@@ -656,6 +656,7 @@ local function install(overrides)
     C_Traits = { GetNodeInfo = retNil, GetEntryInfo = retNil, GetDefinitionInfo = retNil, GetTreeCurrencyInfo = emptyList },
     C_Container = { GetContainerNumSlots = retZero, GetContainerItemInfo = retNil },
     C_Bank = { CanViewBank = retFalse },
+    C_AddOns = { IsAddOnLoaded = retFalse },
     C_Timer = C_Timer,
     Enum = {
       CraftingReagentType = { Modifying = 0, Basic = 1, Finishing = 2, Automatic = 3 },

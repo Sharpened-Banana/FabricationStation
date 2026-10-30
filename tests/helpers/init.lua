@@ -9,3 +9,6 @@ run_cmd = load.run_cmd
 
 -- WoW API and Ace3 stub layer (see wow_stubs.lua).
 install_wow_stubs = require("wow_stubs")
+
+-- 1b crafting world (see crafting_world.lua).
+make_world = require("crafting_world")
