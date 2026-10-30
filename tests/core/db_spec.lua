@@ -57,6 +57,41 @@ describe("DB", function()
     assert.equals("after", ns.FS.pendingErrors[2].err)
     assert.equals(1, #W.printed); assert.matches("newer version", W.printed[1])
   end)
+  describe("with a save from a newer version", function()
+    local function copy(v)
+      if type(v) ~= "table" then return v end
+      local out = {}; for k, x in pairs(v) do out[k] = copy(x) end; return out
+    end
+
+    it("leaves the real saved table untouched, even after logout stripping", function()
+      local saved = { global = { schemaVersion = 999, future = { x = 1 },
+        settings = { prices = { staleAfterDays = 3 }, minimap = { hide = false }, window = { width = 900 } } } }
+      local before = copy(saved)
+      _G.FabricationStationDB = saved
+      W.boot(); W.logout()
+      assert.is_true(ns.FS.dbIsNewer)
+      assert.equals(saved, _G.FabricationStationDB); assert.same(before, saved)
+    end)
+    it("works on an in-memory copy with the defaults filled in", function()
+      _G.FabricationStationDB = { global = { schemaVersion = 999, future = { x = 1 }, settings = { prices = { staleAfterDays = 7 } } } }
+      W.boot()
+      local g = ns.FS.db.global
+      assert.is_not.equals(_G.FabricationStationDB.global, g)
+      assert.equals(999, g.schemaVersion); assert.equals(1, g.future.x); assert.equals(7, g.settings.prices.staleAfterDays)
+      assert.equals(900, g.settings.window.width); assert.same({}, g.characters)
+      g.future.x = 2; assert.equals(1, _G.FabricationStationDB.global.future.x)
+    end)
+    it("still hands a current save to AceDB itself", function()
+      _G.FabricationStationDB = { global = { schemaVersion = 1, future = { x = 1 } } }
+      W.boot()
+      assert.is_nil(ns.FS.dbIsNewer); assert.equals(_G.FabricationStationDB.global, ns.FS.db.global)
+    end)
+    it("treats a non-numeric stored version as not newer", function()
+      _G.FabricationStationDB = { global = { schemaVersion = "x" } }
+      W.boot()
+      assert.is_nil(ns.FS.dbIsNewer); assert.equals(_G.FabricationStationDB.global, ns.FS.db.global)
+    end)
+  end)
   it("keeps the in-memory buffer capped at 50 on a newer database", function()
     _G.FabricationStationDB = { global = { schemaVersion = 999 } }
     W.boot()

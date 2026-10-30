@@ -25,13 +25,32 @@ ns.DBDefaults = {
   },
 }
 
+local NEWER_COPY_DEPTH = 100  -- deep enough for any saved layout; DeepCopy drops what lies deeper
+
+-- The schemaVersion stored in the SavedVariables table, read raw (nil when there is none).
+local function stored_schema_version()
+  local sv = FabricationStationDB
+  local global = type(sv) == "table" and rawget(sv, "global")
+  if type(global) ~= "table" then return nil end
+  return rawget(global, "schemaVersion")
+end
+
 function ns.FS:InitDB()
-  self.db = LibStub("AceDB-3.0"):New("FabricationStationDB", ns.DBDefaults, true)
+  -- A save from a newer version never reaches AceDB: AceDB fills our defaults into it and strips
+  -- every value equal to them on logout, which would rewrite a layout we do not understand. The
+  -- session runs on an in-memory copy instead, and the real table is left exactly as it was.
+  local stored = stored_schema_version()
+  local sv = "FabricationStationDB"
+  if type(stored) == "number" and stored > ns.Migrations.Latest() then
+    sv = ns.Util.DeepCopy(FabricationStationDB, NEWER_COPY_DEPTH)
+  end
+  self.db = LibStub("AceDB-3.0"):New(sv, ns.DBDefaults, true)
   local global = self.db.global
 
   local ok, from, to, err = ns.Migrations.Run(global)
   if err == "newer" then
-    -- Read-only session: pending errors stay in memory and LogError/SetModuleEnabled skip the db.
+    -- Read-only session on the copy: pending errors stay in memory and LogError/SetModuleEnabled
+    -- skip the db.
     self.dbIsNewer = true
     print("FabricationStation: saved data is from a newer version; nothing was changed.")
     return

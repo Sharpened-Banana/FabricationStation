@@ -199,6 +199,19 @@ describe("wow stubs", function()
       local db = LibStub("AceDB-3.0"):New("FabricationStationDB", defaults)
       db.global.t.x = 1; assert.is_nil(defaults.global.t.x)
     end)
+    it("W.logout strips values equal to their defaults and the tables left empty, as AceDB does", function()
+      _G.FabricationStationDB = { global = { a = { b = 2, c = 3 }, d = { e = 1 }, keep = "x", n = 5 } }
+      LibStub("AceDB-3.0"):New("FabricationStationDB", { global = { a = { b = 2 }, d = { e = 1 }, n = 6, f = { g = 1 } } })
+      W.logout()
+      assert.same({ global = { a = { c = 3 }, keep = "x", n = 5 } }, FabricationStationDB)
+    end)
+    it("W.logout strips a database created from a plain table without touching the named global", function()
+      _G.FabricationStationDB = { global = { n = 1 } }
+      local sv = { global = { n = 1 } }
+      LibStub("AceDB-3.0"):New(sv, { global = { n = 1 } })
+      W.logout()
+      assert.same({ global = {} }, sv); assert.same({ global = { n = 1 } }, FabricationStationDB)
+    end)
   end)
 
   describe("frames", function()

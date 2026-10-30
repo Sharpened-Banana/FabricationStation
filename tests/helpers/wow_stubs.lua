@@ -3,7 +3,8 @@
 -- Deliberate divergences from real WoW/Ace3 (so tests stay simple and failures stay loud):
 --   * Errors in OnInitialize/OnEnable and in event/message handlers propagate to the caller.
 --     Real Ace3 routes them to geterrorhandler() and carries on.
---   * AceDB does no logout stripping of default values and has no "*" / "**" wildcard defaults.
+--   * AceDB strips default values only when a test calls W.logout() (the client does it on
+--     PLAYER_LOGOUT), and has no "*" / "**" wildcard defaults.
 --   * Frame Show/Hide do not fire OnShow/OnHide.
 --   * HookScript composes with the existing SetScript/HookScript handler, so GetScript returns the chain.
 --   * frame:RegisterEvent is a no-op (use W.fire to drive AceEvent handlers).
@@ -473,6 +474,7 @@ local function install(overrides)
       end
     end
   end
+  local databases = {}
   function AceDB:New(sv, defaults)
     if type(sv) == "string" then
       if _G[sv] == nil then _G[sv] = {} end
@@ -480,9 +482,32 @@ local function install(overrides)
     end
     sv.global = sv.global or {}
     if defaults and defaults.global then fill_defaults(sv.global, defaults.global) end
-    return { sv = sv, global = sv.global, defaults = defaults }
+    local db = { sv = sv, global = sv.global, defaults = defaults }
+    databases[#databases + 1] = db
+    return db
   end
   libs["AceDB-3.0"] = AceDB
+
+  -- AceDB's removeDefaults: values equal to their default go, then tables the strip left empty.
+  local function strip_defaults(dst, defaults)
+    for k, v in pairs(defaults) do
+      if type(v) == "table" and type(dst[k]) == "table" then
+        strip_defaults(dst[k], v)
+        if next(dst[k]) == nil then dst[k] = nil end
+      elseif dst[k] == v then
+        dst[k] = nil
+      end
+    end
+  end
+
+  -- Simulates PLAYER_LOGOUT: strips the defaults from every database AceDB:New created.
+  function W.logout()
+    for _, db in ipairs(databases) do
+      if db.defaults and db.defaults.global and type(db.sv.global) == "table" then
+        strip_defaults(db.sv.global, db.defaults.global)
+      end
+    end
+  end
 
   -- AceGUI
   local AceGUI = {}
