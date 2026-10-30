@@ -13,3 +13,4 @@ Core\Core.lua
 Core\Bus.lua
 Core\Migrations.lua
 Core\DB.lua
+Data\GameData.lua
