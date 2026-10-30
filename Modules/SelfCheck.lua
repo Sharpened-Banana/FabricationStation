@@ -3,7 +3,7 @@ local ADDON_NAME, ns = ...
 -- SelfCheck: while a profession window is open, compares the addon's prediction for the reagents Blizzard has
 -- allocated (Recipes:PredictLive) with the game's own numbers (Scanner:GetLiveOperationInfo) and logs every
 -- difference through Diagnostics:LogMismatch, with the data Task 9's exporter turns into a math fixture
--- (context = { calib, schematic, reagents, operationInfo }). The profession panel's status line shows the result.
+-- (context = { calib, schematic, reagents, operationInfo }). The profession panel's own check line shows the result.
 --
 -- What is compared: skill, difficulty, quality, the lower and next quality thresholds and the concentration cost
 -- (ns.SelfCheck.Compare). What is not: a recipe without a calibration for this character, an estimated recipe
@@ -12,9 +12,13 @@ local ADDON_NAME, ns = ...
 -- with differences that say nothing about the formulas.
 --
 -- The game is asked about the same reagents Blizzard sends: the required allocation plus one row per optional or
--- finishing reagent in the transaction (Scanner:ToCraftingReagentInfo maps rows back to data slots).
+-- finishing reagent in the transaction (Scanner:ToCraftingReagentInfo maps rows back to data slots). Concentration
+-- is never applied to either side: the game's skill with concentration may include the points it adds, which the
+-- prediction for the allocation does not.
 --
--- Logging rules: the same (recipeID, field, expected, actual) is logged at most once per session. Nothing is
+-- Logging rules: the same (recipeID, field, expected, actual) is logged at most once per session, and at most
+-- MAX_PER_FIELD distinct ones per (recipeID, field) (a formula that is wrong everywhere would otherwise flood the
+-- capped log). The session sets restart when the logged mismatches are cleared in Settings. Nothing is
 -- written here, so a saved-data version newer than ours (ns.FS.dbIsNewer) is Diagnostics' business, which keeps
 -- the entry in memory then.
 --
@@ -39,10 +43,12 @@ local RUN_KEY, RUN_DELAY = "selfCheck.run", 0.2
 local SKILL_TOLERANCE = 0.5   -- points; the game rounds its skill display
 local EXACT = 1e-6            -- float noise only
 local RSAQUO = "\226\128\186"
+local MAX_PER_FIELD = 3
 
 local attached = false     -- the callbacks are registered
 local attachedForm         -- the schematic form the AllocationsModified callback is registered on
-local logged = {}          -- [key] = true: mismatches already logged this session
+local logged = {}          -- [key] = true: mismatches already logged (since the log was last cleared)
+local perField = {}        -- ["recipeID|field"] = distinct mismatches logged for it
 local loggedCount = 0
 
 ---------------------------------------------------------------------------
@@ -137,10 +143,14 @@ end
 local function log_new(recipeID, charKey, mismatches, calib, schematic, infos, opInfo)
   local diagnostics = ns.FS:GetModule("Diagnostics", true)
   if not diagnostics or not diagnostics:IsEnabled() then return end
+  -- Cleared in Settings: what was logged before may be logged again.
+  if next(logged) ~= nil and #diagnostics:GetMismatches() == 0 then logged, perField = {}, {} end
   for _, m in ipairs(mismatches) do
-    local key = table.concat({ recipeID, m.field, tostring(m.expected), tostring(m.actual) }, "|")
-    if not logged[key] then
+    local fieldKey = recipeID .. "|" .. m.field
+    local key = fieldKey .. "|" .. tostring(m.expected) .. "|" .. tostring(m.actual)
+    if not logged[key] and (perField[fieldKey] or 0) < MAX_PER_FIELD then
       logged[key] = true
+      perField[fieldKey] = (perField[fieldKey] or 0) + 1
       loggedCount = loggedCount + 1
       diagnostics:LogMismatch({ recipeID = recipeID, charKey = charKey, field = m.field, expected = m.expected,
         actual = m.actual, context = { calib = calib, schematic = schematic, reagents = infos, operationInfo = opInfo } })
@@ -148,18 +158,30 @@ local function log_new(recipeID, charKey, mismatches, calib, schematic, infos, o
   end
 end
 
+-- The panel's check line: count nil (nothing was compared) clears it.
 local function show_status(count)
   local panel = ns.FS:GetModule("ProfessionPanel", true)
-  if not panel or not panel:IsEnabled() or not panel.SetStatus then return end
-  if count == 0 then
-    panel:SetStatus("Math check: OK", "good")
+  if not panel or not panel:IsEnabled() or not panel.SetCheckLine then return end
+  if count == nil then
+    panel:SetCheckLine(nil)
+  elseif count == 0 then
+    panel:SetCheckLine("Math check: OK", "good")
   else
-    panel:SetStatus(("Math check: %d mismatches (see Settings %s Diagnostics)"):format(count, RSAQUO), "warn")
+    local noun = count == 1 and "mismatch" or "mismatches"
+    panel:SetCheckLine(("Math check: %d %s (see Settings %s Diagnostics)"):format(count, noun, RSAQUO), "warn")
   end
 end
 
 -- Mismatches for the open window, or nil when nothing was compared (see the header).
+local compare
+
 local function check(recipeID)
+  local mismatches = compare(recipeID)
+  show_status(mismatches and #mismatches or nil)
+  return mismatches
+end
+
+function compare(recipeID)
   local recipes = ns.FS:GetModule("Recipes")
   if not recipes:GetSetting("selfCheck") then return nil end
   local scanner = ns.FS:GetModule("Scanner")
@@ -174,19 +196,17 @@ local function check(recipeID)
   if not schematic or not calib then return nil end
 
   local infos = t:CreateCraftingReagentInfoTbl() or {}
-  local concentrating = t.IsApplyingConcentration and t:IsApplyingConcentration() and true or false
   local allocation, optionalItemIDs = recipes:FromCraftingReagentInfo(recipeID, infos)
-  local prediction = recipes:PredictLive(recipeID, allocation, optionalItemIDs, concentrating)
+  local prediction = recipes:PredictLive(recipeID, allocation, optionalItemIDs, false)
   if not prediction or (prediction.flags or {}).unknownOptional then return nil end
   local evaluated = recipes:Evaluate(recipeID, charKey, {})
   if not evaluated or (evaluated.flags or {}).estimated then return nil end
 
-  local opInfo = scanner:GetLiveOperationInfo(recipeID, game_allocation(schematic, allocation, infos), concentrating)
+  local opInfo = scanner:GetLiveOperationInfo(recipeID, game_allocation(schematic, allocation, infos), false)
   if type(opInfo) ~= "table" then return nil end
 
   local mismatches = M.Compare(prediction, opInfo)
   log_new(recipeID, charKey, mismatches, calib, schematic, infos, opInfo)
-  show_status(#mismatches)
   return mismatches
 end
 
@@ -211,7 +231,10 @@ end
 local function schedule()
   if not SelfCheck:IsEnabled() then return end
   ns.FS:SafeCall("SelfCheck:Schedule", function()
-    if not ns.FS:GetModule("Recipes"):GetSetting("selfCheck") then return end
+    if not ns.FS:GetModule("Recipes"):GetSetting("selfCheck") then
+      show_status(nil)  -- a line from before the setting was turned off must not stay
+      return
+    end
     ns.FS:Debounce(RUN_KEY, RUN_DELAY, ns.FS:Wrap("SelfCheck:Compare", function() check(nil) end))
   end)
 end

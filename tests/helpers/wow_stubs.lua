@@ -206,9 +206,12 @@ local function install(overrides)
 
   local function make_fontstring()
     local fs = new_object()
-    local text
+    local text, shown = nil, true
     function fs:SetText(t) text = t end
     function fs:GetText() return text end
+    function fs:Show() shown = true end
+    function fs:Hide() shown = false end
+    function fs:IsShown() return shown end
     return fs
   end
 

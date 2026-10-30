@@ -121,7 +121,7 @@ describe("SelfCheck run", function()
     assert.same({ { field = "quality", expected = 1, actual = 2 } }, S:Run())
   end)
 
-  it("asks the game for the transaction's reagents and its concentration choice", function()
+  it("asks the game for the transaction's reagents without concentration, even while Blizzard applies it", function()
     local asked
     world.live[9001] = function(allocation, applyConcentration)
       asked = { allocation = allocation, applyConcentration = applyConcentration }
@@ -132,9 +132,17 @@ describe("SelfCheck run", function()
     assert.same({ { slotIndex = 1, itemID = 1001, quantity = 10 }, { slotIndex = 2, itemID = 2001, quantity = 5 },
       { slotIndex = 3, itemID = 3001, quantity = 2 } }, asked.allocation)
     assert.is_false(asked.applyConcentration)
+    local recipes, predicted = ns.FS:GetModule("Recipes"), nil
+    local predict = recipes.PredictLive
+    recipes.PredictLive = function(self, recipeID, allocation, optionalItemIDs, concentrating)
+      predicted = concentrating
+      return predict(self, recipeID, allocation, optionalItemIDs, concentrating)
+    end
     form.applyingConcentration = true
+    asked = nil
     S:Run(9001)
-    assert.is_true(asked.applyConcentration)
+    assert.is_false(asked.applyConcentration)
+    assert.is_false(predicted)
   end)
 
   it("adds optional and finishing reagents back as extra rows so the game sees what Blizzard sends", function()
@@ -194,6 +202,20 @@ describe("SelfCheck run", function()
     quality = 3
     S:Run(9001)
     assert.equals(2, S:GetSessionCount()); assert.equals(2, #D:GetMismatches())
+  end)
+
+  it("logs at most 3 distinct values per recipe and field, and starts over after the log is cleared", function()
+    local quality = 2
+    world.live[9001] = function() return right({ craftingQuality = quality }) end
+    open()
+    for q = 2, 6 do quality = q; assert.equals(1, #S:Run(9001)) end
+    assert.equals(3, #D:GetMismatches()); assert.equals(3, S:GetSessionCount())
+    D:ClearMismatches()
+    quality = 2
+    S:Run(9001)
+    assert.equals(1, #D:GetMismatches())
+    S:Run(9001)
+    assert.equals(1, #D:GetMismatches())
   end)
 
   it("returns every current mismatch but logs only the new ones", function()
@@ -381,19 +403,20 @@ describe("SelfCheck status line", function()
   local ns, W, world, form, panel
   local RANK1 = { { reagent = { itemID = 1001 }, dataSlotIndex = 11, quantity = 10 },
     { reagent = { itemID = 2001 }, dataSlotIndex = 12, quantity = 5 } }
-  local quality
+  local quality, lower
 
   before_each(function()
-    ns, W, world = make_world({ last = "UI/ProfessionPanel.lua", professions = {} })
+    ns, W, world = make_world({ last = "UI/ProfessionPanel.lua", professions = {}, recipes = 2,
+      calibrate = { ["Main-Realm"] = { 9001 } } })
     form, panel = world.form, ns.FS:GetModule("ProfessionPanel")
-    quality = 1
+    quality, lower = 1, 0
     world.live[9001] = function(allocation)
       local top = #allocation > 0
       for _, row in ipairs(allocation) do
         if row.itemID == 1001 or row.itemID == 2001 then top = false end
       end
       return { baseSkill = 480, bonusSkill = top and 300 or 20, baseDifficulty = 700, bonusDifficulty = 0,
-        craftingQuality = quality, lowerSkillThreshold = 0, upperSkillTreshold = 700, concentrationCost = 0,
+        craftingQuality = quality, lowerSkillThreshold = lower, upperSkillTreshold = 700, concentrationCost = 0,
         craftingDataID = 2588, bonusStats = {} }
     end
     world.openProfession(2906)
@@ -404,33 +427,70 @@ describe("SelfCheck status line", function()
   it("shows Math check: OK when the game agrees", function()
     form.allocate(RANK1)
     W.advance(0.3)
-    assert.equals("Math check: OK", panel:GetView().status:GetText())
+    assert.equals("Math check: OK", panel:GetView().checkLine:GetText())
   end)
 
   it("counts the mismatches and points at Settings > Diagnostics", function()
     quality = 2
     form.allocate(RANK1)
     W.advance(0.3)
-    assert.equals("Math check: 1 mismatches (see Settings \226\128\186 Diagnostics)", panel:GetView().status:GetText())
+    assert.equals("Math check: 1 mismatch (see Settings \226\128\186 Diagnostics)", panel:GetView().checkLine:GetText())
     assert.equals(1, #ns.FS:GetModule("Diagnostics"):GetMismatches())
+  end)
+
+  it("uses the plural for several mismatches", function()
+    quality, lower = 2, 700
+    form.allocate(RANK1)
+    W.advance(0.3)
+    assert.equals("Math check: 2 mismatches (see Settings \226\128\186 Diagnostics)", panel:GetView().checkLine:GetText())
   end)
 
   it("colours the line green for OK and amber for mismatches", function()
     local tones = {}
-    local set = panel.SetStatus
-    panel.SetStatus = function(self, text, tone) tones[#tones + 1] = tone; return set(self, text, tone) end
+    local set = panel.SetCheckLine
+    panel.SetCheckLine = function(self, text, tone) tones[#tones + 1] = tone; return set(self, text, tone) end
     form.allocate(RANK1); W.advance(0.3)
     quality = 2
     form.allocate(RANK1); W.advance(0.3)
     assert.same({ "good", "warn" }, tones)
   end)
 
-  it("says nothing when no check could be made", function()
-    panel:SetStatus("Added 1x Sample Recipe 9001 to the queue")
-    ns.FS.db.global.settings.crafting = { selfCheck = false }
+  it("never overwrites the action status", function()
+    panel:SetStatus("Applied the Q2 reagents")
     form.allocate(RANK1)
     W.advance(0.3)
-    assert.equals("Added 1x Sample Recipe 9001 to the queue", panel:GetView().status:GetText())
+    assert.equals("Applied the Q2 reagents", panel:GetView().status:GetText())
+    assert.equals("Math check: OK", panel:GetView().checkLine:GetText())
+    assert.is_true(panel:GetView().checkLine:IsShown())
+  end)
+
+  it("clears the line when the setting is turned off", function()
+    quality = 2
+    form.allocate(RANK1); W.advance(0.3)
+    assert.is_truthy(panel:GetView().checkLine:GetText():find("mismatch", 1, true))
+    ns.FS.db.global.settings.crafting = { selfCheck = false }
+    form.allocate(RANK1); W.advance(0.3)
+    assert.equals("", panel:GetView().checkLine:GetText())
+    assert.is_false(panel:GetView().checkLine:IsShown())
+  end)
+
+  it("clears the line when the window closes", function()
+    quality = 2
+    form.allocate(RANK1); W.advance(0.3)
+    world.openLine = nil
+    form.allocate(RANK1); W.advance(0.3)
+    assert.equals("", panel:GetView().checkLine:GetText())
+  end)
+
+  it("clears the line when the next recipe cannot be compared", function()
+    quality = 2
+    form.allocate(RANK1); W.advance(0.3)
+    assert.is_truthy(panel:GetView().checkLine:GetText():find("mismatch", 1, true))
+    form.selectRecipe({ recipeID = 9002 })  -- no live data, so never calibrated
+    W.advance(0.3)
+    assert.is_nil(ns.FS:GetModule("Recipes"):GetCalibration("Main-Realm", 9002))
+    assert.equals("", panel:GetView().checkLine:GetText())
+    assert.is_false(panel:GetView().checkLine:IsShown())
   end)
 
   it("does not need the profession panel", function()

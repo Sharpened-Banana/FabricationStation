@@ -529,9 +529,18 @@ function Panel:ApplyAllocation(allocation)
   return true
 end
 
--- One line under the buttons (SelfCheck reports here too). tone: a TONES key, "plain" by default.
+-- One line under the buttons for the actions' results. tone: a TONES key, "plain" by default.
 function Panel:SetStatus(text, tone)
   set_status(text, tone)
+end
+
+-- SelfCheck's own line below the status line, so a check never overwrites an action's result. nil or "" hides it.
+function Panel:SetCheckLine(text, tone)
+  if not view then return end
+  text = text or ""
+  view.checkLine:SetText(text)
+  set_tone(view.checkLine, tone)
+  if text == "" then view.checkLine:Hide() else view.checkLine:Show() end
 end
 
 local function read_only()
@@ -661,9 +670,16 @@ local function create_quality_row(parent)
 end
 
 local function build_controls(frame, created)
+  created.checkLine = text(frame)
+  created.checkLine:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", PAD, PAD)
+  created.checkLine:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, PAD)
+  created.checkLine:SetHeight(LINE)
+  created.checkLine:SetJustifyV("TOP")
+  created.checkLine:Hide()
+
   created.status = text(frame)
-  created.status:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", PAD, PAD)
-  created.status:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, PAD)
+  created.status:SetPoint("BOTTOMLEFT", created.checkLine, "TOPLEFT", 0, 2)
+  created.status:SetPoint("BOTTOMRIGHT", created.checkLine, "TOPRIGHT", 0, 2)
   created.status:SetHeight(LINE * 2)
   created.status:SetJustifyV("TOP")
 
