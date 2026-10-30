@@ -321,14 +321,29 @@ local function snapshot_moxie(p, line, now)
   return true, old == nil or old.currencyID ~= id or old.value ~= info.quantity
 end
 
--- A recipe without cooldown or charges has no entry.
+-- Seconds two readyAt values may differ by and still be the same cooldown: readyAt = Now() (whole seconds) +
+-- the remaining time, so recomputing an unchanged cooldown moves it by less than a second.
+local READY_AT_SLACK = 1
+
+-- Whether two cooldown records describe the same state (time aside). A readyAt that has passed in both is
+-- the same (a recipe with charges and no running cooldown gets readyAt = now on every refresh).
+local function same_cooldown(a, b, now)
+  if a == nil or b == nil then return a == b end
+  if a.charges ~= b.charges or a.maxCharges ~= b.maxCharges then return false end
+  local ra, rb = a.readyAt or 0, b.readyAt or 0
+  if ra <= now and rb <= now then return true end
+  return math.abs(ra - rb) <= READY_AT_SLACK
+end
+
+-- A recipe without cooldown or charges has no entry. Returns true when the stored state changed.
 local function refresh_cooldown(p, recipeID, now)
   local cd, _, charges, maxCharges = C_TradeSkillUI.GetRecipeCooldown(recipeID)
+  local old, new = p.cooldowns[recipeID], nil
   if (cd or 0) > 0 or (maxCharges or 0) > 0 then
-    p.cooldowns[recipeID] = { readyAt = now + (cd or 0), charges = charges or 0, maxCharges = maxCharges or 0, time = now }
-  else
-    p.cooldowns[recipeID] = nil
+    new = { readyAt = now + (cd or 0), charges = charges or 0, maxCharges = maxCharges or 0, time = now }
   end
+  p.cooldowns[recipeID] = new
+  return not same_cooldown(type(old) == "table" and old or nil, new, now)
 end
 
 local function snapshot_tools(p, child, now)
@@ -582,21 +597,25 @@ function Scanner:ScanSpec()
   return taken
 end
 
--- Refreshes the cooldowns of every recipe the last scan filed while that profession is still open;
--- sends FS_DATA_CHANGED "professions".
+-- Refreshes the cooldowns of every recipe the last scan filed while that profession is still open (after
+-- every craft); sends FS_DATA_CHANGED "cooldowns" only when a record actually changed (added, removed, charges,
+-- or readyAt). Nothing evaluates or calibrates on "cooldowns": the queue's cooldown display may listen.
 function Scanner:ScanCooldowns()
   local open = openLines
   if not self:IsEnabled() or not writable() or not open or not self:IsProfessionOpen(open.child) then return false end
   local charKey = ns.FS:CharKey()
   local c = ensure_character(charKey)
   local now = ns.FS:Now()
+  local changed = false
   local ok = guarded("cooldowns", function()
     for line in pairs(open.lines) do
       local p = profession_record(c, line)
-      for id in pairs(p.recipes) do refresh_cooldown(p, id, now) end
+      for id in pairs(p.recipes) do
+        if refresh_cooldown(p, id, now) then changed = true end
+      end
     end
   end)
-  if ok then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "professions") end
+  if changed then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "cooldowns") end
   return ok
 end
 

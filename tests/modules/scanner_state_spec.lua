@@ -145,7 +145,28 @@ describe("Scanner profession state", function()
     W.advance(10); W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", {}); W.advance(0.5)
     assert.is_nil(p.cooldowns[1001])
     assert.same({ readyAt = W.now + 600, charges = 0, maxCharges = 2, time = W.now }, Scanner:GetProfession(K, 2822).cooldowns[1002])
-    assert.same({ "FS_DATA_CHANGED", K, "professions" }, W.messages[#W.messages])
+    assert.same({ "FS_DATA_CHANGED", K, "cooldowns" }, W.messages[#W.messages])
+    assert.equals(0, count("professions"))
+  end)
+  it("announces nothing after a craft that changed no cooldown", function()
+    scan()
+    local readyAt = W.now + 3600   -- 1001 keeps counting down to the same time; 1002 keeps a charge, ready now
+    C_TradeSkillUI.GetRecipeCooldown = function(id)
+      if id == 1001 then return readyAt - W.now, true, 0, 0 end
+      if id == 1002 then return nil, false, 1, 2 end
+    end
+    local before = #W.messages
+    W.advance(10); W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", {}); W.advance(0.5)
+    assert.equals(before, #W.messages)
+    assert.equals(readyAt, Scanner:GetProfession(K, 2871).cooldowns[1001].readyAt)
+    -- a charge spent is a change
+    C_TradeSkillUI.GetRecipeCooldown = function(id)
+      if id == 1001 then return readyAt - W.now, true, 0, 0 end
+      if id == 1002 then return 600, false, 0, 2 end
+    end
+    W.advance(10); W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", {}); W.advance(0.5)
+    assert.equals(before + 1, #W.messages)
+    assert.same({ "FS_DATA_CHANGED", K, "cooldowns" }, W.messages[#W.messages])
   end)
   it("survives a state API error without disabling the module", function()
     C_ProfSpecs.GetSpecTabIDsForSkillLine = function() error("boom") end

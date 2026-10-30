@@ -330,6 +330,30 @@ describe("recipe scan", function()
       assert.equals(0, #R:GetRanked({ charKey = "Main-Realm" }))
     end)
 
+    -- Phase 2 Task 0 (I3): a craft that changes a cooldown must not recalibrate or re-evaluate anything.
+    it("a cooldowns change starts no rescan: no live calls, no evaluations, the same cached results", function()
+      local liveCalls = 0
+      for id in pairs(world.schematics) do
+        world.live[id] = function()
+          liveCalls = liveCalls + 1
+          return { baseSkill = 500, bonusSkill = 0, baseDifficulty = 700, craftingDataID = 2588, bonusStats = {} }
+        end
+      end
+      world.openProfession(2906)
+      R:StartScan(nil); finish_scan()
+      local before = R:Evaluate(9001, "Main-Realm", {})
+      local evals, real = 0, ns.Math.Profit.EvaluateCraft
+      ns.Math.Profit.EvaluateCraft = function(i) evals = evals + 1; return real(i) end
+      liveCalls = 0
+      ns.FS:GetModule("Scanner"):SendMessage("FS_DATA_CHANGED", "Main-Realm", "cooldowns")
+      W.advance(2)
+      assert.is_false(R:IsScanning())
+      finish_scan()
+      assert.equals(0, liveCalls); assert.equals(0, evals)
+      assert.equals(before, R:Evaluate(9001, "Main-Realm", {}))
+      ns.Math.Profit.EvaluateCraft = real
+    end)
+
     it("debounces bursts of data changes into one pass", function()
       local S = ns.FS:GetModule("Scanner")
       for _ = 1, 5 do S:SendMessage("FS_DATA_CHANGED", "Alt-Realm", "professions"); W.advance(0.5) end
