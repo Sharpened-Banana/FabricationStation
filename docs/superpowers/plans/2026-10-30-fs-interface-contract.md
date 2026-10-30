@@ -106,6 +106,8 @@ Lazy keys added by 1b (no migration): `settings.crafting` (overrides of `Recipes
 | `FS_ALTS_CHANGED` | `charKey` | Alts |
 | `FS_MODULE_FAILED` | `moduleName, errText` | Core |
 
+Note: a full profession scan announces its spec, concentration and Moxie changes only as `FS_DATA_CHANGED(charKey, "recipes")`; the `"spec"`, `"concentration"` and `"professions"` kinds come from the dedicated events (spec changes, currency updates, login). Consumers must not assume a kind-specific message follows a scan. Scanner also exposes `ScanSpec`, `ScanCooldowns`, `RefreshCurrencies` (phase 1a Task 8).
+
 ## GameData (1a)
 
 - Runtime `ns.GameData` (pure): `Define(name, build|nil, tbl)`, `Get(name) -> tbl|nil`, `Build() -> integer|nil`, `Status(clientBuild) -> { build, missing, outdated, mismatched = { name... } }`. Math receives GameData values as arguments; it never calls `ns.GameData`.
