@@ -5,7 +5,8 @@
 -- Each slot's rank mixes ("compositions") are enumerated and the cheapest kept per unit count, where a slot's
 -- units are sum(2 * RankFactor(rank) * n): 2 ranks give {0, 2} per item, 3 ranks {0, 1, 2}. A knapsack over the
 -- slots (unit counts scaled by rounded weight / GCD of the weights) gives the cheapest cost for every reachable weighted
--- unit total u; reagent skill is maxReagentSkill * u / Umax, the same value Quality.ReagentSkill gives.
+-- unit total u; reagent skill is maxReagentSkill * u / Umax. That is the value Quality.ReagentSkill gives for integer
+-- weights (what game data has); for non-integer weights it can differ slightly, since only the optimizer rounds them.
 -- Every composition uses exactly the slot's quantity, so reagent skill never exceeds maxReagentSkill.
 local ADDON_NAME, ns = ...
 

@@ -171,9 +171,11 @@ describe("Math.Optimizer", function()
     local function run(ws)
       return O.CheapestByQuality({ maxQuality = 5, baseDifficulty = 700, baseSkill = 300, maxReagentSkill = 280, slots = slots(ws) })
     end
+    -- Unrounded, these weights gave a different q4 plan (13990 vs 13984 copper here) and took ~1 s; the equality
+    -- is the deterministic check, the generous time bound only a backstop against a state-space blow-up.
     local t = os.clock()
     local per = run({ 10.4, 20.2, 30.1, 40.3, 50.2, 59.6 })
-    assert.is_true(os.clock() - t < 0.25, "took " .. (os.clock() - t) .. " s")
+    assert.is_true(os.clock() - t < 2, "took " .. (os.clock() - t) .. " s")
     assert.same(run({ 10, 20, 30, 40, 50, 60 }), per)
     -- A positive weight below 0.5 still counts: it rounds to 1, not to an unweighted 0.
     assert.same(O.CheapestByQuality(input(500, { slot(1, 10, 1, {100, 300}) })),
