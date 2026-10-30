@@ -1,0 +1,1244 @@
+# FabricationStation Phase 2 — Orders, Customers, Ledger Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Score and filter crafting orders, add profit, score and risk columns to Blizzard's crafting-orders list, keep customer records and a profit ledger, and alert the player in game when a personal order arrives.
+
+**Architecture:** Three new AceAddon modules (`Customers`, `Orders`, `Ledger`) hold the data and logic. They read the game only through events and post-hooks, and they price orders through `Recipes:Evaluate` and `Prices:Get`. UI is split into small modules: Blizzard-list additions (`OrdersRowAddons`, `OrdersSidePanel`, `OrderViewWarning`), each of which can be switched off and disables itself if it errors; a personal-order toast (`OrderAlert`); three main-window tabs; and two Dashboard widgets. Each UI file exposes pure "model" functions that busted tests can check without frames.
+
+**Tech Stack:** WoW retail Lua 5.1 (Midnight 12.x), Ace3 (AceAddon, AceEvent, AceDB, AceConfig), busted, luacheck. Everything from phases 1a and 1b listed in the interface contract.
+
+**Spec:** `docs/superpowers/specs/2026-10-30-fabricationstation-design.md` (§3, §4, §5.1, §5.3, §7, §11, §12). **Binding names:** `docs/superpowers/plans/2026-10-30-fs-interface-contract.md`.
+
+## Global Constraints
+
+- Retail only (Midnight 12.x); Lua 5.1 semantics; every file begins `local ADDON_NAME, ns = ...`; modules via `ns.FS:NewModule("<Name>", "AceEvent-3.0")`.
+- Design rule 2: "FabricationStation never replaces, hides, or reparents Blizzard's Professions or Crafting Orders frames. Its panels dock beside them; every Blizzard button keeps working. Disabling the addon leaves default UI untouched."
+- Design rule 3: "Crafting, claiming orders, and buying happen only from a button the player clicks. No loops, no timers, no unattended actions." `C_CraftingOrders.ClaimOrder` is `HasRestrictions = true`.
+- Design rule 7: "Only own frames and `hooksecurefunc`-style post-hooks on Blizzard code; never write to Blizzard frame fields or call protected functions from insecure code paths outside a click." Allowed: `hooksecurefunc`, `frame:HookScript`, reading Blizzard fields, anchoring **own** frames to Blizzard frames. Not allowed: assigning any field on a Blizzard frame or table, `SetScript` on a Blizzard frame, calling Blizzard mixin methods that change state (`ViewOrder`, `SetCraftingOrderType`, …).
+- Design rule 5: only the Prices module talks to Auctionator.
+- Design rule 6: missing prices and stale data stay visible. Unknown money is `nil`, never `0`. A `nil` score sorts last and is never "best".
+- Money is integer copper; time is `ns.FS:Now()` server seconds; UI formats with `ns.UI.FormatMoney` (1a) and shows `—` for `nil`.
+- §12: event handlers and hook bodies run inside `ns.FS:SafeCall(<moduleName>, fn, ...)`; Blizzard-frame additions can each be switched off.
+- Saved data is never wiped. Phase 2 creates its DB keys lazily on first access. Modules must work before `OnInitialize`/`OnEnable` have run, so tests can call them directly.
+- §7: alerts are "in-game sound + toast" only; §10: "Notifications outside the game" are out of scope.
+- §15: mail parsing handles the English locale first.
+- Tests: `busted` from repo root; specs at `tests/<area>/<name>_spec.lua`; lint `luacheck .` must stay clean (add new WoW globals to `.luacheckrc` `read_globals` in the task that first uses them).
+- Every new `.lua` file is added to `FabricationStation.toc` after phase-1b files in the task that creates it, in this order: `Data/OrderRewards.lua`, `Modules/Customers.lua`, `Modules/Orders.lua`, `Modules/Ledger.lua`, `UI/OrdersPanel.lua`, `UI/OrderAlert.lua`, `UI/Tabs/Orders.lua`, `UI/Tabs/Customers.lua`, `UI/Tabs/Ledger.lua`, `UI/OrdersWidgets.lua`, `UI/OrdersOptions.lua`.
+- Commits: conventional (`feat:`, `test:`, `fix:`, `chore:`).
+
+## Review Focus
+
+Five inputs or conditions most likely to cause problems for a player that the spec implies but does not state. Each has a test in its owning task.
+
+1. **Orders that arrive with no `customerName`.** The name can arrive later through `CRAFTINGORDERS_UPDATE_CUSTOMER_NAME`, and NPC orders have no player customer. The order must score without a `blockedCustomer` flag and without errors, and the flag must be recalculated when the name arrives. Tests: Task 3 `normalizes a nil customer name`, Task 5 `applies a late customer name and re-flags a blocked customer`.
+2. **AH sale mail for an item with no FS craft record, or whose name matches several quality-rank itemIDs.** The sale is still recorded with `itemID` nil (or the most recently crafted ID, marked `ambiguous`) and `cost = nil`. It is counted as `incomplete` and never shown as a zero-cost sale. Test: Task 7 `records a sale of an uncrafted item as incomplete`.
+3. **The same mail's money is taken twice.** This can happen when Open All races a manual click, or when a click repeats while the server command is pending. The result must be exactly one ledger entry. Test: Task 7 `ignores a second take of the same mail`.
+4. **A Blizzard patch renames a hook target** (`ProfessionsFrame.OrdersPage`, `ShowOrders`, `OrderView.SetOrder`, the ScrollBox), or a hook body errors. Only that addition disables itself, it logs once, Blizzard's list keeps working, and the other additions keep running. Test: Task 8 `disables only the failing addition`.
+5. **The order snapshot is viewed later, or on another character.** Expired orders are hidden, "seen X ago" is shown, and rescoring uses the snapshot's character (not the logged-in one). Test: Task 5 `rescoring uses the snapshot character and GetSnapshot drops expired orders`.
+
+**Not verified from source; the implementer checks each in game before relying on it (record the result in the commit message of the owning task):**
+- `GetInboxInvoiceInfo(index)` returns data for an unopened mail. Inside a `hooksecurefunc("TakeInboxMoney")` post-hook, the invoice and header money are still readable (Task 7). If not, switch to scanning on `MAIL_INBOX_UPDATE` with the same dedupe signature.
+- `CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS` fires at login and when an order arrives away from a crafting table (Task 9). If it only fires at the table, also poll `GetPersonalOrdersInfo()` on `PLAYER_ENTERING_WORLD`. That is a read on an event, not a timer.
+- `C_CraftingOrders.GetClaimedOrder().outputItemHyperlink` is filled after crafting, and `C_TradeSkillUI.GetItemCraftedQualityByItemInfo(link)` accepts a hyperlink (Task 5).
+- Whether `CraftRecipe`'s `craftingReagents` include customer-provided reagents on order crafts, and whether `TRADE_SKILL_ITEM_CRAFTED_RESULT.quantity` already includes multicraft (Task 7).
+- `ScrollUtil.AddAcquiredFrameCallback`, `ScrollUtil.AddReleasedFrameCallback` and `EventUtil.ContinueOnAddOnLoaded` exist on live (Task 8). After an addon-button `ClaimOrder`, Blizzard's `OrdersPage:CheckForClaimedOrder` shows the claimed order on its next `OnShow`.
+- `SOUNDKIT.RAID_WARNING` exists (Task 9).
+- Item and currency IDs of Midnight knowledge and Moxie rewards for `Data/OrderRewards.lua` (Task 3); wago.tools blocks automated fetching, so get them from an in-game `/dump` of `npcOrderRewards`.
+- `CraftingOrderInfo.minQuality` and `RecipeResult.expectedQuality` use the same quality-tier scale (Task 4). If they differ, map them in `Orders:Normalize`.
+
+## API reference (verified 2026-10-30 against `Gethe/wow-ui-source` branch `live`)
+
+- `C_CraftingOrders`: `GetCrafterOrders() -> CraftingOrderInfo[]` (cumulative across pages), `GetClaimedOrder() -> CraftingOrderInfo|nil`, `GetPersonalOrdersInfo() -> { {profession, numPersonalOrders, professionName} }`, `GetOrderClaimInfo(profession) -> {claimsRemaining, secondsToRecharge}`, `ClaimOrder(orderID, profession)` **HasRestrictions**, `FulfillOrder(orderID, crafterNote, profession)`, `GetCraftingOrderTime() -> time`.
+- `CraftingOrderInfo` fields: `orderID, itemID, spellID, skillLineAbilityID, orderType, orderState, expirationTime, claimEndTime, minQuality, tipAmount, consortiumCut, isRecraft, isFulfillable, reagentState, customerGuid?, customerName?, crafterName?, npcCustomerCreatureID?, customerNotes, reagents = { {reagentInfo = {reagent = {itemID?, currencyID?}, dataSlotIndex, quantity}, slotIndex, source, isBasicReagent} }, outputItemHyperlink?, npcOrderRewards = { {itemLink?, currencyType?, count} }, npcCraftingOrderSetID, npcTreasureID`.
+- Enums: `CraftingOrderType` Public 0, Guild 1, Personal 2, Npc 3; `CraftingOrderReagentsType` All 0, Some 1, None 2; `CraftingOrderReagentSource` Any 0, Customer 1, Crafter 2, None 3; `CraftingOrderResult` Ok 0 (AlreadyClaimed 2, CannotClaim 6).
+- Events: `CRAFTINGORDERS_CLAIM_ORDER_RESPONSE(result, orderID)`, `CRAFTINGORDERS_FULFILL_ORDER_RESPONSE(result, orderID)`, `CRAFTINGORDERS_CLAIMED_ORDER_ADDED`, `CRAFTINGORDERS_CLAIMED_ORDER_UPDATED(orderID)`, `CRAFTINGORDERS_UPDATE_CUSTOMER_NAME(customerName, orderID)`, `CRAFTINGORDERS_UPDATE_REWARDS(npcOrderRewards, orderID)`, `CRAFTINGORDERS_UPDATE_ORDER_COUNT(orderType, numOrders)`, `CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS` (no payload).
+- Blizzard: the commission shown is `tipAmount - consortiumCut`; time remaining is `expirationTime - C_CraftingOrders.GetCraftingOrderTime()`; claim uses `C_TradeSkillUI.GetChildProfessionInfo().profession`.
+- Frames (Blizzard_Professions, LoadOnDemand): `ProfessionsFrame.OrdersPage` (mixin `ProfessionsCraftingOrderPageMixin`) has methods `ShowOrders(offset, isSorted)`, `ShowBuckets(offset, isSorted)` and field `orderType`; list at `ProfessionsFrame.OrdersPage.BrowseFrame.OrderList.ScrollBox` with header `...OrderList.HeaderContainer`; row element data is `{option = CraftingOrderInfo|CraftingOrderBucketInfo, browseType, pageFrame}` (flat rows have `option.orderID`); detail view `ProfessionsFrame.OrdersPage.OrderView:SetOrder(order)`.
+- Crafting: `C_TradeSkillUI.CraftRecipe(recipeSpellID, numCasts, craftingReagents, recipeLevel, orderID, applyConcentration)`; event `TRADE_SKILL_ITEM_CRAFTED_RESULT(data)` with `data = {itemID, quantity, craftingQuality?, hyperlink, multicraft, resourcesReturned = { {reagent = {itemID?, currencyID?}, quantity} }?, concentrationSpent, ...}`.
+- Mail (legacy globals, used by Blizzard_MailFrame): `GetInboxInvoiceInfo(index) -> invoiceType ("buyer"|"seller"|"seller_temp_invoice"), itemName, playerName, bid, buyout, deposit, consignment, moneyDelay, etaHour, etaMin, count, commerceAuction`; `GetInboxHeaderInfo(index) -> packageIcon, stationeryIcon, sender, subject, money, CODAmount, daysLeft, itemCount, wasRead, ...`; money is taken through `TakeInboxMoney(index)` (Open All and single clicks) or `AutoLootMailItem(index)`. Do not call `GetInboxText`, because it marks mail as read.
+
+## Contract additions (Phase 2 owns these; later phases may depend on them)
+
+- Bus: `FS_ORDER_FULFILLED (fulfilled: FulfilledOrder)` and `FS_PERSONAL_ORDER_ARRIVED (professionName, count, delta)`, both sent by Orders.
+- Shapes:
+  - `OrderInput = { orderID, orderType, recipeID, itemID, skillLineAbilityID, minQuality, tipAmount, consortiumCut, reagentState = "all"|"some"|"none", customer = nameRealm|nil, npcCreatureID|nil, expiresAt, provided = {[itemID]=qty}, rewards = { {itemID?, currencyID?, count} }, isRecraft, outputItemHyperlink|nil }`
+  - `OrderView` = the contract fields plus `itemID, consortiumCut, commission, rewardsValue, usedConcentration, concentrationCost, net, goldPerConcentration, flags = {noPrice, unknownRecipe, unpricedReward}, charKey, input = OrderInput`. `tip` is the gross `tipAmount`; `rewards = { {itemID?, currencyID?, count, value|nil, kind} }`.
+  - `FulfilledOrder = { orderID, orderType, customer|nil, npcCreatureID|nil, recipeID, itemID, quality|nil, tip, consortiumCut, commission, rewards, rewardsValue, time, charKey }`
+  - `CustomerRecord = { nameRealm, firstSeen, lastSeen, orders = { {time, orderID, itemID, recipeID, quality, tip, commission, orderType} }, tipsTotal, notes, tags = {[tag]=true}, linkedTo = nameRealm|nil }`
+  - `LedgerEntry = { time, type = "craft"|"sale"|"commission", itemID|nil, amount, charKey, ref|nil, recipeID?, quality?, quantity?, itemName?, cost?, incomplete?, ambiguous?, customer?, orderType?, tip?, rewardsValue?, source? }`. `amount` is negative for `craft`.
+- DB keys: `global.customers`, `global.ledger = {entries, costBasis = {[itemID]={totalCost,totalQty,recipeID}}, nameIndex = {[itemName]={itemID, ambiguous}}}`, `global.ordersSnapshot = {time, charKey, orders}`, `global.ordersState = {[charKey] = {personalCounts = {[profession]=n}}}`, `global.ordersUnknownRewards = {[key] = {count, lastSeen}}`, `global.settings.orders / .alerts / .ledger / .ordersPanel`.
+- `ns.GameData.OrderRewards = { items = {[itemID] = {kind, points?}}, currencies = {[currencyID] = {kind, points?}} }`, where kind is `"knowledge"`, `"moxie"` or `"reagent"`.
+- Module names: `Customers`, `Orders`, `Ledger`, `OrdersRowAddons`, `OrdersSidePanel`, `OrderViewWarning`, `OrderAlert`.
+
+---
+
+### Task 1: Phase-2 test helpers and Customers record store
+
+**Files:**
+- Create: `tests/helpers/phase2.lua`, `Modules/Customers.lua`
+- Modify: `FabricationStation.toc`, `.luacheckrc` (add `GetNormalizedRealmName`, `date`)
+- Test: `tests/customers/customers_spec.lua`
+
+**Interfaces:**
+- Consumes: `install_wow_stubs(overrides)`, `load_files(ns, paths)` (1a); `ns.FS:Now()`, `ns.FS.db.global`.
+- Produces:
+  - `tests/helpers/phase2.lua` returns `P2` with `P2.boot(stubOverrides) -> ns, wow` (installs stubs merged with `P2.GLOBALS`, loads every `Core/*.lua` entry of `FabricationStation.toc` in TOC order, runs `ns.FS:OnInitialize()` if `ns.FS.db` is nil, stubs `ns.FS.Now` to return `1000` and `ns.FS.CharKey` to return `"Me-Silvermoon"`), `P2.load(ns, paths)`, `P2.fake_module(ns, name, methods) -> module`, `P2.raw_order(overrides) -> CraftingOrderInfo`, `P2.merge(a, b) -> table`. `P2.GLOBALS` contains the verified enum values above, `SOUNDKIT = {RAID_WARNING = 8959}`, `GetNormalizedRealmName = function() return "Silvermoon" end`, `date = os.date`, and a recording `hooksecurefunc`. If 1a's harness already provides a boot helper, `P2.boot` wraps it instead of duplicating it.
+  - `P2.raw_order` defaults: `{orderID=777, itemID=211111, spellID=4444, skillLineAbilityID=55, orderType=2, orderState=2, expirationTime=8600, claimEndTime=0, minQuality=0, tipAmount=500000, consortiumCut=50000, isRecraft=false, isFulfillable=true, reagentState=0, customerName="Bob", customerNotes="", reagents={}, npcOrderRewards={}, npcCraftingOrderSetID=0, npcTreasureID=0}`.
+  - `Customers:NormalizeName(name) -> nameRealm|nil`, `Customers:Get(nameRealm) -> CustomerRecord|nil`, `Customers:RecordOrder(nameRealm, row) -> CustomerRecord`, `Customers:OnOrderFulfilled(event, fulfilled)`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("Customers store", function()
+  local ns, C
+  before_each(function()
+    ns = P2.boot(); P2.load(ns, {"Modules/Customers.lua"}); C = ns.FS:GetModule("Customers")
+  end)
+  it("normalizes names to Name-Realm", function()
+    assert.equal("Bob-Silvermoon", C:NormalizeName("Bob"))
+    assert.equal("Bob-Area52", C:NormalizeName("Bob-Area52"))
+    assert.is_nil(C:NormalizeName(nil)); assert.is_nil(C:NormalizeName(""))
+  end)
+  it("records a fulfilled order once and totals tips", function()
+    spy.on(C, "SendMessage")
+    local row = {time=1000, orderID=777, itemID=211111, recipeID=4444, quality=3, tip=500000, commission=450000, orderType="personal"}
+    C:RecordOrder("Bob-Silvermoon", row); C:RecordOrder("Bob-Silvermoon", row)
+    local r = C:Get("Bob-Silvermoon")
+    assert.equal(1, #r.orders); assert.equal(500000, r.tipsTotal)
+    assert.equal(1000, r.firstSeen); assert.equal(1000, r.lastSeen); assert.equal("", r.notes)
+    assert.spy(C.SendMessage).was.called_with(C, "FS_CUSTOMERS_CHANGED", "Bob-Silvermoon")
+  end)
+  it("captures player orders on FS_ORDER_FULFILLED and skips NPC orders", function()
+    local f = {orderID=1, orderType="public", customer="Ann-Silvermoon", recipeID=4444, itemID=211111, quality=2, tip=100000, consortiumCut=10000, commission=90000, rewards={}, rewardsValue=0, time=1000, charKey="Me-Silvermoon"}
+    C:OnOrderFulfilled("FS_ORDER_FULFILLED", f)
+    C:OnOrderFulfilled("FS_ORDER_FULFILLED", P2.merge(f, {orderID=2, orderType="npc", customer=nil, npcCreatureID=9}))
+    assert.equal(1, #C:Get("Ann-Silvermoon").orders)
+    assert.is_nil(C:Get(nil))
+  end)
+end)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/customers/customers_spec.lua`
+Expected: FAIL (`tests.helpers.phase2` / `Modules/Customers.lua` not found)
+
+- [ ] **Step 3: Implement the helper and the `Customers` module (`Modules/Customers.lua`)**
+
+`Customers` stores records in `ns.FS.db.global.customers` (create the table lazily). `RecordOrder` keeps orders unique by `orderID`, sets `firstSeen` the first time and updates `lastSeen` each time. `OnOrderFulfilled` ignores `orderType == "npc"` and a nil `customer`. `OnEnable` registers `FS_ORDER_FULFILLED` through `ns.FS:SafeCall("Customers", ...)`. Add the TOC line and the luacheck globals.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `busted tests/customers/customers_spec.lua && luacheck .`
+Expected: PASS, `0 warnings / 0 errors`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/helpers/phase2.lua tests/customers/customers_spec.lua Modules/Customers.lua FabricationStation.toc .luacheckrc
+git commit -m "feat: add Customers record store and phase-2 test helpers"
+```
+
+### Task 2: Customer tags, notes, alt linking, search, export
+
+**Files:**
+- Modify: `Modules/Customers.lua`
+- Test: `tests/customers/tags_links_spec.lua`
+
+**Interfaces:**
+- Consumes: Task 1 `Customers` store.
+- Produces: `Customers:SetNote(nameRealm, text)`, `Customers:SetTag(nameRealm, tag, on)` (tags `"VIP"` and `"blocked"` are canonical; a custom tag is trimmed and cut to 24 characters, and an empty one is ignored), `Customers:Link(alt, main) -> ok, err` (`err = "cycle"|"self"`), `Customers:Unlink(alt)`, `Customers:Root(nameRealm) -> nameRealm`, `Customers:GetGroup(nameRealm) -> {nameRealm,...}` (root first, then alts sorted), `Customers:IsBlocked(nameRealm) -> bool` (true if anyone in the group has `blocked`), `Customers:Search(text) -> {CustomerRecord}` (case-insensitive plain substring over nameRealm, notes and tag names; sorted by `lastSeen` descending with nil as 0, then by nameRealm; empty text returns all), `Customers:Export(nameRealms|nil) -> string`. Every change creates a missing record and sends `FS_CUSTOMERS_CHANGED`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("Customers tags/links/search/export", function()
+  local ns, C
+  before_each(function()
+    ns = P2.boot(); P2.load(ns, {"Modules/Customers.lua"}); C = ns.FS:GetModule("Customers")
+    C:RecordOrder("Bob-Silvermoon", {time=1000, orderID=1, itemID=1, recipeID=1, quality=3, tip=500000, commission=450000, orderType="personal"})
+  end)
+  it("blocks a whole linked group", function()
+    C:Link("Alt-Silvermoon", "Bob-Silvermoon"); C:SetTag("Bob-Silvermoon", "blocked", true)
+    assert.is_true(C:IsBlocked("Alt-Silvermoon")); assert.is_false(C:IsBlocked("Nobody-Silvermoon"))
+    assert.same({"Bob-Silvermoon", "Alt-Silvermoon"}, C:GetGroup("Alt-Silvermoon"))
+  end)
+  it("refuses cycles and self links", function()
+    C:Link("Alt-Silvermoon", "Bob-Silvermoon")
+    assert.same({false, "cycle"}, {C:Link("Bob-Silvermoon", "Alt-Silvermoon")})
+    assert.same({false, "self"}, {C:Link("Bob-Silvermoon", "Bob-Silvermoon")})
+  end)
+  it("searches names, notes and tags", function()
+    C:SetTag("Bob-Silvermoon", "VIP", true); C:SetNote("Ann-Silvermoon", "slow payer")
+    assert.equal("Bob-Silvermoon", C:Search("vip")[1].nameRealm)
+    assert.equal("Ann-Silvermoon", C:Search("SLOW")[1].nameRealm)
+    assert.equal(2, #C:Search(""))
+  end)
+  it("exports CSV with quoting", function()
+    C:SetTag("Bob-Silvermoon", "VIP", true); C:SetTag("Bob-Silvermoon", "blocked", true)
+    C:SetNote("Bob-Silvermoon", 'pays well, "fast"\nalways')
+    assert.equal('nameRealm,orders,tipsTotal,lastSeen,tags,linkedTo,notes\n'
+      .. 'Bob-Silvermoon,1,500000,1970-01-01,VIP;blocked,,"pays well, ""fast"" always"',
+      C:Export({"Bob-Silvermoon"}))
+  end)
+end)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/customers/tags_links_spec.lua`
+Expected: FAIL (`attempt to call method 'Link' (a nil value)`)
+
+- [ ] **Step 3: Implement the functions listed under Interfaces in `Modules/Customers.lua`**
+
+`Link` stores `alt.linkedTo = Root(main)`. A link is a cycle when `Root(main) == alt`. Export: dates use `date("!%Y-%m-%d", lastSeen)`, tags are sorted by byte order and joined with `;`, newlines become a space, and a field containing `,`, `"` or a newline is quoted with `"` doubled.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `busted tests/customers && luacheck .`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Modules/Customers.lua tests/customers/tags_links_spec.lua
+git commit -m "feat: add customer tags, notes, alt linking, search and export"
+```
+
+### Task 3: Orders normalization and reward valuation
+
+**Files:**
+- Create: `Data/OrderRewards.lua`, `Modules/Orders.lua`
+- Modify: `FabricationStation.toc`, `.luacheckrc` (`C_CraftingOrders`, `C_CurrencyInfo`, `Enum`)
+- Test: `tests/orders/normalize_spec.lua`
+
+**Interfaces:**
+- Consumes: `Customers:NormalizeName` (Task 1); `Prices:Get(itemID) -> {value, source, ageDays}`; `C_CraftingOrders.GetCraftingOrderTime()`; `C_CurrencyInfo.GetCurrencyInfo(id).name`.
+- Produces: `ns.GameData.OrderRewards` (shape listed under Contract additions; start it with empty `items`/`currencies` and a comment explaining how to fill it from an in-game `/dump C_CraftingOrders.GetCrafterOrders()[n].npcOrderRewards`), `Orders.ORDER_TYPES = {[0]="public",[1]="guild",[2]="personal",[3]="npc"}`, `Orders.REAGENT_STATES = {[0]="all",[1]="some",[2]="none"}`, `Orders:Settings() -> table` (fills defaults into `db.global.settings.orders`), `Orders:Normalize(orderInfo) -> OrderInput`, `Orders:ValueRewards(rewards) -> total, valued, unpriced`.
+- `Orders:Settings()` defaults: `{lowTipMargin = 100000, expiringSoonSeconds = 3600, knowledgePointValue = 500000, moxieValue = 20000, moxieNamePattern = "Moxie", rewardOverrides = {}, claimMinScore = 0, claimBlockingRisks = {noMatsLowTip=true, unreachableQuality=true, noConcentration=true, expiringSoon=true, blockedCustomer=true}, filters = {hideRisks = {}, orderTypes = {public=true, guild=true, personal=true, npc=true}, minScore = nil, hideUnscored = false}}`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("Orders:Normalize / ValueRewards", function()
+  local ns, O, prices
+  before_each(function()
+    ns = P2.boot({ C_CraftingOrders = { GetCraftingOrderTime = function() return 5000 end },
+                   C_CurrencyInfo = { GetCurrencyInfo = function(id) return { name = id == 4000 and "Artisan's Moxie" or "Other" } end } })
+    prices = { [210000] = 30000 }
+    P2.fake_module(ns, "Prices", { Get = function(_, id) return { value = prices[id], source = prices[id] and "auction" } end })
+    P2.load(ns, {"Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua"})
+    ns.GameData.OrderRewards = { items = { [99001] = {kind="knowledge", points=1} }, currencies = { [3256] = {kind="moxie"} } }
+    O = ns.FS:GetModule("Orders")
+  end)
+  it("normalizes a raw order", function()
+    local i = O:Normalize(P2.raw_order({ orderType=3, reagentState=2,
+      reagents = { {reagentInfo={reagent={itemID=100}, quantity=3, dataSlotIndex=1}, slotIndex=1, source=1, isBasicReagent=true},
+                   {reagentInfo={itemID=101, quantity=2, dataSlotIndex=2}, slotIndex=2, source=1, isBasicReagent=true},
+                   {reagentInfo={reagent={itemID=200}, quantity=1, dataSlotIndex=3}, slotIndex=3, source=2, isBasicReagent=true} },
+      npcOrderRewards = { {itemLink="|cff0070dd|Hitem:12345::::|h[X]|h|r", count=2}, {currencyType=3056, count=10} } }))
+    assert.equal("npc", i.orderType); assert.equal("none", i.reagentState); assert.equal(4444, i.recipeID)
+    assert.same({[100]=3, [101]=2}, i.provided)
+    assert.same({ {itemID=12345, count=2}, {currencyID=3056, count=10} }, i.rewards)
+    assert.equal(4600, i.expiresAt)              -- Now 1000 + (8600 - 5000)
+    assert.equal("Bob-Silvermoon", i.customer)
+  end)
+  it("normalizes a nil customer name", function()
+    assert.is_nil(O:Normalize(P2.raw_order({ customerName = nil })).customer)
+  end)
+  it("values knowledge, moxie, priced items and flags unpriced rewards", function()
+    local total, valued, unpriced = O:ValueRewards({ {itemID=99001,count=2}, {currencyID=3256,count=10}, {itemID=210000,count=5}, {itemID=88888,count=1} })
+    assert.equal(1350000, total); assert.is_true(unpriced)
+    assert.same({"knowledge","moxie","reagent","unknown"}, {valued[1].kind, valued[2].kind, valued[3].kind, valued[4].kind})
+    assert.is_nil(valued[4].value)
+    assert.equal(1, ns.FS.db.global.ordersUnknownRewards["item:88888"].count)
+  end)
+  it("uses the Moxie name fallback and per-reward overrides", function()
+    O:Settings().rewardOverrides["item:88888"] = 70000
+    local total, _, unpriced = O:ValueRewards({ {currencyID=4000,count=3}, {itemID=88888,count=1} })
+    assert.equal(130000, total); assert.is_false(unpriced)
+  end)
+end)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/orders/normalize_spec.lua`
+Expected: FAIL (`Modules/Orders.lua` not found)
+
+- [ ] **Step 3: Implement `Data/OrderRewards.lua` and `Orders:Settings/Normalize/ValueRewards` in `Modules/Orders.lua`**
+
+`Normalize`:
+- `provided` sums customer-source (`1`) reagents. Take the itemID from `reagentInfo.reagent.itemID` (Midnight shape), falling back to `reagentInfo.itemID`.
+- `expiresAt = ns.FS:Now() + (expirationTime - C_CraftingOrders.GetCraftingOrderTime())`.
+- The reward itemID comes from `itemLink:match("item:(%d+)")`.
+
+`ValueRewards` checks these sources in order, per unit, and uses the first that gives a value:
+1. `rewardOverrides["item:<id>"|"currency:<id>"]`
+2. `ns.GameData.OrderRewards`: `knowledge` → `points × knowledgePointValue`; `moxie` → `moxieValue`
+3. for items, `Prices:Get(itemID).value` (kind `"reagent"`)
+4. for currencies, a name containing `moxieNamePattern` (kind `"moxie"`)
+5. otherwise kind `"unknown"`, `value = nil`, `unpriced = true`, and a count is added to `db.global.ordersUnknownRewards[key]` with `lastSeen = Now()`.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `busted tests/orders && luacheck .`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Data/OrderRewards.lua Modules/Orders.lua tests/orders/normalize_spec.lua FabricationStation.toc .luacheckrc
+git commit -m "feat: normalize crafting orders and value patron rewards"
+```
+
+### Task 4: Order scoring, risk flags, filters, best claimable order
+
+**Files:**
+- Modify: `Modules/Orders.lua`
+- Test: `tests/orders/score_spec.lua`
+
+**Interfaces:**
+- Consumes: `Recipes:Evaluate(recipeID, charKey, opts) -> RecipeResult`; `Recipes:GetRanked(filter)`; `Scanner:GetSchematic(recipeID).skillLineID`; `Scanner:ProjectConcentration(charKey, skillLineID, atTime)`; `Customers:IsBlocked`; Task 3 `Normalize`, `ValueRewards`, `Settings`.
+- Produces: `Orders.RISKS = {"noMatsLowTip","unreachableQuality","noConcentration","expiringSoon","blockedCustomer"}` (in this order; a view's `risks` list follows the same order); `Orders.RISK_LABELS = {noMatsLowTip="No mats, low tip", unreachableQuality="Can't reach min quality", noConcentration="Not enough concentration", expiringSoon="Expiring soon", blockedCustomer="Blocked customer"}`; `Orders:BuildContext(charKey) -> ctx = {charKey, now, bestGPC, concentrationFor = fn(recipeID) -> number|nil}`; `Orders:ScoreInput(input, ctx) -> OrderView`; `Orders:Score(orderInfo) -> OrderView` (contract; `= ScoreInput(Normalize(orderInfo), BuildContext(ns.FS:CharKey()))`); `Orders:IsHidden(view, filters) -> bool`; `Orders:Filter(views, filters) -> views` (visible only, sorted by score descending, nil scores last); `Orders:GetBestClaimable(views, claim) -> view|nil, reason` with `claim = {claimsRemaining = n, hasClaimed = bool}` and `reason` one of `"alreadyClaimed"`, `"none"`.
+- `bestGPC` = `Recipes:GetRanked({charKey=charKey, usesConcentration=true, sortBy="goldPerConcentration"})[1].goldPerConcentration`, floored at 0, or 0 when there are no results.
+
+Scoring algorithm (the signature does not determine it):
+
+```lua
+local commission = input.tipAmount - input.consortiumCut
+local rewardsValue, rewards, unpriced = self:ValueRewards(input.rewards)
+local target = (input.minQuality or 0) > 1 and input.minQuality or nil
+local opts = { targetQuality = target, providedReagents = input.provided }
+local r, usedConc = Recipes:Evaluate(input.recipeID, ctx.charKey, opts), false
+if target and (r.expectedQuality or 0) < target then
+  opts.useConcentration = true
+  r, usedConc = Recipes:Evaluate(input.recipeID, ctx.charKey, opts), true
+end
+local concCost = usedConc and (r.concentrationCost or 0) or 0
+local net = commission + rewardsValue - (r.reagentCost or 0)
+local scorable = not (r.flags.noPrice or r.flags.unknownRecipe)
+local score = scorable and (net - math.floor(concCost * ctx.bestGPC)) or nil
+-- risks:
+--  noMatsLowTip       reagentState == "none" and commission - reagentCost < settings.lowTipMargin
+--  unreachableQuality target and r.expectedQuality < target
+--  noConcentration    usedConc and not unreachable and ctx.concentrationFor(recipeID) ~= nil and concCost > that value
+--  expiringSoon       input.expiresAt - ctx.now < settings.expiringSoonSeconds
+--  blockedCustomer    input.customer and Customers:IsBlocked(input.customer)
+-- goldPerConcentration = concCost > 0 and math.floor(net / concCost) or nil
+```
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("Orders scoring", function()
+  local ns, O, ev
+  local function ctx(o) return P2.merge({charKey="Me-Silvermoon", now=1000000, bestGPC=1000, concentrationFor=function() return 40 end}, o) end
+  local function input(o) return P2.merge({orderID=777, orderType="personal", recipeID=4444, itemID=211111, minQuality=2,
+    tipAmount=500000, consortiumCut=50000, reagentState="all", customer="Bob-Silvermoon", expiresAt=1086400, provided={}, rewards={}}, o) end
+  before_each(function()
+    ns = P2.boot()
+    ev = { plain = {expectedQuality=3, reagentCost=200000, concentrationCost=0, flags={}},
+           conc  = {expectedQuality=4, reagentCost=200000, concentrationCost=50, flags={}} }
+    P2.fake_module(ns, "Recipes", { Evaluate = function(_, _, _, o) return o.useConcentration and ev.conc or ev.plain end })
+    P2.fake_module(ns, "Customers", { IsBlocked = function(_, n) return n == "Bad-Silvermoon" end, NormalizeName = function(_, n) return n end })
+    P2.fake_module(ns, "Prices", { Get = function() return {} end })
+    P2.load(ns, {"Data/OrderRewards.lua", "Modules/Orders.lua"}); O = ns.FS:GetModule("Orders")
+  end)
+  it("scores commission minus reagent cost", function()
+    local v = O:ScoreInput(input(), ctx())
+    assert.equal(450000, v.commission); assert.equal(250000, v.net); assert.equal(250000, v.score)
+    assert.is_false(v.usedConcentration); assert.same({}, v.risks); assert.equal(500000, v.tip)
+  end)
+  it("charges concentration at the best gold per concentration", function()
+    local v = O:ScoreInput(input({minQuality=4}), ctx())
+    assert.is_true(v.usedConcentration); assert.equal(50, v.concentrationCost)
+    assert.equal(200000, v.score); assert.equal(5000, v.goldPerConcentration)
+    assert.same({"noConcentration"}, v.risks)
+  end)
+  it("flags unreachable quality instead of concentration", function()
+    ev.conc.expectedQuality = 3
+    assert.same({"unreachableQuality"}, O:ScoreInput(input({minQuality=4}), ctx()).risks)
+  end)
+  it("flags no-mats low tip, expiring, blocked", function()
+    ev.plain.reagentCost = 100000   -- commission 135000 - 100000 = 35000 < 100000 margin
+    local v = O:ScoreInput(input({reagentState="none", tipAmount=150000, consortiumCut=15000, expiresAt=1001800, customer="Bad-Silvermoon"}), ctx())
+    assert.same({"noMatsLowTip","expiringSoon","blockedCustomer"}, v.risks)
+    assert.same({}, O:ScoreInput(input({reagentState="none", tipAmount=300000, consortiumCut=30000}), ctx()).risks)
+  end)
+  it("leaves score nil when a price is missing", function()
+    ev.plain.flags = {noPrice=true}
+    local v = O:ScoreInput(input(), ctx()); assert.is_nil(v.score); assert.is_true(v.flags.noPrice)
+  end)
+  it("filters and picks the best claimable order", function()
+    local A = {orderID=1, orderType="personal", score=300000, risks={"expiringSoon"}}
+    local B = {orderID=2, orderType="public", score=200000, risks={}}
+    local C = {orderID=3, orderType="public", score=nil, risks={}}
+    local D = {orderID=4, orderType="personal", score=100000, risks={}}
+    assert.equal(2, O:GetBestClaimable({A,B,C,D}, {claimsRemaining=2}).orderID)
+    assert.equal(4, O:GetBestClaimable({A,B,C,D}, {claimsRemaining=0}).orderID)
+    assert.same({nil, "alreadyClaimed"}, {O:GetBestClaimable({B}, {claimsRemaining=2, hasClaimed=true})})
+    local f = {hideRisks={expiringSoon=true}, orderTypes={public=true, personal=true}, hideUnscored=true}
+    assert.same({2, 4}, (function() local t={} for _,v in ipairs(O:Filter({A,B,C,D}, f)) do t[#t+1]=v.orderID end return t end)())
+  end)
+end)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/orders/score_spec.lua`
+Expected: FAIL (`attempt to call method 'ScoreInput' (a nil value)`)
+
+- [ ] **Step 3: Implement the functions listed under Interfaces in `Modules/Orders.lua`**
+
+`GetBestClaimable` picks the highest `score` among views with `score ~= nil`, `score > claimMinScore`, and no risk in `claimBlockingRisks`. A `public` order also needs `claim.claimsRemaining > 0`. `IsHidden` is true when the view's type is not in `orderTypes`, any risk is in `hideRisks`, `hideUnscored` is set and `score == nil`, or `minScore` is set and the score is below it.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `busted tests/orders && luacheck .`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Modules/Orders.lua tests/orders/score_spec.lua
+git commit -m "feat: score crafting orders with risk flags, filters and best-claim selection"
+```
+
+### Task 5: Order board capture, snapshot, live updates, Claim Best Order, fulfilment, personal counts
+
+**Files:**
+- Modify: `Modules/Orders.lua`, `.luacheckrc` (`ProfessionsFrame`, `EventUtil`, `hooksecurefunc`, `C_TradeSkillUI`)
+- Test: `tests/orders/board_spec.lua`, `tests/orders/claim_click_only_spec.lua`
+
+**Interfaces:**
+- Consumes: Task 4 scoring; `ns.FS:Debounce(key, seconds, fn)`; `ns.FS:SafeCall`; `C_CraftingOrders.GetCrafterOrders/GetClaimedOrder/GetOrderClaimInfo/ClaimOrder/GetPersonalOrdersInfo`; `C_TradeSkillUI.GetChildProfessionInfo().profession`; `C_TradeSkillUI.GetItemCraftedQualityByItemInfo(link)`.
+- Produces:
+  - `Orders:OnBoardShown(orderTypeEnum, orders)` replaces that type's views in the live set and in `db.global.ordersSnapshot`, sets `snapshot.time = Now()` and `snapshot.charKey`, and sends `FS_ORDERS_CHANGED`.
+  - `Orders:GetSnapshot() -> {time, charKey, orders}` (contract; leaves out views with `expiresAt < Now()`).
+  - `Orders:GetLiveViews() -> {OrderView}` (current board only; empty after the Professions frame closes).
+  - `Orders:GetView(orderID) -> OrderView|nil` (live first, then snapshot).
+  - `Orders:Rescore()` (snapshot and live views from stored `input`, using `BuildContext(snapshot.charKey)`).
+  - `Orders:OnCustomerNameUpdated(event, name, orderID)`, `Orders:OnRewardsUpdated(event, rewards, orderID)`.
+  - `Orders:GetClaimedOrder() -> OrderInput|nil`.
+  - `Orders:ClaimBest() -> view|nil, reason`: calls `ClaimOrder` at most once. Only `OrdersSidePanel`'s `OnClick` may call it.
+  - `Orders:OnFulfillClicked(orderID, note, profession)` (post-hook on `C_CraftingOrders.FulfillOrder`), `Orders:OnFulfillResponse(event, result, orderID)`: sends `FS_ORDER_FULFILLED` and removes the order from the snapshot.
+  - `Orders:UpdatePersonalCounts(infos) -> arrivals` with `{ {profession, professionName, count, delta} }`; sends `FS_PERSONAL_ORDER_ARRIVED(professionName, count, delta)` for each arrival.
+  - `Orders:InstallBoardHook() -> bool`.
+- `OnEnable` registers, each through `SafeCall("Orders")`:
+  - game events: `CRAFTINGORDERS_UPDATE_CUSTOMER_NAME`, `CRAFTINGORDERS_UPDATE_REWARDS`, `CRAFTINGORDERS_FULFILL_ORDER_RESPONSE`, `CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS`, and `CRAFTINGORDERS_UPDATE_ORDER_COUNT` (Personal type only; both count events call `UpdatePersonalCounts(C_CraftingOrders.GetPersonalOrdersInfo())`)
+  - messages `FS_PRICES_CHANGED`, `FS_RECIPES_CHANGED` and `FS_CUSTOMERS_CHANGED`, each calling `ns.FS:Debounce("orders-rescore", 0.5, Rescore)`
+  - `hooksecurefunc(C_CraftingOrders, "FulfillOrder", ...)`
+  - `EventUtil.ContinueOnAddOnLoaded("Blizzard_Professions", InstallBoardHook)`
+
+  `InstallBoardHook` post-hooks `ProfessionsFrame.OrdersPage` `ShowOrders` and calls `OnBoardShown(page.orderType, C_CraftingOrders.GetCrafterOrders())`. It returns false and prints one chat line if the target is missing. It also hooks `ProfessionsFrame` `OnHide` (via `HookScript`) to clear the live views.
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("Orders board", function()
+  local ns, O, wow, claimed, claimCalls
+  before_each(function()
+    claimed, claimCalls = nil, {}
+    ns, wow = P2.boot({
+      C_CraftingOrders = { GetCraftingOrderTime = function() return 5000 end, GetClaimedOrder = function() return claimed end,
+        GetOrderClaimInfo = function() return {claimsRemaining = 3} end, ClaimOrder = function(id, p) claimCalls[#claimCalls+1] = {id, p} end },
+      C_TradeSkillUI = { GetChildProfessionInfo = function() return {profession = 7} end,
+        GetItemCraftedQualityByItemInfo = function() return 3 end } })
+    P2.fake_module(ns, "Recipes", { Evaluate = function() return {expectedQuality=3, reagentCost=200000, flags={}} end, GetRanked = function() return {} end })
+    P2.fake_module(ns, "Customers", { IsBlocked = function(_, n) return n == "Bad-Silvermoon" end,
+      NormalizeName = function(_, n) return n and (n:find("-") and n or n .. "-Silvermoon") end })
+    P2.fake_module(ns, "Prices", { Get = function() return {} end })
+    P2.fake_module(ns, "Scanner", { GetSchematic = function() return {skillLineID = 2900} end, ProjectConcentration = function() return 500, 1000 end })
+    P2.load(ns, {"Data/OrderRewards.lua", "Modules/Orders.lua"}); O = ns.FS:GetModule("Orders")
+  end)
+  it("replaces only the shown order type in the snapshot", function()
+    O:OnBoardShown(0, { P2.raw_order({orderID=1, orderType=0}), P2.raw_order({orderID=2, orderType=0}) })
+    O:OnBoardShown(2, { P2.raw_order({orderID=3}) })
+    assert.equal(3, #O:GetSnapshot().orders)
+    O:OnBoardShown(0, {})
+    assert.equal(1, #O:GetSnapshot().orders); assert.equal(1000, O:GetSnapshot().time)
+    assert.equal("Me-Silvermoon", O:GetSnapshot().charKey)
+  end)
+  it("applies a late customer name and re-flags a blocked customer", function()
+    O:OnBoardShown(2, { P2.raw_order({customerName=nil}) })
+    assert.same({}, O:GetView(777).risks)
+    O:OnCustomerNameUpdated("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", "Bad", 777)
+    assert.equal("Bad-Silvermoon", O:GetView(777).customer); assert.same({"blockedCustomer"}, O:GetView(777).risks)
+  end)
+  it("rescoring uses the snapshot character and GetSnapshot drops expired orders", function()
+    O:OnBoardShown(2, { P2.raw_order({orderID=1}), P2.raw_order({orderID=2, expirationTime=4000}) })  -- expiresAt 0
+    ns.FS.CharKey = function() return "Alt-Silvermoon" end; local s = spy.on(O, "BuildContext")
+    O:Rescore()
+    assert.spy(s).was.called_with(O, "Me-Silvermoon")
+    assert.equal(1, #O:GetSnapshot().orders)
+  end)
+  it("claims the best order once and refuses while one is claimed", function()
+    O:OnBoardShown(2, { P2.raw_order({orderID=10, tipAmount=900000}), P2.raw_order({orderID=11}) })
+    assert.equal(10, O:ClaimBest().orderID); assert.same({{10, 7}}, claimCalls)
+    claimed = P2.raw_order({orderID=10})
+    assert.same({nil, "alreadyClaimed"}, {O:ClaimBest()}); assert.equal(1, #claimCalls)
+  end)
+  it("sends FS_ORDER_FULFILLED on a successful fulfil response", function()
+    claimed = P2.raw_order({outputItemHyperlink = "|Hitem:211111::|h[Potion]|h"})
+    spy.on(O, "SendMessage")
+    O:OnFulfillClicked(777, "", 7)
+    O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 10, 777)   -- CannotFulfill: nothing sent
+    assert.spy(O.SendMessage).was_not.called()
+    O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+    assert.spy(O.SendMessage).was.called_with(O, "FS_ORDER_FULFILLED", {orderID=777, orderType="personal", customer="Bob-Silvermoon",
+      recipeID=4444, itemID=211111, quality=3, tip=500000, consortiumCut=50000, commission=450000, rewards={}, rewardsValue=0, time=1000, charKey="Me-Silvermoon"})
+  end)
+  it("detects personal order arrivals after a baseline", function()
+    local t = {profession=7, professionName="Tailoring"}
+    assert.same({}, O:UpdatePersonalCounts({P2.merge(t, {numPersonalOrders=1})}))   -- first sighting is the baseline
+    assert.same({}, O:UpdatePersonalCounts({P2.merge(t, {numPersonalOrders=1})}))
+    assert.same({}, O:UpdatePersonalCounts({P2.merge(t, {numPersonalOrders=0})}))
+    assert.same({{profession=7, professionName="Tailoring", count=2, delta=2}}, O:UpdatePersonalCounts({P2.merge(t, {numPersonalOrders=2})}))
+  end)
+end)
+```
+
+`tests/orders/claim_click_only_spec.lua`: parse `FabricationStation.toc` and read every listed `.lua` file. Then assert:
+- `C_CraftingOrders.ClaimOrder(` occurs in exactly one file, `Modules/Orders.lua`, inside `function Orders:ClaimBest`.
+- `:ClaimBest(` occurs outside `Modules/Orders.lua` only in `UI/OrdersPanel.lua`, on a line inside a `SetScript("OnClick"` block. Track the enclosing `SetScript("OnClick", function` … `end)` by line numbers.
+
+Until Task 8 adds the button, the second assertion holds trivially: no caller exists yet.
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/orders/board_spec.lua tests/orders/claim_click_only_spec.lua`
+Expected: FAIL (`attempt to call method 'OnBoardShown' (a nil value)`)
+
+- [ ] **Step 3: Implement the functions listed under Interfaces in `Modules/Orders.lua`**
+
+The live set and the snapshot are keyed by `orderID`. The snapshot stores the full `OrderView` (plain tables only). `GetClaimedOrder` normalizes `C_CraftingOrders.GetClaimedOrder()`. `ClaimBest` builds `claim` from `GetOrderClaimInfo(profession).claimsRemaining` and `GetClaimedOrder() ~= nil`. `OnFulfillClicked` stores the pending fulfilment. Its quality is `GetItemCraftedQualityByItemInfo(outputItemHyperlink)`, or `nil` when there is no link. Personal counts persist in `db.global.ordersState[charKey].personalCounts`; a profession with no stored count records a baseline and produces no arrival.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `busted tests/orders && luacheck .`
+Expected: PASS
+
+- [ ] **Step 5: In-game check**
+
+`/reload`, open a profession at a crafting-orders table, and open the Personal and Patron tabs. Then `/dump #FabricationStationDB.global.ordersSnapshot.orders`: the count equals the number of orders seen. Also record whether `CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS` fired at login: `/etrace`, or a temporary print in the handler that you remove before committing.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add Modules/Orders.lua tests/orders/board_spec.lua tests/orders/claim_click_only_spec.lua .luacheckrc
+git commit -m "feat: capture order board, snapshot, claim best order, fulfilment and personal counts"
+```
+
+### Task 6: Ledger store, queries, weekly and per-recipe profit, benchmarks
+
+**Files:**
+- Create: `Modules/Ledger.lua`
+- Modify: `FabricationStation.toc`, `.luacheckrc` (`C_DateAndTime`)
+- Test: `tests/ledger/ledger_spec.lua`
+
+**Interfaces:**
+- Consumes: `ns.FS:Now()`, `ns.FS:CharKey()`; `C_DateAndTime.GetSecondsUntilWeeklyReset()`.
+- Produces:
+  - `Ledger:Settings()` with defaults `{benchmarkMinSamples = 3, keepDays = 365}`.
+  - `Ledger:Add(entry)` (contract; fills `time = Now()` and `charKey = CharKey()` when missing; rejects a `type` outside `craft|sale|commission` or a non-integer `amount` with `error`; sends `FS_LEDGER_CHANGED`).
+  - `Ledger:Query(filter) -> {LedgerEntry}` (contract; `filter = {type?, since?, before?, recipeID?, charKey?, customer?}`; newest first).
+  - `Ledger:Prune(now)`.
+  - `Ledger:WeekStart(now) -> number`.
+  - `Ledger:Weekly(now, weeks) -> { {weekStart, income, cost, profit, incomplete} }` (newest first).
+  - `Ledger:ByRecipe(filter) -> { [recipeID] = {income, cost, profit, n, incomplete} }`.
+  - `Ledger.Percentile(sorted, p) -> number`.
+  - `Ledger:Benchmark(recipeID, quality) -> {median, p25, p75, n}|nil` (contract; `quality == nil` means all qualities).
+- Profit rule: only `sale` and `commission` entries count. `income = amount`, `cost = entry.cost or 0`, and `incomplete` counts entries whose `cost == nil`. `craft` entries are cost-basis records and are excluded. NPC reward values are shown but are not gold income.
+- `WeekStart(now) = now + GetSecondsUntilWeeklyReset() - 604800`.
+- Percentile is linear interpolation on sorted values: `h = (n-1)p + 1`, and the result is rounded to an integer with `math.floor(x + 0.5)`. The benchmark uses the gross `tip` of commission entries and returns nil when `n < benchmarkMinSamples`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("Ledger store", function()
+  local ns, L
+  local W = 1495200   -- WeekStart(2000000) with 100000 s until reset
+  before_each(function()
+    ns = P2.boot({ C_DateAndTime = { GetSecondsUntilWeeklyReset = function() return 100000 end } })
+    P2.load(ns, {"Modules/Ledger.lua"}); L = ns.FS:GetModule("Ledger")
+  end)
+  it("computes the weekly reset boundary", function() assert.equal(W, L:WeekStart(2000000)) end)
+  it("aggregates weekly and per-recipe profit", function()
+    L:Add({time=W+100, type="commission", amount=450000, cost=30000, recipeID=4444, tip=500000, quality=3})
+    L:Add({time=W+200, type="sale", amount=950000, cost=150000, recipeID=4444, quantity=5})
+    L:Add({time=W-100, type="sale", amount=100000, recipeID=5555, quantity=1})
+    L:Add({time=W+300, type="craft", amount=-30000, recipeID=4444, quantity=2})
+    assert.same({ {weekStart=W, income=1400000, cost=180000, profit=1220000, incomplete=0},
+                  {weekStart=W-604800, income=100000, cost=0, profit=100000, incomplete=1} }, L:Weekly(2000000, 2))
+    assert.same({ [4444] = {income=1400000, cost=180000, profit=1220000, n=2, incomplete=0},
+                  [5555] = {income=100000, cost=0, profit=100000, n=1, incomplete=1} }, L:ByRecipe({}))
+  end)
+  it("queries newest first and rejects bad entries", function()
+    L:Add({time=1, type="craft", amount=-1}); L:Add({time=2, type="sale", amount=5})
+    assert.equal(2, L:Query({})[1].time); assert.equal(1, #L:Query({type="craft"}))
+    assert.has_error(function() L:Add({type="loot", amount=1}) end)
+    assert.has_error(function() L:Add({type="sale", amount=1.5}) end)
+  end)
+  it("benchmarks tips by percentile", function()
+    for _, t in ipairs({300, 100, 400, 200}) do L:Add({type="commission", amount=t, tip=t, recipeID=4444, quality=3}) end
+    assert.same({median=250, p25=175, p75=325, n=4}, L:Benchmark(4444, 3))
+    assert.same({median=250, p25=175, p75=325, n=4}, L:Benchmark(4444, nil))
+    assert.is_nil(L:Benchmark(4444, 2)); assert.is_nil(L:Benchmark(9999, 3))
+  end)
+  it("prunes entries older than keepDays", function()
+    L:Add({time=2000000 - 366*86400, type="sale", amount=1}); L:Add({time=2000000 - 10, type="sale", amount=1})
+    L:Prune(2000000); assert.equal(1, #L:Query({}))
+  end)
+end)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/ledger/ledger_spec.lua`
+Expected: FAIL (`Modules/Ledger.lua` not found)
+
+- [ ] **Step 3: Implement the `Ledger` functions listed under Interfaces in `Modules/Ledger.lua`**
+
+The store is `db.global.ledger = {entries = {}, costBasis = {}, nameIndex = {}}`, created lazily. `OnEnable` calls `Prune(Now())`.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `busted tests/ledger && luacheck .`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Modules/Ledger.lua tests/ledger/ledger_spec.lua FabricationStation.toc .luacheckrc
+git commit -m "feat: add Ledger store with weekly, per-recipe profit and tip benchmarks"
+```
+
+### Task 7: Ledger capture — craft cost basis, order commissions, AH sale mail
+
+**Files:**
+- Modify: `Modules/Ledger.lua`, `.luacheckrc` (`GetInboxInvoiceInfo`, `GetInboxHeaderInfo`, `TakeInboxMoney`, `AutoLootMailItem`, `AUCTION_SOLD_MAIL_SUBJECT`)
+- Test: `tests/ledger/capture_spec.lua`
+
+**Interfaces:**
+- Consumes: `Scanner:GetSchematic(recipeID)` (`reagentSlots = { {slotIndex, required, quantity, reagents = {itemID,...}, kind} }`); `Prices:Get`; `Orders:GetClaimedOrder() -> OrderInput|nil` (Task 5); `FS_ORDER_FULFILLED` / `FulfilledOrder` (Task 5).
+- Produces:
+  - `Ledger:OnCraftRecipe(recipeID, numCasts, craftingReagents, recipeLevel, orderID, applyConcentration)` (post-hook on `C_TradeSkillUI.CraftRecipe`).
+  - `Ledger:OnCraftResult(event, data)` (`TRADE_SKILL_ITEM_CRAFTED_RESULT`).
+  - `Ledger:CostOfCraft(recipeID, craftingReagents, provided, returned) -> cost, incomplete, estimated`.
+  - `Ledger:OnOrderFulfilled(event, fulfilled)`.
+  - `Ledger:OnTakeMoney(index)` (post-hook on `TakeInboxMoney` and `AutoLootMailItem`).
+  - `Ledger.ItemNameFromLink(link) -> string|nil`.
+  - `Ledger:ResolveItemName(name) -> itemID|nil, ambiguous`.
+- `CostOfCraft` rules:
+  - A reagent's itemID is `r.reagent and r.reagent.itemID or r.itemID`; currency reagents cost 0.
+  - For each schematic slot, use the `craftingReagents` entries whose itemID is in `slot.reagents`. If there are none, a required slot uses `slot.reagents[1] × slot.quantity` and marks the cost `estimated`.
+  - The paid quantity per item is `max(0, used - provided[itemID])`.
+  - Returned reagents are subtracted at their price.
+  - Any used item without a price makes the cost `incomplete`, and the cost then sums only the priced items.
+- The craft entry is `{type="craft", amount=-cost, itemID=data.itemID, quantity=data.quantity, quality=data.craftingQuality, recipeID, ref=orderID, incomplete?}`. A non-order craft that is not incomplete also adds to `costBasis[itemID] = {totalCost += cost, totalQty += quantity, recipeID}` and sets `nameIndex[ItemNameFromLink(data.hyperlink)] = {itemID, ambiguous}`, where `ambiguous` becomes true once a second itemID has been seen for that name.
+- `ItemNameFromLink` strips `|A...|a` atlas markup and trims spaces from the text inside `[...]`.
+- The commission entry is `{type="commission", amount=commission, tip, recipeID, itemID, quality, customer, orderType, ref=orderID, rewardsValue, cost = Σ -amount of craft entries with ref == orderID, or nil when none}`.
+- Sale entries:
+  - From the invoice: `invoiceType == "seller"` gives `{type="sale", source="invoice", itemName, itemID, ambiguous, quantity=count or 1, amount=bid-consignment, buyer=playerName, deposit, recipeID=costBasis.recipeID, cost=floor(totalCost/totalQty*quantity+0.5) or nil}`.
+  - Subject fallback, used only when the invoice is nil: the subject matches a pattern built from `AUCTION_SOLD_MAIL_SUBJECT`, or the literal `"Auction successful: %s"` when that global is missing. It produces `{source="subject", itemName=<capture>, quantity=1, amount=header money}`.
+  - Dedupe signature: `itemName|bid or money|count|playerName|floor(daysLeft*1440)`, kept for the session. Header money of 0 is skipped.
+- `OnEnable` sets up, each through `SafeCall("Ledger")`:
+  - `hooksecurefunc(C_TradeSkillUI, "CraftRecipe", …)`
+  - `hooksecurefunc("TakeInboxMoney", …)` and `hooksecurefunc("AutoLootMailItem", …)`
+  - the event `TRADE_SKILL_ITEM_CRAFTED_RESULT`
+  - the message `FS_ORDER_FULFILLED`
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("Ledger capture", function()
+  local ns, L, inv, hdr, claimed
+  local LINK = "|cff1eff00|Hitem:211111::|h[Potion of Foo |A:Professions-ChatIcon-Quality-Tier3:17:15::1|a]|h|r"
+  before_each(function()
+    inv, hdr, claimed = {}, {}, nil
+    ns = P2.boot({ GetInboxInvoiceInfo = function(i) return unpack(inv[i] or {}, 1, 12) end,
+                   GetInboxHeaderInfo = function(i) return unpack(hdr[i] or {}, 1, 12) end,
+                   AUCTION_SOLD_MAIL_SUBJECT = "Auction successful: %s",
+                   C_DateAndTime = { GetSecondsUntilWeeklyReset = function() return 1 end } })
+    local price = {[100]=10000, [101]=15000, [200]=5000}
+    P2.fake_module(ns, "Prices", { Get = function(_, id) return {value = price[id]} end })
+    P2.fake_module(ns, "Scanner", { GetSchematic = function() return { reagentSlots = {
+      {slotIndex=1, required=true, quantity=3, reagents={100,101}, kind="basic"},
+      {slotIndex=2, required=true, quantity=2, reagents={200}, kind="basic"} } } end })
+    P2.fake_module(ns, "Orders", { GetClaimedOrder = function() return claimed end })
+    P2.load(ns, {"Modules/Ledger.lua"}); L = ns.FS:GetModule("Ledger")
+  end)
+  local function craft(orderID)
+    L:OnCraftRecipe(4444, 1, { {reagent={itemID=100}, quantity=3, dataSlotIndex=1} }, nil, orderID, false)
+    L:OnCraftResult("TRADE_SKILL_ITEM_CRAFTED_RESULT", {itemID=211111, quantity=2, craftingQuality=3, hyperlink=LINK,
+      resourcesReturned={ {reagent={itemID=100}, quantity=1} }})
+  end
+  it("stores craft cost basis at craft time", function()
+    craft(nil)
+    local e = L:Query({type="craft"})[1]
+    assert.same({-30000, 2, 3, 4444, 211111}, {e.amount, e.quantity, e.quality, e.recipeID, e.itemID})
+    assert.same({totalCost=30000, totalQty=2, recipeID=4444}, ns.FS.db.global.ledger.costBasis[211111])
+    assert.equal(211111, (L:ResolveItemName("Potion of Foo")))
+  end)
+  it("subtracts customer-provided reagents and records the commission", function()
+    claimed = {orderID=777, provided={[200]=2}}
+    craft(777)
+    assert.equal(-20000, L:Query({type="craft"})[1].amount)
+    assert.is_nil(ns.FS.db.global.ledger.costBasis[211111])
+    L:OnOrderFulfilled("FS_ORDER_FULFILLED", {orderID=777, orderType="personal", customer="Bob-Silvermoon", recipeID=4444, itemID=211111,
+      quality=3, tip=500000, consortiumCut=50000, commission=450000, rewards={}, rewardsValue=0, time=1000, charKey="Me-Silvermoon"})
+    local c = L:Query({type="commission"})[1]
+    assert.same({450000, 20000, 500000, 777}, {c.amount, c.cost, c.tip, c.ref})
+  end)
+  it("records an AH sale from the invoice with cost basis", function()
+    craft(nil); craft(nil)   -- costBasis 60000 / 4
+    inv[1] = {"seller", "Potion of Foo", "Buyer", 1000000, 0, 20000, 50000, 0, 0, 0, 5, false}
+    hdr[1] = {nil, nil, "Auction House", "Auction successful: Potion of Foo (5)", 970000, 0, 29.5, 0}
+    L:OnTakeMoney(1)
+    local s = L:Query({type="sale"})[1]
+    assert.same({950000, 5, 75000, 4444, 211111, "invoice"}, {s.amount, s.quantity, s.cost, s.recipeID, s.itemID, s.source})
+  end)
+  it("ignores a second take of the same mail", function()
+    inv[1] = {"seller", "Potion of Foo", "Buyer", 1000000, 0, 20000, 50000, 0, 0, 0, 5, false}
+    hdr[1] = {nil, nil, "Auction House", "x", 970000, 0, 29.5, 0}
+    L:OnTakeMoney(1); L:OnTakeMoney(1); assert.equal(1, #L:Query({type="sale"}))
+  end)
+  it("records a sale of an uncrafted item as incomplete", function()
+    inv[2] = {"seller", "Mystery Ore", nil, 40000, 0, 0, 2000, 0, 0, 0, 1, true}
+    hdr[2] = {nil, nil, "Auction House", "x", 38000, 0, 10, 0}
+    L:OnTakeMoney(2)
+    local s = L:Query({type="sale"})[1]
+    assert.is_nil(s.itemID); assert.is_nil(s.cost); assert.equal(38000, s.amount)
+    assert.equal(1, L:Weekly(1000, 1)[1].incomplete)
+  end)
+  it("falls back to the English subject and ignores purchases", function()
+    inv[3] = {"buyer", "Thing", "Seller", 5000, 0, 0, 0, 0, 0, 0, 1, false}; hdr[3] = {nil, nil, "Auction House", "Auction won: Thing", 0, 0, 30, 1}
+    hdr[4] = {nil, nil, "Auction House", "Auction successful: Potion of Foo", 950000, 0, 29, 0}
+    L:OnTakeMoney(3); L:OnTakeMoney(4)
+    local s = L:Query({type="sale"}); assert.equal(1, #s)
+    assert.same({"subject", "Potion of Foo", 950000, 1}, {s[1].source, s[1].itemName, s[1].amount, s[1].quantity})
+  end)
+end)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/ledger/capture_spec.lua`
+Expected: FAIL (`attempt to call method 'OnCraftRecipe' (a nil value)`)
+
+- [ ] **Step 3: Implement the capture functions listed under Interfaces in `Modules/Ledger.lua`**
+
+The pending craft context `{recipeID, craftingReagents, orderID, provided, castsLeft = numCasts}` is set by `OnCraftRecipe`. `provided` comes from `Orders:GetClaimedOrder()` when its `orderID` matches. Each `OnCraftResult` uses the context and decrements `castsLeft`, then clears the context at 0. A result with no context records nothing.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `busted tests/ledger && luacheck .`
+Expected: PASS
+
+- [ ] **Step 5: In-game check**
+
+- Craft one item. `/dump FabricationStationDB.global.ledger.entries[#FabricationStationDB.global.ledger.entries]` shows a `craft` entry with a negative amount.
+- Collect one "Auction successful" mail with Open All. It produces exactly one `sale` entry.
+- Note in the commit message whether `TRADE_SKILL_ITEM_CRAFTED_RESULT.quantity` included multicraft extras.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add Modules/Ledger.lua tests/ledger/capture_spec.lua .luacheckrc
+git commit -m "feat: capture craft cost basis, order commissions and AH sales from mail"
+```
+
+### Task 8: OrdersPanel — additions to Blizzard's crafting-orders list
+
+**Files:**
+- Create: `UI/OrdersPanel.lua`
+- Modify: `FabricationStation.toc`, `.luacheckrc` (`ScrollUtil`, `CreateFrame`, `GameTooltip`, `UIParent`)
+- Test: `tests/ui/orders_panel_spec.lua`
+
+**Interfaces:**
+- Consumes: `Orders:GetView`, `GetLiveViews`, `IsHidden`, `Settings`, `GetBestClaimable`, `ClaimBest`, `RISK_LABELS`; `Customers:Get`, `IsBlocked`; `Ledger:Benchmark`; `ns.UI.FormatMoney`; `ns.FS:SafeCall`.
+- Produces:
+  - Shared table `ns.UI.OrdersPanel` with pure functions:
+    - `RowModel(view, customer, filters) -> {profit, score, riskCount, riskText, highlight = "blocked"|"vip"|"repeat"|nil, dimmed}`. `profit = view.net` and `score` are copper or nil. `riskText` is the risk labels joined with `"\n"` for the tooltip. `dimmed = Orders:IsHidden(view, filters)`. Highlight precedence:
+      1. `"blocked"`: `view.risks` contains `blockedCustomer`, which is group-aware, or `customer.tags.blocked`
+      2. `"vip"`: `customer.tags.VIP`
+      3. `"repeat"`: `#customer.orders >= 2`
+    - `BestText(itemText, view, benchmark) -> string`, formatted `"<itemText> · net <FormatMoney(view.net)> · tip vs your median <+N%|-N%|n/a>"`, with `N = floor((tip/median - 1) * 100 + 0.5)`.
+    - `Guard(moduleName, fn, ...)`, which calls `ns.FS:SafeCall(moduleName, fn, ...)` only while that module is enabled.
+  - Three modules, each enabled per `db.global.settings.ordersPanel = {rows = true, sidePanel = true, orderViewWarning = true}`:
+    - `OrdersRowAddons`: own overlay and cell frames, anchored to Blizzard rows and parented to an own container that clips children and is anchored over `OrderList.ScrollBox`.
+    - `OrdersSidePanel`: own frame anchored `TOPLEFT` to `ProfessionsFrame` `TOPRIGHT` (+2, 0), width 220. It holds:
+      - the header `"FabricationStation"`
+      - one checkbox per risk (label `RISK_LABELS[risk]`, bound to `filters.hideRisks[risk]`) plus `"Hide unscored"`
+      - the claims-remaining text
+      - the `"Claim Best Order"` button, whose `SetScript("OnClick", ...)` is the only caller of `Orders:ClaimBest()`
+      - the best-order line from `BestText`
+      - the claim-result line from `CRAFTINGORDERS_CLAIM_ORDER_RESPONSE`: `"Claimed — open it from the order list"`, or `"Claim failed (<result>)"`.
+    - `OrderViewWarning`: own fontstring frame anchored above `ProfessionsFrame.OrdersPage.OrderView`, showing `"Blocked customer: <name>"` in red or `"VIP customer · <n> previous orders"` in gold.
+- Hooks, installed once from `EventUtil.ContinueOnAddOnLoaded("Blizzard_Professions", ...)`, with every body run through `Guard`:
+  - `hooksecurefunc(ProfessionsFrame.OrdersPage, "ShowOrders"|"ShowBuckets")`. Bucket view hides cells.
+  - `ScrollUtil.AddAcquiredFrameCallback` / `AddReleasedFrameCallback` on the ScrollBox. Rows with no `elementData.option.orderID` get no cells.
+  - `BrowseFrame:HookScript("OnShow"|"OnHide")` shows and hides the panel.
+  - `hooksecurefunc(OrderView, "SetOrder")` for the warning.
+  - Messages `FS_ORDERS_CHANGED` and `FS_CUSTOMERS_CHANGED` refresh the visible cells.
+- A missing hook target means that module prints `"FabricationStation: <module> disabled (Blizzard UI changed)"` once and calls `:Disable()`.
+- Row colours: VIP overlay `(1, 0.82, 0, 0.18)`; blocked `(1, 0.1, 0.1, 0.25)` plus a warning icon; dimmed (filtered out) uses an own black overlay at alpha `0.55`.
+- Cells, in this order: profit (net), score, and a risk icon showing `riskCount` with a `GameTooltip` of `riskText`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("OrdersPanel", function()
+  local ns, P, errors
+  before_each(function()
+    ns = P2.boot(); errors = {}
+    P2.load(ns, {"Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua", "Modules/Ledger.lua", "UI/OrdersPanel.lua"})
+    P = ns.UI.OrdersPanel
+  end)
+  it("builds a row model with highlight and dimming", function()
+    local v = {orderType="public", net=250000, score=200000, risks={"expiringSoon","blockedCustomer"}}
+    local m = P.RowModel(v, {orders={{},{}}, tags={VIP=true}}, {hideRisks={expiringSoon=true}, orderTypes={public=true}})
+    assert.same({250000, 200000, 2, "Expiring soon\nBlocked customer", "blocked", true},
+      {m.profit, m.score, m.riskCount, m.riskText, m.highlight, m.dimmed})   -- blockedCustomer risk (group-aware) wins over VIP
+    local ok = {orderType="public", net=1, score=1, risks={}}
+    local f = {hideRisks={}, orderTypes={public=true}}
+    assert.equal("vip", P.RowModel(ok, {orders={}, tags={VIP=true}}, f).highlight)
+    assert.equal("repeat", P.RowModel(ok, {orders={{},{}}, tags={}}, f).highlight)
+    assert.is_nil(P.RowModel(ok, nil, f).highlight); assert.is_false(P.RowModel(ok, nil, f).dimmed)
+  end)
+  it("disables only the failing addition", function()
+    local rows, side = ns.FS:GetModule("OrdersRowAddons"), ns.FS:GetModule("OrdersSidePanel")
+    P.Guard("OrdersRowAddons", function() error("boom") end)
+    assert.is_false(rows:IsEnabled()); assert.is_true(side:IsEnabled())
+    local called = false; P.Guard("OrdersRowAddons", function() called = true end)
+    assert.is_false(called)
+  end)
+  it("formats the best-order line with the tip benchmark", function()
+    local money = ns.UI.FormatMoney(250000)
+    assert.equal("Potion · net " .. money .. " · tip vs your median +25%",
+      P.BestText("Potion", {net=250000, tip=500000}, {median=400000, p25=1, p75=1, n=5}))
+    assert.equal("Potion · net " .. money .. " · tip vs your median n/a", P.BestText("Potion", {net=250000, tip=500000}, nil))
+  end)
+end)
+```
+
+(The test relies on 1a's `SafeCall` disabling the named module on error. The caller passes `itemText`: the hyperlink when it is cached, otherwise `tostring(itemID)`.)
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/ui/orders_panel_spec.lua`
+Expected: FAIL (`UI/OrdersPanel.lua` not found)
+
+- [ ] **Step 3: Implement `UI/OrdersPanel.lua` as specified under Interfaces**
+
+Frames are created only in `OnEnable` or the first hook call, never at file load. Do not assign any field on a Blizzard frame. Keep `rowFrame → cells` in a weak-keyed own table.
+
+- [ ] **Step 4: Run tests and lint**
+
+Run: `busted tests/ui/orders_panel_spec.lua tests/orders/claim_click_only_spec.lua && luacheck .`
+Expected: PASS (the click-only test now finds exactly one `ClaimBest(` caller, inside the button's `OnClick`).
+
+- [ ] **Step 5: In-game check**
+
+1. Open orders at a table with `/console taintLog 1` set.
+2. Check that profit, score and risk cells line up with rows while scrolling.
+3. Tag a customer VIP from `/run` and check that the row turns gold.
+4. Toggle a filter and check that matching rows dim.
+5. Click Claim Best Order, then Blizzard's Start Order and Craft buttons, and check that each still works.
+6. Disable each of the three settings and check that its addition disappears after `/reload`.
+7. `Logs/taint.log` has no `FabricationStation` entries for Blizzard_Professions.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add UI/OrdersPanel.lua tests/ui/orders_panel_spec.lua FabricationStation.toc .luacheckrc
+git commit -m "feat: add score/profit/risk columns, customer highlight, filters and Claim Best Order to crafting orders"
+```
+
+### Task 9: Personal-order arrival alert (sound + toast)
+
+**Files:**
+- Create: `UI/OrderAlert.lua`
+- Modify: `FabricationStation.toc`, `.luacheckrc` (`PlaySound`, `SOUNDKIT`)
+- Test: `tests/ui/order_alert_spec.lua`
+
+**Interfaces:**
+- Consumes: `FS_PERSONAL_ORDER_ARRIVED(professionName, count, delta)` (Task 5).
+- Produces: module `OrderAlert` with:
+  - `OrderAlert:Settings()`, defaults `db.global.settings.alerts = {personalOrderSound = true, personalOrderToast = true, sound = "RAID_WARNING", toastSeconds = 8}`
+  - `OrderAlert.ToastText(professionName, count) -> string`
+  - `OrderAlert:OnArrived(event, professionName, count, delta)`, which plays `PlaySound(SOUNDKIT[sound] or SOUNDKIT.RAID_WARNING)` and shows the own toast frame (top-centre of `UIParent`, fades after `toastSeconds`; created on first use).
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("OrderAlert", function()
+  local ns, A, played
+  before_each(function()
+    played = {}
+    ns = P2.boot({ PlaySound = function(id) played[#played+1] = id end })
+    P2.load(ns, {"UI/OrderAlert.lua"}); A = ns.FS:GetModule("OrderAlert")
+    stub(A, "ShowToast")
+  end)
+  it("formats toast text", function()
+    assert.equal("New personal crafting order: Tailoring (2 waiting)", A.ToastText("Tailoring", 2))
+    assert.equal("New personal crafting order: Tailoring (1 waiting)", A.ToastText("Tailoring", 1))
+  end)
+  it("plays the sound and shows the toast per settings", function()
+    A:OnArrived("FS_PERSONAL_ORDER_ARRIVED", "Tailoring", 2, 1)
+    assert.same({8959}, played); assert.stub(A.ShowToast).was.called_with(A, "New personal crafting order: Tailoring (2 waiting)")
+    A:Settings().personalOrderSound = false; A:Settings().personalOrderToast = false
+    A:OnArrived("FS_PERSONAL_ORDER_ARRIVED", "Tailoring", 3, 1)
+    assert.same({8959}, played); assert.stub(A.ShowToast).was.called(1)
+  end)
+end)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/ui/order_alert_spec.lua`
+Expected: FAIL (`UI/OrderAlert.lua` not found)
+
+- [ ] **Step 3: Implement `UI/OrderAlert.lua`**
+
+`OnEnable` registers `FS_PERSONAL_ORDER_ARRIVED` through `SafeCall("OrderAlert")`. `ShowToast(text)` builds or reuses the toast frame.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `busted tests/ui/order_alert_spec.lua && luacheck .`
+Expected: PASS
+
+- [ ] **Step 5: In-game check**
+
+Have a second account or a friend place a personal order while you are away from a crafting table. The sound plays and the toast shows. Record in the commit message whether the count event fired away from the table (see the Review Focus unverified list).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add UI/OrderAlert.lua tests/ui/order_alert_spec.lua FabricationStation.toc .luacheckrc
+git commit -m "feat: alert with sound and toast when a personal crafting order arrives"
+```
+
+### Task 10: Orders tab
+
+**Files:**
+- Create: `UI/Tabs/Orders.lua`
+- Modify: `FabricationStation.toc`
+- Test: `tests/ui/orders_tab_spec.lua`
+
+**Interfaces:**
+- Consumes: `MainWindow:RegisterTab(id, def)`; `Orders:GetSnapshot`, `Filter`, `Settings().filters`, `RISK_LABELS`; `ns.UI.OrdersPanel.RowModel` (Task 8); `Customers:Get`; `Ledger:Benchmark`.
+- Produces:
+  - `ns.UI.OrdersTab.Model(snapshot, filters, now) -> {header = "Orders seen <age> ago on <charKey>"|"No orders seen yet", rows = { {orderID, type, item, customer, tip, net, score, risks, expiresIn} }}`. Rows are filtered and sorted by `Orders:Filter`.
+  - `ns.UI.OrdersTab.Age(seconds) -> string`: `"<n>s"` under 60, `"<n>m"` under 3600, `"<n>h"` under 86400, otherwise `"<n>d"`, always floored.
+  - Registration at file load: `RegisterTab("orders", {label = "Orders", icon = "Interface\\Icons\\INV_Misc_Note_06", order = 40, phase = 2, build, refresh})`.
+  - The tab UI: a filter checkbox row (the same `filters` table as the side panel) and a `WowScrollBoxList` with columns Type, Item, Customer, Tip, Net, Score, Risk, Expires, using `RowModel` highlight colours. A row tooltip shows `Ledger:Benchmark(recipeID, minQuality)` as `"Your tips: median <m> (p25 <a>, p75 <b>, n=<n>)"`. `refresh` runs on `FS_ORDERS_CHANGED` and `FS_CUSTOMERS_CHANGED`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("Orders tab", function()
+  local ns, T, reg
+  before_each(function()
+    ns = P2.boot(); reg = {}
+    P2.fake_module(ns, "MainWindow", { RegisterTab = function(_, id, def) reg[id] = def end })
+    P2.load(ns, {"Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua", "Modules/Ledger.lua", "UI/OrdersPanel.lua", "UI/Tabs/Orders.lua"})
+    T = ns.UI.OrdersTab
+  end)
+  it("registers at order 40", function()
+    assert.same({"Orders", 40, 2}, {reg.orders.label, reg.orders.order, reg.orders.phase})
+  end)
+  it("formats ages", function()
+    assert.same({"59s", "1m", "59m", "1h", "1d"}, {T.Age(59), T.Age(60), T.Age(3599), T.Age(3600), T.Age(86400)})
+  end)
+  it("builds header and filtered rows", function()
+    local snap = {time=400, charKey="Me-Silvermoon", orders={
+      {orderID=1, orderType="public", itemID=5, score=10, net=10, tip=20, risks={}, expiresAt=5000},
+      {orderID=2, orderType="npc", itemID=6, score=50, net=50, tip=0, risks={"expiringSoon"}, expiresAt=1500}}}
+    local m = T.Model(snap, {hideRisks={expiringSoon=true}, orderTypes={public=true, npc=true}}, 1000)
+    assert.equal("Orders seen 10m ago on Me-Silvermoon", m.header)
+    assert.equal(1, #m.rows); assert.same({1, "public", 4000}, {m.rows[1].orderID, m.rows[1].type, m.rows[1].expiresIn})
+    assert.equal("No orders seen yet", T.Model({orders={}}, {hideRisks={}, orderTypes={}}, 1000).header)
+  end)
+end)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/ui/orders_tab_spec.lua`
+Expected: FAIL (`UI/Tabs/Orders.lua` not found)
+
+- [ ] **Step 3: Implement `UI/Tabs/Orders.lua` (model functions, registration, `build`/`refresh` from the Interfaces block)**
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `busted tests/ui/orders_tab_spec.lua && luacheck .`
+Expected: PASS
+
+- [ ] **Step 5: In-game check**
+
+On a character that has not opened the order board, `/fs` → Orders shows the last snapshot with its "seen … ago on …" header. Filters hide flagged rows.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add UI/Tabs/Orders.lua tests/ui/orders_tab_spec.lua FabricationStation.toc
+git commit -m "feat: add Orders tab showing the saved order board"
+```
+
+### Task 11: Customers tab
+
+**Files:**
+- Create: `UI/Tabs/Customers.lua`
+- Modify: `FabricationStation.toc`
+- Test: `tests/ui/customers_tab_spec.lua`
+
+**Interfaces:**
+- Consumes: `MainWindow:RegisterTab`; `Customers:Search`, `Get`, `GetGroup`, `SetNote`, `SetTag`, `Link`, `Unlink`, `Export`, `NormalizeName`.
+- Produces:
+  - `ns.UI.CustomersTab.ListModel(records) -> { {nameRealm, orders = n, tipsTotal, lastSeen, tagsText, linkedTo} }`, where `tagsText` is the sorted tags joined with `", "`.
+  - `ns.UI.CustomersTab.LinkInput(text) -> nameRealm|nil, err`, which normalizes through `Customers:NormalizeName`, returns `err = "empty"` for blank input, and passes `Link` errors through.
+  - Registration `RegisterTab("customers", {label = "Customers", order = 50, phase = 2, icon = "Interface\\Icons\\INV_Misc_GroupNeedMore", build, refresh})`.
+  - The tab UI:
+    - a search box that calls `Search` on text change
+    - a list with columns Name, Orders, Tips, Last seen, Tags
+    - a detail pane with the order history (date, item, quality, tip), a notes multi-line edit box saved on focus lost, VIP and Blocked check buttons, a custom tag add field with removable tag chips, a "Linked to" edit box with Link/Unlink buttons, and the linked alts list from `GetGroup`
+    - an "Export" button that opens an own dialog with a read-only, pre-selected edit box containing `Export(visible names)`
+  - Refresh runs on `FS_CUSTOMERS_CHANGED`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("Customers tab", function()
+  local ns, T, reg
+  before_each(function()
+    ns = P2.boot(); reg = {}
+    P2.fake_module(ns, "MainWindow", { RegisterTab = function(_, id, def) reg[id] = def end })
+    P2.load(ns, {"Modules/Customers.lua", "UI/Tabs/Customers.lua"}); T = ns.UI.CustomersTab
+  end)
+  it("registers at order 50", function() assert.same({"Customers", 50}, {reg.customers.label, reg.customers.order}) end)
+  it("builds list rows", function()
+    local rows = T.ListModel({ {nameRealm="Bob-Silvermoon", orders={{},{}}, tipsTotal=7, lastSeen=9, tags={blocked=true, VIP=true}} })
+    assert.same({nameRealm="Bob-Silvermoon", orders=2, tipsTotal=7, lastSeen=9, tagsText="VIP, blocked"}, rows[1])
+  end)
+  it("normalizes link input", function()
+    assert.equal("Bob-Silvermoon", (T.LinkInput(" Bob ")))
+    assert.same({nil, "empty"}, {T.LinkInput("  ")})
+  end)
+end)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/ui/customers_tab_spec.lua`
+Expected: FAIL (`UI/Tabs/Customers.lua` not found)
+
+- [ ] **Step 3: Implement `UI/Tabs/Customers.lua` as specified under Interfaces**
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `busted tests/ui/customers_tab_spec.lua && luacheck .`
+Expected: PASS
+
+- [ ] **Step 5: In-game check**
+
+1. Fulfil one order; the customer appears with the item, quality and tip.
+2. Tag the customer Blocked and link an alt. Back at the order board, an order from the alt shows the red highlight and the OrderView warning.
+3. Export produces CSV text you can copy.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add UI/Tabs/Customers.lua tests/ui/customers_tab_spec.lua FabricationStation.toc
+git commit -m "feat: add Customers tab with search, notes, tags, alt links and export"
+```
+
+### Task 12: Ledger tab and Dashboard widgets
+
+**Files:**
+- Create: `UI/Tabs/Ledger.lua`, `UI/OrdersWidgets.lua`
+- Modify: `FabricationStation.toc`
+- Test: `tests/ui/ledger_tab_spec.lua`
+
+**Interfaces:**
+- Consumes: `MainWindow:RegisterTab`; `Dashboard:RegisterWidget(id, def)`; `Ledger:Weekly`, `ByRecipe`, `Query`, `Benchmark`, `WeekStart`; `Orders:GetSnapshot`.
+- Produces:
+  - `ns.UI.LedgerTab.RecipeRows(byRecipe) -> { {recipeID, income, cost, profit, n, incomplete} }`, sorted by profit descending.
+  - `ns.UI.LedgerTab.BenchmarkRows(entries) -> { {recipeID, quality, median, p25, p75, n} }`. Built from distinct `(recipeID, quality)` pairs of commission entries, calling `Ledger:Benchmark` for each and skipping nil results. Sorted by recipeID, then quality.
+  - Registration `RegisterTab("ledger", {label = "Ledger", order = 60, phase = 2, icon = "Interface\\Icons\\INV_Misc_Coin_02", build, refresh})`. The UI has three sections:
+    - weekly summary for 8 weeks (income, cost, profit, plus `"<n> without cost basis"` when `incomplete > 0`)
+    - the per-recipe table
+    - an entries list (time, type, item, amount, customer) and the benchmark table
+  - Refresh runs on `FS_LEDGER_CHANGED`.
+  - `ns.UI.OrdersWidgets.OpenOrdersModel(snapshot, now) -> {total, personal, bestScore|nil, age|nil}`, where `age` is `now - snapshot.time`.
+  - `ns.UI.OrdersWidgets.GoldThisWeekModel(weekly) -> {profit, income, incomplete}`.
+  - Widgets: `RegisterWidget("openOrders", {order = 40, title = "Open orders"})` and `RegisterWidget("goldThisWeek", {order = 50, title = "Gold this week"})`. They refresh on `FS_ORDERS_CHANGED` and `FS_LEDGER_CHANGED` respectively.
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("Ledger tab and widgets", function()
+  local ns, reg, widgets
+  before_each(function()
+    ns = P2.boot({ C_DateAndTime = { GetSecondsUntilWeeklyReset = function() return 1 end } }); reg, widgets = {}, {}
+    P2.fake_module(ns, "MainWindow", { RegisterTab = function(_, id, def) reg[id] = def end })
+    P2.fake_module(ns, "Dashboard", { RegisterWidget = function(_, id, def) widgets[id] = def end })
+    P2.load(ns, {"Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua", "Modules/Ledger.lua", "UI/Tabs/Ledger.lua", "UI/OrdersWidgets.lua"})
+  end)
+  it("registers tab and widgets", function()
+    assert.same({"Ledger", 60}, {reg.ledger.label, reg.ledger.order})
+    assert.same({40, "Open orders", 50, "Gold this week"}, {widgets.openOrders.order, widgets.openOrders.title, widgets.goldThisWeek.order, widgets.goldThisWeek.title})
+  end)
+  it("sorts recipe rows by profit", function()
+    local rows = ns.UI.LedgerTab.RecipeRows({ [1] = {income=5, cost=0, profit=5, n=1, incomplete=0}, [2] = {income=9, cost=1, profit=8, n=1, incomplete=0} })
+    assert.same({2, 1}, {rows[1].recipeID, rows[2].recipeID})
+  end)
+  it("builds benchmark rows from commission history", function()
+    local L = ns.FS:GetModule("Ledger")
+    for _, t in ipairs({100, 200, 300}) do L:Add({type="commission", amount=t, tip=t, recipeID=4444, quality=3}) end
+    L:Add({type="commission", amount=1, tip=1, recipeID=4444, quality=2})
+    assert.same({ {recipeID=4444, quality=3, median=200, p25=150, p75=250, n=3} }, ns.UI.LedgerTab.BenchmarkRows(L:Query({type="commission"})))
+  end)
+  it("models the dashboard widgets", function()
+    local W = ns.UI.OrdersWidgets
+    assert.same({total=2, personal=1, bestScore=50, age=600},
+      W.OpenOrdersModel({time=400, orders={ {orderType="personal", score=50}, {orderType="public", score=nil} }}, 1000))
+    assert.same({total=0, personal=0}, W.OpenOrdersModel({orders={}}, 1000))
+    assert.same({profit=7, income=9, incomplete=1}, W.GoldThisWeekModel({ {weekStart=0, income=9, cost=2, profit=7, incomplete=1} }))
+  end)
+end)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/ui/ledger_tab_spec.lua`
+Expected: FAIL (`UI/Tabs/Ledger.lua` not found)
+
+- [ ] **Step 3: Implement `UI/Tabs/Ledger.lua` and `UI/OrdersWidgets.lua` as specified under Interfaces**
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `busted tests/ui/ledger_tab_spec.lua && luacheck .`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add UI/Tabs/Ledger.lua UI/OrdersWidgets.lua tests/ui/ledger_tab_spec.lua FabricationStation.toc
+git commit -m "feat: add Ledger tab and open-orders / gold-this-week dashboard widgets"
+```
+
+### Task 13: Phase-2 settings group and acceptance pass
+
+**Files:**
+- Create: `UI/OrdersOptions.lua`
+- Modify: `FabricationStation.toc`
+- Test: `tests/ui/orders_options_spec.lua`
+
+**Interfaces:**
+- Consumes: `ns.FS:RegisterOptions(key, group)`; `Orders:Settings()`, `Ledger:Settings()`, `OrderAlert:Settings()`; `db.global.settings.ordersPanel`; modules `OrdersRowAddons`, `OrdersSidePanel`, `OrderViewWarning`.
+- Produces: `ns.UI.OrdersOptions.Build() -> AceConfig group`, registered at file load as `RegisterOptions("orders", Build())` with `name = "Orders & Ledger"`. It has four subgroups:
+  - **Order scoring**:
+    - `lowTipMargin`, `knowledgePointValue`, `moxieValue` as range inputs in gold, stored as copper (`get` divides by 10000, `set` multiplies and floors)
+    - `expiringSoonSeconds` in minutes
+    - `claimMinScore` in gold
+    - one toggle per `claimBlockingRisks` key
+  - **Crafting-orders window**: toggles `rows`, `sidePanel` and `orderViewWarning`. `set` stores the value and calls the module's `Enable()`/`Disable()`.
+  - **Alerts**: `personalOrderSound`, `personalOrderToast`.
+  - **Ledger**: `benchmarkMinSamples` (1–20), `keepDays` (30–1095).
+
+- [ ] **Step 1: Write the failing tests**
+
+```lua
+local P2 = require("tests.helpers.phase2")
+describe("Orders options", function()
+  local ns, g
+  before_each(function()
+    ns = P2.boot()
+    P2.load(ns, {"Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua", "Modules/Ledger.lua",
+      "UI/OrdersPanel.lua", "UI/OrderAlert.lua", "UI/OrdersOptions.lua"})
+    g = ns.UI.OrdersOptions.Build()
+  end)
+  it("edits copper settings in gold", function()
+    local opt = g.args.scoring.args.lowTipMargin
+    assert.equal(10, opt.get()); opt.set(nil, 12.5)
+    assert.equal(125000, ns.FS:GetModule("Orders"):Settings().lowTipMargin)
+  end)
+  it("toggles a crafting-orders addition module", function()
+    local opt = g.args.panel.args.rows
+    opt.set(nil, false)
+    assert.is_false(ns.FS.db.global.settings.ordersPanel.rows)
+    assert.is_false(ns.FS:GetModule("OrdersRowAddons"):IsEnabled())
+  end)
+end)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `busted tests/ui/orders_options_spec.lua`
+Expected: FAIL (`UI/OrdersOptions.lua` not found)
+
+- [ ] **Step 3: Implement `UI/OrdersOptions.lua` as specified under Interfaces**
+
+- [ ] **Step 4: Run the full suite and lint**
+
+Run: `busted && luacheck .`
+Expected: all specs PASS, `0 warnings / 0 errors`
+
+- [ ] **Step 5: In-game acceptance (spec §7 checklist)**
+
+Run these in one session with `/console taintLog 1`:
+1. Public (drill into a bucket), Guild, Personal and Patron tabs each show profit, score and risk cells.
+2. Claim Best Order claims the top unflagged order with one click and is disabled while an order is claimed.
+3. Craft and fulfil it: the Customers tab shows the customer, the Ledger has `craft` and `commission` entries, and the Dashboard "Gold this week" goes up.
+4. Collect an AH sale mail: one `sale` entry.
+5. A personal order arrival plays the sound and shows the toast.
+6. `/reload` on an alt: the Orders tab shows the snapshot with its age.
+7. Disable FabricationStation: Blizzard's crafting-orders UI looks and works as before.
+8. `taint.log` has no FabricationStation lines.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add UI/OrdersOptions.lua tests/ui/orders_options_spec.lua FabricationStation.toc
+git commit -m "feat: add Orders & Ledger settings group"
+```
+
+---
+
+## Self-review notes
+
+- **Spec coverage (§7, §5.1, §5.3):**
+  - Order scoring with rewards, quality and concentration: Tasks 3–4
+  - Risk flags (all five): Task 4
+  - Filters: Tasks 4, 8, 10
+  - Claim Best (one click per claim): Tasks 5, 8, with the structural test in Task 5
+  - Snapshot: Task 5
+  - Customers capture, tags, links, search and export: Tasks 1–2, 11
+  - Highlight and blocked warning in Blizzard's list: Task 8
+  - Ledger commissions, AH mail sales, cost basis, weekly and per-recipe profit: Tasks 6–7, 12
+  - Benchmarks: Tasks 6, 12
+  - Alerts: Tasks 5, 9
+  - Tabs: Tasks 10–12
+  - Dashboard widgets: Task 12
+  - Toggleable, self-disabling additions: Tasks 8, 13
+- **Names checked across tasks:**
+  - `OrderInput.provided` is used by Tasks 4 and 7.
+  - `Orders:GetClaimedOrder` is defined in Task 5 and used in Task 7.
+  - The `FulfilledOrder` fields are the same in Tasks 1, 5 and 7.
+  - `ns.UI.OrdersPanel.RowModel` is defined in Task 8 and used in Task 10.
+  - Settings keys are identical in Tasks 3, 6, 8, 9 and 13.
