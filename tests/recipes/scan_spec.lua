@@ -269,6 +269,23 @@ describe("recipe scan", function()
       assert.equals(0, #R:GetRanked({ skillLineID = 1 }))
     end)
 
+    it("separates two professions by skillLineID", function()
+      local main = world.chars["Main-Realm"].professions
+      main[2906].recipes = { [9001] = true, [9002] = true, [9003] = true }
+      main[7777] = { name = "Other", skill = 100, maxSkill = 100, skillModifier = 0,
+        recipes = { [9004] = true, [9005] = true }, cooldowns = {}, tools = {} }
+      R:StartScan("Main-Realm"); finish_scan()
+      local function ids(filter)
+        local out = {}
+        for _, r in ipairs(R:GetRanked(filter)) do out[#out + 1] = r.recipeID end
+        table.sort(out)
+        return out
+      end
+      assert.same({ 9001, 9002, 9003 }, ids({ charKey = "Main-Realm", skillLineID = 2906 }))
+      assert.same({ 9004, 9005 }, ids({ charKey = "Main-Realm", skillLineID = 7777 }))
+      assert.equals(5, #R:GetRanked({ charKey = "Main-Realm" }))
+    end)
+
     it("filters by charKey", function()
       for _, r in ipairs(R:GetRanked({ charKey = "Alt-Realm" })) do assert.equals("Alt-Realm", r.charKey) end
       assert.equals(0, #R:GetRanked({ charKey = "Nobody-Realm" }))
@@ -374,21 +391,125 @@ describe("recipe scan", function()
       assert.equals(10, #R:GetRanked({ charKey = "Alt-Realm" }))
     end)
 
-    it("stops scanning when the module is disabled", function()
+    it("stops scanning when the module is disabled and forgets its results", function()
       R:StartScan(nil); R:_ScanStep(2)
       R:Disable()
       assert.is_false(R:IsScanning())
       assert.is_false(R.scanFrame:IsShown())
       R:StartScan(nil)
       assert.is_false(R:IsScanning())
+      assert.same({}, R:GetRanked({}))
       R:Enable()
+      assert.same({}, R:GetRanked({}))
       R:StartScan(nil); finish_scan()
       assert.equals(20, #R:GetRanked({}))
+    end)
+
+    it("announces once per pass after being disabled and enabled again (no double registration)", function()
+      R:Disable(); R:Enable()
+      world.bumpPriceVersion()                        -- one FS_PRICES_CHANGED
+      finish_scan()
+      assert.equals(1, #world.messages("FS_RECIPES_CHANGED"))
+      ns.FS:GetModule("Scanner"):SendMessage("FS_DATA_CHANGED", "Alt-Realm", "recipes")
+      W.advance(1.5); finish_scan()
+      assert.equals(2, #world.messages("FS_RECIPES_CHANGED"))
+    end)
+
+    it("drops a pending data-change scan when disabled", function()
+      ns.FS:GetModule("Scanner"):SendMessage("FS_DATA_CHANGED", "Alt-Realm", "recipes")
+      R:Disable()
+      W.advance(2)
+      R:Enable()
+      assert.is_false(R:IsScanning())
+      assert.equals(0, #world.messages("FS_RECIPES_CHANGED"))
     end)
 
     it("is still the core Recipes module", function()
       assert.is_true(R.coreModule)
       assert.is_function(R.Evaluate)
+    end)
+  end)
+
+  describe("first scan after enabling", function()
+    it("starts a scan a few seconds after enabling and announces once", function()
+      assert.is_false(R:IsScanning())
+      W.advance(4.5)
+      assert.is_false(R:IsScanning())
+      W.advance(1)
+      assert.is_true(R:IsScanning())
+      finish_scan()
+      assert.equals(1, #world.messages("FS_RECIPES_CHANGED"))
+      assert.equals(20, #R:GetRanked({}))
+      W.advance(60)
+      assert.is_false(R:IsScanning())                 -- one-shot
+      assert.equals(1, #world.messages("FS_RECIPES_CHANGED"))
+    end)
+
+    it("does nothing when disabled before it fires", function()
+      W.advance(2)
+      R:Disable()
+      W.advance(30)
+      assert.is_false(R:IsScanning())
+      assert.equals(0, #world.messages("FS_RECIPES_CHANGED"))
+    end)
+
+    it("is armed once, however often the module is enabled", function()
+      R:Disable(); R:Enable(); R:OnEnable(); R:OnEnable()
+      W.advance(6)
+      finish_scan()
+      assert.equals(1, #world.messages("FS_RECIPES_CHANGED"))
+    end)
+
+    it("is re-armed by enabling again after it was cancelled", function()
+      R:Disable(); W.advance(30)
+      R:Enable(); W.advance(6)
+      assert.is_true(R:IsScanning())
+      finish_scan()
+      assert.equals(1, #world.messages("FS_RECIPES_CHANGED"))
+    end)
+  end)
+
+  describe("crafting setting changes", function()
+    local function args() return ns.FS:GetOptionsTable().args.crafting.args end
+
+    it("rescan everything after a quiet second", function()
+      args().staleCalibrationDays.set(nil, 7)
+      W.advance(0.9)
+      assert.is_false(R:IsScanning())
+      W.advance(0.2)
+      assert.is_true(R:IsScanning())
+      finish_scan()
+      assert.equals(20, #R:GetRanked({}))
+      assert.equals(1, #world.messages("FS_RECIPES_CHANGED"))
+    end)
+
+    it("debounce a burst of changes into one pass", function()
+      args().staleCalibrationDays.set(nil, 7); W.advance(0.5)
+      args().staleCalibrationDays.set(nil, 8); W.advance(0.5)
+      args().staleCalibrationDays.set(nil, 9); W.advance(1.5)
+      finish_scan()
+      assert.equals(1, #world.messages("FS_RECIPES_CHANGED"))
+    end)
+
+    it("refresh the results the setting changes", function()
+      R:StartScan(nil); finish_scan()
+      -- calibrations are fresh (age 0): shrinking the limit cannot make them stale; growing the clock can
+      assert.is_false(R:GetRanked({ charKey = "Main-Realm" })[1].flags.staleData)
+      W.advance(3 * 86400)
+      args().staleCalibrationDays.set(nil, 2)
+      W.advance(1.5); finish_scan()
+      assert.is_true(R:GetRanked({ charKey = "Main-Realm" })[1].flags.staleData)
+    end)
+
+    it("do not rescan for an unchanged value or for the scan budget", function()
+      args().staleCalibrationDays.set(nil, 14)        -- first store of a value: a change
+      W.advance(2); finish_scan()
+      local before = #world.messages("FS_RECIPES_CHANGED")
+      args().staleCalibrationDays.set(nil, 14)        -- same value
+      args().scanBudgetMs.set(nil, 8)                 -- affects timing only
+      W.advance(2)
+      assert.is_false(R:IsScanning())
+      assert.equals(before, #world.messages("FS_RECIPES_CHANGED"))
     end)
   end)
 

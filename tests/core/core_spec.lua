@@ -120,6 +120,15 @@ describe("Core", function()
     assert.same({ "a1", "b1", "a2" }, calls)
   end)
 
+  it("CancelDebounce drops a pending call and ignores unknown keys", function()
+    local calls = {}
+    ns.FS:Debounce("c", 1, function() table.insert(calls, "c") end)
+    ns.FS:CancelDebounce("c"); ns.FS:CancelDebounce("never")
+    W.advance(2); assert.same({}, calls)
+    ns.FS:Debounce("c", 1, function() table.insert(calls, "c2") end); W.advance(1.1)
+    assert.same({ "c2" }, calls)
+  end)
+
   describe("slash", function()
     it("registers fs and fabstation on boot", function()
       W.boot(); assert.is_function(W.slash.fs); assert.is_function(W.slash.fabstation)

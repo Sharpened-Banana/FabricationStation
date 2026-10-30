@@ -109,6 +109,13 @@ function FS:Debounce(key, seconds, fn)
   debounceTimers[key] = timer
 end
 
+-- Drops the pending timer for key, if any.
+function FS:CancelDebounce(key)
+  local pending = debounceTimers[key]
+  if pending then pending:Cancel() end
+  debounceTimers[key] = nil
+end
+
 ---------------------------------------------------------------------------
 -- Slash commands
 ---------------------------------------------------------------------------

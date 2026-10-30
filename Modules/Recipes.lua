@@ -57,7 +57,7 @@ local function prices()
 end
 
 -- 1a's costing setting: owned reagents cost nothing.
-local function owned_free_setting()
+function Recipes:IsOwnedReagentsFree()
   local g = global()
   local costing = g and g.settings and g.settings.costing
   return costing and costing.ownedReagentsFree and true or false
@@ -85,6 +85,8 @@ local function set_setting(key, value)
   if s.crafting[key] == value then return end
   s.crafting[key] = value
   settingsVersion = settingsVersion + 1
+  -- RecipeScan's hook: results computed under the old setting are stale.
+  if Recipes.OnCraftingSettingChanged then Recipes:OnCraftingSettingChanged(key) end
 end
 
 local function toggle(order, key, name)
@@ -151,10 +153,10 @@ local function on_data_changed(_, charKey, kind)
   if kind == "items" then
     if charKey == nil then return end
     itemStamps[charKey] = (itemStamps[charKey] or 0) + 1
-    if owned_free_setting() then bump_stamp(charKey) end
+    if Recipes:IsOwnedReagentsFree() then bump_stamp(charKey) end
   elseif kind == "warband" then
     warbandStamp = warbandStamp + 1
-    if owned_free_setting() then bump_every_stamp() end
+    if Recipes:IsOwnedReagentsFree() then bump_every_stamp() end
   else
     if kind == "recipes" then itemIndex = nil end
     if charKey ~= nil then bump_stamp(charKey) end
@@ -328,7 +330,7 @@ local function full_opts(opts)
     if type(n) == "number" and n > 0 then provided[itemID] = n end
   end
   local ownedFree = opts.ownedReagentsFree
-  if ownedFree == nil then ownedFree = owned_free_setting() end
+  if ownedFree == nil then ownedFree = Recipes:IsOwnedReagentsFree() end
   return {
     targetQuality = opts.targetQuality,
     useConcentration = opts.useConcentration and true or false,

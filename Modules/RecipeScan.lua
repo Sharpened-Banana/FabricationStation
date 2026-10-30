@@ -9,6 +9,7 @@ local ADDON_NAME, ns = ...
 local Recipes = ns.FS:GetModule("Recipes")
 
 local DATA_DEBOUNCE = 1  -- seconds
+local FIRST_SCAN_DELAY = 5  -- seconds after enabling
 
 local results = {}       -- [charKey] = { { result, skillLineID } } from the last completed pass
 local scan = {
@@ -22,6 +23,8 @@ local scan = {
 local stepStart, stepBudget = 0, 0
 local calibrated = {}    -- [recipeID] = true: calibrated since the profession window opened
 local logged = {}        -- [key] = true: failures already logged this session
+local debounceKeys = {}  -- [key] = true: debounce keys in use
+local startTimer         -- the one-shot first scan after enabling
 local listener           -- plain AceEvent object: Recipes already owns the FS_DATA_CHANGED registration
 
 ---------------------------------------------------------------------------
@@ -244,27 +247,31 @@ end
 -- Lifecycle
 ---------------------------------------------------------------------------
 
+-- Trailing-debounced StartScan(target); the keys are remembered so disabling can cancel them.
+local function debounced(key, target)
+  debounceKeys[key] = true
+  ns.FS:Debounce(key, DATA_DEBOUNCE, ns.FS:Wrap("Recipes:Scan", function() Recipes:StartScan(target) end))
+end
+
 local function on_update()
   ns.FS:SafeCall("Recipes:Scan", function() Recipes:_ScanStep(Recipes:GetSetting("scanBudgetMs")) end)
 end
 
-local function owned_free()
-  local g = ns.FS.db and ns.FS.db.global
-  local costing = g and g.settings and g.settings.costing
-  return costing and costing.ownedReagentsFree and true or false
-end
-
 -- Owned counts only change results while owned reagents are free.
 local function on_data_changed(_, charKey, kind)
-  if (kind == "items" or kind == "warband") and not owned_free() then return end
+  if (kind == "items" or kind == "warband") and not Recipes:IsOwnedReagentsFree() then return end
   if kind ~= "items" and kind ~= "warband" and (charKey == nil or charKey == ns.FS:CharKey()) then
     for recipeID in pairs(calibrated) do calibrated[recipeID] = nil end   -- the live numbers may have moved
   end
   -- "warband" carries the current character but is account-wide.
   local target = kind ~= "warband" and charKey or nil
-  ns.FS:Debounce("RecipeScan:" .. tostring(target), DATA_DEBOUNCE, ns.FS:Wrap("Recipes:Scan", function()
-    Recipes:StartScan(target)
-  end))
+  debounced("RecipeScan:" .. tostring(target), target)
+end
+
+-- A crafting setting changed: every cached evaluation is stale (the scan budget only affects timing).
+function Recipes:OnCraftingSettingChanged(key)
+  if key == "scanBudgetMs" or not self:IsEnabled() then return end
+  debounced("RecipeScan:settings", nil)
 end
 
 local baseOnEnable, baseOnDisable = Recipes.OnEnable, Recipes.OnDisable
@@ -279,10 +286,20 @@ function Recipes:OnEnable()
   listener = listener or LibStub("AceEvent-3.0"):Embed({})
   listener:RegisterMessage(ns.Msg.PRICES_CHANGED, ns.FS:Wrap("Recipes:Scan", function() Recipes:StartScan(nil) end))
   listener:RegisterMessage(ns.Msg.DATA_CHANGED, ns.FS:Wrap("Recipes:Scan", on_data_changed))
+  -- Rank something soon after login, without waiting for the first price or data change.
+  if startTimer then startTimer:Cancel() end
+  startTimer = C_Timer.NewTimer(FIRST_SCAN_DELAY, ns.FS:Wrap("Recipes:Scan", function()
+    startTimer = nil
+    Recipes:StartScan(nil)
+  end))
 end
 
 function Recipes:OnDisable()
   if listener then listener:UnregisterAllMessages() end
+  if startTimer then startTimer:Cancel(); startTimer = nil end
+  for key in pairs(debounceKeys) do ns.FS:CancelDebounce(key) end
+  debounceKeys = {}
+  results = {}
   reset()
   if baseOnDisable then baseOnDisable(self) end
 end
