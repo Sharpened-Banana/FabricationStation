@@ -212,11 +212,56 @@ function FS:BuildModuleToggles()
   return args
 end
 
+---------------------------------------------------------------------------
+-- General options
+---------------------------------------------------------------------------
+
+-- One line describing the generated game data. "Not generated" is checked first: the checked-in
+-- generated tables carry no build while GameData_Manual is stamped, so Build() can equal the
+-- client build while the generated tables are still missing.
+function FS:GameDataStatusText()
+  local gameData = ns.GameData
+  local clientBuild = tonumber((select(2, GetBuildInfo())))
+  local status = gameData and gameData.Status(clientBuild)
+  if not status or status.missing then return "GameData not generated" end
+  if status.outdated then
+    return ("GameData is outdated: data build %s, game build %s"):format(tostring(status.build), tostring(clientBuild))
+  end
+  if #status.mismatched > 0 then
+    return "GameData tables are from different builds: " .. table.concat(status.mismatched, ", ")
+  end
+  return ("GameData: build %s, up to date"):format(tostring(status.build))
+end
+
+local function build_general_group(self)
+  return {
+    type = "group", name = "General", order = 10,
+    args = {
+      minimap = {
+        type = "toggle", order = 1, width = "full", name = "Show minimap button",
+        get = function()
+          local launcher = self:GetModule("Launcher", true)
+          return launcher == nil or launcher:IsMinimapShown()
+        end,
+        set = function(_, value)
+          local launcher = self:GetModule("Launcher", true)
+          if launcher then launcher:SetMinimapShown(value) end
+        end,
+      },
+      gamedata = {
+        type = "description", order = 2, fontSize = "medium",
+        name = function() return self:GameDataStatusText() end,
+      },
+    },
+  }
+end
+
 function FS:OnInitialize()
   self:RegisterChatCommand("fs", "HandleSlash")
   self:RegisterChatCommand("fabstation", "HandleSlash")
   self:InitDB()
   self:ApplyModuleSettings()
+  self:RegisterOptions("general", build_general_group(self))
   self.modulesGroup = { type = "group", name = "Modules", order = 90, args = {} }
   self:RegisterOptions("modules", self.modulesGroup)
   LibStub("AceConfig-3.0"):RegisterOptionsTable("FabricationStation", function() return ns.FS:GetOptionsTable() end)

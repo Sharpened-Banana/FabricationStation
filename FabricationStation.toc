@@ -23,3 +23,5 @@ Modules\Scanner.lua
 Modules\Prices.lua
 UI\Util.lua
 UI\MainWindow.lua
+UI\Tabs\Settings.lua
+UI\Launcher.lua

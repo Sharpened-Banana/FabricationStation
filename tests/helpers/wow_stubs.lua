@@ -17,6 +17,8 @@
 --   local W = install_wow_stubs(overrides)
 -- Every call rebuilds all fakes from scratch. `overrides` is deep-merged into the default globals
 -- (plain tables merge key by key, anything else replaces). Returns the handle `W`.
+-- One override is not a global: `LibStubMissing = { "LibName", ... }` lists libraries that
+-- LibStub(name, true) reports as absent (nil), so tests can check that optional libs are optional.
 
 local unpack = unpack or table.unpack
 local realPrint = print
@@ -88,6 +90,14 @@ end
 
 local function install(overrides)
   overrides = overrides or {}
+  -- LibStubMissing configures the LibStub fake; it is not a global to install.
+  local missingLibs = {}
+  if overrides.LibStubMissing ~= nil then
+    for _, name in ipairs(overrides.LibStubMissing) do missingLibs[name] = true end
+    local rest = {}
+    for k, v in pairs(overrides) do if k ~= "LibStubMissing" then rest[k] = v end end
+    overrides = rest
+  end
 
   -- Undo the previous install.
   for name in pairs(installedNames) do _G[name] = nil end
@@ -254,7 +264,7 @@ local function install(overrides)
   local libs = {}
   local LibStub = setmetatable({}, { __call = function(self, name, silent) return self:GetLibrary(name, silent) end })
   function LibStub:GetLibrary(name, silent)
-    local lib = libs[name]
+    local lib = not missingLibs[name] and libs[name] or nil
     if not lib and not silent then error(('Cannot find a library instance of "%s".'):format(tostring(name)), 2) end
     return lib
   end
