@@ -252,6 +252,7 @@ local function install(overrides)
     function f:GetParent() return par end
     function f:GetName() return name end
     function f:CreateFontString() return make_fontstring() end
+    function f:CreateTexture() return new_object() end
     if name then
       framesByName[name] = true
       _G[name] = f
