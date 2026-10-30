@@ -36,9 +36,11 @@ describe("CraftingData", function()
     it("maps the effect names it knows", function()
       assert.same({ skill = "skill", multicraft = "multicraft", resourcefulness = "resourcefulness" }, CD.EFFECT_MAP)
     end)
-    it("curve keeps the skill points when the difficulty curve is empty, and is nil without skill points", function()
+    it("curve is nil when the difficulty curve or the skill points are empty", function()
       gd.Define("ConcentrationCurves", 70575, { [77] = { skill = { {0,2}, {50,1} }, difficulty = {} } })
-      assert.same({ constant = {}, curve = { {0,2}, {0.5,1} } }, CD.Curve(gd, 2588))
+      assert.is_nil(CD.Curve(gd, 2588))
+      gd.Define("ConcentrationCurves", 70575, { [77] = { skill = { {0,2}, {50,1} } } })
+      assert.is_nil(CD.Curve(gd, 2588))
       gd.Define("ConcentrationCurves", 70575, { [77] = { skill = {}, difficulty = { {0,200} } } })
       assert.is_nil(CD.Curve(gd, 2588))
     end)
@@ -84,6 +86,29 @@ describe("CraftingData", function()
       assert.same({ 4 }, opt)
       alloc, opt = CD.AllocationFromReagentInfo({}, nil)
       assert.same({}, alloc); assert.same({}, opt)
+    end)
+  end)
+
+  describe("required non-basic slots", function()
+    it("maps a required modifying slot's reagent to an allocation row, an optional one to optionalItemIDs", function()
+      local schematic = { reagentSlots = {
+        { slotIndex = 1, dataSlotIndex = 4, kind = "basic", reagents = { 1002 } },
+        { slotIndex = 5, dataSlotIndex = 10, kind = "optional", required = true, reagents = { 7101, 7102 } },
+        { slotIndex = 6, dataSlotIndex = 11, kind = "optional", required = false, reagents = { 7001 } } } }
+      local alloc, opt = CD.AllocationFromReagentInfo(schematic, {
+        { reagent = { itemID = 1002 }, dataSlotIndex = 4, quantity = 3 }, { reagent = { itemID = 7102 }, dataSlotIndex = 10, quantity = 1 },
+        { reagent = { itemID = 7001 }, dataSlotIndex = 11, quantity = 1 } })
+      assert.same({ { slotIndex = 1, itemID = 1002, quantity = 3 }, { slotIndex = 5, itemID = 7102, quantity = 1 } }, alloc)
+      assert.same({ 7001 }, opt)
+    end)
+    it("IsAllocated: basic slots and required slots with reagents", function()
+      assert.is_true(CD.IsAllocated({ kind = "basic", reagents = { 1 } }))
+      assert.is_true(CD.IsAllocated({ kind = "optional", required = true, reagents = { 1 } }))
+      assert.is_true(CD.IsAllocated({ kind = "finishing", required = true, reagents = { 1 } }))
+      assert.is_false(CD.IsAllocated({ kind = "optional", required = false, reagents = { 1 } }))
+      assert.is_false(CD.IsAllocated({ kind = "optional", required = true, reagents = {} }))
+      assert.is_false(CD.IsAllocated({ kind = "basic", reagents = {}, currencyID = 3008 }))
+      assert.is_false(CD.IsAllocated(nil))
     end)
   end)
 

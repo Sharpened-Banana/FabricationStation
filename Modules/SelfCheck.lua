@@ -121,7 +121,8 @@ end
 ---------------------------------------------------------------------------
 
 -- The allocation to ask the game about: the required rows plus one row per optional/finishing reagent in the
--- transaction (FromCraftingReagentInfo keeps only their itemIDs, so they are read from the infos again).
+-- transaction (FromCraftingReagentInfo keeps only their itemIDs, so they are read from the infos again). A required
+-- optional slot (a spark) is already among the required rows.
 local function game_allocation(schematic, allocation, infos)
   local out = {}
   for i, row in ipairs(allocation) do out[i] = row end
@@ -133,7 +134,7 @@ local function game_allocation(schematic, allocation, infos)
   for _, info in ipairs(infos) do
     local slot = slotByData[info.dataSlotIndex]
     local itemID = info.reagent and info.reagent.itemID
-    if slot and itemID and slot.kind ~= "basic" then
+    if slot and itemID and not ns.CraftingData.IsAllocated(slot) then
       out[#out + 1] = { slotIndex = slot.slotIndex, itemID = itemID, quantity = info.quantity or slot.quantity or 1 }
     end
   end

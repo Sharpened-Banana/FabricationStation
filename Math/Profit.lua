@@ -63,6 +63,12 @@ local function prepare(input, optionalItemIDs)
   for _, f in ipairs(conc.lessFactors or {}) do less[#less + 1] = f end
   for _, f in ipairs(optLess) do less[#less + 1] = f end
 
+  -- Slots resourcefulness does not save (required modifying reagents); their cost is taken off the saving's base.
+  local unsavedSlots = {}
+  for _, slot in ipairs(input.slots or {}) do
+    if slot.noResourcefulness then unsavedSlots[#unsavedSlots + 1] = slot end
+  end
+
   local baseDifficulty = input.baseDifficulty or 0
   local yield = input.yield or {}
   local baseYield = ((yield.min or 1) + (yield.max or yield.min or 1)) / 2
@@ -75,7 +81,9 @@ local function prepare(input, optionalItemIDs)
     maxReagentSkill = input.maxReagentSkill or Math.Quality.DEFAULT_REAGENT_SKILL_FACTOR * baseDifficulty,
     optionalCost = optionalCost,
     unknownOptional = unknownOptional,
-    curve = conc.curve,
+    -- A curve without points cannot price anything: treated as no curve (concentration numbers unknown).
+    curve = Math.Concentration.IsUsable(conc.curve) and conc.curve or nil,
+    unsavedSlots = unsavedSlots,
     less = less,
     baseYield = baseYield,
     expectedYield = (Math.Stats.ExpectedYield(baseYield, stats.multicraft, stats.multicraftExtra)),
@@ -95,7 +103,11 @@ end
 local function makePlan(ctx, quality, allocation, requiredCost, skill, concentrated, concentrationCost)
   local stats = ctx.stats
   local reagentCost = requiredCost and ctx.optionalCost and requiredCost + ctx.optionalCost or nil
-  local saving = requiredCost and Math.Stats.ResourcefulnessSaving(requiredCost, stats.resourcefulness, stats.resourcefulnessExtra)
+  local savable = requiredCost
+  if savable and #ctx.unsavedSlots > 0 then
+    savable = savable - (Math.Optimizer.AllocationCost(ctx.unsavedSlots, allocation) or 0)
+  end
+  local saving = savable and Math.Stats.ResourcefulnessSaving(savable, stats.resourcefulness, stats.resourcefulnessExtra)
   local price = (ctx.input.outputPrices or {})[quality]
   local expectedSale = Profit.ExpectedSale({ [quality] = 1 }, ctx.input.outputPrices, ctx.expectedYield)
   local profit = expectedSale and reagentCost and Round(expectedSale - (reagentCost - saving)) or nil

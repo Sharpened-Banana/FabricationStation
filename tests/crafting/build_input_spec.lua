@@ -84,6 +84,51 @@ describe("CraftingData.BuildInput", function()
     assert.has_no.errors(function() ns.Math.Profit.EvaluateCraft(input) end)
   end)
 
+  describe("required non-basic slots (sparks)", function()
+    before_each(function()
+      local slots = schematic.reagentSlots
+      slots[#slots + 1] = { slotIndex = 4, required = true, quantity = 1, reagents = { 7101, 7102 }, kind = "optional",
+        dataSlotIndex = 14, dataSlotType = 2 }
+    end)
+    it("becomes a weight-0 slot that saves nothing on resourcefulness, priced like the others", function()
+      local prices = world.priceValues(); prices[7101], prices[7102] = 5000, 4000
+      local input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = prices, owned = { [7101] = 1 } })
+      assert.equals(4, #input.slots)
+      local s = input.slots[4]
+      assert.same({ 4, 1, 0, true }, { s.slotIndex, s.quantity, s.weight, s.noResourcefulness })
+      assert.same({ { itemID = 7101, rank = 1, price = 5000, owned = 1, provided = 0 },
+                    { itemID = 7102, rank = 2, price = 4000, owned = 0, provided = 0 } }, s.items)
+      assert.is_nil(input.slots[1].noResourcefulness)
+      assert.is_false(input.missingWeights)
+    end)
+    it("is costed, allocated and kept out of resourcefulness by EvaluateCraft", function()
+      local prices = world.priceValues(); prices[7101], prices[7102] = 5000, 4000
+      local r = ns.Math.Profit.EvaluateCraft(CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = prices }))
+      assert.equals(8800, r.reagentCost); assert.equals(116010, r.profit); assert.equals(360, r.resourcefulnessValue)
+      assert.same({ slotIndex = 4, itemID = 7102, quantity = 1 }, r.allocation[#r.allocation])
+    end)
+    it("is not offered as an optional candidate", function()
+      local input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = world.priceValues(), optionalItemIDs = {} })
+      assert.same({}, input.optionals)
+    end)
+    it("an unpriced spark makes the cost unknown, never free", function()
+      local r = ns.Math.Profit.EvaluateCraft(CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = world.priceValues() }))
+      assert.is_nil(r.reagentCost); assert.is_nil(r.profit); assert.is_true(r.missingPrice)
+    end)
+  end)
+
+  describe("missing reagent weights", function()
+    it("flags a basic slot with two or more ranks but no GameData weight", function()
+      gd.Define("ReagentQuality", 70575, { [2001] = { rank = 1, categoryID = 2 }, [2002] = { rank = 2, categoryID = 2 } })
+      local input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = world.priceValues() })
+      assert.equals(0, input.slots[1].weight); assert.is_true(input.missingWeights)
+    end)
+    it("does not flag single-rank slots", function()
+      local input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = world.priceValues() })
+      assert.equals(0, input.slots[3].weight); assert.is_false(input.missingWeights)
+    end)
+  end)
+
   describe("optional candidates", function()
     before_each(function()
       gd.Define("ReagentQuality", 70575, {

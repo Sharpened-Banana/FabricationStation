@@ -133,6 +133,42 @@ describe("Recipes:Evaluate", function()
     end)
   end)
 
+  describe("required modifying reagents (sparks)", function()
+    before_each(function()
+      table.insert(world.schematics[9001].reagentSlots, { slotIndex = 4, required = true, quantity = 1, reagents = { 7101 },
+        kind = "optional", dataSlotIndex = 14, dataSlotType = 2 })
+      world.prices[7101] = { value = 4000, source = "auction", ageDays = 2 }
+    end)
+    it("counts the spark in the cost, the profit and the allocation", function()
+      local r = R:Evaluate(9001, "Main-Realm", {})
+      assert.equals(2, r.expectedQuality); assert.equals(8800, r.reagentCost); assert.equals(116010, r.profit)
+      assert.same({ slotIndex = 4, itemID = 7101, quantity = 1 }, r.allocation[#r.allocation])
+      assert.equals(2, r.priceAgeDays)
+      assert.is_false(r.flags.noPrice)
+    end)
+    it("an unpriced spark leaves the result unpriced", function()
+      world.prices[7101] = nil
+      local r = R:Evaluate(9001, "Main-Realm", {})
+      assert.is_true(r.flags.noPrice); assert.is_nil(r.profit)
+    end)
+    it("maps a live spark back to the allocation, so PredictLive costs it", function()
+      local alloc, opt = R:FromCraftingReagentInfo(9001, { { reagent = { itemID = 1002 }, dataSlotIndex = 11, quantity = 10 },
+        { reagent = { itemID = 7101 }, dataSlotIndex = 14, quantity = 1 } })
+      assert.same({ { slotIndex = 1, itemID = 1002, quantity = 10 }, { slotIndex = 4, itemID = 7101, quantity = 1 } }, alloc)
+      assert.same({}, opt)
+      local live = R:PredictLive(9001, alloc, opt, false)
+      assert.equals(7000, live.reagentCost); assert.is_nil(live.flags.unknownOptional)
+    end)
+  end)
+
+  describe("missing reagent weights", function()
+    it("flags a calibrated result as estimated when a ranked slot has no GameData weight", function()
+      ns.GameData.Define("ReagentQuality", 70575, { [2001] = { rank = 1, categoryID = 2 }, [2002] = { rank = 2, categoryID = 2 } })
+      local r = R:Evaluate(9001, "Main-Realm", {})
+      assert.is_true(r.flags.estimated); assert.is_false(r.flags.staleData)
+    end)
+  end)
+
   describe("unknown and dropped recipes", function()
     it("still evaluates a recipe the character does not know", function()
       world.chars["Alt-Realm"].professions[2906].recipes[9001] = nil

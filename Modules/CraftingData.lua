@@ -38,11 +38,12 @@ function CraftingData.ReagentWeight(gd, itemID)
 end
 
 -- { curve = skill points with x as a fraction, constant = difficulty points } for the recipe's
--- crafting data; nil when it is unknown or has no skill points.
+-- crafting data; nil when it is unknown or has no skill points or no difficulty points (a cost needs both).
 function CraftingData.Curve(gd, craftingDataID)
   local data = tbl(gd, "CraftingData")[craftingDataID]
   local curves = data and tbl(gd, "ConcentrationCurves")[data.craftingDifficultyID]
-  if not curves or not curves.skill or #curves.skill == 0 then return nil end
+  if not curves or type(curves.skill) ~= "table" or #curves.skill == 0 then return nil end
+  if type(curves.difficulty) ~= "table" or #curves.difficulty == 0 then return nil end
   return { curve = copyPoints(curves.skill, percentToFraction), constant = copyPoints(curves.difficulty) }
 end
 
@@ -96,10 +97,20 @@ function CraftingData.OptionalStats(gd, itemID, kind)
   return stats
 end
 
+-- Whether a schematic slot is part of the required allocation (a Math slot): every basic slot, and every
+-- required optional/finishing slot (a "spark": a modifying reagent the recipe cannot be crafted without).
+-- A slot whose reagents list is empty (currency-only, or nothing listed) never is.
+function CraftingData.IsAllocated(slot)
+  if type(slot) ~= "table" then return false end
+  if type(slot.reagents) == "table" and #slot.reagents == 0 then return false end
+  return slot.kind == "basic" or slot.required == true
+end
+
 -- Converts Blizzard-style reagent infos ({ reagent = { itemID }, dataSlotIndex, quantity }) back to a
--- ReagentAllocation over the schematic's slotIndex (basic slots) and a list of optional/finishing
--- itemIDs. Infos for unknown data slots or without an itemID are skipped, as are slots with a currencyID
--- or an empty reagents list (Scanner:ToCraftingReagentInfo never emits those).
+-- ReagentAllocation over the schematic's slotIndex (basic slots and required optional/finishing slots, see
+-- IsAllocated) and a list of the other optional/finishing itemIDs. Infos for unknown data slots or without an
+-- itemID are skipped, as are slots with a currencyID or an empty reagents list (Scanner:ToCraftingReagentInfo
+-- never emits those).
 function CraftingData.AllocationFromReagentInfo(schematic, infos)
   local slotByData = {}
   for _, slot in ipairs(schematic and schematic.reagentSlots or EMPTY) do
@@ -113,7 +124,7 @@ function CraftingData.AllocationFromReagentInfo(schematic, infos)
     local slot = slotByData[info.dataSlotIndex]
     local itemID = info.reagent and info.reagent.itemID
     if slot and itemID then
-      if slot.kind == "basic" then
+      if CraftingData.IsAllocated(slot) then
         allocation[#allocation + 1] = { slotIndex = slot.slotIndex, itemID = itemID, quantity = info.quantity }
       else
         optionalItemIDs[#optionalItemIDs + 1] = itemID
@@ -137,10 +148,15 @@ end
 --   owned|nil and provided|nil = {[itemID] = count}, optionalItemIDs|nil, useConcentration, targetQuality.
 -- With calib its baseSkill, baseDifficulty (else the schematic's), maxReagentSkill and stats are used; without,
 -- baseSkill = professionSkill, the schematic's baseDifficulty, maxReagentSkill nil (Math's default) and no stats.
--- Only basic slots with reagents become slots (currency-only and empty slots are left out); a slot's weight is
--- its first reagent's ReagentWeight and its items are ranked in the schematic's order.
--- optionals: with optionalItemIDs (a list, possibly empty), every item of every optional and finishing slot
--- with its OptionalStats and price, so EvaluateAllocation(input, allocation, optionalItemIDs) can pick the
+-- Basic slots with reagents become slots (currency-only and empty slots are left out); a slot's weight is
+-- its first reagent's ReagentWeight and its items are ranked in the schematic's order. Required optional and
+-- finishing slots with reagents (sparks) become slots too: weight 0 (fixed: the optimiser takes the cheapest
+-- usable item, which then is in the allocation, the cost, missing reagents and CraftRecipe's reagents) and
+-- noResourcefulness = true (resourcefulness saves basic reagents only). Their items' stats are not applied.
+-- missingWeights = true when a basic slot offers two or more ranks but GameData has no weight for it (the
+-- ranks then add no skill: the result is an estimate).
+-- optionals: with optionalItemIDs (a list, possibly empty), every item of every other optional and finishing
+-- slot with its OptionalStats and price, so EvaluateAllocation(input, allocation, optionalItemIDs) can pick the
 -- selected ones; without, none (EvaluateCraft applies every listed optional).
 -- A non-number maxQuality becomes nil (Math treats it as 1, with no thresholds).
 function CraftingData.BuildInput(gd, args)
@@ -151,16 +167,20 @@ function CraftingData.BuildInput(gd, args)
   local craftingDataID = calib and calib.craftingDataID or CraftingData.CraftingDataIDFor(gd, schematic)
 
   local slots, optionals, seen = {}, {}, {}
+  local missingWeights = false
   for _, slot in ipairs(schematic.reagentSlots or EMPTY) do
     local reagents = type(slot.reagents) == "table" and slot.reagents or EMPTY
-    if slot.kind == "basic" and #reagents > 0 then
+    if #reagents > 0 and CraftingData.IsAllocated(slot) then
+      local basic = slot.kind == "basic"
       local items = {}
       for rank, itemID in ipairs(reagents) do
         items[rank] = { itemID = itemID, rank = rank, price = prices[itemID], owned = owned[itemID] or 0,
           provided = provided[itemID] or 0 }
       end
-      slots[#slots + 1] = { slotIndex = slot.slotIndex, quantity = slot.quantity or 0,
-        weight = CraftingData.ReagentWeight(gd, reagents[1]), items = items }
+      local weight = basic and CraftingData.ReagentWeight(gd, reagents[1]) or 0
+      if basic and #reagents >= 2 and weight <= 0 then missingWeights = true end
+      slots[#slots + 1] = { slotIndex = slot.slotIndex, quantity = slot.quantity or 0, weight = weight, items = items,
+        noResourcefulness = (not basic) or nil }
     elseif args.optionalItemIDs and (slot.kind == "optional" or slot.kind == "finishing") then
       for _, itemID in ipairs(reagents) do
         if not seen[itemID] then
@@ -185,6 +205,7 @@ function CraftingData.BuildInput(gd, args)
     maxReagentSkill = calib and calib.maxReagentSkill or nil,
     thresholdFractions = CraftingData.ThresholdFractions(gd, craftingDataID, maxQuality),
     slots = slots,
+    missingWeights = missingWeights,
     optionals = optionals,
     stats = stats,
     yield = { min = schematic.quantityMin, max = schematic.quantityMax },

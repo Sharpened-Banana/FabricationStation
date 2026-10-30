@@ -414,7 +414,8 @@ local function evaluate(recipeID, charKey, o, schematic)
   local calib = ctx.calib
   -- A recipe with qualities (maxQuality > 1; 0, 1 and nil mean none) is an estimate when it has no thresholds
   -- (an unsupported maxQuality predicts quality 1 whatever the skill: never present that as real), or when
-  -- default thresholds stand in because GameData lacks the recipe's.
+  -- default thresholds stand in because GameData lacks the recipe's. A ranked basic slot without a GameData weight
+  -- (input.missingWeights) adds no skill whatever its rank: an estimate too.
   local hasQualities = (input.maxQuality or 1) > 1
   local noThresholds = hasQualities
     and ns.Math.Quality.Thresholds(input.maxQuality, input.baseDifficulty or 0, input.thresholdFractions) == nil
@@ -426,7 +427,7 @@ local function evaluate(recipeID, charKey, o, schematic)
     stalePrice = stalePrice,
     staleData = calib == nil or older_than(calib.time, now, days) or older_than(char and char.lastSeen, now, days),
     unknownRecipe = not ctx.known,
-    estimated = calib == nil or noThresholds or defaultThresholds,
+    estimated = calib == nil or noThresholds or defaultThresholds or input.missingWeights == true,
     unreachableTarget = mathFlags.unreachableTarget == true,
     unknownOptional = mathFlags.unknownOptional == true,
   }

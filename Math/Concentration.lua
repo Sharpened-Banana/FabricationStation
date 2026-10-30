@@ -29,11 +29,19 @@ local function lerp(p0, p1, x)
   return p0[2] + (p1[2] - p0[2]) * (x - p0[1]) / (p1[1] - p0[1])
 end
 
+-- Whether a curve can price concentration: both point lists are present and non-empty.
+function Concentration.IsUsable(curve)
+  return type(curve) == "table" and type(curve.curve) == "table" and #curve.curve > 0
+    and type(curve.constant) == "table" and #curve.constant > 0
+end
+
 -- Concentration needed to craft at `skill` against `difficulty`.
 -- curve = { constant = { {difficulty, k}... }, curve = { {skill/difficulty, value}... } }; nil curve costs 0.
+-- A curve without points (either list empty or missing) has an unknown cost: nil.
 -- lessFactors: fractions of the cost each saved (e.g. {0.1}); they are summed before rounding.
 function Concentration.Cost(curve, skill, difficulty, lessFactors)
   if not curve or difficulty <= 0 then return 0 end
+  if not Concentration.IsUsable(curve) then return nil end
   skill = math.min(skill, difficulty)
   local s, e = bracket(skill / difficulty, curve.curve)
   s, e = s or { 0, 0 }, e or { 1, 1 }

@@ -288,6 +288,34 @@ describe("Queue craft actions", function()
     end)
   end)
 
+  describe("required modifying reagents (sparks), real evaluation", function()
+    before_each(function()
+      ns, W, world = make_world({ last = "Modules/QueueCraft.lua", calibrate = { ["Main-Realm"] = { 9001 } } })
+      Q = ns.FS:GetModule("Queue")
+      api = world.recordAuctionatorTerms()
+      table.insert(world.schematics[9001].reagentSlots, { slotIndex = 4, required = true, quantity = 1, reagents = { 7101 },
+        kind = "optional", dataSlotIndex = 14, dataSlotType = 2 })
+      world.prices[7101] = { value = 4000, source = "auction", ageDays = 1 }
+      world.openProfession(2906)
+    end)
+    it("sends the spark to CraftRecipe", function()
+      world.haveAll("Main-Realm")
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      assert.equals("crafted", Q:CraftNext().status)
+      local infos = world.crafts[1][3]
+      assert.same({ reagent = { itemID = 7101 }, dataSlotIndex = 14, quantity = 1 }, infos[#infos])
+    end)
+    it("reports a missing spark and puts it on the shopping list", function()
+      world.haveAll("Main-Realm"); world.items["Main-Realm"][7101] = nil
+      world.names[7101] = "Spark"
+      Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      local r = Q:CraftNext()
+      assert.equals("missing", r.status); assert.same({ [7101] = 1 }, r.missing)
+      assert.is_true((Q:ExportShoppingList()))
+      assert.same({ searchString = "Spark", isExact = true, quantity = 2 }, api.terms[#api.terms])
+    end)
+  end)
+
   describe("Craft Next results", function()
     before_each(function() world.openProfession(2906) end)
     it("does not decrement restock entries", function()

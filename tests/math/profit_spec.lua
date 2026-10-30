@@ -104,6 +104,26 @@ describe("Math.Profit", function()
     local rc = P.EvaluateCraft(scenario({ concentration = {}, useConcentration = true }))
     assert.equals(2, rc.expectedQuality); assert.equals(121675, rc.profit); assert.is_nil(rc.concentrationCost)
   end)
+  it("a curve without points gives unknown concentration numbers instead of an error", function()
+    for _, curve in ipairs({ { curve = MID.curve, constant = {} }, { curve = {}, constant = MID.constant } }) do
+      local r
+      assert.has_no.errors(function() r = P.EvaluateCraft(scenario({ concentration = { curve = curve, lessFactors = {} } })) end)
+      assert.equals(120010, r.profit)
+      assert.is_nil(r.concentrationCost); assert.is_nil(r.expectedConcentrationCost); assert.is_nil(r.goldPerConcentration)
+      assert.is_nil(r.concentrationCostForAllocation)
+      assert.has_no.errors(function() P.EvaluateAllocation(scenario({ concentration = { curve = curve } }), ALL_LOW) end)
+    end
+  end)
+  it("costs a fixed slot marked noResourcefulness but saves nothing on it", function()
+    local spark = slot(4, 1, 0, { 4000 }); spark.noResourcefulness = true
+    local r = P.EvaluateCraft(scenario({ slots = { slot(1,10,48,{100,300}), slot(2,5,32,{200,300}), slot(3,2,0,{500}), spark } }))
+    assert.equals(2, r.expectedQuality); assert.equals(8800, r.reagentCost)
+    assert.equals(360, r.resourcefulnessValue); assert.equals(116010, r.profit)
+    assert.same({ slotIndex = 4, itemID = 4001, quantity = 1 }, r.allocation[#r.allocation])
+    local a = P.EvaluateAllocation(scenario({ slots = { slot(1,10,48,{100,300}), slot(2,5,32,{200,300}), slot(3,2,0,{500}), spark } }),
+      { ALL_TOP[1], ALL_TOP[2], ALL_TOP[3], { slotIndex = 4, itemID = 4001, quantity = 1 } })
+    assert.equals(9500, a.reagentCost); assert.equals(413, a.resourcefulnessValue)    -- 0.25 × 5500 × 0.3, the spark left out
+  end)
   it("no concentration plan when every reachable quality is the top one", function()
     local r = P.EvaluateCraft(scenario({ baseSkill = 700 }))
     assert.equals(3000, r.reagentCost); assert.equals(2, r.expectedQuality); assert.is_nil(r.perQuality[1])

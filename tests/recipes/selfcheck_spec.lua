@@ -161,6 +161,18 @@ describe("SelfCheck run", function()
       { slotIndex = 4, itemID = 4002, quantity = 1 }, { slotIndex = 5, itemID = 5501, quantity = 1 } }, asked)
   end)
 
+  it("sends a required spark once, as part of the allocation", function()
+    local schematic = world.schematics[9001]
+    schematic.reagentSlots[#schematic.reagentSlots + 1] = { slotIndex = 4, required = true, quantity = 1,
+      reagents = { 7101 }, kind = "optional", dataSlotIndex = 14, dataSlotType = 2 }
+    local asked
+    world.live[9001] = function(allocation) asked = allocation; return right() end
+    open({ RANK1[1], RANK1[2], RANK1[3], { reagent = { itemID = 7101 }, dataSlotIndex = 14, quantity = 1 } })
+    S:Run(9001)
+    assert.same({ { slotIndex = 1, itemID = 1001, quantity = 10 }, { slotIndex = 2, itemID = 2001, quantity = 5 },
+      { slotIndex = 3, itemID = 3001, quantity = 2 }, { slotIndex = 4, itemID = 7101, quantity = 1 } }, asked)
+  end)
+
   it("predicts with the transaction's optional reagents", function()
     local schematic = world.schematics[9001]
     schematic.reagentSlots[#schematic.reagentSlots + 1] = { slotIndex = 4, required = false, quantity = 1,

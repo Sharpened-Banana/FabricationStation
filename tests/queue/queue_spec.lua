@@ -205,6 +205,22 @@ describe("Queue", function()
     end)
   end)
 
+  describe("required modifying reagents (sparks), real evaluation", function()
+    before_each(function()
+      ns, W, world = make_world({ last = "Modules/Queue.lua", calibrate = { ["Main-Realm"] = { 9001 } } })
+      Q = ns.FS:GetModule("Queue")
+      table.insert(world.schematics[9001].reagentSlots, { slotIndex = 4, required = true, quantity = 1, reagents = { 7101 },
+        kind = "optional", dataSlotIndex = 14, dataSlotType = 2 })
+      world.prices[7101] = { value = 4000, source = "auction", ageDays = 1 }
+    end)
+    it("lists the spark among the missing reagents and costs it", function()
+      local id = Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      assert.equals(2, Q:GetMissingReagents(nil)[7101])
+      assert.equals(2, Q:GetEntryMissing(id)[7101])
+      assert.equals(2 * 8800, Q:GetEntryCost(id))
+    end)
+  end)
+
   describe("restock", function()
     it("lists nothing when the target is reached, or no one can craft it", function()
       world.counts[5002] = 20; Q:SetRestock(5002, 20); assert.equals(0, #Q:GetEntries())
