@@ -177,3 +177,96 @@ describe("Scanner professions", function()
     assert.is_nil(Scanner:GetCharacter(K)); assert.same({}, ns.FS.db.global.schematics)
   end)
 end)
+
+describe("Scanner dropped professions", function()
+  local W, ns, Scanner
+  local K = "Thrall-ArgentDawn"
+  -- GetProfessions -> prof1, prof2, archaeology, fishing, cooking (spellbook indices, nil when unlearned);
+  -- GetProfessionInfo(index) -> name, icon, skill, maxSkill, numSpells, spellOffset, skillLine (base), ...
+  local known
+  local function professions_api()
+    return {
+      GetProfessions = function() return known[1] and 1 or nil, known[2] and 2 or nil, nil, nil, known[5] and 5 or nil end,
+      GetProfessionInfo = function(index) return "Name", 0, 1, 100, 0, 0, known[index] end,
+    }
+  end
+  local function saved(extra)
+    local g = { characters = {
+      [K] = { professions = {
+        [2871] = { parentSkillLineID = 164, recipes = { [1001] = true } },
+        [2900] = { parentSkillLineID = 171, recipes = { [5] = true }, skill = 50 },
+        [2950] = { recipes = { [6] = true } },  -- no parent recorded: left alone
+      } },
+      ["Jaina-ArgentDawn"] = { professions = { [2900] = { parentSkillLineID = 171, recipes = {} } } },
+    } }
+    for k, v in pairs(extra or {}) do g[k] = v end
+    return { global = g }
+  end
+  local function boot(extra, overrides)
+    W = install_wow_stubs(fixture(overrides or professions_api()))
+    _G.FabricationStationDB = saved(extra)
+    ns = load_addon({}, "Modules/Scanner.lua"); W.boot(); Scanner = ns.FS:GetModule("Scanner")
+  end
+  local function count()
+    local n = 0
+    for _, m in ipairs(W.messages) do if m[1] == "FS_DATA_CHANGED" and m[3] == "professions" then n = n + 1 end end
+    return n
+  end
+
+  before_each(function() known = { [1] = 164, [5] = 185 } end)
+
+  it("marks a profession whose base profession is gone as dropped at login, keeping its data", function()
+    boot()
+    local p = Scanner:GetProfession(K, 2900)
+    assert.is_true(p.dropped); assert.is_true(p.recipes[5]); assert.equals(50, p.skill)
+    assert.is_nil(Scanner:GetProfession(K, 2871).dropped); assert.is_nil(Scanner:GetProfession(K, 2950).dropped)
+    assert.is_nil(Scanner:GetProfession("Jaina-ArgentDawn", 2900).dropped)
+    assert.equals(1, count())
+  end)
+  it("clears the mark when the profession is learned again, on SKILL_LINES_CHANGED", function()
+    boot(); assert.is_true(Scanner:GetProfession(K, 2900).dropped)
+    known[2] = 171; W.fire("SKILL_LINES_CHANGED"); W.fire("SKILL_LINES_CHANGED"); W.advance(0.5)
+    assert.is_nil(Scanner:GetProfession(K, 2900).dropped); assert.equals(2, count())
+    W.fire("SKILL_LINES_CHANGED"); W.advance(0.5); assert.equals(2, count())  -- no change, no message
+  end)
+  it("marks a profession dropped later in the session", function()
+    known[2] = 171; boot(); assert.is_nil(Scanner:GetProfession(K, 2900).dropped); assert.equals(0, count())
+    known[2] = nil; W.fire("SKILL_LINES_CHANGED"); W.advance(0.5)
+    assert.is_true(Scanner:GetProfession(K, 2900).dropped); assert.equals(1, count())
+  end)
+  it("clears the mark on a profession seen in the profession window", function()
+    boot(); local p = Scanner:GetProfession(K, 2871); p.dropped = true
+    W.fire("TRADE_SKILL_LIST_UPDATE"); W.advance(0.5)
+    assert.is_nil(p.dropped)
+  end)
+  it("does nothing when the client lacks GetProfessions or GetProfessionInfo", function()
+    for _, missing in ipairs({ "GetProfessions", "GetProfessionInfo" }) do
+      local api = professions_api(); api[missing] = nil
+      boot(nil, api)
+      assert.is_nil(Scanner:GetProfession(K, 2900).dropped, missing); assert.equals(0, count(), missing)
+      assert.is_true(Scanner:IsEnabled())
+    end
+  end)
+  it("marks nothing when a profession's skill line is not known yet", function()
+    known[2] = "pending"
+    local api = professions_api()
+    api.GetProfessions = function() return 1, 2 end
+    api.GetProfessionInfo = function(index) if index == 1 then return "Name", 0, 1, 100, 0, 0, 164 end end
+    boot(nil, api)
+    assert.is_nil(Scanner:GetProfession(K, 2900).dropped); assert.equals(0, count())
+  end)
+  it("logs an API error once and keeps the module running", function()
+    local api = professions_api(); api.GetProfessions = function() error("nope") end
+    boot(nil, api)
+    W.fire("SKILL_LINES_CHANGED"); W.advance(0.5)
+    assert.is_true(Scanner:IsEnabled()); assert.is_nil(Scanner:GetProfession(K, 2900).dropped)
+    local errs = ns.FS.db.global.diagnostics.errors
+    assert.equals(1, #errs); assert.matches("nope", errs[1].err)
+  end)
+  it("writes nothing when the saved data is from a newer version", function()
+    boot({ schemaVersion = 999 })
+    assert.is_nil(Scanner:GetProfession(K, 2900).dropped)
+    W.fire("SKILL_LINES_CHANGED"); W.advance(0.5)
+    assert.is_nil(Scanner:GetProfession(K, 2900).dropped); assert.equals(0, count())
+  end)
+end)

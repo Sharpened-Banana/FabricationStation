@@ -26,7 +26,10 @@ General, Prices, Modules and Diagnostics.
    and right-click opens Settings. The window can be dragged, resized and closed with Escape, and its size and
    position survive `/reload`.
 3. **API presence.** Run `/dump C_TradeSkillUI.GetAllRecipeIDs ~= nil, GetProfessions ~= nil`. Expected:
-   `true, true`. If either is false, note it; Task 7's fallback covers recipe IDs.
+   `true, true`. If either is false, note it; Task 7's fallback covers recipe IDs. Then run
+   `/dump select(7, GetProfessionInfo((GetProfessions())))`. Expected: your first profession's base skill
+   line ID (for example `164` for Blacksmithing), which the Scanner's dropped-profession check relies on.
+   If it is not that number, report what it is; every saved profession would otherwise be marked `dropped`.
 
 ## B. Scanner and captures (plan checks 4-7)
 

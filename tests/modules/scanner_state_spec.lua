@@ -45,6 +45,20 @@ describe("Scanner profession state", function()
   it("records no concentration when the currency id is 0", function()
     C_TradeSkillUI.GetConcentrationCurrencyID = function() return 0 end; scan(); assert.is_nil(Scanner:GetProfession(K, 2871).concentration)
   end)
+  it("keeps the concentration snapshot when the client does not know the currency id yet", function()
+    scan(); local c = Scanner:GetProfession(K, 2871).concentration; assert.is_table(c)
+    C_TradeSkillUI.GetConcentrationCurrencyID = function() return nil end
+    W.advance(10); scan()
+    assert.equals(c, Scanner:GetProfession(K, 2871).concentration)
+  end)
+  it("does not cache a nil concentration currency id", function()
+    local lookup = C_TradeSkillUI.GetConcentrationCurrencyID
+    C_TradeSkillUI.GetConcentrationCurrencyID = function() return nil end
+    scan(); assert.is_nil(Scanner:GetProfession(K, 2871).concentration)
+    C_TradeSkillUI.GetConcentrationCurrencyID = lookup; _G.ProfessionsFrame = nil
+    W.fire("CURRENCY_DISPLAY_UPDATE", 3256)
+    assert.equals(500, Scanner:GetProfession(K, 2871).concentration.value)
+  end)
   it("records Moxie when GameData maps the skill line", function()
     ns.GameData.Define("MoxieCurrency", 70575, { [2871] = 3300 }); scan()
     assert.same({ currencyID = 3300, value = 42, time = W.now }, Scanner:GetProfession(K, 2871).moxie)

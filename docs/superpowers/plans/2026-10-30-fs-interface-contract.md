@@ -145,9 +145,10 @@ Note: a full profession scan announces its spec, concentration and Moxie changes
     concentration = { currencyID, value, max, time, perCycle, cycleSeconds } | nil,
     moxie = { currencyID, value, time } | nil,
     cooldowns = { [recipeID] = { readyAt, charges, maxCharges, time } },
-    tools = { [inventorySlot] = itemLink }, toolsTime }
+    tools = { [inventorySlot] = itemLink }, toolsTime,
+    dropped = true | nil }
   ```
-  `spec.paths[*].rank` is the raw `C_Traits` `currentRank` (Blizzard's UI shows `currentRank - 1` when > 0). `spendEntryID`/`entryID` key into GameData `SpecEntryEffects`. A cooldown is "ready" when `readyAt <= Now()` or `charges > 0`.
+  `dropped = true` marks a profession the character no longer has: at login and on `SKILL_LINES_CHANGED` (debounced), Scanner compares each of the current character's records' `parentSkillLineID` with the base skill lines from `GetProfessions()`/`GetProfessionInfo(index)` (7th return; both feature-tested, skipped when missing or incomplete). The record and its data are kept; the mark is cleared when the profession is known again or seen in a profession scan. Records without `parentSkillLineID` are never marked. Consumers that list a character's current professions skip dropped records. `spec.paths[*].rank` is the raw `C_Traits` `currentRank` (Blizzard's UI shows `currentRank - 1` when > 0). `spendEntryID`/`entryID` key into GameData `SpecEntryEffects`. A cooldown is "ready" when `readyAt <= Now()` or `charges > 0`.
 - `Scanner:GetSchematic(recipeID) -> Schematic | nil` — cached account-wide in `db.global.schematics[recipeID]`; live-fetched and cached when the profession window is open; else nil.
   `{ recipeID, skillLineID (child skill line), outputItemIDs = {[quality]=itemID}, maxQuality, baseDifficulty, quantityMin, quantityMax, reagentSlots = { { slotIndex, required (bool), quantity, reagents = {itemID,...} (ascending quality rank), kind = "basic"|"optional"|"finishing", dataSlotIndex, dataSlotType, automatic (bool), hidden (bool), currencyID? } }, isConcentrationCapable, name, icon, recipeType, supportsQualities, craftingDataID, build, time }`. Automatic slots are `kind = "basic"` with `automatic = true`; currency-only slots have empty `reagents` and set `currencyID`.
 - `Scanner:GetItemCount(itemID, charKey) -> { bags, bank, reagentBank, warband, total }` — with `charKey`: that character + warband; nil: all characters + warband once. `total` = sum of the four. `reagentBank` is always 0 on 12.x (kept for shape). Bank counts update only while the bank is open.
@@ -156,7 +157,8 @@ Note: a full profession scan announces its spec, concentration and Moxie changes
 - **[1a additions]**:
   - `Scanner:IsProfessionOpen(skillLineID|nil) -> bool` — `ProfessionsFrame` shown, data ready, not linked/guild/NPC; with an id, the open child profession must match.
   - `Scanner:ToCraftingReagentInfo(recipeID, allocation) -> { { reagent = { itemID }, dataSlotIndex, quantity } }` — only slots with `dataSlotType == Enum.TradeskillSlotDataType.ModifiedReagent` (Blizzard's `CreateCraftingReagentInfoTbl` rule). Used for `CraftRecipe` and live operation info.
-  - `Scanner:ScanProfession()`, `Scanner:CacheSchematics(recipeIDs)` (25 per frame), `Scanner:ScanBags()`, `Scanner:ScanBank()`, `Scanner:ScanWarband()`.
+  - `Scanner:ScanProfession()`, `Scanner:CacheSchematics(recipeIDs)` (25 per frame), `Scanner:ScanBags()`, `Scanner:ScanBank()`, `Scanner:ScanWarband()`. Each returns early (false) while Scanner is disabled. `ScanBags`/`ScanBank` always advance `itemsTime` but send `FS_DATA_CHANGED(charKey, "items")` only when a count changed.
+  - `Scanner:CheckDroppedProfessions() -> changed` — sets/clears `ProfessionRecord.dropped` for the current character (see above); sends `FS_DATA_CHANGED(charKey, "professions")` when a mark changed.
   - `db.global.warband = { items = { [itemID] = count }, time }`.
 - Scans ignore linked, guild and NPC profession views.
 

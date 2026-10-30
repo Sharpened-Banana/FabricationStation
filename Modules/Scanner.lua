@@ -292,9 +292,11 @@ local function concentration_id(p, line)
   return p.concentration and p.concentration.currencyID or lookup_concentration_id(line)
 end
 
--- Open-profession snapshot: currency id 0 means the profession has no concentration.
+-- Open-profession snapshot: currency id 0 means the profession has no concentration. A nil id (data
+-- not loaded yet) changes nothing and is not cached.
 local function snapshot_concentration(p, line, now)
-  local id = C_TradeSkillUI.GetConcentrationCurrencyID(line) or 0
+  local id = C_TradeSkillUI.GetConcentrationCurrencyID(line)
+  if id == nil then return end
   concentrationIDs[line] = id ~= 0 and id or false
   if id == 0 then p.concentration = nil; return end
   p.concentration = read_concentration(id, now) or p.concentration
@@ -364,8 +366,10 @@ local function count_containers(first, last)
 end
 
 -- Rewrites one field (bags | bank) of the character's item entries from `counts`, for every item
--- seen before or now. An entry whose bags, bank and reagentBank are all 0 is deleted.
+-- seen before or now. An entry whose bags, bank and reagentBank are all 0 is deleted. Returns true
+-- when any count of that field changed.
 local function write_item_field(c, field, counts)
+  local changed = false
   local ids, seen = {}, {}
   for itemID in pairs(c.items) do ids[#ids + 1] = itemID; seen[itemID] = true end
   for itemID in pairs(counts) do
@@ -373,7 +377,9 @@ local function write_item_field(c, field, counts)
   end
   for _, itemID in ipairs(ids) do
     local entry = c.items[itemID] or { bags = 0, bank = 0, reagentBank = 0 }
-    entry[field] = counts[itemID] or 0
+    local count = counts[itemID] or 0
+    if (entry[field] or 0) ~= count then changed = true end
+    entry[field] = count
     entry.bags, entry.bank, entry.reagentBank = entry.bags or 0, entry.bank or 0, entry.reagentBank or 0
     if entry.bags == 0 and entry.bank == 0 and entry.reagentBank == 0 then
       c.items[itemID] = nil
@@ -381,6 +387,7 @@ local function write_item_field(c, field, counts)
       c.items[itemID] = entry
     end
   end
+  return changed
 end
 
 ---------------------------------------------------------------------------
@@ -493,9 +500,10 @@ end
 
 -- Snapshots the open profession: the open child's header, every known recipe filed under its own
 -- child skill line with its cooldown, those lines' skill, and the open child's specialization,
--- concentration, Moxie and tools. Sends one FS_DATA_CHANGED ("recipes"). Returns true when a scan ran.
+-- concentration, Moxie and tools. Every line it files is known, so its `dropped` mark is cleared.
+-- Sends one FS_DATA_CHANGED ("recipes"). Returns true when a scan ran.
 function Scanner:ScanProfession()
-  if not writable() or not can_scan() then return false end
+  if not self:IsEnabled() or not writable() or not can_scan() then return false end
   local charKey = ns.FS:CharKey()
   local c = ensure_character(charKey)
   local now = ns.FS:Now()
@@ -530,6 +538,7 @@ function Scanner:ScanProfession()
   for line, p in pairs(touched) do
     if line ~= childLine then apply_profession_info(p, C_TradeSkillUI.GetProfessionInfoBySkillLineID(line)) end
     p.time = now
+    p.dropped = nil
   end
 
   guarded("cooldowns", function()
@@ -575,7 +584,7 @@ end
 -- sends FS_DATA_CHANGED "professions".
 function Scanner:ScanCooldowns()
   local open = openLines
-  if not writable() or not open or not self:IsProfessionOpen(open.child) then return false end
+  if not self:IsEnabled() or not writable() or not open or not self:IsProfessionOpen(open.child) then return false end
   local charKey = ns.FS:CharKey()
   local c = ensure_character(charKey)
   local now = ns.FS:Now()
@@ -622,32 +631,77 @@ function Scanner:RefreshCurrencies(currencyType)
   if concentration then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "concentration") end
 end
 
--- Snapshots the carried bags (backpack through reagent bag); sends FS_DATA_CHANGED "items".
+-- Base skill lines (e.g. 164 Blacksmithing) the character knows now. GetProfessions returns the
+-- spellbook indices of prof1, prof2, archaeology, fishing and cooking (nil when unlearned), and the
+-- 7th return of GetProfessionInfo(index) is the base skill line. Neither is in the generated API
+-- docs, so both are feature-tested. Nil when the client lacks them or an answer is incomplete.
+local function known_base_lines()
+  if type(GetProfessions) ~= "function" or type(GetProfessionInfo) ~= "function" then return nil end
+  local indices = { GetProfessions() }
+  local known = {}
+  for i = 1, 5 do
+    local index = indices[i]
+    if index then
+      local skillLine = select(7, GetProfessionInfo(index))
+      if type(skillLine) ~= "number" then return nil end
+      known[skillLine] = true
+    end
+  end
+  return known
+end
+
+-- Marks this character's profession records whose base profession (parentSkillLineID) is no longer
+-- known with dropped = true, and clears the mark when it is known again. Records without a
+-- parentSkillLineID are left alone, and no data is deleted. Sends FS_DATA_CHANGED "professions"
+-- when a mark changed; returns true then.
+function Scanner:CheckDroppedProfessions()
+  if not self:IsEnabled() or not writable() then return false end
+  local charKey = ns.FS:CharKey()
+  local c = self:GetCharacter(charKey)
+  if not (c and c.professions) then return false end
+  local known
+  if not guarded("dropped professions", function() known = known_base_lines() end) or not known then return false end
+  local changed = false
+  for _, p in pairs(c.professions) do
+    if p.parentSkillLineID ~= nil then
+      local dropped = not known[p.parentSkillLineID] or nil
+      if p.dropped ~= dropped then p.dropped = dropped; changed = true end
+    end
+  end
+  if changed then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "professions") end
+  return changed
+end
+
+-- Snapshots the carried bags (backpack through reagent bag). itemsTime.bags always moves forward;
+-- FS_DATA_CHANGED "items" is sent only when a count changed.
 function Scanner:ScanBags()
-  if not writable() then return false end
+  if not self:IsEnabled() or not writable() then return false end
   local charKey = ns.FS:CharKey()
   local c = ensure_character(charKey)
-  write_item_field(c, "bags", count_containers("Backpack", "ReagentBag"))
+  local changed = write_item_field(c, "bags", count_containers("Backpack", "ReagentBag"))
   c.itemsTime.bags = ns.FS:Now()
-  self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "items")
+  if changed then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "items") end
   return true
 end
 
--- Snapshots the character bank tabs; only while the bank is open. Sends "items".
+-- Snapshots the character bank tabs; only while the bank is open. Sends "items" only when a count
+-- changed.
 function Scanner:ScanBank()
-  if not writable() or not self.bankOpen then return false end
+  if not self:IsEnabled() or not writable() or not self.bankOpen then return false end
   local charKey = ns.FS:CharKey()
   local c = ensure_character(charKey)
-  write_item_field(c, "bank", count_containers("CharacterBankTab_1", "CharacterBankTab_6"))
+  local changed = write_item_field(c, "bank", count_containers("CharacterBankTab_1", "CharacterBankTab_6"))
   c.itemsTime.bank = ns.FS:Now()
-  self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "items")
+  if changed then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "items") end
   return true
 end
 
 -- Snapshots the warband bank into the account-wide table; only while the bank is open and the
 -- warband bank can be viewed. Sends "warband".
 function Scanner:ScanWarband()
-  if not writable() or not self.bankOpen or not C_Bank.CanViewBank(Enum.BankType.Account) then return false end
+  if not self:IsEnabled() or not writable() or not self.bankOpen or not C_Bank.CanViewBank(Enum.BankType.Account) then
+    return false
+  end
   global().warband = { items = count_containers("AccountBankTab_1", "AccountBankTab_5"), time = ns.FS:Now() }
   self:SendMessage(ns.Msg.DATA_CHANGED, ns.FS:CharKey(), "warband")
   return true
@@ -692,6 +746,7 @@ function Scanner:OnEnable()
     c.class = select(2, UnitClass("player"))
     c.gold = GetMoney()
     self:RefreshCurrencies(nil)
+    self:CheckDroppedProfessions()
   end
 
   local scan = ns.FS:Wrap("Scanner", function() self:ScanProfession() end)
@@ -735,4 +790,11 @@ function Scanner:OnEnable()
   self:RegisterEvent("CURRENCY_DISPLAY_UPDATE", ns.FS:Wrap("Scanner", function(_, currencyType)
     self:RefreshCurrencies(currencyType)
   end))
+
+  -- Learning or dropping a profession fires SKILL_LINES_CHANGED (along with many other skill
+  -- updates, hence the debounce). Registered protected: the client errors on an unknown event.
+  local checkDropped = ns.FS:Wrap("Scanner", function() self:CheckDroppedProfessions() end)
+  pcall(self.RegisterEvent, self, "SKILL_LINES_CHANGED", function()
+    ns.FS:Debounce("scanner.skilllines", SCAN_DEBOUNCE, checkDropped)
+  end)
 end
