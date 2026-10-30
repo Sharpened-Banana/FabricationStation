@@ -8,8 +8,8 @@ local _, ns = ...
 --
 -- Display rules (same as the Dashboard and Recipes tabs): an unknown cost is "no price" (never 0g); money
 -- goes through ns.UI.FormatMoney; an estimated cost starts with "~" and every cost carries its price age (red
--- when stale); an entry whose target quality cannot be reached says "[quality unreachable]". While the saved data is from a newer version every control that would
--- change the queue says it is read-only instead.
+-- when stale); an entry whose target quality cannot be reached says "[quality unreachable]". While the saved
+-- data is from a newer version every control that would change the queue says it is read-only instead.
 --
 -- Craft Next is a protected action: the only reference to it is inside the button's OnClick handler (the
 -- structural check in tests/queue/craft_spec.lua enforces that).
