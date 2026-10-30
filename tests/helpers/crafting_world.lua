@@ -7,8 +7,9 @@
 -- Stubs: opts.stubs is deep-merged over { UnitName -> "Main", GetNormalizedRealmName -> "Realm" }
 -- (so ns.FS:CharKey() is "Main-Realm") plus fakes for EventRegistry (RegisterCallback,
 -- UnregisterCallback, TriggerEvent; registrations in EventRegistry.callbacks[event] as
--- { fn, owner } entries, duplicates kept), TooltipDataProcessor.AddTooltipPostCall (calls recorded
--- in TooltipDataProcessor.postCalls), Enum.TooltipDataType.Item and debugprofilestop.
+-- { fn, owner } entries, duplicates kept) and debugprofilestop. TooltipDataProcessor.AddTooltipPostCall (calls
+-- recorded in TooltipDataProcessor.postCalls as { dataType, fn }) and Enum.TooltipDataType.Item come from
+-- wow_stubs (every spec has them: Tooltips enables in any full load).
 --
 -- World (recipe 9001 = the Math.Profit scenario as a contract Schematic):
 --   skill line 2906, craftingDataID 2588 (craftingDifficultyID 77), maxQuality 2, baseDifficulty 700,
@@ -99,14 +100,6 @@ local function fake_event_registry()
     for _, entry in ipairs(snapshot) do entry.fn(entry.owner, ...) end
   end
   return reg
-end
-
-local function fake_tooltip_processor()
-  local tdp = { postCalls = {} }
-  function tdp.AddTooltipPostCall(dataType, fn)
-    tdp.postCalls[#tdp.postCalls + 1] = { dataType = dataType, fn = fn }
-  end
-  return tdp
 end
 
 local function slot(slotIndex, quantity, reagents, dataSlotIndex, dataSlotType)
@@ -219,8 +212,6 @@ local function make_world(opts)
     UnitName = function() return "Main" end,
     GetNormalizedRealmName = function() return "Realm" end,
     EventRegistry = fake_event_registry(),
-    TooltipDataProcessor = fake_tooltip_processor(),
-    Enum = { TooltipDataType = { Item = 0 } },
     debugprofilestop = function() return os.clock() * 1000 end,
   }
   deep_merge(overrides, opts.stubs or {})

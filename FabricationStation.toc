@@ -41,3 +41,4 @@ UI\Tabs\Settings.lua
 UI\Launcher.lua
 UI\ProfessionPanel.lua
 UI\RecipeListLabels.lua
+UI\Tooltips.lua

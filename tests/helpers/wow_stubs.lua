@@ -633,7 +633,12 @@ local function install(overrides)
   local retFalse = function() return false end
   local retZero = function() return 0 end
 
-  local globals = {
+  local TooltipDataProcessor = { postCalls = {} }
+  function TooltipDataProcessor.AddTooltipPostCall(dataType, fn)
+    TooltipDataProcessor.postCalls[#TooltipDataProcessor.postCalls + 1] = { dataType = dataType, fn = fn }
+  end
+
+local globals = {
     C_TradeSkillUI = {
       GetRecipeSchematic = retNil, GetRecipeInfo = retNil, GetCraftingOperationInfo = retNil,
       GetConcentrationCurrencyID = retZero, GetChildProfessionInfo = retNil, GetChildProfessionInfos = emptyList,
@@ -674,7 +679,9 @@ local function install(overrides)
       BankType = { Character = 0, Account = 2 },
       ProfessionsSpecPathState = { Locked = 0, Progressing = 1, Completed = 2 },
       ProfessionsSpecPerkState = { Unearned = 0, Earned = 1, Pending = 2 },
+      TooltipDataType = { Item = 0 },
     },
+    TooltipDataProcessor = TooltipDataProcessor,
     LibStub = LibStub,
     ButtonFrameTemplate_HidePortrait = noop,
     ButtonFrameTemplate_HideButtonBar = noop,
