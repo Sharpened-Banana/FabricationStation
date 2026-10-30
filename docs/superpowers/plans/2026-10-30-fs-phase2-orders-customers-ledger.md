@@ -719,22 +719,36 @@ describe("Ledger capture", function()
     local price = {[100]=10000, [101]=15000, [200]=5000}
     P2.fake_module(ns, "Prices", { Get = function(_, id) return {value = price[id]} end })
     P2.fake_module(ns, "Scanner", { GetSchematic = function() return { reagentSlots = {
-      {slotIndex=1, required=true, quantity=3, reagents={100,101}, kind="basic"},
-      {slotIndex=2, required=true, quantity=2, reagents={200}, kind="basic"} } } end })
+      {slotIndex=1, required=true, quantity=3, reagents={100,101}, kind="basic", dataSlotIndex=1, dataSlotType=2},   -- quality slot: in craftingReagents
+      {slotIndex=2, required=true, quantity=2, reagents={200}, kind="basic", dataSlotIndex=2, dataSlotType=1} } } end })   -- fixed reagent: never passed
     P2.fake_module(ns, "Orders", { GetClaimedOrder = function() return claimed end })
     P2.load(ns, {"Modules/Ledger.lua"}); L = ns.FS:GetModule("Ledger")
   end)
   local function craft(orderID)
+    op = op + 1
     L:OnCraftRecipe(4444, 1, { {reagent={itemID=100}, quantity=3, dataSlotIndex=1} }, nil, orderID, false)
-    L:OnCraftResult("TRADE_SKILL_ITEM_CRAFTED_RESULT", {itemID=211111, quantity=2, craftingQuality=3, hyperlink=LINK,
+    L:OnCraftResult("TRADE_SKILL_ITEM_CRAFTED_RESULT", {itemID=211111, quantity=2, craftingQuality=3, hyperlink=LINK, operationID=op,
       resourcesReturned={ {reagent={itemID=100}, quantity=1} }})
   end
   it("stores craft cost basis at craft time", function()
     craft(nil)
     local e = L:Query({type="craft"})[1]
     assert.same({-30000, 2, 3, 4444, 211111}, {e.amount, e.quantity, e.quality, e.recipeID, e.itemID})
+    assert.is_nil(e.incomplete)
     assert.same({totalCost=30000, totalQty=2, recipeID=4444}, ns.FS.db.global.ledger.costBasis[211111])
     assert.equal(211111, (L:ResolveItemName("Potion of Foo")))
+  end)
+  it("adds a multicraft extra with the same operationID to the same craft entry", function()
+    craft(nil)
+    L:OnCraftResult("TRADE_SKILL_ITEM_CRAFTED_RESULT", {itemID=211111, quantity=1, craftingQuality=3, hyperlink=LINK, operationID=op})
+    local e = L:Query({type="craft"}); assert.equal(1, #e)
+    assert.same({3, -30000}, {e[1].quantity, e[1].amount})
+    assert.same({totalCost=30000, totalQty=3, recipeID=4444}, ns.FS.db.global.ledger.costBasis[211111])
+  end)
+  it("is reached through the CraftRecipe post-hook", function()
+    C_TradeSkillUI.CraftRecipe(4444, 1, { {reagent={itemID=100}, quantity=3, dataSlotIndex=1} }, nil, nil, false)
+    L:OnCraftResult("TRADE_SKILL_ITEM_CRAFTED_RESULT", {itemID=211111, quantity=1, craftingQuality=3, hyperlink=LINK, operationID=99})
+    assert.equal(1, #L:Query({type="craft"}))
   end)
   it("subtracts customer-provided reagents and records the commission", function()
     claimed = {orderID=777, provided={[200]=2}}
@@ -784,7 +798,7 @@ Expected: FAIL (`attempt to call method 'OnCraftRecipe' (a nil value)`)
 
 - [ ] **Step 3: Implement the capture functions listed under Interfaces in `Modules/Ledger.lua`**
 
-The pending craft context `{recipeID, craftingReagents, orderID, provided, castsLeft = numCasts}` is set by `OnCraftRecipe`. `provided` comes from `Orders:GetClaimedOrder()` when its `orderID` matches. Each `OnCraftResult` uses the context and decrements `castsLeft`, then clears the context at 0. A result with no context records nothing.
+The pending craft context `{recipeID, craftingReagents, orderID, provided, castsLeft = numCasts}` is set by `OnCraftRecipe`. `provided` comes from `Orders:GetClaimedOrder()` when its `orderID` matches. `OnCraftResult` first checks the multicraft rule (same `operationID` as the last recorded craft entry, which is kept outside the context so it still matches after the context is cleared). Otherwise it uses the context and decrements `castsLeft`, then clears the context at 0. A result with no context and no matching `operationID` records nothing.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -795,7 +809,7 @@ Expected: PASS
 
 - Craft one item. `/dump FabricationStationDB.global.ledger.entries[#FabricationStationDB.global.ledger.entries]` shows a `craft` entry with a negative amount.
 - Collect one "Auction successful" mail with Open All. It produces exactly one `sale` entry.
-- Note in the commit message whether `TRADE_SKILL_ITEM_CRAFTED_RESULT.quantity` included multicraft extras.
+- Note in the commit message whether a multicraft proc arrived as a second `TRADE_SKILL_ITEM_CRAFTED_RESULT` with the same `operationID` (the rule shared with 1b's Queue), or was already included in the first result's `quantity`.
 
 - [ ] **Step 6: Commit**
 
@@ -808,20 +822,20 @@ git commit -m "feat: capture craft cost basis, order commissions and AH sales fr
 
 **Files:**
 - Create: `UI/OrdersPanel.lua`
-- Modify: `FabricationStation.toc`, `.luacheckrc` (`ScrollUtil`, `CreateFrame`, `GameTooltip`, `UIParent`)
+- Modify: `FabricationStation.toc` (`UI\OrdersPanel.lua` after 1b's `UI\Tooltips.lua`), `.luacheckrc` (`ScrollUtil`; 1a already lists `CreateFrame`, `GameTooltip`, `UIParent`)
 - Test: `tests/ui/orders_panel_spec.lua`
 
 **Interfaces:**
-- Consumes: `Orders:GetView`, `GetLiveViews`, `IsHidden`, `Settings`, `GetBestClaimable`, `ClaimBest`, `RISK_LABELS`; `Customers:Get`, `IsBlocked`; `Ledger:Benchmark`; `ns.UI.FormatMoney`; `ns.FS:SafeCall`.
+- Consumes: `Orders:GetView`, `GetLiveViews`, `IsHidden`, `Settings`, `GetBestClaimable`, `ClaimBest`, `RISK_LABELS`; `Customers:Get`, `IsBlocked`; `Ledger:Benchmark`; 1a `ns.UI.FormatMoney` (`"--"` for nil); 1a `ns.FS:SafeCall` (disables the named module if enabled, logs, sends `FS_MODULE_FAILED`, prints once), `ns.FS:LogError`, `ns.FS.failedModules`; `ns.Msg`.
 - Produces:
-  - Shared table `ns.UI.OrdersPanel` with pure functions:
-    - `RowModel(view, customer, filters) -> {profit, score, riskCount, riskText, highlight = "blocked"|"vip"|"repeat"|nil, dimmed}`. `profit = view.net` and `score` are copper or nil. `riskText` is the risk labels joined with `"\n"` for the tooltip. `dimmed = Orders:IsHidden(view, filters)`. Highlight precedence:
+  - Shared table `ns.UI.OrdersPanel` (`ns.UI` is created by 1a's `UI/Util.lua`) with pure functions:
+    - `RowModel(view, customer, filters) -> {profit, score, riskCount, riskText, highlight = "blocked"|"vip"|"repeat"|nil, dimmed, estimated}`. `profit = view.net` and `score` are copper or nil. `riskText` is the risk labels joined with `"\n"` for the tooltip. `dimmed = Orders:IsHidden(view, filters)`. `estimated = view.flags and view.flags.estimated or false` (1b's "no calibration" flag); the score cell then shows `~` before the money so an estimate never looks certain. Highlight precedence:
       1. `"blocked"`: `view.risks` contains `blockedCustomer`, which is group-aware, or `customer.tags.blocked`
       2. `"vip"`: `customer.tags.VIP`
       3. `"repeat"`: `#customer.orders >= 2`
     - `BestText(itemText, view, benchmark) -> string`, formatted `"<itemText> · net <FormatMoney(view.net)> · tip vs your median <+N%|-N%|n/a>"`, with `N = floor((tip/median - 1) * 100 + 0.5)`.
     - `Guard(moduleName, fn, ...)`, which calls `ns.FS:SafeCall(moduleName, fn, ...)` only while that module is enabled.
-  - Three modules, each enabled per `db.global.settings.ordersPanel = {rows = true, sidePanel = true, orderViewWarning = true}`:
+  - Three modules, each a normal toggleable module (1a's `settings.modules[<Name>]`, default on, listed in 1a's `"modules"` options group and in Task 13's group; changed only through `ns.FS:SetModuleEnabled`):
     - `OrdersRowAddons`: own overlay and cell frames, anchored to Blizzard rows and parented to an own container that clips children and is anchored over `OrderList.ScrollBox`.
     - `OrdersSidePanel`: own frame anchored `TOPLEFT` to `ProfessionsFrame` `TOPRIGHT` (+2, 0), width 220. It holds:
       - the header `"FabricationStation"`
@@ -831,13 +845,13 @@ git commit -m "feat: capture craft cost basis, order commissions and AH sales fr
       - the best-order line from `BestText`
       - the claim-result line from `CRAFTINGORDERS_CLAIM_ORDER_RESPONSE`: `"Claimed — open it from the order list"`, or `"Claim failed (<result>)"`.
     - `OrderViewWarning`: own fontstring frame anchored above `ProfessionsFrame.OrdersPage.OrderView`, showing `"Blocked customer: <name>"` in red or `"VIP customer · <n> previous orders"` in gold.
-- Hooks, installed once from `EventUtil.ContinueOnAddOnLoaded("Blizzard_Professions", ...)`, with every body run through `Guard`:
+- Hooks, installed once per session per module (they cannot be removed; while a module is disabled `Guard` makes its bodies no-ops) from `OnEnable` when `ProfessionsFrame` exists, else from the first `ADDON_LOADED("Blizzard_Professions")`, with every body run through `Guard`:
   - `hooksecurefunc(ProfessionsFrame.OrdersPage, "ShowOrders"|"ShowBuckets")`. Bucket view hides cells.
   - `ScrollUtil.AddAcquiredFrameCallback` / `AddReleasedFrameCallback` on the ScrollBox. Rows with no `elementData.option.orderID` get no cells.
   - `BrowseFrame:HookScript("OnShow"|"OnHide")` shows and hides the panel.
   - `hooksecurefunc(OrderView, "SetOrder")` for the warning.
-  - Messages `FS_ORDERS_CHANGED` and `FS_CUSTOMERS_CHANGED` refresh the visible cells.
-- A missing hook target means that module prints `"FabricationStation: <module> disabled (Blizzard UI changed)"` once and calls `:Disable()`.
+  - Messages `ns.Msg.ORDERS_CHANGED` and `ns.Msg.CUSTOMERS_CHANGED` refresh the visible cells.
+- A missing hook target means that module calls `ns.FS:LogError("<Module>", "hook target missing: <path>")`, prints `"FabricationStation: <module> disabled (Blizzard UI changed)"` once and calls `:Disable()` (not `SetModuleEnabled`, so the stored setting stays on and the hook is retried next session).
 - Row colours: VIP overlay `(1, 0.82, 0, 0.18)`; blocked `(1, 0.1, 0.1, 0.25)` plus a warning icon; dimmed (filtered out) uses an own black overlay at alpha `0.55`.
 - Cells, in this order: profit (net), score, and a risk icon showing `riskCount` with a `GameTooltip` of `riskText`.
 
@@ -846,9 +860,9 @@ git commit -m "feat: capture craft cost basis, order commissions and AH sales fr
 ```lua
 local P2 = require("tests.helpers.phase2")
 describe("OrdersPanel", function()
-  local ns, P, errors
+  local ns, P, W
   before_each(function()
-    ns = P2.boot(); errors = {}
+    ns, W = P2.boot()
     P2.load(ns, {"Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua", "Modules/Ledger.lua", "UI/OrdersPanel.lua"})
     P = ns.UI.OrdersPanel
   end)
@@ -867,6 +881,9 @@ describe("OrdersPanel", function()
     local rows, side = ns.FS:GetModule("OrdersRowAddons"), ns.FS:GetModule("OrdersSidePanel")
     P.Guard("OrdersRowAddons", function() error("boom") end)
     assert.is_false(rows:IsEnabled()); assert.is_true(side:IsEnabled())
+    assert.is_truthy(ns.FS.failedModules.OrdersRowAddons)
+    local errs = ns.FS.db.global.diagnostics.errors; assert.equal("OrdersRowAddons", errs[#errs].source)
+    assert.same({"FS_MODULE_FAILED", "OrdersRowAddons"}, {W.messages[#W.messages][1], W.messages[#W.messages][2]})
     local called = false; P.Guard("OrdersRowAddons", function() called = true end)
     assert.is_false(called)
   end)
@@ -879,7 +896,7 @@ describe("OrdersPanel", function()
 end)
 ```
 
-(The test relies on 1a's `SafeCall` disabling the named module on error. The caller passes `itemText`: the hyperlink when it is cached, otherwise `tostring(itemID)`.)
+(The test relies on 1a's `SafeCall` disabling the named module on error, which needs the modules enabled; `P2.load` runs 1a's `W.boot()`. The caller passes `itemText`: the hyperlink when it is cached, otherwise `tostring(itemID)`.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -902,7 +919,7 @@ Expected: PASS (the click-only test now finds exactly one `ClaimBest(` caller, i
 3. Tag a customer VIP from `/run` and check that the row turns gold.
 4. Toggle a filter and check that matching rows dim.
 5. Click Claim Best Order, then Blizzard's Start Order and Craft buttons, and check that each still works.
-6. Disable each of the three settings and check that its addition disappears after `/reload`.
+6. Turn off each of the three modules in Settings › Modules (1a's group) and check that its addition disappears after `/reload`.
 7. `Logs/taint.log` has no `FabricationStation` entries for Blizzard_Professions.
 
 - [ ] **Step 6: Commit**
@@ -916,11 +933,11 @@ git commit -m "feat: add score/profit/risk columns, customer highlight, filters 
 
 **Files:**
 - Create: `UI/OrderAlert.lua`
-- Modify: `FabricationStation.toc`, `.luacheckrc` (`PlaySound`, `SOUNDKIT`)
+- Modify: `FabricationStation.toc` (`UI\OrderAlert.lua` after `UI\OrdersPanel.lua`), `.luacheckrc` (`PlaySound`, `SOUNDKIT`)
 - Test: `tests/ui/order_alert_spec.lua`
 
 **Interfaces:**
-- Consumes: `FS_PERSONAL_ORDER_ARRIVED(professionName, count, delta)` (Task 5).
+- Consumes: `ns.Msg.PERSONAL_ORDER_ARRIVED` (`professionName, count, delta`; Task 5); `SOUNDKIT`/`PlaySound` defaults from the Task 1 stub additions.
 - Produces: module `OrderAlert` with:
   - `OrderAlert:Settings()`, defaults `db.global.settings.alerts = {personalOrderSound = true, personalOrderToast = true, sound = "RAID_WARNING", toastSeconds = 8}`
   - `OrderAlert.ToastText(professionName, count) -> string`
@@ -959,7 +976,7 @@ Expected: FAIL (`UI/OrderAlert.lua` not found)
 
 - [ ] **Step 3: Implement `UI/OrderAlert.lua`**
 
-`OnEnable` registers `FS_PERSONAL_ORDER_ARRIVED` through `SafeCall("OrderAlert")`. `ShowToast(text)` builds or reuses the toast frame.
+`OnEnable` registers `ns.Msg.PERSONAL_ORDER_ARRIVED` with `ns.FS:Wrap("OrderAlert", ...)`. `ShowToast(text)` builds or reuses the toast frame. Settings live in `db.global.settings.alerts` (created lazily).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -981,16 +998,15 @@ git commit -m "feat: alert with sound and toast when a personal crafting order a
 
 **Files:**
 - Create: `UI/Tabs/Orders.lua`
-- Modify: `FabricationStation.toc`
+- Modify: `FabricationStation.toc` (`UI\Tabs\Orders.lua` after 1b's `UI\Tabs\Queue.lua`, before `UI\Tabs\Settings.lua`)
 - Test: `tests/ui/orders_tab_spec.lua`
 
 **Interfaces:**
-- Consumes: `MainWindow:RegisterTab(id, def)`; `Orders:GetSnapshot`, `Filter`, `Settings().filters`, `RISK_LABELS`; `ns.UI.OrdersPanel.RowModel` (Task 8); `Customers:Get`; `Ledger:Benchmark`.
+- Consumes: 1a `MainWindow:RegisterTab(id, def)` (`def = {label, icon, order, build(container), refresh(container)?, phase}`; returns false on a duplicate id or missing `label`/`order`/`build`; `build` runs once and `refresh` on every select, both `pcall`ed by MainWindow), 1a `MainWindow:RefreshTab(id)` (no-op unless that tab is selected and the window shown); 1a `ns.UI.FormatAge`, `ns.UI.FormatMoney`; `Orders:GetSnapshot`, `Filter`, `Settings().filters`, `RISK_LABELS`; `ns.UI.OrdersPanel.RowModel` (Task 8; looked up at call time because `UI\OrdersPanel.lua` loads later in the TOC); `Customers:Get`; `Ledger:Benchmark`.
 - Produces:
-  - `ns.UI.OrdersTab.Model(snapshot, filters, now) -> {header = "Orders seen <age> ago on <charKey>"|"No orders seen yet", rows = { {orderID, type, item, customer, tip, net, score, risks, expiresIn} }}`. Rows are filtered and sorted by `Orders:Filter`.
-  - `ns.UI.OrdersTab.Age(seconds) -> string`: `"<n>s"` under 60, `"<n>m"` under 3600, `"<n>h"` under 86400, otherwise `"<n>d"`, always floored.
-  - Registration at file load: `RegisterTab("orders", {label = "Orders", icon = "Interface\\Icons\\INV_Misc_Note_06", order = 40, phase = 2, build, refresh})`.
-  - The tab UI: a filter checkbox row (the same `filters` table as the side panel) and a `WowScrollBoxList` with columns Type, Item, Customer, Tip, Net, Score, Risk, Expires, using `RowModel` highlight colours. A row tooltip shows `Ledger:Benchmark(recipeID, minQuality)` as `"Your tips: median <m> (p25 <a>, p75 <b>, n=<n>)"`. `refresh` runs on `FS_ORDERS_CHANGED` and `FS_CUSTOMERS_CHANGED`.
+  - `ns.UI.OrdersTab.Model(snapshot, filters, now) -> {header = "Orders seen <FormatAge(now - snapshot.time)> ago on <charKey>"|"No orders seen yet", rows = { {orderID, type, item, customer, tip, net, score, risks, expiresIn} }}`. Rows are filtered and sorted by `Orders:Filter`.
+  - Module `"OrdersTab"` with `coreModule = true` (like 1a's `SettingsTab`, so it is not listed as a user toggle). Its `OnInitialize` calls `ns.FS:GetModule("MainWindow"):RegisterTab("orders", {label = "Orders", icon = "Interface\\Icons\\INV_Misc_Note_06", order = 40, phase = 2, build, refresh})`. The tab id is lowercase (1a convention).
+  - The tab UI: a filter checkbox row (the same `filters` table as the side panel) and a `WowScrollBoxList` with columns Type, Item, Customer, Tip, Net, Score, Risk, Expires, using `RowModel` highlight colours. A row tooltip shows `Ledger:Benchmark(recipeID, minQuality)` as `"Your tips: median <m> (p25 <a>, p75 <b>, n=<n>)"`. `OrdersTab:OnEnable` registers `ns.Msg.ORDERS_CHANGED` and `ns.Msg.CUSTOMERS_CHANGED` (wrapped with `ns.FS:Wrap("OrdersTab", ...)`) to call `MainWindow:RefreshTab("orders")`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1007,8 +1023,8 @@ describe("Orders tab", function()
   it("registers at order 40", function()
     assert.same({"Orders", 40, 2}, {reg.orders.label, reg.orders.order, reg.orders.phase})
   end)
-  it("formats ages", function()
-    assert.same({"59s", "1m", "59m", "1h", "1d"}, {T.Age(59), T.Age(60), T.Age(3599), T.Age(3600), T.Age(86400)})
+  it("formats the snapshot age with 1a's FormatAge", function()
+    assert.equal("Orders seen <1m ago on Me-Silvermoon", T.Model({time=970, charKey="Me-Silvermoon", orders={}}, {hideRisks={}, orderTypes={}}, 1000).header)
   end)
   it("builds header and filtered rows", function()
     local snap = {time=400, charKey="Me-Silvermoon", orders={
@@ -1049,21 +1065,21 @@ git commit -m "feat: add Orders tab showing the saved order board"
 
 **Files:**
 - Create: `UI/Tabs/Customers.lua`
-- Modify: `FabricationStation.toc`
+- Modify: `FabricationStation.toc` (`UI\Tabs\Customers.lua` after `UI\Tabs\Orders.lua`)
 - Test: `tests/ui/customers_tab_spec.lua`
 
 **Interfaces:**
-- Consumes: `MainWindow:RegisterTab`; `Customers:Search`, `Get`, `GetGroup`, `SetNote`, `SetTag`, `Link`, `Unlink`, `Export`, `NormalizeName`.
+- Consumes: 1a `MainWindow:RegisterTab`, `MainWindow:RefreshTab`, `ns.UI.FormatMoney`; `Customers:Search`, `Get`, `GetGroup`, `SetNote`, `SetTag`, `Link`, `Unlink`, `Export`, `NormalizeName`.
 - Produces:
   - `ns.UI.CustomersTab.ListModel(records) -> { {nameRealm, orders = n, tipsTotal, lastSeen, tagsText, linkedTo} }`, where `tagsText` is the sorted tags joined with `", "`.
   - `ns.UI.CustomersTab.LinkInput(text) -> nameRealm|nil, err`, which normalizes through `Customers:NormalizeName`, returns `err = "empty"` for blank input, and passes `Link` errors through.
-  - Registration `RegisterTab("customers", {label = "Customers", order = 50, phase = 2, icon = "Interface\\Icons\\INV_Misc_GroupNeedMore", build, refresh})`.
+  - Module `"CustomersTab"` (`coreModule = true`) whose `OnInitialize` calls `MainWindow:RegisterTab("customers", {label = "Customers", order = 50, phase = 2, icon = "Interface\\Icons\\INV_Misc_GroupNeedMore", build, refresh})`.
   - The tab UI:
     - a search box that calls `Search` on text change
     - a list with columns Name, Orders, Tips, Last seen, Tags
     - a detail pane with the order history (date, item, quality, tip), a notes multi-line edit box saved on focus lost, VIP and Blocked check buttons, a custom tag add field with removable tag chips, a "Linked to" edit box with Link/Unlink buttons, and the linked alts list from `GetGroup`
     - an "Export" button that opens an own dialog with a read-only, pre-selected edit box containing `Export(visible names)`
-  - Refresh runs on `FS_CUSTOMERS_CHANGED`.
+  - `CustomersTab:OnEnable` registers `ns.Msg.CUSTOMERS_CHANGED` (wrapped with `ns.FS:Wrap("CustomersTab", ...)`) to call `MainWindow:RefreshTab("customers")`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1117,22 +1133,22 @@ git commit -m "feat: add Customers tab with search, notes, tags, alt links and e
 
 **Files:**
 - Create: `UI/Tabs/Ledger.lua`, `UI/OrdersWidgets.lua`
-- Modify: `FabricationStation.toc`
+- Modify: `FabricationStation.toc` (`UI\Tabs\Ledger.lua` after `UI\Tabs\Customers.lua`; `UI\OrdersWidgets.lua` after `UI\OrderAlert.lua`, so after 1b's `UI\Tabs\Dashboard.lua`)
 - Test: `tests/ui/ledger_tab_spec.lua`
 
 **Interfaces:**
-- Consumes: `MainWindow:RegisterTab`; `Dashboard:RegisterWidget(id, def)`; `Ledger:Weekly`, `ByRecipe`, `Query`, `Benchmark`, `WeekStart`; `Orders:GetSnapshot`.
+- Consumes: 1a `MainWindow:RegisterTab`, `MainWindow:RefreshTab(id)`, `ns.UI.FormatMoney/FormatAge`; 1b `Dashboard:RegisterWidget(id, def)` with `def = {order, title, build = function(frame) end, refresh = function(frame) end}` (1b stores `def.id = id`, same id replaces; 1b's `BuildAll` isolates a widget whose `build`/`refresh` errors, and 1b's phase-1 widgets use orders 10/20/30); `Ledger:Weekly`, `ByRecipe`, `Query`, `Benchmark`, `WeekStart`; `Orders:GetSnapshot`.
 - Produces:
   - `ns.UI.LedgerTab.RecipeRows(byRecipe) -> { {recipeID, income, cost, profit, n, incomplete} }`, sorted by profit descending.
   - `ns.UI.LedgerTab.BenchmarkRows(entries) -> { {recipeID, quality, median, p25, p75, n} }`. Built from distinct `(recipeID, quality)` pairs of commission entries, calling `Ledger:Benchmark` for each and skipping nil results. Sorted by recipeID, then quality.
-  - Registration `RegisterTab("ledger", {label = "Ledger", order = 60, phase = 2, icon = "Interface\\Icons\\INV_Misc_Coin_02", build, refresh})`. The UI has three sections:
+  - Module `"LedgerTab"` (`coreModule = true`) whose `OnInitialize` calls `MainWindow:RegisterTab("ledger", {label = "Ledger", order = 60, phase = 2, icon = "Interface\\Icons\\INV_Misc_Coin_02", build, refresh})`. The UI has three sections:
     - weekly summary for 8 weeks (income, cost, profit, plus `"<n> without cost basis"` when `incomplete > 0`)
     - the per-recipe table
     - an entries list (time, type, item, amount, customer) and the benchmark table
-  - Refresh runs on `FS_LEDGER_CHANGED`.
-  - `ns.UI.OrdersWidgets.OpenOrdersModel(snapshot, now) -> {total, personal, bestScore|nil, age|nil}`, where `age` is `now - snapshot.time`.
+  - `LedgerTab:OnEnable` registers `ns.Msg.LEDGER_CHANGED` (wrapped) to call `MainWindow:RefreshTab("ledger")`.
+  - `ns.UI.OrdersWidgets.OpenOrdersModel(snapshot, now) -> {total, personal, bestScore|nil, age|nil}`, where `age` is `now - snapshot.time` (the widget shows it with `ns.UI.FormatAge`).
   - `ns.UI.OrdersWidgets.GoldThisWeekModel(weekly) -> {profit, income, incomplete}`.
-  - Widgets: `RegisterWidget("openOrders", {order = 40, title = "Open orders"})` and `RegisterWidget("goldThisWeek", {order = 50, title = "Gold this week"})`. They refresh on `FS_ORDERS_CHANGED` and `FS_LEDGER_CHANGED` respectively.
+  - Module `"OrdersWidgets"` (`coreModule = true`) whose `OnInitialize` calls `ns.FS:GetModule("Dashboard"):RegisterWidget("openOrders", {order = 40, title = "Open orders", build, refresh})` and `RegisterWidget("goldThisWeek", {order = 50, title = "Gold this week", build, refresh})`. 1b's Dashboard only refreshes on its own three messages, so `OrdersWidgets:OnEnable` registers `ns.Msg.ORDERS_CHANGED` and `ns.Msg.LEDGER_CHANGED` (wrapped) to call `MainWindow:RefreshTab("dashboard")`, which re-runs every widget's `refresh` when the Dashboard is visible.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1193,18 +1209,18 @@ git commit -m "feat: add Ledger tab and open-orders / gold-this-week dashboard w
 
 **Files:**
 - Create: `UI/OrdersOptions.lua`
-- Modify: `FabricationStation.toc`
+- Modify: `FabricationStation.toc` (`UI\OrdersOptions.lua` after `UI\OrdersWidgets.lua`), `tests/integration/load_all_spec.lua` (1a-owned: add the phase-2 module names to its "enables every module" list)
 - Test: `tests/ui/orders_options_spec.lua`
 
 **Interfaces:**
-- Consumes: `ns.FS:RegisterOptions(key, group)`; `Orders:Settings()`, `Ledger:Settings()`, `OrderAlert:Settings()`; `db.global.settings.ordersPanel`; modules `OrdersRowAddons`, `OrdersSidePanel`, `OrderViewWarning`.
-- Produces: `ns.UI.OrdersOptions.Build() -> AceConfig group`, registered at file load as `RegisterOptions("orders", Build())` with `name = "Orders & Ledger"`. It has four subgroups:
+- Consumes: 1a `ns.FS:RegisterOptions(key, group)` (adds `group` to the options table as `args[key]`; after init it also notifies AceConfigRegistry); 1a `ns.FS:SetModuleEnabled(name, enabled)` and `db.global.settings.modules`; `Orders:Settings()`, `Ledger:Settings()`, `OrderAlert:Settings()`; modules `OrdersRowAddons`, `OrdersSidePanel`, `OrderViewWarning`. Existing top-level option keys to avoid: 1a `general` (10), `prices` (20), `modules` (90), `diagnostics` (95); 1b `crafting`.
+- Produces: `ns.UI.OrdersOptions.Build() -> AceConfig group`, registered at file load as `ns.FS:RegisterOptions("orders", Build())` with `name = "Orders & Ledger"`, `order = 40`. It has four subgroups:
   - **Order scoring**:
     - `lowTipMargin`, `knowledgePointValue`, `moxieValue` as range inputs in gold, stored as copper (`get` divides by 10000, `set` multiplies and floors)
     - `expiringSoonSeconds` in minutes
     - `claimMinScore` in gold
     - one toggle per `claimBlockingRisks` key
-  - **Crafting-orders window**: toggles `rows`, `sidePanel` and `orderViewWarning`. `set` stores the value and calls the module's `Enable()`/`Disable()`.
+  - **Crafting-orders window**: toggles `rows`, `sidePanel` and `orderViewWarning` for modules `OrdersRowAddons`, `OrdersSidePanel` and `OrderViewWarning`. `get` returns `settings.modules[name] ~= false`; `set` calls `ns.FS:SetModuleEnabled(name, value)` (which stores the boolean in `settings.modules`, enables or disables now, and clears `failedModules[name]` on enable). These are shortcuts to the same switches 1a's `"modules"` group shows.
   - **Alerts**: `personalOrderSound`, `personalOrderToast`.
   - **Ledger**: `benchmarkMinSamples` (1–20), `keepDays` (30–1095).
 
@@ -1225,11 +1241,16 @@ describe("Orders options", function()
     assert.equal(10, opt.get()); opt.set(nil, 12.5)
     assert.equal(125000, ns.FS:GetModule("Orders"):Settings().lowTipMargin)
   end)
-  it("toggles a crafting-orders addition module", function()
+  it("toggles a crafting-orders addition module through 1a's SetModuleEnabled", function()
     local opt = g.args.panel.args.rows
-    opt.set(nil, false)
-    assert.is_false(ns.FS.db.global.settings.ordersPanel.rows)
-    assert.is_false(ns.FS:GetModule("OrdersRowAddons"):IsEnabled())
+    assert.is_true(opt.get()); opt.set(nil, false)
+    assert.is_false(ns.FS.db.global.settings.modules.OrdersRowAddons)
+    assert.is_false(ns.FS:GetModule("OrdersRowAddons"):IsEnabled()); assert.is_false(opt.get())
+  end)
+  it("registers the group and is listed beside 1a's module toggles", function()
+    local args = ns.FS:GetOptionsTable().args
+    assert.equal("Orders & Ledger", args.orders.name)
+    assert.is_truthy(args.modules.args.OrdersRowAddons); assert.is_truthy(args.modules.args.Ledger)
   end)
 end)
 ```
@@ -1240,6 +1261,8 @@ Run: `busted tests/ui/orders_options_spec.lua`
 Expected: FAIL (`UI/OrdersOptions.lua` not found)
 
 - [ ] **Step 3: Implement `UI/OrdersOptions.lua` as specified under Interfaces**
+
+Also extend the module list in 1a's `tests/integration/load_all_spec.lua` ("enables every module without logging errors") with `Customers, Orders, Ledger, OrdersRowAddons, OrdersSidePanel, OrderViewWarning, OrderAlert, OrdersTab, CustomersTab, LedgerTab, OrdersWidgets`, so the whole TOC (1a + 1b + phase 2) must boot cleanly against the stubs.
 
 - [ ] **Step 4: Run the full suite and lint**
 
@@ -1261,7 +1284,7 @@ Run these in one session with `/console taintLog 1`:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add UI/OrdersOptions.lua tests/ui/orders_options_spec.lua FabricationStation.toc
+git add UI/OrdersOptions.lua tests/ui/orders_options_spec.lua tests/integration/load_all_spec.lua FabricationStation.toc
 git commit -m "feat: add Orders & Ledger settings group"
 ```
 

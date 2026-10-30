@@ -543,7 +543,7 @@ git commit -m "feat: add Midnight knowledge sources and recipe source GameData"
 **Interfaces:**
 - Consumes: `ns.FS:CharKey()`, `ns.FS:Now()`, `ns.FS:SafeCall`, `ns.FS:Wrap`, `ns.FS:Debounce`, `ns.FS:RegisterOptions`, `ns.Msg`, `Scanner:GetCharacter(charKey)`, `Scanner:GetProfession(charKey, skillLineID).spec` (1a Task 8 shape; raw ranks), `Scanner:IsProfessionOpen(skillLineID|nil)` (1a: frame shown and not a linked/guild/NPC view), `ns.GameData.Get("Knowledge")`, `PlanCalc.StripCodes`, `Enum.ProfessionsSpecPathState` (1a stubs install it).
 - Produces: `Alts:CollectPathNames(skillLineID) -> { [pathID] = name } | nil`; `Alts:CollectKnowledgeFlags()`; `Alts:CollectOpenProfession()`; `Alts:GetSpecSnapshot(charKey, skillLineID) -> SpecSnapshot|nil` (derived from the Scanner spec record, see Contract additions); `Alts:GetRecipeCatalog(skillLineID) -> { [recipeID] = {name, sourceText, time} }`; `Alts:Settings() -> table`; `Alts:DebugKnowledge()`; message `FS_ALTS_CHANGED(charKey)`.
-- `tests/helpers/phase3_fakes.lua` returns `phase3_env(opts) -> ns, env, W` and the constants `NOW = 1793361600`, `WS = 1793113200`. It calls `W = install_wow_stubs(merged)` where `merged` = `opts.wow` deep-merged over `{ UnitName = function() return "Aria" end, GetNormalizedRealmName = function() return "Silvermoon" end, C_QuestLog = { IsQuestFlaggedCompleted = function() return false end }, C_DateAndTime = { GetSecondsUntilWeeklyReset = function() return 356400 end, GetCurrentCalendarTime = function() return {monthDay = 30, weekday = 6, hour = 12, minute = 0} end }, C_Spell = { GetSpellName = function() return nil end }, GetCurrentRegion = function() return 1 end }` (so 1a's `CharKey()` is `"Aria-Silvermoon"`), sets `W.now = opts.now or NOW` (1a's clock drives `Now()`), runs `ns = load_addon({}, "Data/GameData_Manual.lua")` (Core + GameData runtime and 1a data, no Scanner/1b modules), then `load_files(ns, {"UI/Util.lua", "Modules/PlanCalc.lua", unpack(opts.files)})`, wraps `ns.FS.GetModule` so `Scanner`, `Recipes`, `Tooltips`, `Dashboard`, `MainWindow` return the fakes in `env` (other names fall through), calls `ns.GameData.Define("Knowledge", 70575, <fixture knowledge>)`, then `W.boot()`, and only then seeds `ns.FS.db.global.characters = <fixture>`, `warband = { items = {[2001] = 7}, time = NOW }`, `recipeCatalog = {}`. Fixture characters (profession records in 1a's Scanner shape, keyed by child skillLineID):
+- `tests/helpers/phase3_fakes.lua` returns `phase3_env(opts) -> ns, env, W` and the constants `NOW = 1793361600`, `WS = 1793113200`. It calls `W = install_wow_stubs(merged)` where `merged` = `opts.wow` deep-merged over `{ UnitName = function() return "Aria" end, GetNormalizedRealmName = function() return "Silvermoon" end, C_QuestLog = { IsQuestFlaggedCompleted = function() return false end }, C_DateAndTime = { GetSecondsUntilWeeklyReset = function() return 356400 end, GetCurrentCalendarTime = function() return {monthDay = 30, weekday = 6, hour = 12, minute = 0} end }, C_Spell = { GetSpellName = function() return nil end }, GetCurrentRegion = function() return 1 end }` (so 1a's `CharKey()` is `"Aria-Silvermoon"`), sets `W.now = opts.now or NOW` (1a's clock drives `Now()`), runs `ns = load_addon({}, "Data/GameData_Manual.lua")` (Core + GameData runtime and 1a data, no Scanner/1b modules), wraps `ns.FS.GetModule` so `Scanner`, `Recipes`, `Tooltips`, `Dashboard`, `MainWindow` return the fakes in `env` (other names fall through; done before loading phase-3 files because tab files register at file load), then `load_files(ns, {"UI/Util.lua", "Modules/PlanCalc.lua", unpack(opts.files)})`, calls `ns.GameData.Define("Knowledge", 70575, <fixture knowledge>)`, then `W.boot()`, and only then seeds `ns.FS.db.global.characters = <fixture>`, `warband = { items = {[2001] = 7}, time = NOW }`, `recipeCatalog = {}`. Fixture characters (profession records in 1a's Scanner shape, keyed by child skillLineID):
   - `Aria-Silvermoon`: class PALADIN, gold 12345678, lastSeen NOW-3600; profession 2907 `{name="Midnight Blacksmithing", skill=85, maxSkill=100, recipes={[1001]=true}, concentration={currencyID=3256, value=400, max=1000, time=NOW, perCycle=1, cycleSeconds=360}, moxie={currencyID=3300, value=120, time=NOW}, cooldowns={[1001]={readyAt=NOW+7200, charges=0, maxCharges=1, time=NOW}}, spec={configID=55, unspent=4, currencyName="Blacksmithing Knowledge", tabs={[10]=1}, paths={[1]={rank=11, maxRank=31, state=1, spendEntryID=1000}, [2]={rank=0, maxRank=21, state=1, spendEntryID=1001}, [3]={rank=6, maxRank=11, state=0, spendEntryID=1002}}, perks={[900]={state=1, entryID=9000, unlockRank=15, pathID=1}}, time=NOW-60}}`; items `{[2001]={bags=5, bank=10, reagentBank=0}}`; `knowledgeWeekly={time=NOW-60, quests={[93691]=true}}`; `planning={[2907]={pathNames={[1]="Path 1", [2]="Path 2", [3]="Path 3"}, firstCraftsPending=2, time=NOW-60}}`.
   - `Bren-Silvermoon`: MAGE, gold 500, lastSeen NOW-10*86400; profession 2912 `{name="Midnight Herbalism", skill=50, maxSkill=100, recipes={}, concentration={currencyID=3257, value=1000, max=1000, time=NOW-864000, perCycle=1, cycleSeconds=360}}`; items `{[2001]={bags=0, bank=0, reagentBank=3}}`; `knowledgeWeekly={time=NOW-864000, quests={[93700]=true}}`.
   - `Cato-Silvermoon`: DRUID, gold 0, lastSeen NOW-7200, `professions = {}`, `knowledgeWeekly = {}` (1a's default).
@@ -711,14 +711,14 @@ git commit -m "feat: add Alts overview rows with knowledge, concentration and co
 **Files:**
 - Modify: `Modules/Alts.lua`
 - Create: `UI/AltsTooltips.lua`
-- Modify: `FabricationStation.toc` (`UI/AltsTooltips.lua` after `UI/Tooltips.lua`)
+- Modify: `FabricationStation.toc` (`UI/AltsTooltips.lua` after `UI/Tooltips.lua`); `UI/Tooltips.lua` (1b) only if Step 3's checks require it
 - Test: `tests/alts/items_spec.lua`
 
 **Interfaces:**
-- Consumes: `Scanner:GetItemCount(itemID, charKey)`, `Scanner:GetCharacter(c).items`, `db.global.warband.items` (keys only, spec §4.3), `C_Item.GetItemNameByID`, `C_Item.RequestLoadItemDataByID`, `Tooltips:RegisterLineProvider(id, fn)`, `Recipes:WhoCanCraft(recipeID)`, `Scanner:GetSchematic(recipeID).outputItemIDs`.
-- Produces: `Alts:GetHoldings(itemID) -> ItemLocationRow`; `Alts:FindItems(query) -> { ItemLocationRow }`; `Alts:HoldingsLines(itemID) -> { {left, right} }`; `Alts:CraftersLines(itemID) -> { {left, right} }`; providers `"holdings"` and `"crafters"`.
+- Consumes: `Scanner:GetItemCount(itemID, charKey)` (1a: with `charKey` the result is that character's `bags/bank/reagentBank` **plus the warband count**, `total` = sum of all four; with nil, all characters plus warband once; `reagentBank` is always 0 for data scanned on 12.x), `Scanner:GetCharacter(c).items`, `db.global.warband.items` (keys only; 1a `db.global.warband = { items = {[itemID] = count}, time }`), `C_Item.GetItemNameByID`, `C_Item.RequestLoadItemDataByID`, `Tooltips:RegisterLineProvider(id, fn)` (1b).
+- Produces: `Alts:GetHoldings(itemID) -> ItemLocationRow`; `Alts:FindItems(query) -> { ItemLocationRow }`; `Alts:HoldingsLines(itemID) -> { {left, right} }`; provider `"holdings"`. No `"crafters"` provider: 1b's Tooltips already registers a built-in `"crafters"` line (`{ "Crafters", "Main, Alt" }`, 1b Task 18).
 
-- [ ] **Step 1: Write the failing tests** (wow: `C_Item.GetItemNameByID = function(id) return ({[2001]="Copper Ore", [2002]="Silk"})[id] end`; fixture schematic `1001 = {skillLineID = 2907, outputItemIDs = {[1] = 3001, [2] = 3002}}`, crafters `{[1001] = {"Aria-Silvermoon"}}`)
+- [ ] **Step 1: Write the failing tests** (wow: `C_Item.GetItemNameByID = function(id) return ({[2001]="Copper Ore", [2002]="Silk"})[id] end`)
 
 ```lua
 it("GetHoldings", function()
@@ -744,9 +744,8 @@ it("HoldingsLines truncates and respects setting", function()
   A:Settings().tooltipHoldings = false
   assert.same({}, A:HoldingsLines(2001))
 end)
-it("CraftersLines", function()
-  assert.same({{"Crafted by", "Aria-Silvermoon"}}, A:CraftersLines(3002))
-  assert.same({}, A:CraftersLines(2001))
+it("registers only the holdings provider", function()
+  assert.is_function(env.registered.lineProviders.holdings); assert.is_nil(env.registered.lineProviders.crafters)
 end)
 it("hidden characters excluded", function()
   A:SetHidden("Bren-Silvermoon", true); assert.equal(22, A:GetHoldings(2001).total)
@@ -755,14 +754,14 @@ end)
 
 - [ ] **Step 2: Run** — `busted tests/alts/items_spec.lua` → FAIL.
 
-- [ ] **Step 3: Implement.** `GetHoldings`: per visible character `Scanner:GetItemCount(itemID, charKey)`; `warband` from `Scanner:GetItemCount(itemID, nil).warband`; `total` = Σ visible chars + warband; chars sorted total desc then charKey. `FindItems`: number or numeric string → that itemID; string length < 3 → `{}`; else case-insensitive plain `find` over names of the union of item IDs in visible characters' `items` and `warband.items`; uncached names (nil) are skipped and `C_Item.RequestLoadItemDataByID` is called once per id; results with `total > 0`, sorted by name; max 50. `HoldingsLines`: parts `bags N`, `bank N`, `reagent bank N` (non-zero only); after `tooltipMaxChars` characters add `{"+K more", ""}`; then warband (if > 0) and total. `CraftersLines`: lazily build `itemID → {recipeID}` from known recipes' schematics (rebuild on `FS_ALTS_CHANGED`); join visible `WhoCanCraft` results with `", "`. `UI/AltsTooltips.lua`: on module enable, `Tooltips:RegisterLineProvider("holdings", function(id) return Alts:HoldingsLines(id) end)`; register `"crafters"` likewise **unless** `UI/Tooltips.lua` (phase 1b) already prints a which-characters-can-craft line — check before this step and drop the `"crafters"` registration and its test if so.
+- [ ] **Step 3: Implement.** `GetHoldings`: per visible character `c = Scanner:GetItemCount(itemID, charKey)` and that character's total = `c.bags + c.bank + c.reagentBank` (**not** `c.total`, which 1a includes the warband in); `warband` from `Scanner:GetItemCount(itemID, nil).warband`; `total` = Σ visible chars + warband; chars sorted total desc then charKey. `FindItems`: number or numeric string → that itemID; string length < 3 → `{}`; else case-insensitive plain `find` over names of the union of item IDs in visible characters' `items` and `warband.items`; uncached names (nil) are skipped and `C_Item.RequestLoadItemDataByID` is called once per id; results with `total > 0`, sorted by name; max 50. `HoldingsLines`: parts `bags N`, `bank N`, `reagent bank N` (non-zero only); after `tooltipMaxChars` characters add `{"+K more", ""}`; then warband (if > 0) and total. `UI/AltsTooltips.lua`: in `Alts:OnEnable`, `Tooltips:RegisterLineProvider("holdings", function(id) return Alts:HoldingsLines(id) end)` (1b runs providers after its built-ins, each `pcall`ed). Two 1b Tooltips behaviours to check against `UI/Tooltips.lua` before this step: (a) 1b caches lines per itemID until `FS_RECIPES_CHANGED` — if that cache covers registered providers, holdings go stale after bag/bank changes, so add one handler in `UI/Tooltips.lua` that wipes the cache on `FS_DATA_CHANGED` with kind `"items"`/`"warband"` and on `FS_ALTS_CHANGED`, plus a test in `tests/ui/tooltips_spec.lua`; (b) 1b adds nothing when its `tooltipCraftCost` setting is off — if that gate also suppresses other providers, restrict it to the `"craftCost"` provider in the same file so `tooltipHoldings` alone controls holdings.
 
 - [ ] **Step 4: Run** — `busted tests/alts` → PASS. In game: hover Copper Ore-type reagent → lines appear; hover an item nobody holds → no lines.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Modules/Alts.lua UI/AltsTooltips.lua tests/alts/items_spec.lua FabricationStation.toc
+git add Modules/Alts.lua UI/AltsTooltips.lua tests/alts/items_spec.lua FabricationStation.toc   # + UI/Tooltips.lua tests/ui/tooltips_spec.lua if Step 3 changed them
 git commit -m "feat: add account-wide reagent location search and tooltip holdings lines"
 ```
 
@@ -774,10 +773,10 @@ git commit -m "feat: add account-wide reagent location search and tooltip holdin
 - Test: `tests/planner/knowledge_spec.lua`
 
 **Interfaces:**
-- Consumes: `Alts:GetOverview`, `Alts:GetKnowledgeState`, `Alts:GetKnowledgeSummary`, `Alts:GetRecipeCatalog`, `Scanner:GetProfession`, `ns.GameData.RecipeSources`, `C_Spell.GetSpellName`.
-- Produces: `Planner:Settings() -> table` (defaults `{ capWarnHours = 24, capWarnChat = true, maxCraftsPerRecipe = 10, specTopRecipes = 20 }`); `Planner:GetKnowledgeChecklist(now) -> { { charKey, skillLineID, name, summary = KnowledgeSummary, states = { SourceState } } }` (sorted by `summary.weeklyLeft` desc, then charKey, skillLineID); `Planner:GetMissingRecipes(charKey, skillLineID) -> { { recipeID, name, source = { kind, itemID|nil, text|nil } } }` (sorted by name); `Planner:GameDataBuild() -> string|nil`.
+- Consumes: `Alts:GetOverview`, `Alts:GetKnowledgeState`, `Alts:GetKnowledgeSummary`, `Alts:GetRecipeCatalog`, `Scanner:GetProfession(charKey, sl).recipes`, `ns.GameData.Get("RecipeSources")`, `ns.GameData.Build()`, `C_Spell.GetSpellName`.
+- Produces: `Planner:Settings() -> table` (`db.global.settings.planner`, lazy, defaults `{ capWarnHours = 24, capWarnChat = true, maxCraftsPerRecipe = 10, specTopRecipes = 20 }`); `Planner:GetKnowledgeChecklist(now) -> { { charKey, skillLineID, name, summary = KnowledgeSummary, states = { SourceState } } }` (sorted by `summary.weeklyLeft` desc, then charKey, skillLineID); `Planner:GetMissingRecipes(charKey, skillLineID) -> { { recipeID, name, source = { kind, itemID|nil, text|nil } } }` (sorted by name); `Planner:GameDataBuild() -> integer|nil` (= `ns.GameData.Build()`).
 
-- [ ] **Step 1: Write the failing tests** (catalog `recipeCatalog[2907] = {[102]={name="Blade", sourceText="Trainer", time=NOW}, [103]={name="Axe", sourceText="Vendor: Smith", time=NOW}}`; `ns.GameData.RecipeSources = {build="b", bySkillLine={[2907]={[103]={kind="unknown"}, [104]={kind="item", itemID=555}, [1001]={kind="auto"}}}}`; `C_Spell.GetSpellName = function(id) return id == 104 and "Mace" end`)
+- [ ] **Step 1: Write the failing tests** (catalog `recipeCatalog[2907] = {[102]={name="Blade", sourceText="Trainer", time=NOW}, [103]={name="Axe", sourceText="Vendor: Smith", time=NOW}}`; `ns.GameData.Define("RecipeSources", 70575, {bySkillLine={[2907]={[103]={kind="unknown"}, [104]={kind="item", itemID=555}, [1001]={kind="auto"}}}})`; `C_Spell.GetSpellName = function(id) return id == 104 and "Mace" end`)
 
 ```lua
 local PL = ns.FS:GetModule("Planner")
@@ -801,7 +800,7 @@ end)
 
 - [ ] **Step 2: Run** — `busted tests/planner/knowledge_spec.lua` → FAIL.
 
-- [ ] **Step 3: Implement** `Modules/Planner.lua` (`NewModule("Planner", "AceEvent-3.0")`). Missing = (catalog keys ∪ GameData keys) − `Scanner:GetProfession(charKey, sl).recipes`; source kind from GameData (default `"unknown"`), `text` from catalog `sourceText` when non-empty; name from catalog, else `C_Spell.GetSpellName(id)`, else `"Recipe " .. id`. Register AceConfig group `"planner"` for the four settings. Listen to `FS_ALTS_CHANGED` and `FS_RECIPES_CHANGED` to clear cached results.
+- [ ] **Step 3: Implement** `Modules/Planner.lua` (`NewModule("Planner", "AceEvent-3.0")`). Missing = (catalog keys ∪ GameData keys) − `Scanner:GetProfession(charKey, sl).recipes`; source kind from GameData (default `"unknown"`), `text` from catalog `sourceText` when non-empty; name from catalog, else `C_Spell.GetSpellName(id)`, else `"Recipe " .. id`. A nil `Get("RecipeSources")` counts as no GameData keys. Register AceConfig group `"planner"` via `ns.FS:RegisterOptions` for the four settings. Listen to `ns.Msg.ALTS_CHANGED` and `ns.Msg.RECIPES_CHANGED` to clear cached results.
 
 - [ ] **Step 4: Run** — `busted tests/planner` → PASS.
 
@@ -862,16 +861,19 @@ git commit -m "feat: add concentration scheduler and cap warnings to Planner"
 
 **Files:**
 - Create: `Modules/PlannerSpec.lua`
-- Test: `tests/planner/spec_advice_spec.lua`
+- Modify: `Modules/Recipes.lua` (1b — the `opts.extraStats` hook, Step 4)
+- Test: `tests/planner/spec_advice_spec.lua`, `tests/recipes/extra_stats_spec.lua`
 
 **Interfaces:**
-- Consumes: `Alts:GetSpecSnapshot`, `Recipes:GetRanked({ charKey, skillLineID, onlyProfitable = true, sortBy = "profit" })`, `PlanCalc.RankSpecNodes`, phase 1a spec-node GameData, phase 1b `ns.Math` pipeline.
-- Produces: `Planner:GetSpecAdvice(charKey, skillLineID) -> { SpecAdviceRow }` (max 5 rows); private `Planner:_nodeBonus(skillLineID, pathID, fromRank, toRank) -> { skill, multicraft, resourcefulness, ingenuity, recipes = {[recipeID]=true}|nil }` (nil `recipes` = all recipes of the skill line); private `Planner:_evaluateWithBonus(recipeID, charKey, bonus) -> RecipeResult`.
+- Consumes: `Alts:GetSpecSnapshot` (Task 6; display ranks), `Scanner:GetProfession(charKey, sl).spec` (1a: `paths[pathID].spendEntryID`, `perks[perkID] = { entryID, unlockRank, pathID }`), `ns.GameData.Get("SpecEntryEffects")` (1a: `[traitNodeEntryID] = { effects = { { type, amount } }, labels = { labelID... } }`), `ns.GameData.Get("RecipeLabels")` (1a: `[recipeSpellID] = { labelID... }`), `ns.CraftingData.EFFECT_MAP` (1b: effect `type` → stat key; 1b Task 9 adds the Ingenuity `type<N>`), `Recipes:GetRanked({ charKey, skillLineID, onlyProfitable = true, sortBy = "profit" })`, `Recipes:Evaluate(recipeID, charKey, { extraStats = bonus })` (the hook this task adds), `PlanCalc.RankSpecNodes`.
+- Produces: `Planner:GetSpecAdvice(charKey, skillLineID) -> { SpecAdviceRow }` (max 5 rows); private `Planner:_nodeBonus(charKey, skillLineID, pathID, fromRank, toRank) -> { skill?, multicraft?, resourcefulness?, ingenuity?, recipes = {[recipeID]=true}|nil }` (raw ProfessionEffect amounts; nil `recipes` = all recipes of the skill line); private `Planner:_evaluateWithBonus(recipeID, charKey, bonus) -> RecipeResult` (= `Recipes:Evaluate(recipeID, charKey, { extraStats = bonus })`); **1b addition**: `Recipes:Evaluate` `opts.extraStats` (Contract additions).
 
-- [ ] **Step 1: Write the failing tests** (Aria fixture spec snapshot, unspent 4, paths: `1 = {name="Path 1", rank=10, maxRank=30, available=true, perkRanks={15}}`, `2 = {name="Path 2", rank=0, maxRank=20, available=true, perkRanks={}}`, `3 = {name="Path 3", rank=5, maxRank=10, available=false, perkRanks={}}`; ranked profitable `1001` profit 5000 and `1002` profit 1000; stubs on the module table:)
+Why the hook: 1b's `Recipes:Evaluate` builds Math input from the character's calibration record (`baseSkill`/`stats` measured live, so current spec is already baked in) or the Scanner skill, and neither 1b's Math nor `CraftingData` reads spec GameData — there is no way to ask "what if this path had 5 more ranks". Rather than re-assembling Math inputs in phase 3, the bonus is passed to Evaluate and fed through 1b's own optional-reagent path (`Stats.ApplyOptionals` adds `skill` and converts ratings with `Stats.RATING_PER_UNIT`), so Math is unchanged.
+
+- [ ] **Step 1: Write the failing tests** (Aria fixture: `GetSpecSnapshot` gives unspent 4, paths `1 = {name="Path 1", rank=10, maxRank=30, available=true, perkRanks={15}}`, `2 = {name="Path 2", rank=0, maxRank=20, available=true, perkRanks={}}`, `3 = {name="Path 3", rank=5, maxRank=10, available=false, perkRanks={}}`; ranked profitable `1001` profit 5000 and `1002` profit 1000; stubs on the module table:)
 
 ```lua
-PL._nodeBonus = function(_, sl, pathID) return pathID == 1 and {skill = 5, recipes = {[1001] = true}} or {multicraft = 10} end
+PL._nodeBonus = function(_, charKey, sl, pathID) return pathID == 1 and {skill = 5, recipes = {[1001] = true}} or {multicraft = 10} end
 PL._evaluateWithBonus = function(_, recipeID, charKey, bonus)
   local base = ({[1001] = 5000, [1002] = 1000})[recipeID]
   return {recipeID = recipeID, charKey = charKey, profit = base + (bonus.skill and 2500 or 500), flags = {}}
@@ -889,16 +891,44 @@ end)
 
 - [ ] **Step 2: Run** — `busted tests/planner/spec_advice_spec.lua` → FAIL.
 
-- [ ] **Step 3: Implement `GetSpecAdvice`.** Candidates from the snapshot paths (`pathID` = key, `name` from the snapshot); `gainFn(pathID, from, to)` = Σ over the top `specTopRecipes` profitable results for (charKey, skillLineID) that the bonus applies to of `max(0, _evaluateWithBonus(r.recipeID, charKey, bonus).profit - r.profit)`; return `PlanCalc.RankSpecNodes(candidates, gainFn, snapshot.unspent)` truncated to 5.
+- [ ] **Step 3: Implement `GetSpecAdvice`.** Candidates from the snapshot paths (`pathID` = key, `name` from the snapshot); `gainFn(pathID, from, to)`: `bonus = self:_nodeBonus(charKey, skillLineID, pathID, from, to)`; Σ over the top `specTopRecipes` profitable results for (charKey, skillLineID) that the bonus applies to (`bonus.recipes == nil or bonus.recipes[r.recipeID]`) of `max(0, (_evaluateWithBonus(r.recipeID, charKey, bonus).profit or r.profit) - r.profit)`; return `PlanCalc.RankSpecNodes(candidates, gainFn, snapshot.unspent)` truncated to 5.
 
-- [ ] **Step 4: Implement the adapters.** `_nodeBonus` reads the spec-node effect table phase 1a's GameData ships (the one Recipes uses for spec bonuses) and returns the difference between `toRank` and `fromRank` effects in the normalized shape above. `_evaluateWithBonus` assembles Math inputs exactly as `Recipes:Evaluate` does (read `Modules/Recipes.lua`), adds `bonus.skill` to the recipe skill and the stat bonuses to the stat ratings, calls the same `ns.Math` functions, and returns a `RecipeResult`. Do not modify Recipes or Math. Add one adapter test with a real 1a spec-node fixture (pick one Blacksmithing path from `Data/`) asserting `_nodeBonus(2907, <path>, 0, 5).skill` equals the table's value.
+- [ ] **Step 4: Add `opts.extraStats` to 1b's `Recipes:Evaluate` (`Modules/Recipes.lua`).** After `ns.CraftingData.BuildInput(...)` and before `ns.Math.Profit.EvaluateCraft(input)`, when `opts.extraStats` is a non-empty table, append `{ itemID = 0, price = 0, stats = opts.extraStats }` to `input.optionals` (a free pseudo-optional: `ApplyOptionals` adds `skill`, converts `multicraft/resourcefulness/ingenuity` ratings; price 0 adds no cost). Calls with `extraStats` neither read nor write the result cache; everything else (flags, `priceAgeDays`, cache key for normal calls) is unchanged. Write `tests/recipes/extra_stats_spec.lua` on 1b's `make_world`:
 
-- [ ] **Step 5: Run** — `busted tests/planner` → PASS.
+```lua
+describe("Recipes:Evaluate extraStats (phase 3 hook)", function()
+  local ns, R
+  before_each(function() ns = make_world({ last = "Modules/Recipes.lua", calibrate = { ["Main-Realm"] = { 9001 } } }); R = ns.FS:GetModule("Recipes") end)
+  it("adds skill and stat ratings without cost or cache effects", function()
+    local base = R:Evaluate(9001, "Main-Realm", { targetQuality = 1 })
+    local more = R:Evaluate(9001, "Main-Realm", { targetQuality = 1, extraStats = { skill = 50, multicraft = 110 } })
+    assert.equals(base.skill + 50, more.skill); assert.equals(base.reagentCost, more.reagentCost)
+    assert.is_true(more.multicraftValue > base.multicraftValue)
+    assert.equals(base, R:Evaluate(9001, "Main-Realm", { targetQuality = 1 }))      -- cached plain result untouched
+  end)
+end)
+```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Implement the adapters in `Modules/PlannerSpec.lua`.** `_evaluateWithBonus(recipeID, charKey, bonus)` = `ns.FS:GetModule("Recipes"):Evaluate(recipeID, charKey, { extraStats = { skill = bonus.skill, multicraft = bonus.multicraft, resourcefulness = bonus.resourcefulness, ingenuity = bonus.ingenuity } })`. `_nodeBonus(charKey, sl, pathID, fromRank, toRank)`: `spec = Scanner:GetProfession(charKey, sl).spec` (nil → `{}`); `E = ns.GameData.Get("SpecEntryEffects") or {}`; contributions = the path's `E[spec.paths[pathID].spendEntryID]` effects × `(toRank - fromRank)` (per-rank, **unverified**), plus, once each, `E[perk.entryID]` effects for every `spec.perks` entry with `perk.pathID == pathID` and `fromRank < perk.unlockRank <= toRank`. Each effect `type` maps through `ns.CraftingData.EFFECT_MAP` to `skill/multicraft/resourcefulness/ingenuity` (unmapped types ignored, as 1b does) and amounts are summed. `recipes`: nil when no contributing entry has `labels`; else the set of recipe IDs whose `ns.GameData.Get("RecipeLabels")[recipeID]` shares a label with them. Adapter test (add to `tests/planner/spec_advice_spec.lua`, env loads `Modules/CraftingData.lua` in `files`):
+
+```lua
+it("_nodeBonus reads 1a SpecEntryEffects for the path ranks and perks crossed", function()
+  ns.GameData.Define("SpecEntryEffects", 70575, { [1000] = { effects = { { type = "skill", amount = 1 } }, labels = { 777 } },
+    [9000] = { effects = { { type = "multicraft", amount = 30 }, { type = "type42", amount = 9 } }, labels = { 777 } } })
+  ns.GameData.Define("RecipeLabels", 70575, { [1001] = { 777 }, [1002] = { 5 } })
+  assert.same({ skill = 5, multicraft = 30, recipes = { [1001] = true } }, PL:_nodeBonus("Aria-Silvermoon", 2907, 1, 10, 15))
+  assert.same({ skill = 4, recipes = { [1001] = true } }, PL:_nodeBonus("Aria-Silvermoon", 2907, 1, 10, 14))   -- perk at 15 not crossed
+end)
+```
+
+  In game (Task 16 smoke): for one path, compare the next rank's tooltip bonus with `_nodeBonus(..., r, r + 1)`; if the spend entry's amount is already cumulative rather than per rank, use `amount(toRank) - amount(fromRank)` semantics instead and fix the test.
+
+- [ ] **Step 6: Run** — `busted tests/planner tests/recipes` → PASS; `luacheck .` clean.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add Modules/PlannerSpec.lua tests/planner/spec_advice_spec.lua
+git add Modules/PlannerSpec.lua Modules/Recipes.lua tests/planner/spec_advice_spec.lua tests/recipes/extra_stats_spec.lua
 git commit -m "feat: add specialization advice ranked by profit gain per point"
 ```
 
@@ -906,11 +936,11 @@ git commit -m "feat: add specialization advice ranked by profit gain per point"
 
 **Files:**
 - Create: `UI/Widgets/ExpandGrid.lua`, `UI/Tabs/CharactersView.lua`, `UI/Tabs/PlannerView.lua`
-- Modify: `FabricationStation.toc` (UI files before the tab files)
+- Modify: `FabricationStation.toc` (all three between `UI\MainWindow.lua` and `UI\Tabs\Settings.lua`, before the phase-3 tab files), `.luacheckrc` (`CreateScrollBoxListLinearView`, `CreateDataProvider`, `ScrollUtil`, `RAID_CLASS_COLORS` in `read_globals`)
 - Test: `tests/ui/expand_grid_spec.lua`, `tests/ui/views_spec.lua`
 
 **Interfaces:**
-- Consumes: `AltRow`, `ScheduleRow`, `Pool`, checklist rows, `ns.UI.FormatMoney` (1a).
+- Consumes: `AltRow`, `ScheduleRow`, `Pool`, checklist rows, `ns.UI.FormatMoney` (1a `UI/Util.lua`; files extend the existing `ns.UI` table, `ns.UI = ns.UI or {}`).
 - Produces: `ns.UI.ExpandGrid.Layout(rows, expanded, rowHeight) -> { { key, kind = "row"|"detail", height } }` where `rows = { { key, detailHeight } }`; `ns.UI.ExpandGrid.New(parent, columns) -> grid` with `grid:SetRows(rows)`, `grid:Toggle(key)`, `grid:SetRowRenderer(fn(frame, row))`, `grid:SetDetailRenderer(fn(frame, row))`; `ns.UI.CharactersView.FormatDuration(seconds|nil) -> string`; `ns.UI.CharactersView.KnowledgeCell(summary) -> string`; `ns.UI.CharactersView.Row(altRow, now) -> { name, gold, age, staleAge, profs = { { label, skill, conc, concUrgent, kp, spec, moxie, cds } }, empty|nil }`; `ns.UI.PlannerView.ConcentrationLines(pools, now, max) -> { {left, right, urgent} }`; `ns.UI.PlannerView.KnowledgeLines(checklistRows, max) -> { {left, right} }`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -962,7 +992,7 @@ end)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add UI/Widgets/ExpandGrid.lua UI/Tabs/CharactersView.lua UI/Tabs/PlannerView.lua tests/ui FabricationStation.toc
+git add UI/Widgets/ExpandGrid.lua UI/Tabs/CharactersView.lua UI/Tabs/PlannerView.lua tests/ui FabricationStation.toc .luacheckrc
 git commit -m "feat: add expandable grid widget and Characters/Planner view models"
 ```
 
@@ -970,11 +1000,11 @@ git commit -m "feat: add expandable grid widget and Characters/Planner view mode
 
 **Files:**
 - Create: `UI/Tabs/Characters.lua`
-- Modify: `FabricationStation.toc`
+- Modify: `FabricationStation.toc` (between `UI\MainWindow.lua` and `UI\Tabs\Settings.lua`, after the Task 12 files)
 - Test: `tests/ui/characters_tab_spec.lua`
 
 **Interfaces:**
-- Consumes: `MainWindow:RegisterTab`, `Alts:GetOverview/GetAltRow/FindItems/SetHidden`, `ns.UI.ExpandGrid`, `ns.UI.CharactersView`.
+- Consumes: `MainWindow:RegisterTab` (registered at file load, as phase 2 does), `MainWindow:RefreshTab(id)`, `Alts:GetOverview/GetAltRow/FindItems/SetHidden`, `ns.UI.ExpandGrid`, `ns.UI.CharactersView`.
 - Produces: tab `"characters"` `{ label = "Characters", icon = "Interface\\Icons\\Achievement_Character_Human_Male", order = 70, phase = 3, build, refresh }`.
 
 - [ ] **Step 1: Write the failing test** — loading `UI/Tabs/Characters.lua` in `phase3_env` registers the tab:
@@ -987,9 +1017,9 @@ assert.is_function(env.registered.tabs.characters.build)
 
 - [ ] **Step 2: Run** — `busted tests/ui/characters_tab_spec.lua` → FAIL.
 
-- [ ] **Step 3: Implement `build(container)`.** Header strip: "Characters: N · Gold: <sum> · Knowledge left: <Σ knowledgeLeft> KP". Search box (top right, `SearchBoxTemplate`, placeholder "Find reagent…"): non-empty text (debounced 0.3 s) replaces the grid with an item-results list from `Alts:FindItems(text)` (rows: icon, name, total, per-character "Name: n" list, warband); clearing restores the grid. Grid columns (`ExpandGrid.New`): Character 150 (class-coloured via `RAID_CLASS_COLORS`, current character marked "•"), then for profession slots 1 and 2: Profession 130 (`label` + `skill`), Concentration 120 (`conc`, red when `concUrgent`), KP 40, Spec 80, Moxie 50, Cooldowns 80; then Gold 100, Age 70 (orange when `staleAge`). A row with `empty` shows that text across the profession columns. Detail renderer per profession: spec spent/max/unspent with currency name and data time; knowledge breakdown (weekly X/Y, Darkmoon state, one-time left, first crafts pending); concentration now/max and "full at <date("%a %H:%M", fullAt)>"; each cooldown recipe name (`C_Spell.GetSpellName`) with ready time; a "Hide character" button calling `Alts:SetHidden(charKey, true)` and a "Show hidden" checkbox in the header. `refresh` re-reads `Alts:GetOverview`; the tab registers for `FS_ALTS_CHANGED` and refreshes only while shown.
+- [ ] **Step 3: Implement `build(container)`.** Header strip: "Characters: N · Gold: <sum> · Knowledge left: <Σ knowledgeLeft> KP". Search box (top right, `SearchBoxTemplate`, placeholder "Find reagent…"): non-empty text (debounced 0.3 s) replaces the grid with an item-results list from `Alts:FindItems(text)` (rows: icon, name, total, per-character "Name: n" list, warband); clearing restores the grid. Grid columns (`ExpandGrid.New`): Character 150 (class-coloured via `RAID_CLASS_COLORS`, current character marked "•"), then for profession slots 1 and 2: Profession 130 (`label` + `skill`), Concentration 120 (`conc`, red when `concUrgent`), KP 40, Spec 80, Moxie 50, Cooldowns 80; then Gold 100, Age 70 (orange when `staleAge`). A row with `empty` shows that text across the profession columns. Detail renderer per profession: spec spent/max/unspent with currency name and data time; knowledge breakdown (weekly X/Y, Darkmoon state, one-time left, first crafts pending); concentration now/max and "full at <date("%a %H:%M", fullAt)>"; each cooldown recipe name (`C_Spell.GetSpellName`) with ready time; a "Hide character" button calling `Alts:SetHidden(charKey, true)` and a "Show hidden" checkbox in the header. `refresh` re-reads `Alts:GetOverview` (1a calls it on every select); on `FS_ALTS_CHANGED` the Alts module calls `MainWindow:RefreshTab("characters")`, which 1a runs only while that tab is selected and the window is shown.
 
-- [ ] **Step 4: Run** — `busted` → PASS. In game: `/fs` → Characters tab lists every alt; expand a row; search "ore"; hide and show a character; log an alt, return, confirm its data age resets.
+- [ ] **Step 4: Run** — `busted` → PASS. In game: `/fs tab characters` → Characters tab lists every alt; expand a row; search "ore"; hide and show a character; log an alt, return, confirm its data age resets.
 
 - [ ] **Step 5: Commit**
 
@@ -1002,11 +1032,11 @@ git commit -m "feat: add Characters tab with alt grid, details and reagent searc
 
 **Files:**
 - Create: `UI/Tabs/Planner.lua`
-- Modify: `FabricationStation.toc`
+- Modify: `FabricationStation.toc` (between `UI\MainWindow.lua` and `UI\Tabs\Settings.lua`, after `UI/Tabs/Characters.lua`)
 - Test: `tests/ui/planner_tab_spec.lua`
 
 **Interfaces:**
-- Consumes: `MainWindow:RegisterTab`, `Planner:GetKnowledgeChecklist/GetSchedule/GetCapWarnings/GetSpecAdvice/GetMissingRecipes/GameDataBuild`, `Alts:GetOverview`, `Queue:Add(entry)`.
+- Consumes: `MainWindow:RegisterTab` (at file load), `MainWindow:RefreshTab(id)`, `Planner:GetKnowledgeChecklist/GetSchedule/GetCapWarnings/GetSpecAdvice/GetMissingRecipes/GameDataBuild`, `Alts:GetOverview`, `Queue:Add(entry)` (1b `QueueEntry` fields), `ns.UI.FormatMoney`.
 - Produces: tab `"planner"` `{ label = "Planner", icon = "Interface\\Icons\\INV_Misc_Note_01", order = 80, phase = 3, build, refresh }`.
 
 - [ ] **Step 1: Write the failing test** — same shape as Task 13: `env.registered.tabs.planner` has label `"Planner"`, order `80`, phase `3`.
@@ -1014,11 +1044,11 @@ git commit -m "feat: add Characters tab with alt grid, details and reagent searc
 - [ ] **Step 2: Run** — `busted tests/ui/planner_tab_spec.lua` → FAIL.
 
 - [ ] **Step 3: Implement `build(container)`** with four sub-sections selected by a button row (Knowledge, Concentration, Spec advice, Missing recipes), last choice remembered in `settings.planner.section`.
-  - **Knowledge:** ExpandGrid of checklist rows; columns Character, Profession, Weekly Quest, Treatise, Treasures, Drops, Darkmoon, One-time, First crafts, Left; each category cell `earned/total` with a check icon when done, "closed" for Darkmoon closed, "?" for unknown; expanded detail lists each source with item name (`C_Item.GetItemNameByID(itemID)`), points, hint. Footer: "Knowledge data: build <GameDataBuild()> · Weekly reset in <FormatDuration>" (reset from `C_DateAndTime.GetSecondsUntilWeeklyReset()` when available).
+  - **Knowledge:** ExpandGrid of checklist rows; columns Character, Profession, Weekly Quest, Treatise, Treasures, Drops, Darkmoon, One-time, First crafts, Left; each category cell `earned/total` with a check icon when done, "closed" for Darkmoon closed, "?" for unknown; expanded detail lists each source with item name (`C_Item.GetItemNameByID(itemID)`), points, hint. Footer: "Knowledge data: build <GameDataBuild()> · Weekly reset in <FormatDuration>" ("not generated" when `ns.GameData.Status(clientBuild).missing`, "outdated" when it lists `Knowledge` in `mismatched` or `outdated` is true — 1a's status semantics) (reset from `C_DateAndTime.GetSecondsUntilWeeklyReset()` when available).
   - **Concentration:** cap-warning banner rows (red "capped", orange "soon") then schedule rows: Character, Profession, Recipe, Crafts, Concentration, Gain (`FormatMoney(expectedGain)`), Gold/conc, Caps in. Each row has "Queue" → `Queue:Add({recipeID, quantity = crafts, charKey, useConcentration = true})` (a click; no automatic queueing).
   - **Spec advice:** character + profession dropdowns (from overview); rows: Path, Rank `rank/maxRank`, Points, Gain (`FormatMoney`), Per point, "Affordable" tag; label "Estimate from your top <specTopRecipes> profitable recipes". Empty state: "Open this profession's specializations on <char> to load spec data".
   - **Missing recipes:** character + profession dropdowns; rows: Recipe name, Source text (`text` or kind label: `auto` → "Learned automatically", `item` → "Recipe item: <item name>", `unknown` → "Unknown — open the profession on any character to load sources").
-  - `refresh` on `FS_ALTS_CHANGED`, `FS_RECIPES_CHANGED` while shown.
+  - On `FS_ALTS_CHANGED` / `FS_RECIPES_CHANGED` the Planner module calls `MainWindow:RefreshTab("planner")` (runs only while shown).
 
 - [ ] **Step 4: Run** — `busted` → PASS. In game: each section renders; Queue button adds the entry (check Queue tab); Darkmoon shows "closed" outside the faire week.
 
@@ -1033,33 +1063,33 @@ git commit -m "feat: add Planner tab with knowledge, concentration, spec and rec
 
 **Files:**
 - Create: `UI/AltsDashboard.lua`
-- Modify: `FabricationStation.toc`
+- Modify: `FabricationStation.toc` (after `UI\Tooltips.lua`/`UI\AltsTooltips.lua`)
 - Test: `tests/ui/dashboard_widgets_spec.lua`
 
 **Interfaces:**
-- Consumes: `Dashboard:RegisterWidget(id, def)`, `Alts:GetPools`, `Planner:GetKnowledgeChecklist`, `ns.UI.PlannerView.ConcentrationLines/KnowledgeLines`.
-- Produces: widgets `"altsConcentration"` `{ order = 60, title = "Concentration across alts" }` and `"altsKnowledge"` `{ order = 65, title = "Knowledge left this week" }`.
+- Consumes: `Dashboard:RegisterWidget(id, def)` (1b; `def = { order, title, build(frame), refresh(frame) }`, same id replaces; 1b isolates a failing widget), `Planner:GetKnowledgeChecklist`, `ns.UI.PlannerView.KnowledgeLines`, `MainWindow:SelectTab`.
+- Produces: widget `"altsKnowledge"` `{ order = 65, title = "Knowledge left this week" }`. No concentration widget: 1b already ships `"concentration"` (order 30, every alt sorted by full-at), so a phase-3 `"altsConcentration"` would duplicate it. Existing widget orders: 1b 10/20/30, phase 2 40/50.
 
 - [ ] **Step 1: Write the failing test**
 
 ```lua
 local w = env.registered.widgets
-assert.same({60, "Concentration across alts"}, {w.altsConcentration.order, w.altsConcentration.title})
 assert.same({65, "Knowledge left this week"}, {w.altsKnowledge.order, w.altsKnowledge.title})
-assert.is_function(w.altsKnowledge.refresh)
+assert.is_function(w.altsKnowledge.build); assert.is_function(w.altsKnowledge.refresh)
+assert.is_nil(w.altsConcentration)
 ```
 
 - [ ] **Step 2: Run** — `busted tests/ui/dashboard_widgets_spec.lua` → FAIL.
 
-- [ ] **Step 3: Implement.** `build(frame)` creates 6 two-column font-string lines; `refresh(frame)` fills them from `ConcentrationLines(Alts:GetPools(now), now, 6)` (urgent lines red) / `KnowledgeLines(Planner:GetKnowledgeChecklist(now), 6)`; clicking a widget calls `MainWindow:SelectTab("planner")`. Empty states: "No concentration data yet" / "No knowledge data yet". Refresh on `FS_ALTS_CHANGED`.
+- [ ] **Step 3: Implement.** In `Alts:OnEnable` (or Planner's), `Dashboard:RegisterWidget("altsKnowledge", def)`. `build(frame)` creates 6 two-column font-string lines; `refresh(frame)` fills them from `KnowledgeLines(Planner:GetKnowledgeChecklist(now), 6)`; clicking the widget calls `MainWindow:SelectTab("planner")`. Empty state: "No knowledge data yet". Refresh on `FS_ALTS_CHANGED` (`MainWindow:RefreshTab("dashboard")`).
 
-- [ ] **Step 4: Run** — `busted` → PASS. In game: both widgets show on the Dashboard and update after completing a weekly quest.
+- [ ] **Step 4: Run** — `busted` → PASS. In game: the widget shows on the Dashboard and updates after completing a weekly quest.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add UI/AltsDashboard.lua tests/ui/dashboard_widgets_spec.lua FabricationStation.toc
-git commit -m "feat: add concentration and knowledge Dashboard widgets"
+git commit -m "feat: add knowledge Dashboard widget"
 ```
 
 ### Task 16: Phase 3 integration check
