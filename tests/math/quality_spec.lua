@@ -19,9 +19,19 @@ describe("Math.Quality", function()
     assert.same({3, 400, 250}, { Q.Predict(260, 500, 5) })
     assert.same({1, 100, 0},   { Q.Predict(0, 500, 5) })
   end)
+  it("predict at a threshold, below it and at max quality", function()
+    assert.same({3, 400, 250}, { Q.Predict(250, 500, 5) })     -- skill == threshold reaches it
+    assert.same({2, 250, 100}, { Q.Predict(249, 500, 5) })     -- threshold - 1 does not
+    assert.same({5, nil, 500}, { Q.Predict(500, 500, 5) })     -- max quality: no next threshold; q5 starts at 500
+  end)
+  it("thresholds are not thrown off by float noise", function()
+    assert.same({29}, Q.Thresholds(2, 100, {0.29}))            -- 100 * 0.29 = 28.999999999999996 in doubles
+    assert.same({2, nil, 29}, { Q.Predict(29, 100, 2, {0.29}) })
+  end)
   it("rank factors", function()
     assert.equals(0, Q.RankFactor(1, 2)); assert.equals(1, Q.RankFactor(2, 2))
     assert.equals(0.5, Q.RankFactor(2, 3)); assert.equals(1, Q.RankFactor(3, 3))
+    assert.equals(0, Q.RankFactor(1, 1))                        -- a single-rank slot earns nothing
   end)
   it("reagent skill, 3-rank (CraftSim header example)", function()
     assert.equals(280, Q.ReagentSkill({A, B}, { {slotIndex=1,itemID=13,quantity=10}, {slotIndex=2,itemID=23,quantity=5} }, 280))

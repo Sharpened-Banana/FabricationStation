@@ -30,7 +30,8 @@ Quality.DEFAULT_REAGENT_SKILL_FACTOR = 0.40
 
 -- Skill needed for qualities 2..maxQuality, as an ascending list ({} for maxQuality 1).
 -- `fractions` (from GameData) wins over the defaults; nil for an unsupported maxQuality without fractions.
--- Products are cut to 12 significant digits so float noise (0.8 * 500) cannot push a threshold above its integer.
+-- Products are cut to 12 significant digits so float noise (3 * 0.2 = 0.6000000000000001, 100 * 0.29 = 28.999999999999996)
+-- cannot push a threshold off its intended value and flip a `skill >= threshold` comparison.
 function Quality.Thresholds(maxQuality, difficulty, fractions)
   fractions = fractions or Quality.THRESHOLD_FRACTIONS[maxQuality]
   if not fractions then return nil end
