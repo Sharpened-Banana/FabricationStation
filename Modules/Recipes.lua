@@ -1,6 +1,7 @@
 local ADDON_NAME, ns = ...
 
--- Recipes: crafting settings and per-character calibration. A calibration records what the game
+-- Recipes: crafting settings, per-character calibration, recipe evaluation (Evaluate, PredictLive) and
+-- lookups (WhoCanCraft, FindRecipesForItem). A calibration records what the game
 -- reports for the current character's recipe (base skill, the skill full top-rank reagents add,
 -- difficulty, bonus stats) so recipes can later be evaluated for any character without the
 -- profession window open. Calibration runs automatically when a recipe is selected in Blizzard's
@@ -29,6 +30,12 @@ local stamps = {}          -- [charKey] = integer, bumped when that character's 
 local settingsVersion = 0  -- bumped on every crafting setting change; part of every data stamp
 local attached = false     -- the recipe-selection callback is registered (once per session)
 
+local itemStamps = {}      -- [charKey] = integer, bumped on every "items" message for that character
+local warbandStamp = 0     -- bumped on every "warband" message
+local cache = {}           -- [cacheKey] = { stamp, itemStamp|nil, result }
+local cachePriceVersion    -- Prices:GetVersion() the cache entries were computed with
+local itemIndex            -- [itemID] = { { recipeID, quality } }; nil = rebuild on the next lookup
+
 ---------------------------------------------------------------------------
 -- Helpers
 ---------------------------------------------------------------------------
@@ -43,6 +50,17 @@ end
 
 local function scanner()
   return ns.FS:GetModule("Scanner")
+end
+
+local function prices()
+  return ns.FS:GetModule("Prices")
+end
+
+-- 1a's costing setting: owned reagents cost nothing.
+local function owned_free_setting()
+  local g = global()
+  local costing = g and g.settings and g.settings.costing
+  return costing and costing.ownedReagentsFree and true or false
 end
 
 ---------------------------------------------------------------------------
@@ -113,6 +131,36 @@ local function bump_stamp(charKey)
   stamps[charKey] = (stamps[charKey] or 0) + 1
 end
 
+-- Every known character's stamp: the scanned characters and any stamped so far.
+local function bump_every_stamp()
+  local done = {}
+  for _, charKey in ipairs(scanner():GetCharacters() or {}) do
+    done[charKey] = true
+    bump_stamp(charKey)
+  end
+  for charKey in pairs(stamps) do
+    if not done[charKey] then bump_stamp(charKey) end
+  end
+end
+
+-- FS_DATA_CHANGED(charKey, kind): owned counts only change results while owned reagents are free, so
+-- "items" (that character) and "warband" (account-wide: every character) bump stamps only then; every
+-- other kind bumps the character's stamp. Item stamps always move, for results computed with
+-- opts.ownedReagentsFree = true while the setting is off. "recipes" also marks the item index dirty.
+local function on_data_changed(_, charKey, kind)
+  if kind == "items" then
+    if charKey == nil then return end
+    itemStamps[charKey] = (itemStamps[charKey] or 0) + 1
+    if owned_free_setting() then bump_stamp(charKey) end
+  elseif kind == "warband" then
+    warbandStamp = warbandStamp + 1
+    if owned_free_setting() then bump_every_stamp() end
+  else
+    if kind == "recipes" then itemIndex = nil end
+    if charKey ~= nil then bump_stamp(charKey) end
+  end
+end
+
 ---------------------------------------------------------------------------
 -- Calibration
 ---------------------------------------------------------------------------
@@ -181,6 +229,243 @@ function Recipes:Calibrate(recipeID)
 end
 
 ---------------------------------------------------------------------------
+-- Known recipes (dropped professions are skipped)
+---------------------------------------------------------------------------
+
+-- The character's profession records the character still has.
+local function current_professions(charKey)
+  local c = scanner():GetCharacter(charKey)
+  local out = {}
+  for skillLineID, p in pairs(c and c.professions or {}) do
+    if type(p) == "table" and not p.dropped then out[skillLineID] = p end
+  end
+  return out
+end
+
+-- The profession record that knows recipeID (the schematic's skill line first), else the record of
+-- that skill line (for its skill), else nil. Second return: whether the recipe is known.
+local function find_profession(charKey, recipeID, skillLineID)
+  local profs = current_professions(charKey)
+  local own = skillLineID and profs[skillLineID]
+  if own and own.recipes and own.recipes[recipeID] then return own, true end
+  for _, p in pairs(profs) do
+    if p.recipes and p.recipes[recipeID] then return p, true end
+  end
+  return own, false
+end
+
+-- Characters (sorted) with a current profession that knows recipeID.
+function Recipes:WhoCanCraft(recipeID)
+  local out = {}
+  for _, charKey in ipairs(scanner():GetCharacters() or {}) do
+    local _, known = find_profession(charKey, recipeID, nil)
+    if known then out[#out + 1] = charKey end
+  end
+  table.sort(out)
+  return out
+end
+
+---------------------------------------------------------------------------
+-- Item lookup
+---------------------------------------------------------------------------
+
+local function build_item_index()
+  local index = {}
+  local g = global()
+  for recipeID, schematic in pairs(g and g.schematics or {}) do
+    for quality, itemID in pairs(type(schematic) == "table" and schematic.outputItemIDs or {}) do
+      local list = index[itemID] or {}
+      index[itemID] = list
+      list[#list + 1] = { recipeID = recipeID, quality = quality }
+    end
+  end
+  for _, list in pairs(index) do
+    table.sort(list, function(a, b)
+      if a.recipeID ~= b.recipeID then return a.recipeID < b.recipeID end
+      return a.quality < b.quality
+    end)
+  end
+  return index
+end
+
+-- { { recipeID, quality } } of every cached schematic crafting itemID, by recipeID then quality. The index
+-- is rebuilt after FS_DATA_CHANGED "recipes" or FS_RECIPES_CHANGED (schematics are cached a chunk at a time
+-- after a scan, so an index built in between can miss some until the next message).
+function Recipes:FindRecipesForItem(itemID)
+  itemIndex = itemIndex or build_item_index()
+  local out = {}
+  for i, e in ipairs(itemIndex[itemID] or {}) do out[i] = { recipeID = e.recipeID, quality = e.quality } end
+  return out
+end
+
+---------------------------------------------------------------------------
+-- Evaluation
+---------------------------------------------------------------------------
+
+local DAY = 86400
+
+-- Deterministic text for a cache key: tables recursively with keys sorted (by type, then value).
+local function serialize(v)
+  if type(v) ~= "table" then return type(v):sub(1, 1) .. tostring(v) end
+  local keys = {}
+  for k in pairs(v) do keys[#keys + 1] = k end
+  table.sort(keys, function(a, b)
+    local ta, tb = type(a), type(b)
+    if ta ~= tb then return ta < tb end
+    if ta == "number" or ta == "string" then return a < b end
+    return tostring(a) < tostring(b)
+  end)
+  local parts = {}
+  for i, k in ipairs(keys) do parts[i] = serialize(k) .. "=" .. serialize(v[k]) end
+  return "{" .. table.concat(parts, ",") .. "}"
+end
+
+-- opts with defaults filled in: the cache key's opts and what the evaluation uses.
+local function full_opts(opts)
+  opts = opts or {}
+  local provided = {}
+  for itemID, n in pairs(type(opts.providedReagents) == "table" and opts.providedReagents or {}) do
+    if type(n) == "number" and n > 0 then provided[itemID] = n end
+  end
+  local ownedFree = opts.ownedReagentsFree
+  if ownedFree == nil then ownedFree = owned_free_setting() end
+  return {
+    targetQuality = opts.targetQuality,
+    useConcentration = opts.useConcentration and true or false,
+    providedReagents = provided,
+    ownedReagentsFree = ownedFree and true or false,
+  }
+end
+
+local function owned_count(itemID, charKey)
+  local c = scanner():GetItemCount(itemID, charKey) or {}
+  return (c.bags or 0) + (c.bank or 0) + (c.reagentBank or 0) + (c.warband or 0)
+end
+
+-- RecipeInput and the PriceResults behind it for recipeID on charKey. nil without a schematic.
+local function build(recipeID, charKey, o, optionalItemIDs)
+  local schematic = scanner():GetSchematic(recipeID)
+  if not schematic then return nil end
+  local calib = Recipes:GetCalibration(charKey, recipeID)
+  local prof, known = find_profession(charKey, recipeID, schematic.skillLineID)
+
+  local P = prices()
+  local results, values, owned = {}, {}, o.ownedReagentsFree and {} or nil
+  local function price(itemID, reagent)
+    if itemID == nil or results[itemID] then return end
+    results[itemID] = P:Get(itemID) or {}
+    values[itemID] = results[itemID].value
+    if reagent and owned then owned[itemID] = owned_count(itemID, charKey) end
+  end
+  for _, slot in ipairs(schematic.reagentSlots or {}) do
+    for _, itemID in ipairs(type(slot.reagents) == "table" and slot.reagents or {}) do price(itemID, true) end
+  end
+  for _, itemID in pairs(schematic.outputItemIDs or {}) do price(itemID, false) end
+
+  local input = ns.CraftingData.BuildInput(ns.GameData, {
+    schematic = schematic, calib = calib,
+    professionSkill = prof and (prof.skill or 0) + (prof.skillModifier or 0) or 0,
+    prices = values, owned = owned, provided = o.providedReagents, optionalItemIDs = optionalItemIDs,
+    useConcentration = o.useConcentration, targetQuality = o.targetQuality,
+  })
+  return input, {
+    schematic = schematic, calib = calib, known = known, results = results, owned = owned or {},
+    provided = o.providedReagents or {},
+  }
+end
+
+-- Price results the chosen plan relies on: reagents it buys (beyond owned + provided) and its output.
+local function used_prices(r, ctx)
+  local used, need = {}, {}
+  for _, row in ipairs(r.allocation or {}) do
+    need[row.itemID] = (need[row.itemID] or 0) + (row.quantity or 0)
+  end
+  for itemID, n in pairs(need) do
+    if n - (ctx.owned[itemID] or 0) - (ctx.provided[itemID] or 0) > 0 then used[#used + 1] = ctx.results[itemID] end
+  end
+  local outputs = ctx.schematic.outputItemIDs or {}
+  used[#used + 1] = ctx.results[outputs[r.expectedQuality]]
+  return used
+end
+
+local function older_than(time, now, days)
+  return type(time) ~= "number" or now - time > days * DAY
+end
+
+local function evaluate(recipeID, charKey, o)
+  local input, ctx = build(recipeID, charKey, o, nil)
+  if not input then return nil end
+  local r = ns.Math.Profit.EvaluateCraft(input)
+  local mathFlags = r.flags or {}
+
+  local P = prices()
+  local stalePrice, priceAgeDays = false, nil
+  for _, pr in ipairs(used_prices(r, ctx)) do
+    if P:IsStale(pr) then stalePrice = true end
+    if type(pr.ageDays) == "number" and (priceAgeDays == nil or pr.ageDays > priceAgeDays) then priceAgeDays = pr.ageDays end
+  end
+
+  local now, days = ns.FS:Now(), Recipes:GetSetting("staleCalibrationDays")
+  local char = scanner():GetCharacter(charKey)
+  local calib = ctx.calib
+  -- No thresholds (an unsupported maxQuality) predict quality 1 whatever the skill: never present that as real.
+  -- Default thresholds stand in when GameData lacks the recipe's: also an estimate.
+  local noThresholds = ns.Math.Quality.Thresholds(input.maxQuality, input.baseDifficulty or 0, input.thresholdFractions) == nil
+  local defaultThresholds = (input.maxQuality or 1) > 1 and input.thresholdFractions == nil
+
+  r.recipeID, r.charKey, r.priceAgeDays = recipeID, charKey, priceAgeDays
+  r.flags = {
+    noPrice = r.missingPrice == true,
+    stalePrice = stalePrice,
+    staleData = calib == nil or older_than(calib.time, now, days) or older_than(char and char.lastSeen, now, days),
+    unknownRecipe = not ctx.known,
+    estimated = calib == nil or noThresholds or defaultThresholds,
+    unreachableTarget = mathFlags.unreachableTarget == true,
+    unknownOptional = mathFlags.unknownOptional == true,
+  }
+  return r
+end
+
+-- RecipeResult (contract) for recipeID crafted by charKey (nil = current character); nil when the recipe's
+-- schematic is not cached. opts = { targetQuality, useConcentration, providedReagents = {[itemID] = n},
+-- ownedReagentsFree (nil = 1a's settings.costing.ownedReagentsFree) }. Results are cached per recipe,
+-- character and opts (defaults filled) while Prices:GetVersion() and GetDataStamp(charKey) are unchanged;
+-- treat them as read-only.
+function Recipes:Evaluate(recipeID, charKey, opts)
+  charKey = charKey or ns.FS:CharKey()
+  local o = full_opts(opts)
+  local version = prices():GetVersion()
+  if version ~= cachePriceVersion then
+    cache, cachePriceVersion = {}, version
+  end
+  local key = tostring(recipeID) .. "|" .. tostring(charKey) .. "|" .. serialize(o)
+  local stamp = self:GetDataStamp(charKey)
+  -- Owned-free results also follow item counts when the setting (and so the data stamp) does not.
+  local itemStamp = o.ownedReagentsFree and ((itemStamps[charKey] or 0) + warbandStamp) or nil
+  local entry = cache[key]
+  if entry and entry.stamp == stamp and entry.itemStamp == itemStamp then return entry.result end
+
+  local result = evaluate(recipeID, charKey, o)
+  if result then cache[key] = { stamp = stamp, itemStamp = itemStamp, result = result } end
+  return result
+end
+
+-- Math prediction for `allocation` on the current character (no optimisation): the profession panel and the
+-- self-check. optionalItemIDs selects optional/finishing reagents; applyConcentration crafts one quality up.
+-- MathResult, or nil when the schematic is not cached.
+function Recipes:PredictLive(recipeID, allocation, optionalItemIDs, applyConcentration)
+  local o = full_opts({ useConcentration = applyConcentration })
+  local input = build(recipeID, ns.FS:CharKey(), o, optionalItemIDs)
+  if not input then return nil end
+  return ns.Math.Profit.EvaluateAllocation(input, allocation, optionalItemIDs)
+end
+
+-- Blizzard-style reagent infos back to a ReagentAllocation and optional itemIDs, over the cached schematic.
+function Recipes:FromCraftingReagentInfo(recipeID, infos)
+  return ns.CraftingData.AllocationFromReagentInfo(scanner():GetSchematic(recipeID), infos)
+end
+
+---------------------------------------------------------------------------
 -- Auto-calibration (Blizzard_Professions)
 ---------------------------------------------------------------------------
 
@@ -210,6 +495,8 @@ function Recipes:OnInitialize()
 end
 
 function Recipes:OnEnable()
+  self:RegisterMessage(ns.Msg.DATA_CHANGED, on_data_changed)
+  self:RegisterMessage(ns.Msg.RECIPES_CHANGED, function() itemIndex = nil end)
   self:RegisterEvent("ADDON_LOADED", function(_, name)
     -- Log-only source: a failing attach must not turn off the core Recipes module.
     if name == PROFESSIONS_ADDON then ns.FS:SafeCall("Recipes:Attach", self.AttachIfReady, self) end
