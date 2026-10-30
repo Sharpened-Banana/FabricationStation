@@ -103,6 +103,39 @@ describe("Diagnostics", function()
     local errors = D:GetErrors(); assert.equals("Diagnostics", errors[#errors].source)
     assert.matches("boom", errors[#errors].err); assert.equals(0, #D:GetCaptures())
   end)
+  it("reports noRecipe while the crafting page is hidden (Specializations or Orders showing)", function()
+    ProfessionsFrame.CraftingPage.IsShown = function() return false end
+    assert.same({ nil, "noRecipe" }, { D:Capture() }); assert.equals(0, #D:GetCaptures())
+  end)
+  it("reports noRecipe while the schematic form is hidden", function()
+    ProfessionsFrame.CraftingPage.IsShown = function() return true end
+    ProfessionsFrame.CraftingPage.SchematicForm.IsShown = function() return false end
+    assert.same({ nil, "noRecipe" }, { D:Capture() }); assert.equals(0, #D:GetCaptures())
+  end)
+  it("captures when the page and form are shown", function()
+    ProfessionsFrame.CraftingPage.IsShown = function() return true end
+    ProfessionsFrame.CraftingPage.SchematicForm.IsShown = function() return true end
+    assert.equals(1001, D:Capture().recipeID)
+  end)
+  it("reports noRecipe when the transaction is for another recipe", function()
+    local tx = ProfessionsFrame.CraftingPage.SchematicForm.GetTransaction()
+    tx.GetRecipeID = function() return 1002 end
+    assert.same({ nil, "noRecipe" }, { D:Capture() }); assert.equals(0, #D:GetCaptures())
+    tx.GetRecipeID = function() return 1001 end
+    assert.equals(1001, D:Capture().recipeID)
+  end)
+  for _, case in ipairs({
+    { "recipeInfo", function() C_TradeSkillUI.GetRecipeInfo = function() return nil end end },
+    { "schematicRaw", function() C_TradeSkillUI.GetRecipeSchematic = function() return nil end end },
+    { "schematic", function() ns.FS:GetModule("Scanner").GetSchematic = function() return nil end end },
+    { "operationInfo", function() C_TradeSkillUI.GetCraftingOperationInfo = function() return nil end end },
+  }) do
+    it("returns apiError and stores nothing when " .. case[1] .. " is nil", function()
+      case[2]()
+      assert.same({ nil, "apiError" }, { D:Capture() }); assert.equals(0, #D:GetCaptures())
+      local errors = D:GetErrors(); assert.matches(case[1], errors[#errors].err, 1, true)
+    end)
+  end
   it("numbers captures from nextID", function()
     D:Capture(); D:Capture(); assert.equals(3, ns.FS.db.global.captures.nextID); assert.equals(2, D:GetCaptures()[2].id)
   end)

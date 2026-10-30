@@ -145,11 +145,24 @@ end
 -- Captures
 ---------------------------------------------------------------------------
 
-local function schematic_form()
+-- The crafting page and its schematic form, or nil when the Professions window is closed or lacks them.
+local function crafting_page()
   local frame = ProfessionsFrame
   if not (frame and frame:IsShown()) then return nil end
   local page = frame.CraftingPage
-  return page and page.SchematicForm
+  local form = page and page.SchematicForm
+  if form then return page, form end
+end
+
+-- False when the frame has IsShown and is hidden (the Specializations or Orders page is showing).
+local function visible(frame)
+  return not (frame.IsShown and not frame:IsShown())
+end
+
+-- Errors (so Capture reports apiError) when a call the capture depends on gave nil.
+local function need(value, what, recipeID)
+  if value == nil then error(("%s is nil for recipe %s"):format(what, tostring(recipeID)), 0) end
+  return value
 end
 
 local function recipe_line(recipeID, schematic)
@@ -160,25 +173,29 @@ local function recipe_line(recipeID, schematic)
 end
 
 -- Reads the selected recipe from the open Professions window. Returns the capture record (without
--- an id) or nil plus a reason. Runs under pcall: any error is an API failure.
+-- an id) or nil plus a reason. Runs under pcall: any error, including a nil recipeInfo,
+-- schematicRaw, schematic or operationInfo, is an API failure.
 local function read_capture()
-  local form = schematic_form()
+  local page, form = crafting_page()
   if not form then return nil, "noProfessionFrame" end
   local Scanner = ns.FS:GetModule("Scanner")
   if not Scanner:IsProfessionOpen() then return nil, "notReady" end
+  -- A hidden page or form still holds the last recipe, which is not what the player sees.
+  if not (visible(page) and visible(form)) then return nil, "noRecipe" end
   local selected = form:GetRecipeInfo()
   local recipeID = selected and selected.recipeID
   if not recipeID then return nil, "noRecipe" end
+  local transaction = form:GetTransaction()
+  if transaction and transaction.GetRecipeID and transaction:GetRecipeID() ~= recipeID then return nil, "noRecipe" end
 
   local TS, copy = C_TradeSkillUI, ns.Util.DeepCopy
-  local recipeInfo = TS.GetRecipeInfo(recipeID)
-  local schematicRaw = TS.GetRecipeSchematic(recipeID, false)
-  local schematic = Scanner:GetSchematic(recipeID)
-  local transaction = form:GetTransaction()
+  local recipeInfo = need(TS.GetRecipeInfo(recipeID), "recipeInfo", recipeID)
+  local schematicRaw = need(TS.GetRecipeSchematic(recipeID, false), "schematicRaw", recipeID)
+  local schematic = need(Scanner:GetSchematic(recipeID), "schematic", recipeID)
   local reagents = transaction:CreateCraftingReagentInfoTbl()
   local allocationItemGUID = transaction:GetAllocationItemGUID()
   local applyConcentration = transaction:IsApplyingConcentration() and true or false
-  local operationInfo = TS.GetCraftingOperationInfo(recipeID, reagents, allocationItemGUID, false)
+  local operationInfo = need(TS.GetCraftingOperationInfo(recipeID, reagents, allocationItemGUID, false), "operationInfo", recipeID)
   local operationInfoConcentration = TS.GetCraftingOperationInfo(recipeID, reagents, allocationItemGUID, true)
   local skillLineID = recipe_line(recipeID, schematic)
   local charKey = ns.FS:CharKey()
@@ -190,7 +207,7 @@ local function read_capture()
     gameDataBuild = gameData and gameData.Build() or nil,
     charKey = charKey,
     recipeID = recipeID,
-    recipeName = selected.name or (recipeInfo and recipeInfo.name),
+    recipeName = selected.name or recipeInfo.name,
     skillLineID = skillLineID,
     recipeInfo = copy(recipeInfo),
     schematicRaw = copy(schematicRaw),
@@ -200,7 +217,7 @@ local function read_capture()
     applyConcentration = applyConcentration,
     operationInfo = copy(operationInfo),
     operationInfoConcentration = copy(operationInfoConcentration),
-    predictedQuality = operationInfo and operationInfo.craftingQuality,
+    predictedQuality = operationInfo.craftingQuality,
     profession = skillLineID and copy(Scanner:GetProfession(charKey, skillLineID)) or nil,
   }
 end
