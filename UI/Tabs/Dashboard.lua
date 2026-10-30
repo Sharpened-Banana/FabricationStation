@@ -105,17 +105,18 @@ end
 
 local function layout()
   if not grid then return end
-  local y, list = 0, sorted_widgets()
+  local y, list = 0, {}
+  for _, entry in ipairs(sorted_widgets()) do
+    if grid.frames[entry.id] then list[#list + 1] = entry end
+  end
   local half = GAP / 2
   local i = 1
   while i <= #list do
     local left, right = grid.frames[list[i].id], list[i + 1] and grid.frames[list[i + 1].id]
-    local height = math.max(left and left:GetHeight() or 0, right and right:GetHeight() or 0)
-    if left then
-      left:ClearAllPoints()
-      left:SetPoint("TOPLEFT", grid.child, "TOPLEFT", 0, -y)
-      left:SetPoint("TOPRIGHT", grid.child, "TOP", -half, -y)
-    end
+    local height = math.max(left:GetHeight(), right and right:GetHeight() or 0)
+    left:ClearAllPoints()
+    left:SetPoint("TOPLEFT", grid.child, "TOPLEFT", 0, -y)
+    left:SetPoint("TOPRIGHT", grid.child, "TOP", -half, -y)
     if right then
       right:ClearAllPoints()
       right:SetPoint("TOPLEFT", grid.child, "TOP", half, -y)
@@ -154,16 +155,19 @@ local function build_widget(entry)
   return frame
 end
 
--- (Re)builds one widget into the built grid, replacing its old frame.
-local function install_widget(entry)
-  local old = grid.frames[entry.id]
-  if old then
-    old:Hide()
-    old:ClearAllPoints()
+-- Builds (or rebuilds, for a replaced definition) every widget whose frame is not from its current def.
+local function sync_widgets()
+  for _, entry in ipairs(sorted_widgets()) do
+    if grid.builtDefs[entry.id] ~= entry.def then
+      local old = grid.frames[entry.id]
+      if old then
+        old:Hide()
+        old:ClearAllPoints()
+      end
+      grid.frames[entry.id] = build_widget(entry)
+      grid.builtDefs[entry.id] = entry.def
+    end
   end
-  grid.frames[entry.id] = build_widget(entry)
-  refresh_widget(entry)
-  layout()
 end
 
 ---------------------------------------------------------------------------
@@ -173,7 +177,8 @@ end
 -- Registers a widget: def = { order = number, title = string, build = function(frame), refresh = function(frame) }.
 -- Stores def.id = id. The same id replaces the earlier widget, keeping its place among equal orders.
 -- Returns false (and logs) for a def without a numeric order or a build function. A widget registered
--- after the tab was built is built and refreshed at once.
+-- after the tab was built is built by the tab's next refresh; that refresh is asked for now, and only
+-- happens while the dashboard is the selected tab of a visible window.
 function Dashboard:RegisterWidget(id, def)
   if type(id) ~= "string" or id == "" or type(def) ~= "table" or type(def.order) ~= "number"
     or type(def.build) ~= "function" or (def.refresh ~= nil and type(def.refresh) ~= "function") then
@@ -190,7 +195,10 @@ function Dashboard:RegisterWidget(id, def)
     widgets[#widgets + 1] = entry
     widgetsById[id] = entry
   end
-  if grid then install_widget(entry) end
+  if grid then
+    local window = module("MainWindow")
+    if window then window:RefreshTab(TAB_ID) end
+  end
   return true
 end
 
@@ -229,10 +237,8 @@ function Dashboard:BuildAll(container)
   local width = scroll:GetWidth()
   if width and width > 0 then child:SetWidth(width) end
 
-  grid = { scroll = scroll, child = child, frames = {} }
-  for _, entry in ipairs(sorted_widgets()) do
-    grid.frames[entry.id] = build_widget(entry)
-  end
+  grid = { scroll = scroll, child = child, frames = {}, builtDefs = {} }
+  sync_widgets()
   layout()
   return self:GetBuiltFrames()
 end
@@ -250,9 +256,11 @@ function Dashboard:GetScrollFrame()
   return grid and grid.scroll
 end
 
--- Refreshes every built widget, each isolated, then lays the grid out for their new heights.
+-- Builds widgets registered since the last pass, refreshes every widget (each isolated), then lays the
+-- grid out for their new heights.
 function Dashboard:RefreshAll()
   if not grid then return end
+  sync_widgets()
   for _, entry in ipairs(sorted_widgets()) do refresh_widget(entry) end
   layout()
 end
@@ -351,12 +359,16 @@ end
 
 local function refresh_top_crafts(frame)
   local recipes = module("Recipes")
-  local results = recipes and recipes:GetRanked({ sortBy = "profit" }) or {}
+  local results = recipes and recipes:GetRanked({ sortBy = "profit", onlyProfitable = true }) or {}
   local rows = Dashboard.TopCraftsModel(results, TOP_CRAFTS)
   local lines = {}
   for i, row in ipairs(rows) do lines[i] = top_craft_line(row) end
   if #lines == 0 then
-    lines[1] = color(DIM, recipes and recipes:IsScanning() and "Scanning recipes..." or "No recipes ranked yet.")
+    if recipes and recipes:IsScanning() then
+      lines[1] = color(DIM, "Scanning recipes...")
+    else
+      lines[1] = color(DIM, "No profitable crafts right now \226\128\148 check prices (Auctionator scan) or wait for the next scan.")
+    end
   end
   Dashboard.SetLines(frame, lines)
 end
@@ -399,7 +411,9 @@ local function refresh_queue_summary(frame)
 end
 
 -- One row per non-dropped profession with a concentration snapshot, for every character. The pool is
--- projected to now; the rate is measured from the projection itself, so nothing is hard-coded.
+-- projected to now. The rate comes from the snapshot's own perCycle / cycleSeconds (nothing is
+-- hard-coded); only a snapshot without them falls back to the rate measured from the projection over an
+-- hour, which is wrong close to full (the projection clamps at max).
 local function concentration_rows(now)
   local scanner = module("Scanner")
   local rows = {}
@@ -414,11 +428,18 @@ local function concentration_rows(now)
     for _, skillLineID in ipairs(lineIDs) do
       local value, max = scanner:ProjectConcentration(charKey, skillLineID, now)
       if type(value) == "number" and type(max) == "number" and max > 0 then
-        local later = scanner:ProjectConcentration(charKey, skillLineID, now + CONCENTRATION_WINDOW)
+        local snapshot = record.professions[skillLineID].concentration
+        local regen
+        if type(snapshot.perCycle) == "number" and snapshot.perCycle > 0
+          and type(snapshot.cycleSeconds) == "number" and snapshot.cycleSeconds > 0 then
+          regen = snapshot.perCycle / snapshot.cycleSeconds
+        else
+          local later = scanner:ProjectConcentration(charKey, skillLineID, now + CONCENTRATION_WINDOW)
+          regen = type(later) == "number" and (later - value) / CONCENTRATION_WINDOW or nil
+        end
         rows[#rows + 1] = {
           charKey = charKey, skillLineID = skillLineID, profession = record.professions[skillLineID].name,
-          value = value, max = max,
-          regenPerSec = type(later) == "number" and (later - value) / CONCENTRATION_WINDOW or nil,
+          value = value, max = max, regenPerSec = regen,
         }
       end
     end

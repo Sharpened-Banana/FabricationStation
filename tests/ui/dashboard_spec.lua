@@ -79,13 +79,37 @@ describe("Dashboard", function()
       assert.is_true(first(frames.concentration)[5] < first(frames.topCrafts)[5])  -- next row, further down
       assert.equals("TOPLEFT", first(frames.concentration)[1])
     end)
-    it("adds a widget registered after the tab was built, and replaces one in place", function()
-      local frames = D:BuildAll(CreateFrame("Frame"))
-      D:RegisterWidget("late", { order = 5, title = "Late", build = function(f) f.built = "one" end, refresh = function(f) f.fresh = true end })
-      D:RegisterWidget("late", { order = 5, title = "Late", build = function(f) f.built = "two" end, refresh = function(f) f.fresh = true end })
+    local function late_widget(box, tag)
+      return { order = 5, title = "Late", build = function(f) box.built = tag; f.built = tag end,
+        refresh = function(f) box.refreshes = (box.refreshes or 0) + 1; f.fresh = true end }
+    end
+    it("leaves a widget registered while the tab is not shown for the next tab refresh", function()
+      local box = {}
+      D:BuildAll(CreateFrame("Frame"))
+      D:RegisterWidget("late", late_widget(box, "one"))
+      assert.is_nil(D:GetBuiltFrames().late); assert.is_nil(box.built); assert.is_nil(box.refreshes)
+      D:RefreshAll()
+      assert.equals("one", D:GetBuiltFrames().late.built); assert.equals(1, box.refreshes)
+    end)
+    it("leaves it while another tab is selected", function()
+      local box = {}
+      MW:Show("dashboard"); MW:RegisterTab("other", { label = "Other", order = 50, build = function() end })
+      MW:SelectTab("other")
+      D:RegisterWidget("late", late_widget(box, "one"))
+      assert.is_nil(D:GetBuiltFrames().late); assert.is_nil(box.built)
+      MW:SelectTab("dashboard")
+      assert.equals("one", D:GetBuiltFrames().late.built); assert.equals(1, box.refreshes)
+    end)
+    it("builds and refreshes a late widget at once while the dashboard is shown, and replaces one in place", function()
+      local box = {}
+      MW:Show("dashboard")
+      local topCrafts = D:GetBuiltFrames().topCrafts
+      D:RegisterWidget("late", late_widget(box, "one"))
+      assert.equals("one", D:GetBuiltFrames().late.built); assert.equals(1, box.refreshes)
+      D:RegisterWidget("late", late_widget(box, "two"))
       local again = D:GetBuiltFrames()
       assert.equals("two", again.late.built); assert.is_true(again.late.fresh)
-      assert.is_not.equals(frames.topCrafts, nil); assert.equals(frames.topCrafts, again.topCrafts)
+      assert.equals(topCrafts, again.topCrafts)
     end)
     it("scrolls with the mouse wheel inside the range", function()
       D:BuildAll(CreateFrame("Frame"))
@@ -140,34 +164,47 @@ describe("Dashboard", function()
   end)
 
   describe("widgets", function()
+    local filters
     local function stub_ranked(list)
-      ns.FS:GetModule("Recipes").GetRanked = function() return list end
+      filters = {}
+      ns.FS:GetModule("Recipes").GetRanked = function(_, filter) filters[#filters + 1] = filter; return list end
     end
     local function refreshed()
       local frames = D:BuildAll(CreateFrame("Frame")); D:RefreshAll(); return frames
     end
 
-    it("top crafts shows profit, markers and price age, and 'no price' instead of 0", function()
-      world.schematics[9001].name = "Sample Recipe"
-      stub_ranked({ result(12345, { age = 2 }), result(500, { noPrice = true, estimated = true, age = 0.5 }),
-        result(nil, { recipeID = 9999, noPrice = true, charKey = "Alt-Realm" }) })
-      local lines = texts(refreshed().topCrafts)
-      assert.equals(3, #lines)
-      assert.truthy(lines[1]:find("Sample Recipe", 1, true)); assert.truthy(lines[1]:find(ns.UI.FormatMoney(12345), 1, true))
-      assert.truthy(lines[1]:find("price 2d old", 1, true))
-      assert.truthy(lines[2]:find("some prices missing", 1, true)); assert.truthy(lines[2]:find("estimate", 1, true))
-      assert.truthy(lines[2]:find(ns.UI.FormatMoney(500), 1, true)); assert.truthy(lines[2]:find("price 12h old", 1, true))
-      assert.truthy(lines[3]:find("no price", 1, true)); assert.truthy(lines[3]:find("Recipe 9999", 1, true))
-      assert.falsy(lines[3]:find(ns.UI.FormatMoney(0), 1, true)); assert.falsy(lines[3]:find("old", 1, true))
+    it("top crafts asks for the profitable crafts by profit", function()
+      stub_ranked({}); refreshed()
+      assert.same({ { sortBy = "profit", onlyProfitable = true } }, filters)
     end)
-    it("top crafts shows at most ten rows and says when nothing is ranked", function()
+    -- GetRanked(onlyProfitable) never returns noPrice or nil-profit results, so this widget never shows
+    -- them; TopCraftsModel keeps those branches for other callers.
+    it("top crafts shows profit, estimate marker and price age", function()
+      world.schematics[9001].name = "Sample Recipe"
+      stub_ranked({ result(12345, { age = 2 }), result(500, { estimated = true, age = 0.5, charKey = "Alt-Realm" }) })
+      local lines = texts(refreshed().topCrafts)
+      assert.equals(2, #lines)
+      assert.truthy(lines[1]:find("Sample Recipe", 1, true)); assert.truthy(lines[1]:find(ns.UI.FormatMoney(12345), 1, true))
+      assert.truthy(lines[1]:find("price 2d old", 1, true)); assert.falsy(lines[1]:find("estimate", 1, true))
+      assert.truthy(lines[2]:find("estimate", 1, true)); assert.truthy(lines[2]:find("(Alt)", 1, true))
+      assert.truthy(lines[2]:find(ns.UI.FormatMoney(500), 1, true)); assert.truthy(lines[2]:find("price 12h old", 1, true))
+    end)
+    it("top crafts shows at most ten rows", function()
       local list = {}
       for i = 1, 14 do list[i] = result(1000 - i, { recipeID = 9000 + i }) end
       stub_ranked(list)
       assert.equals(10, refreshed().topCrafts.lineCount)
+    end)
+    it("top crafts explains an empty list, or says it is scanning", function()
       stub_ranked({})
-      local frame = D:GetBuiltFrames().topCrafts; D:RefreshAll()
-      assert.equals(1, frame.lineCount); assert.truthy(frame.lines[1]:GetText():find("No recipes", 1, true))
+      local frame = refreshed().topCrafts
+      assert.equals(1, frame.lineCount)
+      assert.truthy(frame.lines[1]:GetText():find("No profitable crafts right now", 1, true))
+      assert.truthy(frame.lines[1]:GetText():find("Auctionator scan", 1, true))
+      ns.FS:GetModule("Recipes").IsScanning = function() return true end
+      D:RefreshAll()
+      assert.truthy(frame.lines[1]:GetText():find("Scanning recipes...", 1, true))
+      assert.falsy(frame.lines[1]:GetText():find("No profitable", 1, true))
     end)
     it("top crafts marks stale prices", function()
       stub_ranked({ result(100, { age = 5, stale = true }) })
@@ -206,11 +243,18 @@ describe("Dashboard", function()
       assert.truthy(lines[2]:find("Main", 1, true)); assert.truthy(lines[2]:find("900/1000", 1, true))
       assert.truthy(lines[2]:find("10h 0m", 1, true))
     end)
-    it("concentration derives the rate from the projection and never hard-codes it", function()
+    it("concentration derives the rate from the snapshot and never hard-codes it", function()
       local main = world.chars["Main-Realm"].professions[2906]
       main.concentration = { currencyID = 1, value = 0, max = 100, time = W.now, perCycle = 5, cycleSeconds = 600 }
       -- 5 points per 600 s = 1/120 per second: 100 points take 12000 s = 3h 20m.
       assert.truthy(texts(refreshed().concentration)[1]:find("3h 20m", 1, true))
+    end)
+    it("concentration counts the time to full exactly within an hour of full", function()
+      local main = world.chars["Main-Realm"].professions[2906]
+      main.concentration = { currencyID = 1, value = 995, max = 1000, time = W.now, perCycle = 1, cycleSeconds = 360 }
+      -- 5 points at 1 per 360 s: 30 minutes, not the one-hour clamp of a rate measured from the projection.
+      local line = texts(refreshed().concentration)[1]
+      assert.truthy(line:find("995/1000", 1, true)); assert.truthy(line:find("full in 30m", 1, true))
     end)
     it("concentration says so when no character has a snapshot", function()
       assert.truthy(texts(refreshed().concentration)[1]:find("No concentration", 1, true))
@@ -246,11 +290,19 @@ describe("Dashboard", function()
         W.advance(5); assert.equals(1, box.n)
       end)
     end
-    it("does not refresh while another tab is selected or the window is closed", function()
+    it("does not refresh while the window is closed", function()
       local box = counting_widget()
       MW:Show("dashboard"); box.n = 0
       MW:Hide(); D:SendMessage("FS_QUEUE_CHANGED"); W.advance(1)
       assert.equals(0, box.n)
+    end)
+    it("does not refresh while another tab is selected", function()
+      local box = counting_widget()
+      MW:Show("dashboard"); MW:RegisterTab("other", { label = "Other", order = 50, build = function() end })
+      MW:SelectTab("other"); box.n = 0
+      D:SendMessage("FS_QUEUE_CHANGED"); W.advance(1)
+      assert.equals(0, box.n)
+      MW:SelectTab("dashboard"); assert.equals(1, box.n)
     end)
     it("stops refreshing and cancels the pending refresh when disabled", function()
       local box = counting_widget()
