@@ -9,7 +9,7 @@ stds.wow = {
     "GetServerTime", "GetBuildInfo", "GetMoney", "GetMoneyString", "UnitName", "UnitClass", "GetRealmName",
     "GetNormalizedRealmName", "GetProfessions", "GetProfessionInfo", "GetInventoryItemLink", "ProfessionsFrame",
     "ButtonFrameTemplate_HidePortrait", "ButtonFrameTemplate_HideButtonBar", "hooksecurefunc", "EventRegistry",
-    "debugstack", "geterrorhandler", "date", "time", "wipe", "tinsert", "tremove", "strsplit", "strtrim" },
+    "debugstack", "debugprofilestop", "geterrorhandler", "date", "time", "wipe", "tinsert", "tremove", "strsplit", "strtrim" },
 }
 files["Math/"] = { std = "lua51" }
 files["Data/"] = { std = "lua51" }

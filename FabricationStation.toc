@@ -29,6 +29,7 @@ Modules\Prices.lua
 Modules\Diagnostics.lua
 Modules\CraftingData.lua
 Modules\Recipes.lua
+Modules\RecipeScan.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Settings.lua
