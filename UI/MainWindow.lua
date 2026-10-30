@@ -13,17 +13,22 @@ local MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT = 700, 450, 1600, 1200
 local RAIL_WIDTH, BUTTON_HEIGHT = 150, 28
 local SIZE_SAVE_DELAY = 0.5
 local SELECTED_COLOR, NORMAL_COLOR = "|cffffd100", "|cffffffff"
+local ANCHORS = {
+  TOPLEFT = true, TOP = true, TOPRIGHT = true, LEFT = true, CENTER = true, RIGHT = true,
+  BOTTOMLEFT = true, BOTTOM = true, BOTTOMRIGHT = true,
+}
 
 local tabs = {}            -- registered tabs in registration order: { id, def, seq }
 local tabsById = {}        -- [id] = entry in tabs
 local seq = 0
-local frame, rail, content, resizeGrip
+local frame, rail, content
 local headerStrings = {}   -- { character, gold, prices } font strings
 local buttons = {}         -- tab rail buttons, reused across relayouts
 local containers = {}      -- [id] = lazily created tab container frame
 local failed = {}        -- [id] = true for tabs whose build failed
 local selected             -- id of the selected tab, or nil
 local shownHandled = false -- true between a handled OnShow and the matching hide
+local pendingTab           -- tab asked for by Show(id), consumed by on_shown
 
 ---------------------------------------------------------------------------
 -- Settings access
@@ -82,6 +87,7 @@ end
 local function create_tab_button()
   local button = CreateFrame("Button", nil, rail, "UIPanelButtonTemplate")
   button:SetSize(RAIL_WIDTH, BUTTON_HEIGHT)
+  -- SetScript is deliberate: this is our own button and OnClick is the whole point of it.
   button:SetScript("OnClick", ns.FS:Wrap("MainWindow", function(self) MainWindow:SelectTab(self.tabID) end))
   return button
 end
@@ -184,9 +190,11 @@ local function save_position()
   if point then w.point, w.x, w.y = point, x, y end
 end
 
+-- Resizing re-anchors the frame in the client (StartSizing), so the size save saves the anchor too.
 local function save_size()
   local w = writable_window_settings()
   if not (w and frame) then return end
+  save_position()
   local width, height = frame:GetSize()
   if width and height and width > 0 and height > 0 then
     w.width, w.height = math.floor(width + 0.5), math.floor(height + 0.5)
@@ -199,6 +207,12 @@ local function on_shown()
   if shownHandled then return end
   shownHandled = true
   update_header()
+  local target = pendingTab
+  pendingTab = nil
+  if target and tabsById[target] then
+    MainWindow:SelectTab(target)
+    return
+  end
   if selected then
     MainWindow:SelectTab(selected)
     return
@@ -211,63 +225,73 @@ local function on_shown()
   MainWindow:SelectTab(initial)
 end
 
+-- Builds the window into locals and publishes it to the module fields only when everything
+-- succeeded, so a failure part-way leaves no half-built frame behind.
 local function create_frame()
-  frame = CreateFrame("Frame", FRAME_NAME, UIParent, "ButtonFrameTemplate")
-  ButtonFrameTemplate_HidePortrait(frame)
-  ButtonFrameTemplate_HideButtonBar(frame)
-  frame:SetTitle("FabricationStation")
-
   local w = window_settings() or {}
-  frame:SetSize(clamp(w.width or 900, MIN_WIDTH, MAX_WIDTH), clamp(w.height or 600, MIN_HEIGHT, MAX_HEIGHT))
-  frame:SetPoint(w.point or "CENTER", UIParent, w.point or "CENTER", w.x or 0, w.y or 0)
-  frame:SetFrameStrata("HIGH")
-  frame:SetClampedToScreen(true)
-  frame:SetMovable(true)
-  frame:SetResizable(true)
-  frame:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT)
-  frame:EnableMouse(true)
-  frame:RegisterForDrag("LeftButton")
-  frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
-  frame:SetScript("OnDragStop", ns.FS:Wrap("MainWindow", function(self)
+  local anchor = type(w.point) == "string" and ANCHORS[w.point] and w.point or "CENTER"
+  local x = type(w.x) == "number" and w.x or 0
+  local y = type(w.y) == "number" and w.y or 0
+  local width = clamp(type(w.width) == "number" and w.width or 900, MIN_WIDTH, MAX_WIDTH)
+  local height = clamp(type(w.height) == "number" and w.height or 600, MIN_HEIGHT, MAX_HEIGHT)
+
+  local f = CreateFrame("Frame", FRAME_NAME, UIParent, "ButtonFrameTemplate")
+  ButtonFrameTemplate_HidePortrait(f)
+  ButtonFrameTemplate_HideButtonBar(f)
+  f:SetTitle("FabricationStation")
+  f:SetSize(width, height)
+  f:SetPoint(anchor, UIParent, anchor, x, y)
+  f:SetFrameStrata("HIGH")
+  f:SetClampedToScreen(true)
+  f:SetMovable(true)
+  f:SetResizable(true)
+  f:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT)
+  f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+
+  -- Header strip: character, gold, price freshness.
+  local header = CreateFrame("Frame", nil, f)
+  header:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -30)
+  header:SetPoint("TOPRIGHT", f, "TOPRIGHT", -12, -30)
+  header:SetHeight(20)
+  local strings = {}
+  strings.character = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  strings.character:SetPoint("LEFT", header, "LEFT", 0, 0)
+  strings.gold = header:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  strings.gold:SetPoint("CENTER", header, "CENTER", 0, 0)
+  strings.prices = header:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  strings.prices:SetPoint("RIGHT", header, "RIGHT", 0, 0)
+
+  local newRail = CreateFrame("Frame", nil, f)
+  newRail:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -58)
+  newRail:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 12, 12)
+  newRail:SetWidth(RAIL_WIDTH)
+
+  local newContent = CreateFrame("Frame", nil, f)
+  newContent:SetPoint("TOPLEFT", newRail, "TOPRIGHT", 10, 0)
+  newContent:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -12, 12)
+
+  local grip = CreateFrame("Button", nil, f, "PanelResizeButtonTemplate")
+  grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -4, 4)
+  grip:Init(f, MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+
+  -- HookScript, never SetScript, for scripts the template may define itself: a hook runs after
+  -- the template's handler instead of replacing it.
+  f:HookScript("OnDragStart", function(self) self:StartMoving() end)
+  f:HookScript("OnDragStop", ns.FS:Wrap("MainWindow", function(self)
     self:StopMovingOrSizing()
     save_position()
   end))
-
-  -- Header strip: character, gold, price freshness.
-  local header = CreateFrame("Frame", nil, frame)
-  header:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -30)
-  header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -30)
-  header:SetHeight(20)
-  headerStrings.character = header:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  headerStrings.character:SetPoint("LEFT", header, "LEFT", 0, 0)
-  headerStrings.gold = header:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  headerStrings.gold:SetPoint("CENTER", header, "CENTER", 0, 0)
-  headerStrings.prices = header:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-  headerStrings.prices:SetPoint("RIGHT", header, "RIGHT", 0, 0)
-
-  rail = CreateFrame("Frame", nil, frame)
-  rail:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -58)
-  rail:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, 12)
-  rail:SetWidth(RAIL_WIDTH)
-
-  content = CreateFrame("Frame", nil, frame)
-  content:SetPoint("TOPLEFT", rail, "TOPRIGHT", 10, 0)
-  content:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 12)
-
-  resizeGrip = CreateFrame("Button", nil, frame, "PanelResizeButtonTemplate")
-  resizeGrip:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -4, 4)
-  resizeGrip:Init(frame, MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
-  MainWindow.resizeGrip = resizeGrip
-
   -- The grip's own mouse-up handler ends the resize, so the size is saved from the size change,
   -- debounced until the drag has settled.
   local saveSizeLater = ns.FS:Wrap("MainWindow", save_size)
-  frame:SetScript("OnSizeChanged", function()
+  f:HookScript("OnSizeChanged", function()
     ns.FS:Debounce("mainwindow.size", SIZE_SAVE_DELAY, saveSizeLater)
   end)
+  f:HookScript("OnShow", ns.FS:Wrap("MainWindow", on_shown))
+  f:HookScript("OnHide", function() shownHandled = false end)
 
-  frame:SetScript("OnShow", ns.FS:Wrap("MainWindow", on_shown))
-  frame:SetScript("OnHide", function() shownHandled = false end)
+  f:Hide()
 
   -- Closes on Escape.
   local registered = false
@@ -276,7 +300,9 @@ local function create_frame()
   end
   if not registered then tinsert(UISpecialFrames, FRAME_NAME) end
 
-  frame:Hide()
+  rail, content, headerStrings = newRail, newContent, strings
+  MainWindow.resizeGrip = grip
+  frame = f
   layout_tabs()
 end
 
@@ -289,9 +315,17 @@ function MainWindow:IsShown()
   return frame ~= nil and frame:IsShown() and true or false
 end
 
-function MainWindow:Show()
-  ensure_frame():Show()
+-- Shows the window. With tabID, that tab is selected directly (and only that tab is built).
+function MainWindow:Show(tabID)
+  ensure_frame()
+  pendingTab = tabID
+  frame:Show()
   on_shown()
+  if pendingTab then
+    local target = pendingTab
+    pendingTab = nil
+    self:SelectTab(target)
+  end
 end
 
 function MainWindow:Hide()
@@ -361,8 +395,10 @@ end
 ---------------------------------------------------------------------------
 
 local function open_tab(id)
-  MainWindow:Show()
-  if not MainWindow:SelectTab(id) then
+  if tabsById[id] then
+    MainWindow:Show(id)
+  else
+    MainWindow:Show()
     local ids = {}
     for i, tab in ipairs(MainWindow:GetTabs()) do ids[i] = tab.id end
     print(("FabricationStation: no tab named %q. Tabs: %s"):format(id, table.concat(ids, ", ")))

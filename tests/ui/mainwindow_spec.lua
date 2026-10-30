@@ -99,11 +99,29 @@ describe("MainWindow", function()
     MW:Show(); local f = _G.FabricationStationMainWindow; f.GetPoint = function() return "CENTER", nil, "CENTER", 10, 20 end
     f:GetScript("OnDragStop")(f); local w = ns.FS.db.global.settings.window; assert.same({ "CENTER", 10, 20 }, { w.point, w.x, w.y })
   end)
-  it("saves its size once resizing settles", function()
+  it("saves its size and anchor once resizing settles", function()
     MW:Show(); local f = _G.FabricationStationMainWindow; f.GetSize = function() return 1000.4, 700.6 end
+    f.GetPoint = function() return "TOPLEFT", nil, "TOPLEFT", 30, -40 end
     local onSize = f:GetScript("OnSizeChanged"); onSize(f, 1000.4, 700.6); onSize(f, 1000.4, 700.6)
     local w = ns.FS.db.global.settings.window; assert.same({ 900, 600 }, { w.width, w.height })
     W.advance(1); assert.same({ 1000, 701 }, { w.width, w.height })
+    assert.same({ "TOPLEFT", 30, -40 }, { w.point, w.x, w.y })
+  end)
+  it("hooks template-owned scripts instead of replacing them", function()
+    local template = {}
+    local realCreate = CreateFrame
+    _G.CreateFrame = function(t, name, parent, tpl)
+      local f = realCreate(t, name, parent, tpl)
+      if name == "FabricationStationMainWindow" then
+        for _, ev in ipairs({ "OnShow", "OnHide", "OnSizeChanged" }) do
+          f:SetScript(ev, function() template[ev] = (template[ev] or 0) + 1 end)
+        end
+      end
+      return f
+    end
+    MW:Show(); local f = _G.FabricationStationMainWindow
+    f:GetScript("OnShow")(f); f:GetScript("OnHide")(f); f:GetScript("OnSizeChanged")(f, 1, 1)
+    assert.same({ OnShow = 1, OnHide = 1, OnSizeChanged = 1 }, template)
   end)
   it("has a resize grip", function() MW:Show(); assert.is_truthy(MW.resizeGrip) end)
   it("writes nothing to a newer database", function()
@@ -120,5 +138,63 @@ describe("MainWindow", function()
     assert.equals("Prices: 2m ago", MW:GetHeaderStrings().prices:GetText())
     _G.GetMoney = function() return 10000 end; W.fire("PLAYER_MONEY")
     assert.equals("1g 0s 0c", MW:GetHeaderStrings().gold:GetText())
+  end)
+
+  describe("opening a specific tab", function()
+    local function counted(order, calls)
+      return {
+        label = "L", order = order,
+        build = function() calls.b = (calls.b or 0) + 1 end,
+        refresh = function() calls.r = (calls.r or 0) + 1 end,
+      }
+    end
+    it("builds and refreshes only the requested tab for /fs settings", function()
+      local a, s = {}, {}
+      MW:RegisterTab("a", counted(1, a)); MW:RegisterTab("settings", counted(100, s))
+      ns.FS:HandleSlash("settings")
+      assert.same({}, a); assert.same({ b = 1, r = 1 }, s); assert.equals("settings", MW:GetSelectedTab())
+    end)
+    it("builds and refreshes only the requested tab for /fs tab <id>", function()
+      local a, q = {}, {}
+      MW:RegisterTab("a", counted(1, a)); MW:RegisterTab("queue", counted(30, q))
+      ns.FS:HandleSlash("tab queue")
+      assert.same({}, a); assert.same({ b = 1, r = 1 }, q)
+    end)
+    it("selects the requested tab when the window is already open", function()
+      local a, q = {}, {}
+      MW:RegisterTab("a", counted(1, a)); MW:RegisterTab("queue", counted(30, q)); MW:Show()
+      ns.FS:HandleSlash("tab queue"); assert.equals("queue", MW:GetSelectedTab()); assert.same({ b = 1, r = 1 }, q)
+    end)
+    it("opens the default tab and lists the tabs for an unknown id", function()
+      MW:RegisterTab("a", counted(1, {})); ns.FS:HandleSlash("tab nope")
+      assert.is_true(MW:IsShown()); assert.equals("a", MW:GetSelectedTab())
+      assert.is_truthy(W.printed[#W.printed]:find("no tab named", 1, true))
+    end)
+  end)
+
+  describe("building the window", function()
+    it("falls back to CENTER for a corrupt saved anchor and values", function()
+      local w = ns.FS.db.global.settings.window
+      w.point, w.x, w.y, w.width, w.height = {}, "x", true, "wide", false
+      MW:Show(); local f = _G.FabricationStationMainWindow
+      assert.same({ "CENTER", 0, 0 }, { select(1, f:GetPoint(1)), select(4, f:GetPoint(1)), select(5, f:GetPoint(1)) })
+      assert.same({ 900, 600 }, { f:GetSize() })
+    end)
+    it("falls back to CENTER for an unknown anchor name", function()
+      ns.FS.db.global.settings.window.point = "NOWHERE"; MW:Show()
+      assert.equals("CENTER", (_G.FabricationStationMainWindow:GetPoint(1)))
+    end)
+    it("leaves no half-built frame when construction fails", function()
+      local realCreate, failures = CreateFrame, 1
+      _G.CreateFrame = function(t, name, parent, tpl)
+        if tpl == "PanelResizeButtonTemplate" and failures > 0 then failures = failures - 1; error("template missing") end
+        return realCreate(t, name, parent, tpl)
+      end
+      MW:RegisterTab("a", { label = "A", order = 1, build = function() end })
+      assert.is_false(pcall(MW.Show, MW)); assert.is_false(MW:IsShown())
+      assert.is_false(table.concat(UISpecialFrames, ","):find("FabricationStationMainWindow") ~= nil)
+      MW:Show(); assert.is_true(MW:IsShown()); assert.equals("a", MW:GetSelectedTab())
+      assert.is_truthy(MW:GetHeaderStrings().character:GetText())
+    end)
   end)
 end)

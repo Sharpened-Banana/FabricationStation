@@ -5,6 +5,7 @@
 --     Real Ace3 routes them to geterrorhandler() and carries on.
 --   * AceDB does no logout stripping of default values and has no "*" / "**" wildcard defaults.
 --   * Frame Show/Hide do not fire OnShow/OnHide.
+--   * HookScript composes with the existing SetScript/HookScript handler, so GetScript returns the chain.
 --   * frame:RegisterEvent is a no-op (use W.fire to drive AceEvent handlers).
 --   * W.advance(0) is one frame: a zero-delay timer (C_Timer.After(0, ...)) created while advance is
 --     running callbacks at the advance's target time waits for the next W.advance, as it waits for
@@ -207,6 +208,12 @@ local function install(overrides)
     function f:IsVisible() return shown end
     function f:SetScript(event, fn) scripts[event] = fn end
     function f:GetScript(event) return scripts[event] end
+    -- Runs after any existing handler instead of replacing it, as in the client.
+    function f:HookScript(event, fn)
+      local existing = scripts[event]
+      if not existing then scripts[event] = fn; return end
+      scripts[event] = function(...) existing(...); return fn(...) end
+    end
     function f:SetPoint(point, a, b, c, d)
       local rel, relPoint, x, y = par, point
       if type(a) == "number" then
