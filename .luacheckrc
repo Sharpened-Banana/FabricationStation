@@ -1,6 +1,6 @@
 std = "lua51+wow"
 max_line_length = false
-exclude_files = { "Libs/", ".release/", "tools/gamedata/cache/", "tests/fixtures/" }
+exclude_files = { "Libs/", ".lua/", ".luarocks/", ".release/", "tools/gamedata/cache/", "tests/fixtures/" }
 ignore = { "211/ADDON_NAME", "212/self" }
 stds.wow = {
   globals = { "FabricationStationDB", "UISpecialFrames" },
