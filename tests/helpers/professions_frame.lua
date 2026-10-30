@@ -34,6 +34,11 @@
 --   node(data)            a recipe-list element: { GetData = function() return data end }
 --   recipeScrollBox.fireInitialized(row, elementData)  runs the OnInitializedFrame callbacks as fn(owner, row,
 --                         elementData) and remembers the row for ScrollBox:ForEachFrame
+--   newRow()              a fake Blizzard recipe-list row: an empty proxy like the other Blizzard objects (every
+--                         assignment is recorded in assignedFields as "Row.<key>"); its CreateFontString makes a
+--                         font string that tracks IsShown (shown at first), Hide/Show, SetTextColor, SetPoint and
+--                         records (template, layer) in .template / .layer
+--   fontStringsOf(row)    the font strings created through that row's CreateFontString, in creation order
 --
 -- Specs get a clean slate from make_world, which removes these globals before installing the stubs.
 
@@ -207,6 +212,31 @@ local function fake_professions_frame(opts)
   end
   function form.node(data)
     return { GetData = function() return data end }
+  end
+
+  local rowFontStrings = setmetatable({}, { __mode = "k" })
+  function form.newRow()
+    local target = CreateFrame("Frame", nil, form.recipeScrollBox)
+    local row = recorded("Row", target)
+    local made = {}
+    rowFontStrings[row] = made
+    rawset(target, "CreateFontString", function(_, name, layer, template)
+      local fs = CreateFrame("Frame"):CreateFontString(name, layer, template)
+      local shown, color = true, nil
+      rawset(fs, "layer", layer)
+      rawset(fs, "template", template)
+      rawset(fs, "Show", function() shown = true end)
+      rawset(fs, "Hide", function() shown = false end)
+      rawset(fs, "IsShown", function() return shown end)
+      rawset(fs, "SetTextColor", function(_, r, g, b, a) color = { r, g, b, a } end)
+      rawset(fs, "GetTextColor", function() return unpack(color or {}) end)
+      made[#made + 1] = fs
+      return fs
+    end)
+    return row
+  end
+  function form.fontStringsOf(row)
+    return rowFontStrings[row] or {}
   end
 
   return form
