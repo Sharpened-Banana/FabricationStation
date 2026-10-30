@@ -110,6 +110,11 @@ describe("Queue tab", function()
       assert.is_truthy(Tab.StatusText({ status = "weird" }):find("weird", 1, true))
       assert.is_truthy(Tab.StatusText(nil):len() > 0)
     end)
+    it("says item, not items, for one", function()
+      assert.equals("Shopping list updated (1 item)", Tab.ShoppingText(true, { added = 1, skipped = 0 }))
+      assert.equals("Shopping list updated (1 item), 1 item skipped, try again", Tab.ShoppingText(true, { added = 1, skipped = 1 }))
+      assert.equals("1 item skipped, try again", Tab.ShoppingText(true, { added = 0, skipped = 1 }))
+    end)
     it("says what happened to the shopping list", function()
       assert.equals("Shopping list updated (4 items)", Tab.ShoppingText(true, { added = 4, skipped = 0 }))
       assert.equals("Shopping list updated (3 items), 2 items skipped, try again", Tab.ShoppingText(true, { added = 3, skipped = 2 }))
@@ -300,7 +305,7 @@ describe("Queue tab", function()
       world.names[2002] = nil
       add(1); MW:Show("queue")
       click(QT:GetView().shoppingButton)
-      assert.is_truthy(QT:GetView().status:GetText():find("1 items skipped, try again", 1, true))
+      assert.is_truthy(QT:GetView().status:GetText():find("1 item skipped, try again", 1, true))
     end)
     it("says Auctionator is not available", function()
       W.removeAuctionator(); add(1); MW:Show("queue")
@@ -399,20 +404,28 @@ describe("Queue tab", function()
       assert.same({ [world.outputOf(9001)] = 10 }, Queue:GetRestockTargets())
       assert.equals(1, #view.restock.rows)
     end)
-    it("a link inserted while the item box has focus fills it", function()
-      local inserted
-      _G.hooksecurefunc = function(_, name, fn) if name == "InsertLink" then inserted = fn end end
-      _G.ChatFrameUtil = { InsertLink = function() return false end }
-      QT:Disable(); QT:Enable()
-      MW:Show("queue")
-      local view = QT:GetView()
-      local text
-      view.itemEdit.HasFocus = function() return true end
-      view.itemEdit.SetText = function(_, t) text = t end
-      assert.is_function(inserted)
-      inserted("|Hitem:5002::|h[Ore]|h")
-      assert.equals("|Hitem:5002::|h[Ore]|h", text)
-      _G.hooksecurefunc, _G.ChatFrameUtil = nil, nil
+    describe("link hook", function()
+      local savedHook, savedUtil
+      before_each(function() savedHook, savedUtil = _G.hooksecurefunc, _G.ChatFrameUtil end)
+      after_each(function() _G.hooksecurefunc, _G.ChatFrameUtil = savedHook, savedUtil end)
+
+      it("a link inserted while the item box has focus fills it, through a hook that leaves InsertLink alone", function()
+        local inserted
+        _G.hooksecurefunc = function(_, name, fn) if name == "InsertLink" then inserted = fn end end
+        local original = function() return false end
+        local util = { InsertLink = original }
+        _G.ChatFrameUtil = util
+        QT:Disable(); QT:Enable()
+        MW:Show("queue")
+        local view = QT:GetView()
+        local text
+        view.itemEdit.HasFocus = function() return true end
+        view.itemEdit.SetText = function(_, t) text = t end
+        assert.is_function(inserted)
+        inserted("|Hitem:5002::|h[Ore]|h")
+        assert.equals("|Hitem:5002::|h[Ore]|h", text)
+        assert.equals(original, util.InsertLink); assert.equals(util, _G.ChatFrameUtil)
+      end)
     end)
   end)
 

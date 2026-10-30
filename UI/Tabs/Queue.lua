@@ -170,13 +170,17 @@ function Tab.StatusText(result, professionName, charName, now)
   return "Unknown result: " .. tostring(s)
 end
 
+local function count_items(n)
+  return n .. (n == 1 and " item" or " items")
+end
+
 -- One line for an ExportShoppingList result (ok, info).
 function Tab.ShoppingText(ok, info)
   if ok then
     local added, skipped = type(info) == "table" and info.added or 0, type(info) == "table" and info.skipped or 0
-    if added == 0 and skipped > 0 then return skipped .. " items skipped, try again" end
-    local text = "Shopping list updated (" .. added .. " items)"
-    if skipped > 0 then text = text .. ", " .. skipped .. " items skipped, try again" end
+    if added == 0 and skipped > 0 then return count_items(skipped) .. " skipped, try again" end
+    local text = "Shopping list updated (" .. count_items(added) .. ")"
+    if skipped > 0 then text = text .. ", " .. count_items(skipped) .. " skipped, try again" end
     return text
   end
   if info == "noAuctionator" then return "Auctionator not available" end

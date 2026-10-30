@@ -364,6 +364,20 @@ describe("ProfessionPanel attach", function()
     assert.same({}, form.assignedFields)
   end)
 
+  it("hides instead of erroring when ProfessionsFrame is gone at a show hook", function()
+    local ns, W = make_world({ last = "UI/ProfessionPanel.lua" }); local form = fake_professions_frame()
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    local frame, P = _G.FabricationStationProfessionPanel, ns.FS:GetModule("ProfessionPanel")
+    assert.is_true(frame:IsShown())
+    local saved = _G.ProfessionsFrame
+    _G.ProfessionsFrame = nil
+    local ok = pcall(form.show)
+    _G.ProfessionsFrame = saved
+    assert.is_true(ok)
+    assert.is_false(frame:IsShown()); assert.is_true(P:IsEnabled())
+    assert.equals(0, #ns.FS.db.global.diagnostics.errors)
+  end)
+
   it("shows only while the CraftingPage (Recipes tab) is shown", function()
     local _, W = make_world({ last = "UI/ProfessionPanel.lua" }); local form = fake_professions_frame()
     W.fire("ADDON_LOADED", "Blizzard_Professions")

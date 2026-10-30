@@ -425,8 +425,9 @@ end
 -- Shows the panel while ProfessionsFrame and its CraftingPage are shown; picks up the recipe the form already shows.
 local function sync_visibility()
   if not view then return end
-  local page = ProfessionsFrame and ProfessionsFrame.CraftingPage
-  if not (ProfessionsFrame:IsShown() and type(page) == "table" and page:IsShown()) then
+  local frame = ProfessionsFrame
+  local page = frame and frame.CraftingPage
+  if not (frame and frame:IsShown() and type(page) == "table" and page:IsShown()) then
     view.frame:Hide()
     return
   end
