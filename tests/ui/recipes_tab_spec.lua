@@ -77,6 +77,10 @@ describe("Recipes tab", function()
       local t = Tab.CellTexts(row)
       assert.equals("--", t.quality); assert.is_truthy(t.gpc:find("--", 1, true)); assert.is_truthy(t.age:find("--", 1, true))
     end)
+    it("shows a profit of exactly zero in no colour", function()
+      local zero = Tab.CellTexts(Tab.BuildRows({ result(9001, 0) })[1]).profit
+      assert.is_falsy(zero:find("|cff", 1, true)); assert.is_truthy(zero:find(ns.UI.FormatMoney(0), 1, true))
+    end)
     it("colours a negative profit differently from a positive one", function()
       local good = Tab.CellTexts(Tab.BuildRows({ result(9001, 5) })[1]).profit
       local bad = Tab.CellTexts(Tab.BuildRows({ result(9001, -5) })[1]).profit
@@ -87,6 +91,12 @@ describe("Recipes tab", function()
         usesConcentration = false, onlyProfitable = false, sortBy = "profit" }))
       assert.same({ sortBy = "profit" }, Tab.FilterFromControls({}))
       assert.same({ sortBy = "profit" }, Tab.FilterFromControls(nil))
+    end)
+    it("combines all six filter keys", function()
+      assert.same({ sortBy = "goldPerConcentration", skillLineID = 2906, charKey = "Alt-Realm", minQuality = 3,
+        usesConcentration = true, onlyProfitable = true },
+        Tab.FilterFromControls({ profession = 2906, character = "Alt-Realm", minQuality = 3, usesConcentration = true,
+          onlyProfitable = true, sortBy = "goldPerConcentration" }))
     end)
     it("maps profession, character, only profitable and an unknown sort", function()
       assert.same({ sortBy = "profit", skillLineID = 2906, charKey = "Alt-Realm", onlyProfitable = true },
@@ -153,6 +163,40 @@ describe("Recipes tab", function()
       assert.is_truthy(cell_texts(view.pool[1])[1]:find("recipe:9101", 1, true))
       assert.equals("TOPLEFT", view.pool[1]:GetPoint(1))
       assert.equals(-(100 * 22), select(5, view.pool[1]:GetPoint(1)))
+    end)
+    it("clamps the scroll offset when the list shrinks while scrolled down", function()
+      for i = 1, 100 do ranked[i] = result(9000 + i, i) end
+      MW:Show("recipes")
+      local scroll = RT:GetView().scroll
+      local pos = 22 * 80
+      scroll.GetHeight = function() return 220 end
+      scroll.GetVerticalScroll = function() return pos end
+      scroll.SetVerticalScroll = function(_, v) pos = v end
+      local original = ranked
+      ranked = {}
+      for i = 1, 30 do ranked[i] = original[i] end
+      MW:RefreshTab("recipes")
+      assert.equals(30 * 22 - 220, pos)
+      local view = RT:GetView()
+      assert.equals(30 * 22, view.child:GetHeight())
+      -- offset 440 -> first visible index 21; 11 slots, indexes 21..30 exist (10 rows)
+      assert.equals(10, view.shown)
+      assert.is_truthy(cell_texts(view.pool[1])[1]:find("recipe:9021", 1, true))
+      assert.is_truthy(cell_texts(view.pool[10])[1]:find("recipe:9030", 1, true))
+      assert.is_false(view.pool[11] and view.pool[11]:IsShown() or false)
+    end)
+    it("scrolls back to the top when the list fits the view", function()
+      for i = 1, 100 do ranked[i] = result(9000 + i, i) end
+      MW:Show("recipes")
+      local scroll = RT:GetView().scroll
+      local pos = 22 * 80
+      scroll.GetHeight = function() return 220 end
+      scroll.GetVerticalScroll = function() return pos end
+      scroll.SetVerticalScroll = function(_, v) pos = v end
+      ranked = { result(9001, 1), result(9002, 2) }
+      MW:RefreshTab("recipes")
+      assert.equals(0, pos); assert.equals(2, RT:GetView().shown)
+      assert.is_truthy(cell_texts(RT:GetView().pool[1])[1]:find("Sample Recipe 9001", 1, true))
     end)
     it("hides pooled rows left over when the list shrinks", function()
       for i = 1, 5 do ranked[i] = result(9000 + i, i) end
@@ -268,6 +312,16 @@ describe("Recipes tab", function()
       queue_click(view, 1)
       assert.is_truthy(view.status:GetText():find("Could not add", 1, true))
     end)
+    it("says the queue is read-only when the saved data is from a newer version", function()
+      ranked = { result(9001, 5) }
+      MW:Show("recipes")
+      local view = RT:GetView()
+      ns.FS.dbIsNewer = true
+      queue_click(view, 1)
+      assert.equals(0, #ns.FS:GetModule("Queue"):GetEntries())
+      assert.is_truthy(view.status:GetText():find("Saved data is from a newer version of FabricationStation; the queue is read-only.", 1, true))
+      assert.is_falsy(view.status:GetText():find("Could not add", 1, true))
+    end)
     it("a filter change clears the queued message", function()
       ranked = { result(9001, 5) }
       MW:Show("recipes")
@@ -287,6 +341,19 @@ describe("Recipes tab", function()
       assert.equals(before, #filters)
       W.advance(1)
       assert.equals(before + 1, #filters); assert.is_not.equals(rows, RT:GetView().rows)
+    end)
+    it("keeps the filter state across a recipes-changed refresh", function()
+      MW:Show("recipes")
+      local view = RT:GetView()
+      view.characterButton:GetScript("OnClick")(view.characterButton)
+      view.concentrationCheck:GetScript("OnClick")(view.concentrationCheck)
+      view.headers[7]:GetScript("OnClick")(view.headers[7])
+      local expected = { sortBy = "goldPerConcentration", charKey = "Alt-Realm", usesConcentration = true }
+      assert.same(expected, filters[#filters])
+      ns.FS:GetModule("Recipes"):SendMessage(ns.Msg.RECIPES_CHANGED)
+      W.advance(1)
+      assert.same(expected, filters[#filters])
+      assert.equals("Alt", view.labels.character)
     end)
     it("does not rank while another tab is selected", function()
       MW:Show("recipes"); MW:SelectTab("dashboard")

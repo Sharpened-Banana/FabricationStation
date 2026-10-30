@@ -150,7 +150,8 @@ function Tab.CellTexts(row)
   if row.noPrice then
     profit = color(DIM, "no price")
   else
-    profit = color(row.profit > 0 and GOOD or BAD, ns.UI.FormatMoney(row.profit))
+    profit = ns.UI.FormatMoney(row.profit)
+    if row.profit > 0 then profit = color(GOOD, profit) elseif row.profit < 0 then profit = color(BAD, profit) end
   end
   local age = color(DIM, "--")
   if row.priceAge ~= nil then
@@ -242,7 +243,9 @@ local function queue_row(row)
   if id then
     status = color(GOOD, "Queued " .. row.name .. " (" .. short_name(row.charKey) .. ")")
   else
-    status = color(BAD, "Could not add to the queue")
+    status = color(BAD, ns.FS.dbIsNewer
+      and "Saved data is from a newer version of FabricationStation; the queue is read-only."
+      or "Could not add to the queue")
   end
   if view then view.status:SetText(status) end
 end
