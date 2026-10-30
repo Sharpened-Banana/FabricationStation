@@ -218,7 +218,7 @@ Module `"Diagnostics"` (`coreModule`):
   - Owned count = `Scanner:GetItemCount(itemID, charKey).total`. Works for any character with a cached schematic; without a calibration it estimates (`flags.estimated`, `flags.staleData`).
   - Cached per `recipeID|charKey|opts` while `Prices:GetVersion()` and `Recipes:GetDataStamp(charKey)` are unchanged.
   - **[phase 3 addition]** `opts.extraStats` (spec what-if bonuses, applied as a free pseudo-optional reagent through `Stats.ApplyOptionals`); calls with `extraStats` bypass the cache. Added to `Modules/Recipes.lua` by phase 3 Task 11.
-- `RecipeResult = MathResult + { recipeID, charKey, priceAgeDays, flags = { noPrice = bool, stalePrice = bool, staleData = bool, unknownRecipe = bool, estimated = bool } }` — copper integers for money. Named fields (v1) plus 1b additions:
+- `RecipeResult = MathResult + { recipeID, charKey, priceAgeDays, flags = { noPrice = bool, stalePrice = bool, staleData = bool, unknownRecipe = bool, estimated = bool, unreachableTarget = bool } }` — copper integers for money. Named fields (v1) plus 1b additions:
   - v1: `recipeID, charKey, expectedQuality, qualityChances = {[q]=p}, allocation = ReagentAllocation, reagentCost, expectedSale, profit, concentrationCost, goldPerConcentration, multicraftValue, resourcefulnessValue, ingenuityValue, flags`.
   - 1b additions: `skill, difficulty, thresholds, lowerThreshold, nextThreshold, requiredCost, expectedConcentrationCost, concentrationCostForAllocation, expectedYield, perQuality, missingPrice, priceAgeDays` (oldest `ageDays` used), `flags.estimated` (no calibration record).
   - **`ingenuityValue` is expected concentration points refunded per craft, not copper.**

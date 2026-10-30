@@ -24,7 +24,7 @@
 - Message names come from 1a's `ns.Msg` (`Core/Bus.lua`): `ns.Msg.PRICES_CHANGED`, `RECIPES_CHANGED`, `ORDERS_CHANGED`, `CUSTOMERS_CHANGED`, `LEDGER_CHANGED`, `MODULE_FAILED`. Task 1 adds `ns.Msg.ORDER_FULFILLED = "FS_ORDER_FULFILLED"` and `ns.Msg.PERSONAL_ORDER_ARRIVED = "FS_PERSONAL_ORDER_ARRIVED"` to `Core/Bus.lua`. Tests may assert the literal strings.
 - Other modules are looked up at call time with `ns.FS:GetModule(name)`, never cached at file load, so tests can replace them with fakes.
 - Saved data is never wiped. 1a's `ns.DBDefaults` already defines `global.customers = {}`, `global.ledger = { entries = {} }`, `global.ordersSnapshot = { orders = {} }` and `global.settings.modules = {}`; phase 2 creates every other key it uses (`ledger.costBasis`, `ledger.nameIndex`, `ordersState`, `ordersUnknownRewards`, `settings.orders/.alerts/.ledger`) lazily on first access, so modules work right after 1a's `InitDB` even before their own `OnEnable` has run. No migration is needed.
-- Blizzard_Professions is LoadOnDemand. Like 1b's ProfessionPanel, phase-2 hooks on it are installed from `OnEnable` when `ProfessionsFrame` already exists, else on the first `ADDON_LOADED` with arg `"Blizzard_Professions"`.
+- Blizzard_Professions is LoadOnDemand. Phase-2 modules attach to it with 1b's late-attachment pattern: a single `AttachIfReady()` called from `ADDON_LOADED("Blizzard_Professions")` and from `OnEnable` (`if C_AddOns.IsAddOnLoaded("Blizzard_Professions") and ProfessionsFrame then`), guarded by an `attached` flag so hooks are installed exactly once per session (`hooksecurefunc` cannot be undone; while a module is disabled its hook bodies return early). In Orders this is `InstallBoardHook`; in Task 8 each of the three addition modules has its own. Add `C_AddOns` to the Task 1 stub defaults (`IsAddOnLoaded` → false) and to `.luacheckrc` if 1a/1b have not already.
 - §7: alerts are "in-game sound + toast" only; §10: "Notifications outside the game" are out of scope.
 - §15: mail parsing handles the English locale first.
 - Tests: `busted` from repo root; specs at `tests/<area>/<name>_spec.lua`; lint `luacheck .` must stay clean. 1a's `.luacheckrc` `read_globals` already has `C_CraftingOrders`, `C_CurrencyInfo`, `C_TradeSkillUI`, `Enum`, `ProfessionsFrame`, `hooksecurefunc`, `CreateFrame`, `UIParent`, `GameTooltip`, `GetNormalizedRealmName` and `date`; add only globals not already there, in the task that first uses them. Tests use 1a's harness (`install_wow_stubs`, `load_addon`, `load_files`, `read_toc`, the `W` handle) through the thin wrapper in `tests/helpers/phase2.lua` (Task 1).
@@ -88,7 +88,7 @@ Five inputs or conditions most likely to cause problems for a player that the sp
 - Consumes (1a): `install_wow_stubs(overrides) -> W` (deep-merges `overrides`; `W.now` drives `GetServerTime`; `W.boot()` runs `OnInitialize` then `OnEnable` on the addon and every enabled module; `W.messages`, `W.printed`, `W.fire`, `W.advance`), `load_addon(ns, lastFile) -> ns`, `load_files(ns, paths) -> ns`, `read_toc(path)`; `ns.FS:Now()`, `ns.FS:CharKey()` (`UnitName("player") .. "-" .. GetNormalizedRealmName()`), `ns.FS:Wrap`, `ns.FS.db.global`, `ns.Msg`.
 - Produces:
   - `Core/Bus.lua` additions: `ns.Msg.ORDER_FULFILLED = "FS_ORDER_FULFILLED"`, `ns.Msg.PERSONAL_ORDER_ARRIVED = "FS_PERSONAL_ORDER_ARRIVED"`.
-  - `tests/helpers/wow_stubs.lua` additions to the default fakes, so 1a's whole-addon load test (`tests/integration/load_all_spec.lua`) keeps booting with phase-2 files in the TOC: `hooksecurefunc([tbl,] name, fn)` (wraps `tbl[name]` or `_G[name]` so `fn` runs after the original with the same arguments, appends `{tbl, name, fn}` to `W.hooks`, and errors like the real one when the target is not a function); `C_CraftingOrders` functions `GetCrafterOrders, GetClaimedOrder, GetPersonalOrdersInfo, GetOrderClaimInfo, ClaimOrder, FulfillOrder, GetCraftingOrderTime`; `C_TradeSkillUI.CraftRecipe`, `C_TradeSkillUI.GetItemCraftedQualityByItemInfo`; `C_DateAndTime.GetSecondsUntilWeeklyReset`; mail globals `GetInboxInvoiceInfo, GetInboxHeaderInfo, TakeInboxMoney, AutoLootMailItem`; `PlaySound`, `SOUNDKIT = {RAID_WARNING = 8959}`; `ScrollUtil.AddAcquiredFrameCallback/AddReleasedFrameCallback`. All return 1a's "safe empties".
+  - `tests/helpers/wow_stubs.lua` additions to the default fakes, so 1a's whole-addon load test (`tests/integration/load_all_spec.lua`) keeps booting with phase-2 files in the TOC: `hooksecurefunc([tbl,] name, fn)` (wraps `tbl[name]` or `_G[name]` so `fn` runs after the original with the same arguments, appends `{tbl, name, fn}` to `W.hooks`, and errors like the real one when the target is not a function); `C_CraftingOrders` functions `GetCrafterOrders, GetClaimedOrder, GetPersonalOrdersInfo, GetOrderClaimInfo, ClaimOrder, FulfillOrder, GetCraftingOrderTime`; `C_TradeSkillUI.CraftRecipe`, `C_TradeSkillUI.GetItemCraftedQualityByItemInfo`; `C_DateAndTime.GetSecondsUntilWeeklyReset`; mail globals `GetInboxInvoiceInfo, GetInboxHeaderInfo, TakeInboxMoney, AutoLootMailItem`; `PlaySound`, `SOUNDKIT = {RAID_WARNING = 8959}`; `ScrollUtil.AddAcquiredFrameCallback/AddReleasedFrameCallback`; `C_AddOns.IsAddOnLoaded` (unless 1b's stubs already provide it). All return 1a's "safe empties".
   - `tests/helpers/phase2.lua` returns `P2`, a thin wrapper over 1a's harness (it adds no loader of its own):
     - `P2.boot(stubOverrides) -> ns, W`: sets `_G.FabricationStationDB = nil`; `W = install_wow_stubs(P2.merge(P2.GLOBALS, stubOverrides or {}))`; `W.now = 1000`; `ns = load_addon({}, "Data/GameData_Manual.lua")` (Core, `ns.Msg`, `ns.DBDefaults`, GameData runtime and 1a data files only); `load_files(ns, {"UI/Util.lua"})` (for `ns.UI.FormatMoney/FormatAge`). It does **not** boot, so tests can add fakes first.
     - `P2.fake_module(ns, name, methods) -> module`: `ns.FS:NewModule(name, "AceEvent-3.0")` with `methods` copied on. Used for 1a/1b modules (`Scanner`, `Prices`, `Recipes`, `MainWindow`, `Dashboard`) and for phase-2 modules a test does not load.
@@ -451,13 +451,13 @@ git commit -m "feat: score crafting orders with risk flags, filters and best-cla
 ### Task 5: Order board capture, snapshot, live updates, Claim Best Order, fulfilment, personal counts
 
 **Files:**
-- Modify: `Modules/Orders.lua` (`.luacheckrc` needs no change: 1a already lists `ProfessionsFrame`, `hooksecurefunc`, `C_TradeSkillUI`, `C_CraftingOrders`)
+- Modify: `Modules/Orders.lua`, `.luacheckrc` (`C_AddOns`, unless 1b already added it; 1a already lists `ProfessionsFrame`, `hooksecurefunc`, `C_TradeSkillUI`, `C_CraftingOrders`)
 - Test: `tests/orders/board_spec.lua`, `tests/orders/claim_click_only_spec.lua`
 
 **Interfaces:**
 - Consumes: Task 4 scoring; 1a `ns.FS:Debounce(key, seconds, fn)` (trailing, not error-isolated), `ns.FS:Wrap(moduleName, fn)`, `ns.FS:LogError(source, errText)`, `ns.Msg`; 1a `read_toc` (test only); `C_CraftingOrders.GetCrafterOrders/GetClaimedOrder/GetOrderClaimInfo/ClaimOrder/GetPersonalOrdersInfo`; `C_TradeSkillUI.GetChildProfessionInfo().profession`; `C_TradeSkillUI.GetItemCraftedQualityByItemInfo(link)`.
 - Produces:
-  - `Orders:OnBoardShown(orderTypeEnum, orders)` replaces that type's views in the live set and in `db.global.ordersSnapshot`, sets `snapshot.time = Now()` and `snapshot.charKey`, and sends `ns.Msg.ORDERS_CHANGED`.
+  - `Orders:OnBoardShown(orderTypeEnum, orders)` replaces that type's views in the live set and in `db.global.ordersSnapshot` (the snapshot stores a trimmed deep copy of each `OrderView`: `result` keeps only `expectedQuality, reagentCost, expectedSale, profit, concentrationCost, goldPerConcentration, flags`, never the shared cached table — test `snapshot_stores_trimmed_copy`), sets `snapshot.time = Now()` and `snapshot.charKey`, and sends `ns.Msg.ORDERS_CHANGED`.
   - `Orders:GetSnapshot() -> {time, charKey, orders}` (contract; leaves out views with `expiresAt < Now()`).
   - `Orders:GetLiveViews() -> {OrderView}` (current board only; empty after the Professions frame closes).
   - `Orders:GetView(orderID) -> OrderView|nil` (live first, then snapshot).
@@ -472,7 +472,7 @@ git commit -m "feat: score crafting orders with risk flags, filters and best-cla
   - game events: `CRAFTINGORDERS_UPDATE_CUSTOMER_NAME`, `CRAFTINGORDERS_UPDATE_REWARDS`, `CRAFTINGORDERS_FULFILL_ORDER_RESPONSE`, `CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS`, and `CRAFTINGORDERS_UPDATE_ORDER_COUNT` (Personal type only; both count events call `UpdatePersonalCounts(C_CraftingOrders.GetPersonalOrdersInfo())`)
   - messages `ns.Msg.PRICES_CHANGED`, `ns.Msg.RECIPES_CHANGED` and `ns.Msg.CUSTOMERS_CHANGED`, each calling `ns.FS:Debounce("orders.rescore", 0.5, ns.FS:Wrap("Orders", function() self:Rescore() end))`
   - `hooksecurefunc(C_CraftingOrders, "FulfillOrder", ...)`, installed once per session (guard `self.hooked`); its body returns early while `not self:IsEnabled()`
-  - `InstallBoardHook`: called now when `ProfessionsFrame` exists, else from the first `ADDON_LOADED` whose arg is `"Blizzard_Professions"` (then that event is unregistered)
+  - `InstallBoardHook` through the late-attachment pattern in Global Constraints (`ADDON_LOADED("Blizzard_Professions")` and `OnEnable`, `attached` flag)
 
   `InstallBoardHook` post-hooks `ProfessionsFrame.OrdersPage` `ShowOrders` and calls `OnBoardShown(page.orderType, C_CraftingOrders.GetCrafterOrders())`. If the target is missing it returns false, calls `ns.FS:LogError("Orders", "hook target missing: ProfessionsFrame.OrdersPage.ShowOrders")` and prints one chat line; the rest of Orders keeps working. It also hooks `ProfessionsFrame` `OnHide` (via `HookScript`) to clear the live views.
 
@@ -575,7 +575,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Modules/Orders.lua tests/orders/board_spec.lua tests/orders/claim_click_only_spec.lua
+git add Modules/Orders.lua tests/orders/board_spec.lua tests/orders/claim_click_only_spec.lua .luacheckrc
 git commit -m "feat: capture order board, snapshot, claim best order, fulfilment and personal counts"
 ```
 
@@ -845,7 +845,7 @@ git commit -m "feat: capture craft cost basis, order commissions and AH sales fr
       - the best-order line from `BestText`
       - the claim-result line from `CRAFTINGORDERS_CLAIM_ORDER_RESPONSE`: `"Claimed — open it from the order list"`, or `"Claim failed (<result>)"`.
     - `OrderViewWarning`: own fontstring frame anchored above `ProfessionsFrame.OrdersPage.OrderView`, showing `"Blocked customer: <name>"` in red or `"VIP customer · <n> previous orders"` in gold.
-- Hooks, installed once per session per module (they cannot be removed; while a module is disabled `Guard` makes its bodies no-ops) from `OnEnable` when `ProfessionsFrame` exists, else from the first `ADDON_LOADED("Blizzard_Professions")`, with every body run through `Guard`:
+- Hooks, installed once per session per module through the late-attachment pattern in Global Constraints (they cannot be removed; while a module is disabled `Guard` makes its bodies no-ops), with every body run through `Guard`:
   - `hooksecurefunc(ProfessionsFrame.OrdersPage, "ShowOrders"|"ShowBuckets")`. Bucket view hides cells.
   - `ScrollUtil.AddAcquiredFrameCallback` / `AddReleasedFrameCallback` on the ScrollBox. Rows with no `elementData.option.orderID` get no cells.
   - `BrowseFrame:HookScript("OnShow"|"OnHide")` shows and hides the panel.
