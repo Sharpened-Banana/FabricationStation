@@ -59,12 +59,16 @@ local function copy(v)
   return out
 end
 
--- Fills every default `target` is missing (or holds with the wrong type), keeping what it has.
+-- Fills every default `target` is missing (or holds with the wrong type), keeping what it has. A numeric string
+-- where a number belongs (e.g. "20000") is kept, as a number.
 local function fill(target, defaults)
   for k, v in pairs(defaults) do
+    local current = target[k]
     if type(v) == "table" then
-      if type(target[k]) ~= "table" then target[k] = copy(v) else fill(target[k], v) end
-    elseif type(target[k]) ~= type(v) then
+      if type(current) ~= "table" then target[k] = copy(v) else fill(current, v) end
+    elseif type(v) == "number" and type(current) == "string" and tonumber(current) then
+      target[k] = tonumber(current)
+    elseif type(current) ~= type(v) then
       target[k] = v
     end
   end
@@ -145,14 +149,16 @@ local function expires_at(expirationTime)
   return ns.FS:Now() + (expirationTime - orderTime)
 end
 
--- CraftingOrderInfo -> OrderInput (nil for anything that is not a table).
+-- CraftingOrderInfo -> OrderInput (nil for anything that is not a table). An NPC (patron) order has no customer:
+-- the patron is not a player, and NormalizeName would turn its name into a made-up "Name-Realm" identity.
 function Orders:Normalize(orderInfo)
   if type(orderInfo) ~= "table" then return nil end
+  local orderType = self.ORDER_TYPES[orderInfo.orderType]
   local npcCreatureID = orderInfo.npcCustomerCreatureID
   if type(npcCreatureID) ~= "number" or npcCreatureID == 0 then npcCreatureID = nil end
   return {
     orderID = orderInfo.orderID,
-    orderType = self.ORDER_TYPES[orderInfo.orderType],
+    orderType = orderType,
     recipeID = orderInfo.spellID,
     itemID = orderInfo.itemID,
     skillLineAbilityID = orderInfo.skillLineAbilityID,
@@ -160,7 +166,7 @@ function Orders:Normalize(orderInfo)
     tipAmount = orderInfo.tipAmount,
     consortiumCut = orderInfo.consortiumCut,
     reagentState = self.REAGENT_STATES[orderInfo.reagentState],
-    customer = customer_name(orderInfo.customerName),
+    customer = orderType ~= "npc" and customer_name(orderInfo.customerName) or nil,
     npcCreatureID = npcCreatureID,
     expiresAt = expires_at(orderInfo.expirationTime),
     provided = provided_reagents(orderInfo.reagents),
@@ -249,8 +255,12 @@ local function unit_value(reward, key, settings)
   return nil, "unknown"
 end
 
--- Counts one sighting of a reward that could not be valued (skipped while the saved data is read-only).
-local function note_unknown(key)
+local RECENT_ORDERS = 50  -- orderIDs remembered per unknown reward, so rescoring an order does not count it again
+
+-- Records a reward that could not be valued: db.global.ordersUnknownRewards[key] = { count, lastSeen, orders }.
+-- `count` is the number of orders it was seen on: an orderID among the last RECENT_ORDERS ones is not counted
+-- again (only lastSeen moves). Without an orderID every call counts. Skipped while the saved data is read-only.
+local function note_unknown(key, orderID)
   if not key or not writable() then return end
   local g = global()
   if type(g.ordersUnknownRewards) ~= "table" then g.ordersUnknownRewards = {} end
@@ -259,14 +269,23 @@ local function note_unknown(key)
     seen = {}
     g.ordersUnknownRewards[key] = seen
   end
-  seen.count = number_or(seen.count, 0) + 1
   seen.lastSeen = ns.FS:Now()
+  if orderID ~= nil then
+    if type(seen.orders) ~= "table" then seen.orders = {} end
+    for _, id in ipairs(seen.orders) do
+      if id == orderID then return end
+    end
+    seen.orders[#seen.orders + 1] = orderID
+    while #seen.orders > RECENT_ORDERS do table.remove(seen.orders, 1) end
+  end
+  seen.count = number_or(seen.count, 0) + 1
 end
 
--- rewards = { {itemID?, currencyID?, count} } -> total copper of the rewards that have a value,
+-- rewards = { {itemID?, currencyID?, count} }, orderID|nil (the order they belong to; it keeps
+-- ordersUnknownRewards counting each order once) -> total copper of the rewards that have a value,
 -- valued = { {itemID?, currencyID?, count, value = copper|nil, kind} } (same order), unpriced = true when any
 -- reward has no value. The total never counts an unvalued reward as 0 silently: check `unpriced`.
-function Orders:ValueRewards(rewards)
+function Orders:ValueRewards(rewards, orderID)
   local total, valued, unpriced = 0, {}, false
   if type(rewards) ~= "table" then return total, valued, unpriced end
   local settings = self:Settings()
@@ -281,7 +300,7 @@ function Orders:ValueRewards(rewards)
         total = total + value
       else
         unpriced = true
-        note_unknown(key)
+        note_unknown(key, orderID)
       end
     end
   end

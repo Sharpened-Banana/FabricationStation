@@ -1,8 +1,8 @@
 local P2 = require("tests.helpers.phase2")
 describe("Orders:Normalize / ValueRewards", function()
-  local ns, O, prices
+  local ns, W, O, prices
   before_each(function()
-    ns = P2.boot({ C_CraftingOrders = { GetCraftingOrderTime = function() return 5000 end },
+    ns, W = P2.boot({ C_CraftingOrders = { GetCraftingOrderTime = function() return 5000 end },
                    C_CurrencyInfo = { GetCurrencyInfo = function(id) return { name = id == 4000 and "Artisan's Moxie" or "Other" } end } })
     prices = { [210000] = 30000 }
     P2.fake_module(ns, "Prices", { Get = function(_, id) return { value = prices[id], source = prices[id] and "auction" } end })
@@ -21,7 +21,13 @@ describe("Orders:Normalize / ValueRewards", function()
     assert.same({[100]=3, [101]=2}, i.provided)
     assert.same({ {itemID=12345, count=2}, {currencyID=3056, count=10} }, i.rewards)
     assert.equal(4600, i.expiresAt)              -- Now 1000 + (8600 - 5000)
-    assert.equal("Bob-Silvermoon", i.customer)
+    -- Ruling (review round 1): an NPC patron is not a player customer, so an NPC order has no customer even when
+    -- customerName is set (NormalizeName would otherwise invent a "Name-Realm" identity for the NPC).
+    assert.is_nil(i.customer)
+  end)
+  it("normalizes the customer name of a player order", function()
+    assert.equal("Bob-Silvermoon", O:Normalize(P2.raw_order({ orderType = 0 })).customer)
+    assert.equal("Ann-Area52", O:Normalize(P2.raw_order({ orderType = 2, customerName = "Ann-Area52" })).customer)
   end)
   it("normalizes a nil customer name", function()
     assert.is_nil(O:Normalize(P2.raw_order({ customerName = P2.NIL })).customer)
@@ -82,12 +88,51 @@ describe("Orders:Normalize / ValueRewards", function()
     assert.is_false(o.filters.orderTypes.npc); assert.is_true(o.filters.orderTypes.public)
     assert.same({}, o.filters.hideRisks); assert.is_nil(o.filters.minScore); assert.is_false(o.filters.hideUnscored)
   end)
-  it("counts each sighting of an unknown reward and skips rewards with no id", function()
+  it("counts every call without an orderID and skips rewards with no id", function()
     O:ValueRewards({ {currencyID=9999, count=4} })
     local _, valued, unpriced = O:ValueRewards({ {currencyID=9999, count=4}, {count=2} })
     local seen = ns.FS.db.global.ordersUnknownRewards["currency:9999"]
     assert.equal(2, seen.count); assert.equal(1000, seen.lastSeen)
     assert.is_true(unpriced); assert.equal("unknown", valued[2].kind); assert.is_nil(valued[2].value)
+  end)
+  it("counts each order once per unknown reward, however often it is valued", function()
+    local r = { {itemID=88888, count=1} }
+    O:ValueRewards(r, 1); O:ValueRewards(r, 1); O:ValueRewards(r, 2); O:ValueRewards(r, 1)
+    W.now = 2000
+    O:ValueRewards(r, 2)
+    local seen = ns.FS.db.global.ordersUnknownRewards["item:88888"]
+    assert.equal(2, seen.count); assert.equal(2000, seen.lastSeen)
+    O:ValueRewards(r, 3)
+    assert.equal(3, seen.count)
+  end)
+  it("keeps a numeric string setting as a number", function()
+    ns.FS.db.global.settings.orders = { moxieValue = "30000", knowledgePointValue = " 1000 ", lowTipMargin = "lots" }
+    local o = O:Settings()
+    assert.equal(30000, o.moxieValue); assert.equal(1000, o.knowledgePointValue); assert.equal(100000, o.lowTipMargin)
+    assert.equal(90000, (O:ValueRewards({ {currencyID=3256, count=3} })))
+  end)
+  it("repairs wrong-typed saved settings", function()
+    ns.FS.db.global.settings.orders = { moxieValue = true, moxieNamePattern = 7, filters = "x",
+      claimBlockingRisks = { expiringSoon = "no" }, rewardOverrides = 5 }
+    local o = O:Settings()
+    assert.equal(20000, o.moxieValue); assert.equal("Moxie", o.moxieNamePattern)
+    assert.same({ public = true, guild = true, personal = true, npc = true }, o.filters.orderTypes)
+    assert.same({}, o.filters.hideRisks); assert.is_false(o.filters.hideUnscored)
+    assert.is_true(o.claimBlockingRisks.expiringSoon); assert.same({}, o.rewardOverrides)
+    assert.equal(o, ns.FS.db.global.settings.orders)
+  end)
+  it("writes nothing while the saved data is from a newer version", function()
+    ns.FS.db.global.settings.orders = { moxieValue = 30000 }
+    ns.FS.dbIsNewer = true
+    local o = O:Settings()
+    assert.are_not.equal(ns.FS.db.global.settings.orders, o)
+    assert.equal(30000, o.moxieValue); assert.equal(500000, o.knowledgePointValue)
+    o.rewardOverrides["item:1"] = 5
+    assert.equal(o, O:Settings())
+    local total, _, unpriced = O:ValueRewards({ {itemID=1, count=2}, {itemID=88888, count=1} }, 9)
+    assert.equal(10, total); assert.is_true(unpriced)
+    assert.same({ moxieValue = 30000 }, ns.FS.db.global.settings.orders)
+    assert.is_nil(ns.FS.db.global.ordersUnknownRewards)
   end)
   it("values an empty reward list at 0 with nothing unpriced", function()
     local total, valued, unpriced = O:ValueRewards({})
@@ -109,6 +154,22 @@ describe("Orders:Normalize / ValueRewards", function()
     O:Settings().rewardOverrides["item:99001"] = nil
     total = O:ValueRewards({ {itemID=99001, count=2} })
     assert.equal(1000000, total)
+  end)
+end)
+
+describe("Orders before InitDB", function()
+  it("works without saved data and writes nothing", function()
+    local ns = P2.boot()
+    load_files(ns, {"Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua"})  -- not booted: no db
+    assert.is_nil(ns.FS.db)
+    local O = ns.FS:GetModule("Orders")
+    local o = O:Settings()
+    assert.equal(20000, o.moxieValue)
+    o.rewardOverrides["currency:5"] = 7
+    local total, valued, unpriced = O:ValueRewards({ {currencyID=5, count=2}, {itemID=88888, count=1} }, 1)
+    assert.equal(14, total); assert.is_true(unpriced); assert.equal("unknown", valued[2].kind)
+    assert.is_table(O:Normalize(P2.raw_order({})))
+    assert.is_nil(ns.FS.db)
   end)
 end)
 
