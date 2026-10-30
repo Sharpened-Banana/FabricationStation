@@ -134,11 +134,13 @@ end
 
 -- One craft of the entry: the evaluation (nil when the recipe cannot be evaluated) and what the
 -- character lacks for it ({ [itemID] = qty }; bags, bank and reagent bank, plus the warband when
--- queueUseWarband; reagents a crafting order provides are not needed).
+-- queueUseWarband; reagents a crafting order provides are not needed). The evaluation costs owned
+-- reagents at zero, so the allocation uses what the character holds first (a held rank that prices have
+-- made dearer is still crafted with rather than reported missing).
 local function one_craft(entry)
   local result = recipes():Evaluate(entry.recipeID, entry.charKey, {
     targetQuality = entry.targetQuality, useConcentration = entry.useConcentration,
-    providedReagents = entry.providedReagents,
+    providedReagents = entry.providedReagents, ownedReagentsFree = true,
   })
   if not result then return nil, {} end
   local need = {}

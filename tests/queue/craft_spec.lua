@@ -288,6 +288,38 @@ describe("Queue craft actions", function()
     end)
   end)
 
+  describe("held reagents, real evaluation", function()
+    before_each(function()
+      ns, W, world = make_world({ last = "Modules/QueueCraft.lua", calibrate = { ["Main-Realm"] = { 9001 } } })
+      Q = ns.FS:GetModule("Queue")
+      world.openProfession(2906)
+      -- Only top-rank reagents held. At market prices the cheapest quality-2 mix also buys 3 × 1001 and 1 × 2001.
+      local items = world.items["Main-Realm"]
+      items[1002] = { bags = 10, bank = 0, reagentBank = 0 }
+      items[2002] = { bags = 5, bank = 0, reagentBank = 0 }
+      items[3001] = { bags = 2, bank = 0, reagentBank = 0 }
+    end)
+    it("crafts with the reagents held instead of reporting the market mix as missing", function()
+      local market = ns.FS:GetModule("Recipes"):Evaluate(9001, "Main-Realm", { targetQuality = 2 })
+      local usesLow = false
+      for _, row in ipairs(market.allocation) do if row.itemID == 1001 or row.itemID == 2001 then usesLow = true end end
+      assert.is_true(usesLow)
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", targetQuality = 2 })
+      local r = Q:CraftNext()
+      assert.equals("crafted", r.status)
+      assert.same({ { reagent = { itemID = 1002 }, dataSlotIndex = 11, quantity = 10 },
+        { reagent = { itemID = 2002 }, dataSlotIndex = 12, quantity = 5 } }, world.crafts[1][3])
+    end)
+    it("puts nothing on the shopping list that the held reagents cover", function()
+      local id = Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", targetQuality = 2 })
+      assert.same({}, Q:GetEntryMissing(id)); assert.same({}, Q:GetMissingReagents(nil))
+    end)
+    it("still costs the entry at market prices unless owned reagents are free", function()
+      local id = Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", targetQuality = 2 })
+      assert.equals(4800, Q:GetEntryCost(id))
+    end)
+  end)
+
   describe("required modifying reagents (sparks), real evaluation", function()
     before_each(function()
       ns, W, world = make_world({ last = "Modules/QueueCraft.lua", calibrate = { ["Main-Realm"] = { 9001 } } })

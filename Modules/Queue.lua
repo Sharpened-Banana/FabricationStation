@@ -257,11 +257,13 @@ end
 ---------------------------------------------------------------------------
 
 -- What one craft of the entry needs: { [itemID] = qty } from the evaluated allocation, less what the
--- customer provides. Nil when the recipe cannot be evaluated (schematic not cached).
+-- customer provides. Nil when the recipe cannot be evaluated (schematic not cached). Evaluated with owned
+-- reagents free, as Craft Next does, so the allocation uses held reagents first and the shopping list does
+-- not buy a rank the character already holds an alternative for.
 local function per_craft(entry)
   local result = recipes():Evaluate(entry.recipeID, entry.charKey, {
     targetQuality = entry.targetQuality, useConcentration = entry.useConcentration,
-    providedReagents = entry.providedReagents,
+    providedReagents = entry.providedReagents, ownedReagentsFree = true,
   })
   if not result then return nil end
   local need = {}
