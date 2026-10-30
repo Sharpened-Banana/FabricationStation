@@ -47,8 +47,9 @@ function CraftingData.Curve(gd, craftingDataID)
 end
 
 -- Quality-tier thresholds for tiers 2..maxQuality as ascending fractions of the difficulty;
--- nil when the crafting data or any tier is missing.
+-- nil when the crafting data or any tier is missing, or maxQuality is not a number.
 function CraftingData.ThresholdFractions(gd, craftingDataID, maxQuality)
+  if type(maxQuality) ~= "number" then return nil end
   local data = tbl(gd, "CraftingData")[craftingDataID]
   local tiers = data and tbl(gd, "QualityThresholds")[data.craftingDifficultyID]
   if not tiers then return nil end
@@ -97,11 +98,15 @@ end
 
 -- Converts Blizzard-style reagent infos ({ reagent = { itemID }, dataSlotIndex, quantity }) back to a
 -- ReagentAllocation over the schematic's slotIndex (basic slots) and a list of optional/finishing
--- itemIDs. Infos for unknown data slots or without an itemID are skipped.
+-- itemIDs. Infos for unknown data slots or without an itemID are skipped, as are slots with a currencyID
+-- or an empty reagents list (Scanner:ToCraftingReagentInfo never emits those).
 function CraftingData.AllocationFromReagentInfo(schematic, infos)
   local slotByData = {}
   for _, slot in ipairs(schematic and schematic.reagentSlots or EMPTY) do
-    if slot.dataSlotIndex ~= nil then slotByData[slot.dataSlotIndex] = slot end
+    local empty = type(slot.reagents) == "table" and #slot.reagents == 0
+    if slot.dataSlotIndex ~= nil and slot.currencyID == nil and not empty then
+      slotByData[slot.dataSlotIndex] = slot
+    end
   end
   local allocation, optionalItemIDs = {}, {}
   for _, info in ipairs(infos or EMPTY) do
@@ -116,4 +121,76 @@ function CraftingData.AllocationFromReagentInfo(schematic, infos)
     end
   end
   return allocation, optionalItemIDs
+end
+
+-- Price of an optional reagent: the copies the slot needs beyond owned + provided at `price` each,
+-- 0 when none must be bought, nil when some must and the price is unknown.
+local function optional_price(price, quantity, owned, provided)
+  local buy = (quantity or 1) - (owned or 0) - (provided or 0)
+  if buy <= 0 then return 0 end
+  if type(price) ~= "number" then return nil end
+  return buy * price
+end
+
+-- RecipeInput for Math.Profit from a cached schematic. args:
+--   schematic, calib|nil (CalibRecord), professionSkill (used without calib), prices = {[itemID] = copper|nil},
+--   owned|nil and provided|nil = {[itemID] = count}, optionalItemIDs|nil, useConcentration, targetQuality.
+-- With calib its baseSkill, baseDifficulty (else the schematic's), maxReagentSkill and stats are used; without,
+-- baseSkill = professionSkill, the schematic's baseDifficulty, maxReagentSkill nil (Math's default) and no stats.
+-- Only basic slots with reagents become slots (currency-only and empty slots are left out); a slot's weight is
+-- its first reagent's ReagentWeight and its items are ranked in the schematic's order.
+-- optionals: with optionalItemIDs (a list, possibly empty), every item of every optional and finishing slot
+-- with its OptionalStats and price, so EvaluateAllocation(input, allocation, optionalItemIDs) can pick the
+-- selected ones; without, none (EvaluateCraft applies every listed optional).
+-- A non-number maxQuality becomes nil (Math treats it as 1, with no thresholds).
+function CraftingData.BuildInput(gd, args)
+  local schematic = args.schematic or EMPTY
+  local calib = args.calib
+  local prices, owned, provided = args.prices or EMPTY, args.owned or EMPTY, args.provided or EMPTY
+  local maxQuality = type(schematic.maxQuality) == "number" and schematic.maxQuality or nil
+  local craftingDataID = calib and calib.craftingDataID or CraftingData.CraftingDataIDFor(gd, schematic)
+
+  local slots, optionals, seen = {}, {}, {}
+  for _, slot in ipairs(schematic.reagentSlots or EMPTY) do
+    local reagents = type(slot.reagents) == "table" and slot.reagents or EMPTY
+    if slot.kind == "basic" and #reagents > 0 then
+      local items = {}
+      for rank, itemID in ipairs(reagents) do
+        items[rank] = { itemID = itemID, rank = rank, price = prices[itemID], owned = owned[itemID] or 0,
+          provided = provided[itemID] or 0 }
+      end
+      slots[#slots + 1] = { slotIndex = slot.slotIndex, quantity = slot.quantity or 0,
+        weight = CraftingData.ReagentWeight(gd, reagents[1]), items = items }
+    elseif args.optionalItemIDs and (slot.kind == "optional" or slot.kind == "finishing") then
+      for _, itemID in ipairs(reagents) do
+        if not seen[itemID] then
+          seen[itemID] = true
+          optionals[#optionals + 1] = { itemID = itemID,
+            price = optional_price(prices[itemID], slot.quantity, owned[itemID], provided[itemID]),
+            stats = CraftingData.OptionalStats(gd, itemID, slot.kind) }
+        end
+      end
+    end
+  end
+
+  local stats = {}
+  for k, v in pairs(calib and calib.stats or EMPTY) do stats[k] = v end
+  local outputPrices = {}
+  for q, itemID in pairs(schematic.outputItemIDs or EMPTY) do outputPrices[q] = prices[itemID] end
+
+  return {
+    maxQuality = maxQuality,
+    baseDifficulty = calib and calib.baseDifficulty or schematic.baseDifficulty,
+    baseSkill = calib and calib.baseSkill or args.professionSkill,
+    maxReagentSkill = calib and calib.maxReagentSkill or nil,
+    thresholdFractions = CraftingData.ThresholdFractions(gd, craftingDataID, maxQuality),
+    slots = slots,
+    optionals = optionals,
+    stats = stats,
+    yield = { min = schematic.quantityMin, max = schematic.quantityMax },
+    outputPrices = outputPrices,
+    concentration = { curve = CraftingData.Curve(gd, craftingDataID), lessFactors = {} },
+    useConcentration = args.useConcentration,
+    targetQuality = args.targetQuality,
+  }
 end

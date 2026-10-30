@@ -87,6 +87,24 @@ describe("CraftingData", function()
     end)
   end)
 
+  describe("carried guards", function()
+    it("allocation skips currency slots and slots with an empty reagents list", function()
+      local schematic = { reagentSlots = {
+        { slotIndex = 1, dataSlotIndex = 4, kind = "basic", reagents = { 1002 } },
+        { slotIndex = 2, dataSlotIndex = 5, kind = "basic", reagents = {}, currencyID = 3008 },
+        { slotIndex = 3, dataSlotIndex = 6, kind = "basic", reagents = {} },
+        { slotIndex = 4, dataSlotIndex = 7, kind = "basic", reagents = { 1005 }, currencyID = 3009 } } }
+      local alloc, opt = CD.AllocationFromReagentInfo(schematic, {
+        { reagent = { itemID = 1002 }, dataSlotIndex = 4, quantity = 1 }, { reagent = { itemID = 9 }, dataSlotIndex = 5, quantity = 1 },
+        { reagent = { itemID = 8 }, dataSlotIndex = 6, quantity = 1 }, { reagent = { itemID = 1005 }, dataSlotIndex = 7, quantity = 1 } })
+      assert.same({ { slotIndex = 1, itemID = 1002, quantity = 1 } }, alloc); assert.same({}, opt)
+    end)
+    it("threshold fractions are nil for a non-number maxQuality", function()
+      assert.is_nil(CD.ThresholdFractions(gd, 2588, nil)); assert.is_nil(CD.ThresholdFractions(gd, 2588, "2"))
+      assert.is_nil(CD.ThresholdFractions(gd, 2588, {}))
+    end)
+  end)
+
   describe("with empty or missing GameData tables", function()
     local function empty()
       for _, name in ipairs({ "ReagentQuality", "ReagentCategories", "OptionalReagents", "CraftingData",

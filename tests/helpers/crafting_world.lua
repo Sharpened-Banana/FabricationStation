@@ -30,6 +30,7 @@
 --               (absent = no live data, Scanner:GetLiveOperationInfo returns nil)
 --   openLine    skill line Scanner:IsProfessionOpen reports open (nil = closed)
 --   bumpPriceVersion()  version + 1 and FS_PRICES_CHANGED
+--   priceValues()       { [itemID] = copper } from world.prices (the BuildInput `prices` argument)
 --   outputOf(recipeID)  the recipe's quality-2 item
 --   messages(name)      the W.messages records named `name`
 -- Later tasks extend this helper with the fakes their specs use.
@@ -265,6 +266,13 @@ local function make_world(opts)
   function world.outputOf(recipeID)
     local s = world.schematics[recipeID]
     return s and s.outputItemIDs[2]
+  end
+  function world.priceValues()
+    local out = {}
+    for itemID, p in pairs(world.prices) do
+      if type(p) == "table" then out[itemID] = p.value end
+    end
+    return out
   end
   function world.messages(name)
     local out = {}
