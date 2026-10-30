@@ -1,0 +1,4 @@
+ID,Name_lang,Description_lang,CategoryID,InventoryIconFileID,SpellWeight,SpellCategory,MaxQty,MaxEarnablePerWeek,Quality,FactionID,ItemGroupSoundsID,XpQuestDifficulty,AwardConditionID,MaxQtyWorldStateID,RechargingAmountPerCycle,RechargingCycleDurationMS,WarbondTransferPercentage,OrderIndex,Flags[0],Flags[1]
+3200,Concentration,"Spent to raise quality, refills over time.",0,0,0,0,1000,0,1,0,0,0,0,0,0,0,0,0,0,0
+3256,Blacksmithing Moxie,,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0
+3257,Tailoring Moxie,,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0

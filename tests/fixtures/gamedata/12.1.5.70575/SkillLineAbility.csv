@@ -1,0 +1,3 @@
+RaceMask,AbilityVerb_lang,AbilityAllVerb_lang,ID,SkillLine,Spell,MinSkillLineRank,ClassMask,SupercedesSpell,AcquireMethod,TrivialSkillLineRankHigh,TrivialSkillLineRankLow,Flags,NumSkillUps,UniqueBit,TradeSkillCategoryID,SkillupSkillLineID
+0,,,1,2950,450001,1,0,0,0,0,0,0,1,0,0,0
+0,,,2,2872,440001,1,0,0,0,0,0,0,1,0,0,0

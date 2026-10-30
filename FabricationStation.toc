@@ -14,3 +14,8 @@ Core\Bus.lua
 Core\Migrations.lua
 Core\DB.lua
 Data\GameData.lua
+Data\GameData_Professions.lua
+Data\GameData_Reagents.lua
+Data\GameData_Difficulty.lua
+Data\GameData_Spec.lua
+Data\GameData_Manual.lua
