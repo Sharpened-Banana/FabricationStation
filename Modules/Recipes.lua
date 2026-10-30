@@ -168,6 +168,7 @@ function Recipes:Calibrate(recipeID)
     craftingDataID = empty.craftingDataID or schematic.craftingDataID,
     stats = ns.Math.Stats.ParseBonusStats(empty.bonusStats, self.STAT_NAMES),
   }
+  -- Newer saved data: the record is returned but not stored, so GetCalibration will not return it.
   if not writable() then return record end
 
   local charKey = ns.FS:CharKey()
@@ -183,10 +184,11 @@ end
 -- Auto-calibration (Blizzard_Professions)
 ---------------------------------------------------------------------------
 
--- EventRegistry calls this as fn(owner, recipeInfo, recipeList).
+-- EventRegistry calls this as fn(owner, recipeInfo, recipeList). Errors are logged under a
+-- non-module source, so they never turn off the core Recipes module.
 local function on_recipe_selected(_, recipeInfo)
   if not Recipes:IsEnabled() then return end
-  ns.FS:SafeCall("Recipes", function()
+  ns.FS:SafeCall("Recipes:AutoCalibrate", function()
     if type(recipeInfo) ~= "table" or not recipeInfo.recipeID or recipeInfo.learned == false then return end
     Recipes:Calibrate(recipeInfo.recipeID)
   end)
@@ -209,7 +211,10 @@ end
 
 function Recipes:OnEnable()
   self:RegisterEvent("ADDON_LOADED", function(_, name)
-    if name == PROFESSIONS_ADDON then ns.FS:SafeCall("Recipes", self.AttachIfReady, self) end
+    -- Log-only source: a failing attach must not turn off the core Recipes module.
+    if name == PROFESSIONS_ADDON then ns.FS:SafeCall("Recipes:Attach", self.AttachIfReady, self) end
   end)
-  if C_AddOns.IsAddOnLoaded(PROFESSIONS_ADDON) and ProfessionsFrame then self:AttachIfReady() end
+  if C_AddOns.IsAddOnLoaded(PROFESSIONS_ADDON) and ProfessionsFrame then
+    ns.FS:SafeCall("Recipes:Attach", self.AttachIfReady, self)
+  end
 end

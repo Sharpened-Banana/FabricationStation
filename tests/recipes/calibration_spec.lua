@@ -150,12 +150,11 @@ describe("Recipes auto-calibration", function()
   end
 
   it("attaches on ADDON_LOADED of Blizzard_Professions, once", function()
-    local ns, W = make_world({ last = "Modules/Recipes.lua" })
+    local _, W = make_world({ last = "Modules/Recipes.lua" })
     assert.equals(0, registrations())
     W.fire("ADDON_LOADED", "SomeOtherAddon"); assert.equals(0, registrations())
     W.fire("ADDON_LOADED", "Blizzard_Professions"); assert.equals(1, registrations())
     W.fire("ADDON_LOADED", "Blizzard_Professions"); assert.equals(1, registrations())
-    assert.is_truthy(ns)
   end)
   it("attaches_when_professions_already_loaded", function()
     local _, W = make_world({ last = "Modules/Recipes.lua", stubs = {
@@ -196,12 +195,36 @@ describe("Recipes auto-calibration", function()
     EventRegistry:TriggerEvent(EVENT, { recipeID = 9001, learned = true })
     assert.is_nil(R:GetCalibration("Main-Realm", 9001))
   end)
-  it("contains a failing calibration through SafeCall", function()
+  it("logs a failing auto-calibration and keeps the core module enabled", function()
     local ns, W, world = make_world({ last = "Modules/Recipes.lua" })
+    local R = ns.FS:GetModule("Recipes")
     world.live[9001] = function() error("boom") end
     W.fire("ADDON_LOADED", "Blizzard_Professions")
     EventRegistry:TriggerEvent(EVENT, { recipeID = 9001, learned = true })
-    assert.is_truthy(ns.FS.failedModules.Recipes)
-    assert.is_false(ns.FS:GetModule("Recipes"):IsEnabled())
+    local errors = ns.FS.db.global.diagnostics.errors
+    assert.equals(1, #errors); assert.equals("Recipes:AutoCalibrate", errors[1].source)
+    assert.is_truthy(tostring(errors[1].err):find("boom"))
+    assert.is_nil(ns.FS.failedModules.Recipes); assert.is_true(R:IsEnabled())
+    world.live[9001] = live
+    EventRegistry:TriggerEvent(EVENT, { recipeID = 9001, learned = true })
+    assert.equals(280, R:GetCalibration("Main-Realm", 9001).maxReagentSkill)
+  end)
+  it("logs a failing attach and keeps the core module enabled", function()
+    local ns, W = make_world({ last = "Modules/Recipes.lua" })
+    EventRegistry.RegisterCallback = function() error("no registry") end
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    local errors = ns.FS.db.global.diagnostics.errors
+    assert.equals(1, #errors); assert.equals("Recipes:Attach", errors[1].source)
+    assert.is_nil(ns.FS.failedModules.Recipes); assert.is_true(ns.FS:GetModule("Recipes"):IsEnabled())
+  end)
+  it("logs a failing attach at enable and keeps the core module enabled", function()
+    local ns = make_world({ last = "Modules/Recipes.lua", stubs = {
+      C_AddOns = { IsAddOnLoaded = function(name) return name == "Blizzard_Professions" end },
+      ProfessionsFrame = {},
+      EventRegistry = { RegisterCallback = function() error("no registry") end },
+    } })
+    local errors = ns.FS.db.global.diagnostics.errors
+    assert.equals(1, #errors); assert.equals("Recipes:Attach", errors[1].source)
+    assert.is_true(ns.FS:GetModule("Recipes"):IsEnabled())
   end)
 end)
