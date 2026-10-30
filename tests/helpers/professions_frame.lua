@@ -7,6 +7,8 @@
 -- opts.withoutScrollBox  build no CraftingPage.RecipeList.ScrollBox
 -- opts.withoutSchematicForm  build no CraftingPage.SchematicForm
 -- opts.loaded            C_AddOns.IsAddOnLoaded("Blizzard_Professions") answers true from now on
+-- opts.slots             the transaction's slot indexes (default { 1, 2, 3 }, make_world's sample recipe);
+--                        transaction:GetAllocations(slotIndex) answers nil for any other slot, as Blizzard's does
 --
 -- Every Blizzard object (ProfessionsFrame, CraftingPage, SchematicForm, RecipeList, ScrollBox, the transaction and its
 -- per-slot allocations) is an empty proxy: reads go to the fake, and every assignment is recorded in
@@ -25,6 +27,7 @@
 --   scrollCallbacks[event]  { fn, owner } registered on the recipe-list ScrollBox
 -- form helpers:
 --   show() / hide()       set ProfessionsFrame's shown state and run its OnShow / OnHide script chain
+--   showPage() / hidePage()  the same for ProfessionsFrame.CraftingPage (the Recipes tab vs the other tabs)
 --   selectRecipe(info)    recipeInfo = info, then EventRegistry "ProfessionsRecipeListMixin.Event.OnRecipeSelected"
 --   allocate(infos)       reagentInfos = infos, then the form's AllocationsModified callbacks (as Blizzard fires them)
 --   transactionUpdated()  EventRegistry "Professions.TransactionUpdated" with the transaction
@@ -88,7 +91,10 @@ local function fake_professions_frame(opts)
 
   -- Transaction and its per-slot allocations.
   local allocations = {}
+  local validSlots = {}
+  for _, slotIndex in ipairs(opts.slots or { 1, 2, 3 }) do validSlots[slotIndex] = true end
   local function allocations_for(slotIndex)
+    if not validSlots[slotIndex] then return nil end
     if not allocations[slotIndex] then
       local a = {}
       local function log(entry)
@@ -177,6 +183,16 @@ local function fake_professions_frame(opts)
     form.frame:Hide()
     local script = form.frame:GetScript("OnHide")
     if script then script(form.frame) end
+  end
+  function form.showPage()
+    form.craftingPage:Show()
+    local script = form.craftingPage:GetScript("OnShow")
+    if script then script(form.craftingPage) end
+  end
+  function form.hidePage()
+    form.craftingPage:Hide()
+    local script = form.craftingPage:GetScript("OnHide")
+    if script then script(form.craftingPage) end
   end
   function form.selectRecipe(info)
     form.recipeInfo = info

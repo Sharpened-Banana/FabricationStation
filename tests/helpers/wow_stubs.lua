@@ -106,6 +106,8 @@ local function install(overrides)
   for name in pairs(framesByName) do _G[name] = nil end
   installedNames, framesByName = {}, {}
   _G.FabricationStationDB = nil
+  -- Globals a fake_professions_frame (professions_frame.lua) installed in the previous world.
+  require("professions_frame").reset()
 
   local W = {
     now = 1700000000,

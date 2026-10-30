@@ -104,8 +104,13 @@ describe("Recipes settings", function()
   end)
   it("has the defaults", function()
     assert.same({ staleCalibrationDays = 14, queueUseWarband = true, tooltipCraftCost = true,
-      applyWritesBlizzardSlots = true, selfCheck = true, scanBudgetMs = 4 }, R.DEFAULTS)
+      applyWritesBlizzardSlots = false, selfCheck = true, scanBudgetMs = 4 }, R.DEFAULTS)
     for key, value in pairs(R.DEFAULTS) do assert.equals(value, R:GetSetting(key), key) end
+  end)
+  it("Apply does not write Blizzard's reagent slots until the user turns it on", function()
+    assert.is_false(R:GetSetting("applyWritesBlizzardSlots"))
+    ns.FS.db.global.settings.crafting = { applyWritesBlizzardSlots = true }
+    assert.is_true(R:GetSetting("applyWritesBlizzardSlots"))
   end)
   it("keeps a stored false", function()
     ns.FS.db.global.settings.crafting = { queueUseWarband = false }

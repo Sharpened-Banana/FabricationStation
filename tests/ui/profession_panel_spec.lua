@@ -67,6 +67,25 @@ describe("ProfessionPanel model", function()
       expectedQuality = 2, concentrationCostForAllocation = 37, applyingConcentration = true })
     assert.same({ "Concentration: 37 (applied)", "Predicted quality: Q2 (concentration)" }, { applied.concentrationText, applied.qualityText })
   end)
+  it("concentration not needed below max quality is not called max quality", function()
+    assert.equals("Concentration: not needed", M.BuildModel(result, { skill = 690, difficulty = 700, lowerThreshold = 0,
+      nextThreshold = 700, expectedQuality = 1, concentrationCostForAllocation = 0 }).concentrationText)
+  end)
+  it("per-quality profit tone: gains green, losses and no price red, exactly zero neutral", function()
+    local m = M.BuildModel(with({ perQuality = { [1] = { reagentCost = 1, profit = 0 }, [2] = { reagentCost = 1, profit = 5 },
+      [3] = { reagentCost = 1, profit = -5 }, [4] = { reagentCost = 1 } } }), nil)
+    local tones = {}
+    for i, r in ipairs(m.perQualityRows) do tones[i] = r.profitTone end
+    assert.same({ "plain", "good", "bad", "bad" }, tones)
+    assert.equals("plain", row(M.BuildModel(with({ profit = 0 }), nil), "Profit").tone)
+  end)
+  it("a per-quality row missing a price but with a profit says some prices missing", function()
+    local m = M.BuildModel(with({ perQuality = { [1] = { reagentCost = 3000, profit = 700, missingPrice = true },
+      [2] = { reagentCost = 4800, profit = 900, flags = { noPrice = true } }, [3] = { reagentCost = 1, profit = 2 } } }), nil)
+    assert.same({ money(700) .. " (some prices missing)", "warn" }, { m.perQualityRows[1].profitText, m.perQualityRows[1].profitTone })
+    assert.equals(money(900) .. " (some prices missing)", m.perQualityRows[2].profitText)
+    assert.equals(money(2), m.perQualityRows[3].profitText)
+  end)
   it("per-quality rows are sorted, carry the allocation and say no price for a missing cost", function()
     local alloc = { { slotIndex = 1, itemID = 1002, quantity = 10 } }
     local m = M.BuildModel(with({ perQuality = { [2] = { reagentCost = 4800, profit = 120010, allocation = alloc },
@@ -117,62 +136,152 @@ end)
 describe("ProfessionPanel apply", function()
   it("writes allocations through the transaction API and fires AllocationsModified", function()
     local ns, W = make_world({ last = "UI/ProfessionPanel.lua" }); local form = fake_professions_frame()
+    ns.FS.db.global.settings.crafting = { applyWritesBlizzardSlots = true }  -- off by default until the taint check
     W.fire("ADDON_LOADED", "Blizzard_Professions")
+    form.selectRecipe({ recipeID = 9001 })  -- Apply writes only into the panel's own recipe
     ns.FS:GetModule("ProfessionPanel"):ApplyAllocation({ {slotIndex=1,itemID=1001,quantity=3}, {slotIndex=1,itemID=1002,quantity=7} })
     assert.same({ "Clear", "Allocate:1001:3", "Allocate:1002:7" }, form.slotCalls[1])
     assert.is_true(form.manuallyAllocated); assert.same({ "UpdateAllSlots", "TriggerEvent:AllocationsModified" }, form.calls)
     assert.same({}, form.assignedFields)
   end)
 
-  local ns, W, world, form, P
+  local ns, W, world, form, P, M
+  local ROW1 = { { slotIndex = 1, itemID = 1001, quantity = 10 } }
+  local function on() ns.FS.db.global.settings.crafting = { applyWritesBlizzardSlots = true } end
+  local function nothing_written()
+    assert.same({}, form.slotCalls); assert.same({}, form.calls); assert.is_false(form.manuallyAllocated)
+  end
+  local function click(button) button:GetScript("OnClick")(button) end
+  -- Records Enable/Disable on our own Apply buttons (1a's frame fake keeps no enabled state).
+  local function track_apply_buttons()
+    local enabled = {}
+    for i, row in ipairs(P:GetView().qualityRows) do
+      row.apply.Enable = function() enabled[i] = true end
+      row.apply.Disable = function() enabled[i] = false end
+    end
+    return enabled
+  end
+
   before_each(function()
     ns, W, world = make_world({ last = "UI/ProfessionPanel.lua" })
     form = fake_professions_frame()
     W.fire("ADDON_LOADED", "Blizzard_Professions")
-    P = ns.FS:GetModule("ProfessionPanel")
+    P, M = ns.FS:GetModule("ProfessionPanel"), ns.UI.ProfessionPanel
   end)
 
+  it("is off by default: nothing is written and the panel says how to turn it on", function()
+    form.selectRecipe({ recipeID = 9001 })
+    assert.same({ false, "off" }, { P:ApplyAllocation(ROW1) })
+    nothing_written()
+    local note = P:GetView().applyNote
+    assert.equals("Apply is off \226\128\148 turn it on in Settings > Crafting after the in-game check.", M.APPLY_OFF_NOTE)
+    assert.equals(M.APPLY_OFF_NOTE, note:GetText())
+    on(); form.selectRecipe({ recipeID = 9001 })
+    assert.equals("", note:GetText())
+  end)
   it("clears each slot once, in allocation order, and skips zero quantities", function()
+    on(); form.selectRecipe({ recipeID = 9001 })
     assert.is_true(P:ApplyAllocation({ { slotIndex = 2, itemID = 2001, quantity = 5 }, { slotIndex = 1, itemID = 1001, quantity = 0 },
       { slotIndex = 1, itemID = 1002, quantity = 10 } }))
     assert.same({ "Clear", "Allocate:2001:5" }, form.slotCalls[2])
     assert.same({ "Clear", "Allocate:1002:10" }, form.slotCalls[1])
   end)
-  it("writes nothing when applyWritesBlizzardSlots is off", function()
-    ns.FS.db.global.settings.crafting = { applyWritesBlizzardSlots = false }
-    assert.is_false(P:ApplyAllocation({ { slotIndex = 1, itemID = 1001, quantity = 10 } }))
-    assert.same({}, form.slotCalls); assert.same({}, form.calls); assert.is_false(form.manuallyAllocated)
-  end)
   it("writes nothing without an allocation or a transaction", function()
-    assert.is_false(P:ApplyAllocation(nil))
+    on(); form.selectRecipe({ recipeID = 9001 })
+    assert.same({ false, "empty" }, { P:ApplyAllocation(nil) })
+    assert.same({ false, "empty" }, { P:ApplyAllocation({}) })
     form.schematicForm.GetTransaction = function() return nil end  -- the spec may write fields; the addon must not
-    assert.is_false(P:ApplyAllocation({ { slotIndex = 1, itemID = 1001, quantity = 10 } }))
-    assert.same({}, form.slotCalls); assert.same({}, form.calls)
+    assert.same({ false, "noTransaction" }, { P:ApplyAllocation(ROW1) })
+    nothing_written()
   end)
-  it("Apply buttons apply their row's cheapest reagents on click", function()
+  it("writes nothing into another recipe's transaction", function()
+    on()
+    assert.same({ false, "recipe" }, { P:ApplyAllocation(ROW1) })  -- no recipe selected yet
+    form.selectRecipe({ recipeID = 9001 })
+    form.recipeInfo = { recipeID = 9002 }  -- CraftingPage moved on without our callback seeing it
+    assert.same({ false, "recipe" }, { P:ApplyAllocation(ROW1) })
+    nothing_written()
+  end)
+  it("checks the form's recipe when the transaction does not name one", function()
+    on(); form.selectRecipe({ recipeID = 9001 })
+    form.transaction.GetRecipeID = function() return nil end
+    assert.is_true(P:ApplyAllocation(ROW1))
+    form.recipeInfo = { recipeID = 9002 }
+    assert.same({ false, "recipe" }, { P:ApplyAllocation(ROW1) })
+  end)
+  it("writes nothing when any slot or item does not fit, even after rows that do", function()
+    on(); form.selectRecipe({ recipeID = 9001 })
+    assert.same({ false, "fit" }, { P:ApplyAllocation({ ROW1[1], { slotIndex = 7, itemID = 1001, quantity = 10 } }) })
+    assert.same({ false, "fit" }, { P:ApplyAllocation({ ROW1[1], { slotIndex = 1, itemID = 2001, quantity = 10 } }) })
+    assert.same({ false, "fit" }, { P:ApplyAllocation({ ROW1[1], { slotIndex = 2, quantity = 5 } }) })
+    nothing_written()
+  end)
+  it("writes nothing for a slot the transaction does not have", function()
+    ns, W, world = make_world({ last = "UI/ProfessionPanel.lua" })
+    form = fake_professions_frame({ slots = { 1, 2 } })
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    P = ns.FS:GetModule("ProfessionPanel"); on(); form.selectRecipe({ recipeID = 9001 })
+    assert.same({ false, "fit" }, { P:ApplyAllocation({ ROW1[1], { slotIndex = 3, itemID = 3001, quantity = 2 } }) })
+    nothing_written()
+  end)
+  it("Apply buttons apply their row's cheapest reagents on click and say so", function()
+    on()
     world.fakeEvaluate(9001, { expectedQuality = 2, flags = {}, perQuality = {
       [1] = { reagentCost = 3000, profit = 1, allocation = { { slotIndex = 1, itemID = 1001, quantity = 10 } } },
       [2] = { reagentCost = 4800, profit = 2, allocation = { { slotIndex = 1, itemID = 1002, quantity = 10 } } } } })
     form.selectRecipe({ recipeID = 9001 })
     local view = P:GetView()
     assert.is_true(view.qualityRows[2]:IsShown())
-    view.qualityRows[2].apply:GetScript("OnClick")(view.qualityRows[2].apply)
+    click(view.qualityRows[2].apply)
     assert.same({ "Clear", "Allocate:1002:10" }, form.slotCalls[1])
+    assert.equals("Applied the Q2 reagents", view.status:GetText())
     assert.same({}, form.assignedFields)
+  end)
+  it("a refused click writes nothing and says why", function()
+    world.fakeEvaluate(9001, { expectedQuality = 1, flags = {}, perQuality = {
+      [1] = { reagentCost = 3000, profit = 1, allocation = { { slotIndex = 9, itemID = 1001, quantity = 10 } } } } })
+    form.selectRecipe({ recipeID = 9001 })
+    local view = P:GetView()
+    click(view.qualityRows[1].apply)
+    assert.equals("Apply is off in Settings", view.status:GetText())
+    on(); click(view.qualityRows[1].apply)
+    assert.equals("Reagents don't fit this recipe", view.status:GetText())
+    form.recipeInfo = { recipeID = 9002 }
+    click(view.qualityRows[1].apply)
+    assert.equals("Recipe changed \226\128\148 reselect it", view.status:GetText())
+    nothing_written()
   end)
   it("Apply is disabled with a tooltip while the setting is off", function()
     world.fakeEvaluate(9001, { expectedQuality = 1, flags = {}, perQuality = {
       [1] = { reagentCost = 3000, profit = 1, allocation = { { slotIndex = 1, itemID = 1001, quantity = 10 } } } } })
-    ns.FS.db.global.settings.crafting = { applyWritesBlizzardSlots = false }
+    local enabled = track_apply_buttons()
     form.selectRecipe({ recipeID = 9001 })
     local view = P:GetView()
-    assert.is_false(view.applyEnabled)
-    assert.equals("Enable in Settings \226\128\186 Crafting", ns.UI.ProfessionPanel.APPLY_DISABLED_TOOLTIP)
-    view.qualityRows[1].apply:GetScript("OnClick")(view.qualityRows[1].apply)
-    assert.same({}, form.slotCalls)
-    ns.FS.db.global.settings.crafting = { applyWritesBlizzardSlots = true }
+    assert.is_false(view.applyEnabled); assert.is_false(enabled[1])
+    local tip = { lines = {} }
+    local saved = _G.GameTooltip
+    _G.GameTooltip = { SetOwner = function(_, owner) tip.owner = owner end,
+      SetText = function(_, t) tip.lines[#tip.lines + 1] = t end, Show = function() tip.shown = true end, Hide = function() end }
+    local apply = view.qualityRows[1].apply
+    apply:GetScript("OnEnter")(apply)
+    _G.GameTooltip = saved
+    assert.equals(apply, tip.owner); assert.is_true(tip.shown)
+    assert.same({ "Enable in Settings \226\128\186 Crafting" }, tip.lines)
+    assert.equals(M.APPLY_DISABLED_TOOLTIP, tip.lines[1])
+    click(apply)
+    nothing_written()
+    on(); form.selectRecipe({ recipeID = 9001 })
+    assert.is_true(P:GetView().applyEnabled); assert.is_true(enabled[1])
+  end)
+  it("Apply is disabled for a quality with no reagents to apply", function()
+    on()
+    world.fakeEvaluate(9001, { expectedQuality = 2, flags = {}, perQuality = {
+      [1] = { reagentCost = 0, profit = 1, allocation = {} },
+      [2] = { reagentCost = 4800, profit = 2, allocation = { { slotIndex = 1, itemID = 1002, quantity = 10 } } } } })
+    local enabled = track_apply_buttons()
     form.selectRecipe({ recipeID = 9001 })
-    assert.is_true(P:GetView().applyEnabled)
+    assert.same({ false, true }, { enabled[1], enabled[2] })
+    assert.same({ false, true }, { P:GetModel().perQualityRows[1].canApply, P:GetModel().perQualityRows[2].canApply })
   end)
 end)
 
@@ -247,6 +356,18 @@ describe("ProfessionPanel attach", function()
     local frame = _G.FabricationStationProfessionPanel
     assert.is_false(frame:IsShown())
     form.show(); assert.is_true(frame:IsShown())
+    form.hide(); assert.is_false(frame:IsShown())
+    assert.same({}, form.assignedFields)
+  end)
+
+  it("shows only while the CraftingPage (Recipes tab) is shown", function()
+    local _, W = make_world({ last = "UI/ProfessionPanel.lua" }); local form = fake_professions_frame()
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    local frame = _G.FabricationStationProfessionPanel
+    assert.is_true(frame:IsShown())
+    form.hidePage(); assert.is_false(frame:IsShown())
+    form.hide(); form.show(); assert.is_false(frame:IsShown())  -- reopened on another tab
+    form.showPage(); assert.is_true(frame:IsShown())
     form.hide(); assert.is_false(frame:IsShown())
     assert.same({}, form.assignedFields)
   end)
@@ -362,6 +483,17 @@ describe("ProfessionPanel recipe and allocation", function()
     assert.is_true(last("PredictLive").args[4])
     assert.equals("Predicted quality: Q2 (concentration)", P:GetModel().qualityText)
     assert.is_truthy(P:GetModel().concentrationText:find("(applied)", 1, true))
+  end)
+
+  it("skips the live prediction while the transaction is for another recipe", function()
+    form.selectRecipe({ recipeID = 9001 })
+    local before = #calls
+    form.recipeInfo = { recipeID = 9002 }  -- CraftingPage re-initialised after our callback
+    form.allocate(RANK1)
+    for i = before + 1, #calls do assert.not_equals("PredictLive", calls[i].name) end
+    local m = P:GetModel()
+    assert.same({ last("Evaluate").out[1].skill, "Predicted quality: Q" .. last("Evaluate").out[1].expectedQuality },
+      { m.skill, m.qualityText })
   end)
 
   it("ignores allocation changes before a recipe is selected", function()
@@ -488,5 +620,14 @@ describe("ProfessionPanel queue buttons", function()
   it("SetStatus shows a line of text", function()
     P:SetStatus("Math check: OK"); assert.equals("Math check: OK", view.status:GetText())
     P:SetStatus(nil); assert.equals("", view.status:GetText())
+  end)
+end)
+
+describe("fake_professions_frame", function()
+  it("is removed by the next install_wow_stubs, so raw-stub specs start without Blizzard_Professions", function()
+    make_world({ last = "UI/ProfessionPanel.lua" }); fake_professions_frame()
+    assert.is_table(_G.ProfessionsFrame)
+    install_wow_stubs()
+    assert.same({ nil, nil, nil, nil }, { _G.ProfessionsFrame, _G.Professions, _G.ProfessionsRecipeSchematicFormMixin, _G.ScrollBoxListMixin })
   end)
 end)

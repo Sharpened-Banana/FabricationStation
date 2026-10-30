@@ -11,11 +11,14 @@ local ADDON_NAME, ns = ...
 -- Apply's (a click, and only while the crafting setting applyWritesBlizzardSlots is on): the same transaction calls
 -- Blizzard's own quality dialog makes.
 --
+-- The panel shows while ProfessionsFrame and its CraftingPage (the Recipes tab) are both shown.
+--
 -- Attachment: AttachIfReady() runs from ADDON_LOADED("Blizzard_Professions") and from OnEnable when the addon is
 -- already loaded; `attached` makes it register once. Every hook body runs in ns.FS:SafeCall("ProfessionPanel", ...),
 -- so an error turns off this module only (1a's rule for toggleable modules) and never reaches Blizzard's code.
--- OnDisable hides the panel and unregisters the callbacks; the two HookScript hooks cannot be removed, so they are
--- installed once per session and do nothing while the module is off.
+-- OnDisable hides the panel and unregisters the callbacks; the HookScript hooks cannot be removed, so they are
+-- installed once per session and do nothing while the module is off. Apply is off by default
+-- (Recipes.DEFAULTS.applyWritesBlizzardSlots) until the in-game taint check has passed; the panel says so.
 --
 -- Display rules (same as the tabs): a nil profit is "no price" (never 0g); noPrice with a profit shows the profit and
 -- "some prices missing"; estimated results say "estimate"; the price age is shown; money goes through
@@ -48,10 +51,19 @@ local BACKDROP = {
 }
 
 M.APPLY_DISABLED_TOOLTIP = "Enable in Settings " .. RSAQUO .. " Crafting"
+M.APPLY_OFF_NOTE = "Apply is off " .. EM_DASH .. " turn it on in Settings > Crafting after the in-game check."
+-- Status texts for an Apply that wrote nothing, by ApplyAllocation's reason.
+M.APPLY_REFUSED = {
+  off = "Apply is off in Settings",
+  empty = "Nothing to apply for this quality",
+  noTransaction = "Open the recipe in the crafting window first",
+  recipe = "Recipe changed " .. EM_DASH .. " reselect it",
+  fit = "Reagents don't fit this recipe",
+}
 
 local view           -- built frames (once per session), nil before the first attach
 local attached       -- the callbacks are registered (reset by OnDisable)
-local hooked         -- the ProfessionsFrame OnShow/OnHide hooks are installed (once per session)
+local hooked         -- the ProfessionsFrame and CraftingPage OnShow/OnHide hooks are installed (once per session)
 local attachedForm   -- the schematic form the AllocationsModified callback is registered on
 local recipeID       -- the selected recipe
 local result         -- Recipes:Evaluate for it (the optimiser)
@@ -103,13 +115,18 @@ local function flags_text(r)
   return table.concat(parts, ", ")
 end
 
+-- Colour of a profit: nil (no price) and losses red, gains green, exactly zero neutral.
+local function tone_of(profit)
+  if type(profit) ~= "number" then return "bad" end
+  return profit > 0 and "good" or (profit < 0 and "bad" or "plain")
+end
+
 local function profit_row(r)
   if type(r.profit) ~= "number" then return { label = "Profit", value = "no price", tone = "bad" } end
   if (r.flags or {}).noPrice then
     return { label = "Profit", value = ns.UI.FormatMoney(r.profit) .. " (some prices missing)", tone = "warn" }
   end
-  local tone = r.profit > 0 and "good" or (r.profit < 0 and "bad" or "plain")
-  return { label = "Profit", value = ns.UI.FormatMoney(r.profit), tone = tone }
+  return { label = "Profit", value = ns.UI.FormatMoney(r.profit), tone = tone_of(r.profit) }
 end
 
 local function price_age_row(r)
@@ -142,6 +159,9 @@ local function breakdown_rows(r)
   }
 end
 
+-- One row per quality the optimiser reached. A row whose own entry says a price is missing (missingPrice or
+-- flags.noPrice) but still has a profit shows it with "some prices missing", as the breakdown does. canApply: the row
+-- has reagents to apply.
 local function per_quality_rows(r)
   local qualities = {}
   for q in pairs(type(r.perQuality) == "table" and r.perQuality or {}) do
@@ -151,8 +171,15 @@ local function per_quality_rows(r)
   local rows = {}
   for i, q in ipairs(qualities) do
     local e = r.perQuality[q]
+    local missing = e.missingPrice == true or (type(e.flags) == "table" and e.flags.noPrice == true)
+    local profitText, profitTone = money(e.profit), tone_of(e.profit)
+    if type(e.profit) == "number" and missing then
+      profitText, profitTone = profitText .. " (some prices missing)", "warn"
+    end
     rows[i] = { quality = q, cost = e.reagentCost, profit = e.profit, allocation = e.allocation,
-      costText = money(e.reagentCost), profitText = money(e.profit) }
+      costText = money(e.reagentCost), costTone = e.reagentCost == nil and "bad" or "plain",
+      profitText = profitText, profitTone = profitTone,
+      canApply = type(e.allocation) == "table" and #e.allocation > 0 }
   end
   return rows
 end
@@ -163,7 +190,8 @@ local function concentration_text(r, liveResult, atMax)
   if type(cost) ~= "number" then return "Concentration: unknown" end
   if liveResult then
     if liveResult.applyingConcentration then return ("Concentration: %d (applied)"):format(math.floor(cost + 0.5)) end
-    if atMax or cost <= 0 then return "Concentration: not needed (max quality)" end
+    if atMax then return "Concentration: not needed (max quality)" end
+    if cost <= 0 then return "Concentration: not needed" end
     return ("Concentration: %d for Q%d"):format(math.floor(cost + 0.5), (liveResult.expectedQuality or 0) + 1)
   end
   return "Concentration: " .. math.floor(cost + 0.5)
@@ -222,6 +250,16 @@ end
 local function transaction()
   local form = schematic_form()
   return form and form.GetTransaction and form:GetTransaction()
+end
+
+-- The recipe the transaction (else the form) is for, or nil when neither says.
+local function transaction_recipe(form, t)
+  local id = t and t.GetRecipeID and t:GetRecipeID()
+  if type(id) ~= "number" and form and form.GetRecipeInfo then
+    local info = form:GetRecipeInfo()
+    id = type(info) == "table" and info.recipeID or nil
+  end
+  return type(id) == "number" and id or nil
 end
 
 local function allocations_modified_event()
@@ -305,18 +343,20 @@ local function render()
   view.concentration:SetText(model.concentrationText)
   view.flags:SetText(model.flagsText)
   set_tone(view.flags, model.flagsTone)
+  if view.applyEnabled then view.applyNote:SetText(""); view.applyNote:Hide()
+  else view.applyNote:SetText(M.APPLY_OFF_NOTE); view.applyNote:Show() end
 
-  local previous = view.qualityHeader
+  local previous = view.applyNote
   for i = 1, MAX_QUALITY_ROWS do
     local row, data = view.qualityRows[i], model.perQualityRows[i]
     row.data = data
     if data then
       row.label:SetText("Q" .. data.quality)
       row.cost:SetText(data.costText)
-      set_tone(row.cost, data.cost == nil and "bad" or "plain")
+      set_tone(row.cost, data.costTone)
       row.profit:SetText(data.profitText)
-      set_tone(row.profit, data.profit == nil and "bad" or (data.profit < 0 and "bad" or "good"))
-      if view.applyEnabled and type(data.allocation) == "table" then row.apply:Enable() else row.apply:Disable() end
+      set_tone(row.profit, data.profitTone)
+      if view.applyEnabled and data.canApply then row.apply:Enable() else row.apply:Disable() end
       row:Show()
       previous = row
     else
@@ -336,11 +376,13 @@ local function eval_opts()
   return { targetQuality = target, useConcentration = useConcentration }
 end
 
--- The live prediction for Blizzard's current allocation (nil without a transaction).
+-- The live prediction for Blizzard's current allocation: nil without a transaction, and nil while the transaction is
+-- for another recipe (CraftingPage can re-initialise after our OnRecipeSelected callback ran).
 local function update_live()
   live = nil
   local t = recipeID and transaction()
   if not t or not t.CreateCraftingReagentInfoTbl then return end
+  if transaction_recipe(schematic_form(), t) ~= recipeID then return end
   local recipes = module("Recipes")
   local allocation, optionalItemIDs = recipes:FromCraftingReagentInfo(recipeID, t:CreateCraftingReagentInfoTbl())
   local concentrating = t.IsApplyingConcentration and t:IsApplyingConcentration() and true or false
@@ -379,10 +421,11 @@ local function shown()
   return view ~= nil and view.frame:IsShown()
 end
 
--- Shows the panel while ProfessionsFrame is shown; picks up the recipe the form already shows.
+-- Shows the panel while ProfessionsFrame and its CraftingPage are shown; picks up the recipe the form already shows.
 local function sync_visibility()
   if not view then return end
-  if not (ProfessionsFrame and ProfessionsFrame:IsShown()) then
+  local page = ProfessionsFrame and ProfessionsFrame.CraftingPage
+  if not (ProfessionsFrame:IsShown() and type(page) == "table" and page:IsShown()) then
     view.frame:Hide()
     return
   end
@@ -434,31 +477,49 @@ end)
 
 -- Writes `allocation` ({ { slotIndex, itemID, quantity } }) into Blizzard's reagent slots with the calls Blizzard's
 -- own quality dialog makes: per slot Clear then Allocate each item, SetManuallyAllocated(true), UpdateAllSlots and
--- AllocationsModified. Only from a click. Returns false (nothing written) while applyWritesBlizzardSlots is off,
--- without an allocation or without a transaction.
+-- AllocationsModified. Only from a click. Everything is checked before anything is written; returns true, or false
+-- and the reason nothing was written:
+--   "off"            applyWritesBlizzardSlots is off
+--   "empty"          no allocation rows
+--   "noTransaction"  no schematic form or transaction
+--   "recipe"         the transaction is for another recipe than the panel's
+--   "fit"            a slot the transaction or the cached schematic does not have, or an item that slot cannot take
 function Panel:ApplyAllocation(allocation)
-  if type(allocation) ~= "table" or not apply_allowed() then return false end
+  if not apply_allowed() then return false, "off" end
+  if type(allocation) ~= "table" or #allocation == 0 then return false, "empty" end
   local form = schematic_form()
   local t = form and form.GetTransaction and form:GetTransaction()
-  if not t then return false end
-  local order, bySlot = {}, {}
-  for _, row in ipairs(allocation) do
-    if type(row) == "table" and row.slotIndex ~= nil and type(row.itemID) == "number" then
-      if not bySlot[row.slotIndex] then
-        bySlot[row.slotIndex] = {}
-        order[#order + 1] = row.slotIndex
-      end
-      table.insert(bySlot[row.slotIndex], row)
-    end
+  if not t then return false, "noTransaction" end
+  if recipeID == nil or transaction_recipe(form, t) ~= recipeID then return false, "recipe" end
+
+  local scanner = module("Scanner")
+  local schematic = scanner and scanner:GetSchematic(recipeID)
+  local slotItems = {}
+  for _, slot in ipairs(schematic and schematic.reagentSlots or {}) do
+    local items = {}
+    for _, itemID in ipairs(type(slot.reagents) == "table" and slot.reagents or {}) do items[itemID] = true end
+    slotItems[slot.slotIndex] = items
   end
+  local order, bySlot, slots = {}, {}, {}
+  for _, row in ipairs(allocation) do
+    if type(row) ~= "table" or type(row.itemID) ~= "number" or row.slotIndex == nil then return false, "fit" end
+    local items = slotItems[row.slotIndex]
+    if not items or not items[row.itemID] then return false, "fit" end
+    if not bySlot[row.slotIndex] then
+      local a = t:GetAllocations(row.slotIndex)
+      if not a then return false, "fit" end
+      bySlot[row.slotIndex], slots[row.slotIndex] = {}, a
+      order[#order + 1] = row.slotIndex
+    end
+    table.insert(bySlot[row.slotIndex], row)
+  end
+
   for _, slotIndex in ipairs(order) do
-    local slot = t:GetAllocations(slotIndex)
-    if slot then
-      slot:Clear()
-      for _, row in ipairs(bySlot[slotIndex]) do
-        if type(row.quantity) == "number" and row.quantity > 0 then
-          slot:Allocate(create_reagent(row.itemID), row.quantity)
-        end
+    local slot = slots[slotIndex]
+    slot:Clear()
+    for _, row in ipairs(bySlot[slotIndex]) do
+      if type(row.quantity) == "number" and row.quantity > 0 then
+        slot:Allocate(create_reagent(row.itemID), row.quantity)
       end
     end
   end
@@ -575,15 +636,23 @@ local function create_quality_row(parent)
   -- SetScript is deliberate on our own button: OnClick is its whole job.
   -- ApplyAllocation itself re-checks the setting, so a click on a button rendered before a change writes nothing.
   row.apply:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
-    if row.data then Panel:ApplyAllocation(row.data.allocation) end
+    if not row.data then return end
+    local ok, reason = Panel:ApplyAllocation(row.data.allocation)
+    if ok then
+      set_status(("Applied the Q%d reagents"):format(row.data.quality), "good")
+    else
+      set_status(M.APPLY_REFUSED[reason] or "Apply failed", "bad")
+    end
   end))
   row.apply:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
     if not GameTooltip then return end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    if apply_allowed() then
-      GameTooltip:SetText("Fill Blizzard's reagent slots with these reagents")
-    else
+    if not apply_allowed() then
       GameTooltip:SetText(M.APPLY_DISABLED_TOOLTIP)
+    elseif not (row.data and row.data.canApply) then
+      GameTooltip:SetText("No reagents to apply for this quality")
+    else
+      GameTooltip:SetText("Fill Blizzard's reagent slots with these reagents")
     end
     GameTooltip:Show()
   end))
@@ -670,8 +739,11 @@ local function build_body(frame, created)
   created.qualityHeader = text(body, "GameFontNormalSmall")
   stack(created.qualityHeader, created.flags, 8)
   created.qualityHeader:SetText("Cheapest reagents per quality")
+  created.applyNote = text(body)
+  stack(created.applyNote, created.qualityHeader, 2)
+  set_tone(created.applyNote, "warn")
   created.qualityRows = {}
-  local previous = created.qualityHeader
+  local previous = created.applyNote
   for i = 1, MAX_QUALITY_ROWS do
     local row = create_quality_row(body)
     stack(row, previous, 2)
@@ -724,6 +796,8 @@ function Panel:AttachIfReady()
   if not hooked then
     ProfessionsFrame:HookScript("OnShow", on_frame_show)
     ProfessionsFrame:HookScript("OnHide", on_frame_hide)
+    ProfessionsFrame.CraftingPage:HookScript("OnShow", on_frame_show)
+    ProfessionsFrame.CraftingPage:HookScript("OnHide", on_frame_hide)
     hooked = true
   end
   EventRegistry:RegisterCallback(RECIPE_SELECTED, on_recipe_selected, self)

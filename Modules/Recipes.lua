@@ -14,7 +14,8 @@ Recipes.DEFAULTS = {
   staleCalibrationDays = 14,
   queueUseWarband = true,
   tooltipCraftCost = true,
-  applyWritesBlizzardSlots = true,
+  -- Off until the in-game taint check of the profession panel's Apply has passed (phase 1b in-game checklist).
+  applyWritesBlizzardSlots = false,
   selfCheck = true,
   scanBudgetMs = 4,
 }

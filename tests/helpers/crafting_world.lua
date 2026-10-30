@@ -45,7 +45,7 @@
 --   recordAuctionatorTerms()  wraps the stub Auctionator v1 and returns { terms, lists }: terms are
 --               copies of the ConvertToSearchString terms, lists are { caller, name, searchStrings }
 --               of CreateShoppingList calls. Call it again after replacing the Auctionator global.
--- Blizzard_Professions (Task 16): make_world first removes the globals a previous fake_professions_frame installed.
+-- Blizzard_Professions (Task 16): install_wow_stubs removes the globals a previous fake_professions_frame installed.
 -- opts.professions = fake_professions_frame opts builds those frames before the addon boots (so modules enable with
 -- Blizzard_Professions already loaded; `loaded` defaults to true) and stores the handle as world.form.
 -- C_TradeSkillUI.GetProfessionInfoByRecipeID answers { professionID = schematic.skillLineID } for world
@@ -224,7 +224,6 @@ local function make_world(opts)
     debugprofilestop = function() return os.clock() * 1000 end,
   }
   deep_merge(overrides, opts.stubs or {})
-  professions_frame.reset()
   local W = install(overrides)
 
   local ns = load.load_addon({}, opts.last)
