@@ -35,5 +35,6 @@ Modules\QueueCraft.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua
+UI\Tabs\Recipes.lua
 UI\Tabs\Settings.lua
 UI\Launcher.lua
