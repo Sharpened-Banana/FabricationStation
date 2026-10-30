@@ -4,11 +4,8 @@ Phase 1a is verified against stubs only. These checks need the real WoW client (
 and cannot be run in CI. Work through them in order. Checks 1-9 are the original plan checks; checks 10-15 come
 from code reviews and each name the exact thing to look for.
 
-Throughout, `CHAR` means this character's key in the saved variables:
-
-```
-/run CHAR = UnitName("player").."-"..GetNormalizedRealmName()
-```
+The Settings tab is the "Settings" tab in the main window (`/fs settings`). Its left-hand tree has the groups
+General, Prices, Modules and Diagnostics.
 
 ## How to report results back
 
@@ -46,18 +43,14 @@ Throughout, `CHAR` means this character's key in the saved variables:
 7. **Bank snapshot.** Open the bank, then run `/dump FabricationStationDB.global.warband.time ~= nil`.
    Expected: `true`. Close the bank, move an item between bags, and confirm the bank counts are unchanged.
 
-## C. Prices (plan check 8 and Auctionator API names)
+## C. Prices (plan check 8)
 
-8. **Auctionator end to end.** With Auctionator installed, do an AH scan. Expected: the header shows
-   `Prices: <1m ago` and `/dump` of an item through `FabricationStation` shows a price. Then disable
-   Auctionator and `/reload`. Expected: the header shows `Prices: no Auctionator` and there are no errors.
-10. **Auctionator API v1 names.** `Modules/Prices.lua` calls these functions on `Auctionator.API.v1`:
-    `GetAuctionPriceByItemID`, `GetAuctionAgeByItemID`, `GetVendorPriceByItemID`, `RegisterForDBUpdate`,
-    `CreateShoppingList`, `ConvertToSearchString`. With Auctionator enabled, run
-    `/run for k,v in pairs(Auctionator.API.v1) do print(k, type(v)) end` (or `/dump Auctionator.API.v1`).
-    Look for: all six names present with type `function`. Also check the argument order of each against
-    the Auctionator source (callerID first, then the item ID or list name). Report any name that is missing
-    or has a different signature.
+8. **Auctionator end to end.** With Auctionator installed, do an AH scan. Expected: the header (right-hand text,
+   top of the window) shows `Prices: <1m ago`, and
+   `/dump LibStub("AceAddon-3.0"):GetAddon("FabricationStation"):GetModule("Prices"):Get(<itemID>)`
+   for an item that was in the scan shows a table with `value` (copper), `source = "auction"` and `ageDays`.
+   Then disable Auctionator and `/reload`. Expected: the header shows `Prices: no Auctionator` and there are
+   no errors.
 
 ## D. Reference data (plan check 9)
 
@@ -68,28 +61,58 @@ Throughout, `CHAR` means this character's key in the saved variables:
 
 ## E. Extra checks from code review
 
-11. **Warband snapshot is not clobbered.** The scanner only saves the warband snapshot once the warband tabs
-    have loaded. Test a fast open:
+### Prices
+
+10. **Auctionator API v1 names.** With Auctionator enabled, list the API with
+    `/run for k,v in pairs(Auctionator.API.v1) do print(k, type(v)) end` (or `/dump Auctionator.API.v1`).
+    Look for these names, each with type `function`:
+    - Used now by `Modules/Prices.lua` (each is called as `fn("FabricationStation", itemID)`, except
+      `RegisterForDBUpdate`, which is `RegisterForDBUpdate("FabricationStation", callback)`):
+      `GetAuctionPriceByItemID`, `GetAuctionAgeByItemID`, `GetVendorPriceByItemID`, `RegisterForDBUpdate`.
+      If one is missing, prices silently fall back (no auction price, or no refresh on a new scan), so report it.
+    - Used by later phases, not called anywhere in the addon yet (shopping-list export):
+      `CreateShoppingList`, `ConvertToSearchString`. Report if either is missing or renamed, so phase 1b can adapt.
+
+### Scanner
+
+11. **Warband snapshot is not clobbered.** The scanner writes the warband snapshot only while the bank is open
+    and `C_Bank.CanViewBank(Enum.BankType.Account)` is true at the moment the debounced scan fires (0.5 s after
+    a bag/bank event). If the bank is closed first, or the warband bank is not viewable yet, it must leave the
+    saved snapshot alone. Test a fast open:
     1. Open the bank once and wait a few seconds, close it, then run
-       `/dump FabricationStationDB.global.warband.items` and note it (it should list your warband items).
-    2. `/reload`, then open the bank and close it again as fast as you can (before the warband tab contents
-       appear), then `/dump FabricationStationDB.global.warband.items` again.
-    Look for: the second dump equals the first. Failure is an empty `{}` or a smaller item list with a new
-    `time`.
+       `/dump FabricationStationDB.global.warband.items` and note the result (it should list your warband items)
+       and `/dump FabricationStationDB.global.warband.time`.
+    2. `/reload`, then open the bank and close it again as fast as you can, then run both dumps again.
+    Look for: the items table is not empty and not smaller than before. A new `time` with an empty or reduced
+    item list is a failure; an unchanged `time` is a pass, as is a new `time` with the same items.
+
+### Window
+
 12. **Main window layout.** Open `/fs` and look at:
-    - The header/title row: title, price status and GameData status do not overlap each other or the close button.
-    - The tab rail sits where intended (not covering the content area) and the selected tab is highlighted.
-    - The resize grip (bottom-right corner) resizes the window; content reflows and there is no overflow
-      past the border. Check at a small and a large size.
-    - The Settings tab (`/fs settings` or minimap right-click) shows the options tree inside the main window,
-      not a separate Blizzard options window.
-    - The GameData line reads `GameData not generated` until real data is generated (check 15), then shows
-      the build.
-13. **`/fs capture` page guard.** Open a profession and switch to the Specializations page: run `/fs capture`.
-    Expected: it refuses with a chat message and stores nothing. Do the same on the Crafting Orders page:
-    same refusal. Then go to the Recipes (crafting) page, select a recipe and run `/fs capture`.
-    Expected: it succeeds. Confirm with `/dump #FabricationStationDB.global.captures.list` that only the
-    crafting-page capture was added.
+    - The title bar reads "FabricationStation" (the frame template's own title).
+    - The header strip directly under the title bar has three texts on one line: left, this character's key
+      (`Name-Realm`); centre, your gold; right, `Prices: ...` (`Prices: no Auctionator`,
+      `Prices: not scanned yet` or `Prices: <age> ago`). They must not overlap each other or the close button.
+    - The tab rail is a column on the left, starting below the header strip and running to the bottom of the
+      window; the tab content fills the area to its right. The selected tab is highlighted.
+    - The resize grip in the bottom-right corner resizes the window; the rail, header and content reflow with
+      no overflow past the border. Check at a small and a large size, and that the size survives `/reload`.
+    - The Settings tab shows the options tree inside the main window, not a separate Blizzard options window.
+      (It is also registered in Blizzard's AddOns settings panel; that is a second copy, not the tab.)
+    - GameData status is not in the window chrome. It appears in two places in the Settings tab, and
+      before real data is generated both must say "not generated" (exact strings in check 15):
+      Settings > General (second line, after the minimap checkbox), and Settings > Diagnostics (first line).
+
+### Diagnostics and scanner state
+
+13. **`/fs capture` page guard.** First record a baseline: `/dump #FabricationStationDB.global.captures.list`.
+    Open a profession and switch to the Specializations page, then run `/fs capture`. Expected: chat prints
+    `FabricationStation: open a profession, select a recipe, then type /fs capture.` and the count is
+    unchanged (that is the message for a hidden crafting page, so it also covers the Orders page). Switch to
+    the Crafting Orders page and run it again: same message, same count. Then go to the crafting (Recipes)
+    page, select a recipe and run `/fs capture`. Expected: chat prints
+    `FabricationStation: captured <recipe name> (#<id>). /reload to write it to disk.` and
+    `/dump #FabricationStationDB.global.captures.list` is the baseline plus one.
 14. **Concentration snapshot.** On a profession with concentration, craft (or use) something that spends some,
     then run
     `/dump FabricationStationDB.global.characters[UnitName("player").."-"..GetNormalizedRealmName()].professions`
@@ -97,12 +120,32 @@ Throughout, `CHAR` means this character's key in the saved variables:
     concentration currency now, `max` equals its cap, `perCycle` and `cycleSeconds` are plausible
     (recharge amount per cycle, and cycle length in seconds, not milliseconds), `currencyID` is the
     concentration currency, and `time` is recent. Spend more, wait, and confirm `value` updates without a reload.
+
+### GameData
+
 15. **Generate real GameData.** On your machine, follow
     [`tools/gamedata/README.md`](../tools/gamedata/README.md): `bash tools/gamedata/fetch.sh <version.build>`,
     `lua tools/gamedata/generate.lua --build <version.build> --cache tools/gamedata/cache/<version.build> --out Data`,
-    then `busted && luacheck .`. Then bump the build number in `Data/GameData_Manual.lua` to match, and fill its
-    Moxie currency IDs (check 6) against the printed candidates. Expected after `/reload`: the GameData line in
-    the window no longer says "not generated" and Diagnostics does not list `MoxieCurrency` as mismatched.
+    then `busted && luacheck .`. Then bump the build number in `Data/GameData_Manual.lua` to match (for
+    `12.1.5.70575` the number is `70575`) and fill its Moxie currency IDs (check 6) against the printed candidates.
+    `/reload` and read the two status lines in the Settings tab.
+    Before generating (the shipped placeholder data), expect:
+    - Settings > General: `GameData not generated`
+    - Settings > Diagnostics: `GameData: not generated — quality math will be approximate`
+
+    After generating and bumping, with the client on that build, expect:
+    - Settings > General: `GameData: build 70575, up to date` (your build number)
+    - Settings > Diagnostics: `GameData: build 70575 (client 70575)`
+
+    Failure forms and what they mean:
+    - General `GameData tables are from different builds: MoxieCurrency` (or another table name): that table's
+      build differs from the rest; most often `GameData_Manual.lua` was not bumped. Diagnostics does not show
+      this case, so it can still look healthy.
+    - General `GameData is outdated: data build <n>, game build <m>` and Diagnostics
+      `GameData: built for <n>, client is <m> — run tools/gamedata after patches`: the data is for another
+      client build than the one running.
+    - General still `GameData not generated`: some generated table still has no build.
+
     Note the README's open items: the wago.tools URL and CurvePoint header style are unverified.
 
 ## Not done here

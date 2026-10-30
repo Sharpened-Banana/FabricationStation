@@ -23,7 +23,9 @@ busted && luacheck .
   expansion whose recipes get `RecipeLabels`.
 - After generating for a new build, bump the build number in `Data/GameData_Manual.lua` to match and re-check
   its Moxie currency IDs against the printed candidates. Otherwise `GameData.Status()` lists `MoxieCurrency` as
-  mismatched.
+  mismatched, which shows in Settings > General as `GameData tables are from different builds: MoxieCurrency`.
+  When everything matches, Settings > General reads `GameData: build <n>, up to date` and Settings > Diagnostics
+  reads `GameData: build <n> (client <n>)`.
 - A bad or truncated export fails with `bad export of <Table>`. Delete that CSV and fetch again.
 - `lua tools/gamedata/generate.lua --empty --out Data` writes placeholder files that define every table with a
   nil build. The addon then reports "GameData not generated".
