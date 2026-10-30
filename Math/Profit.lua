@@ -36,17 +36,20 @@ end
 -- Optionals, resolved stats and the numbers every plan of this input shares.
 local function prepare(input, optionalItemIDs)
   local optionals = input.optionals or {}
+  local unknownOptional = false
   if optionalItemIDs then
     local wanted, picked = {}, {}
     for _, id in ipairs(optionalItemIDs) do wanted[id] = true end
     for _, opt in ipairs(optionals) do
-      if wanted[opt.itemID] then picked[#picked + 1] = opt end
+      if wanted[opt.itemID] then picked[#picked + 1] = opt; wanted[opt.itemID] = nil end
     end
+    -- A requested optional the input does not describe has unknown cost and effects: never price it as free.
+    unknownOptional = next(wanted) ~= nil
     optionals = picked
   end
   local stats, skillBonus, difficultyBonus, optLess = Math.Stats.ApplyOptionals(input.stats, optionals)
 
-  local optionalCost = 0
+  local optionalCost = (not unknownOptional) and 0 or nil
   for _, opt in ipairs(optionals) do
     if optionalCost and type(opt.price) == "number" then
       optionalCost = optionalCost + opt.price
@@ -71,6 +74,7 @@ local function prepare(input, optionalItemIDs)
     -- The default reagent skill scales with base difficulty, not the total with optionals.
     maxReagentSkill = input.maxReagentSkill or Math.Quality.DEFAULT_REAGENT_SKILL_FACTOR * baseDifficulty,
     optionalCost = optionalCost,
+    unknownOptional = unknownOptional,
     curve = conc.curve,
     less = less,
     baseYield = baseYield,
@@ -160,6 +164,7 @@ local function result(ctx, chosen, concPlan, plainBest, perQuality, missingPrice
   if chosen.reagentCost == nil then missingPrice = true end
   flags = flags or {}
   flags.noPrice = missingPrice
+  if ctx.unknownOptional then flags.unknownOptional = true end
 
   return {
     expectedQuality = chosen.quality,
@@ -199,7 +204,8 @@ end
 --   otherwise the most profitable concentration plan when useConcentration (the plain one when no quality can
 --     be concentrated), else the most profitable plain plan. Unpriced plans never beat priced ones.
 -- Concentration fields describe the chosen plan when it uses concentration, otherwise the most profitable
--- concentration plan; goldPerConcentration compares it with the most profitable plain plan. Without a curve
+-- concentration plan; goldPerConcentration compares it with the plain plan at targetQuality when there is one,
+-- else with the most profitable plain plan. Without a curve
 -- they are nil; with a curve and nothing to concentrate, 0 (goldPerConcentration nil).
 -- missingPrice: a required slot or optional has no price, a plainly reachable quality's output has no price,
 -- or the chosen plan's own output has no price. profit/expectedSale are nil only for the chosen plan's gaps.
@@ -247,11 +253,14 @@ function Profit.EvaluateCraft(input)
   end
 
   local concPlan = chosen.concentrated and chosen or concBest
-  return result(ctx, chosen, concPlan, plainBest, perQuality, missingPrice, flags)
+  -- With a target, concentration is worth comparing with crafting that same quality plainly, when possible.
+  local plainRef = target and plain[target] or plainBest
+  return result(ctx, chosen, concPlan, plainRef, perQuality, missingPrice, flags)
 end
 
 -- Prediction for a given allocation (no optimisation): live prediction, golden fixtures and the self-check.
--- optionalItemIDs picks which of input.optionals are applied (nil = all of them). With useConcentration the
+-- optionalItemIDs picks which of input.optionals are applied (nil = all of them); an ID input.optionals does not
+-- list makes the cost unknown (reagentCost/profit nil, missingPrice) and sets flags.unknownOptional. With useConcentration the
 -- allocation crafts one quality higher (capped at the top); skill and thresholds still describe the allocation.
 -- The concentration fields describe concentrating this allocation.
 function Profit.EvaluateAllocation(input, allocation, optionalItemIDs)

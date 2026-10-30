@@ -142,6 +142,30 @@ describe("Math.Profit", function()
     local none = P.EvaluateAllocation(inp, ALL_LOW, {})
     assert.equals(500, none.skill); assert.equals(3000, none.reagentCost)
   end)
+  it("EvaluateAllocation flags an optional it does not know", function()
+    local inp = scenario({ optionals = { { itemID = 7001, price = 1000, stats = { skill = 50 } } } })
+    local r = P.EvaluateAllocation(inp, ALL_LOW, { 9999 })
+    assert.is_nil(r.reagentCost); assert.is_nil(r.profit); assert.is_true(r.missingPrice)
+    assert.is_true(r.flags.noPrice); assert.is_true(r.flags.unknownOptional)
+    local mixed = P.EvaluateAllocation(inp, ALL_LOW, { 7001, 9999 })
+    assert.equals(550, mixed.skill); assert.is_nil(mixed.reagentCost); assert.is_true(mixed.flags.unknownOptional)
+    assert.is_nil(P.EvaluateAllocation(inp, ALL_LOW, { 7001 }).flags.unknownOptional)
+  end)
+  it("with targetQuality, gold per concentration compares against that quality's plain plan", function()
+    -- 5 qualities, thresholds 140/350/560/700. Plain q1: 2000, skill 100, profit 7500; plain q2: 2300 (3 of slot 2 at
+    -- rank 2), skill 142, profit 16700; plain q3: profit 52700 (the best plain plan). Concentrating q1 to q2: profit
+    -- 17000 at 463 concentration (2.314286 × 200), expected 463 × 0.9 = 416.7.
+    local inp = scenario({ maxQuality = 5, baseSkill = 100, slots = { slot(1,10,48,{100,300}), slot(2,5,32,{200,300}) },
+      stats = { ingenuity = 0.2 }, outputPrices = { 10000, 20000, 60000, 80000, 90000 }, targetQuality = 2, useConcentration = true })
+    local r = P.EvaluateCraft(inp)
+    assert.equals(2, r.expectedQuality); assert.equals(17000, r.profit); assert.equals(2000, r.reagentCost)
+    assert.equals(16700, r.perQuality[2].profit); assert.equals(52700, r.perQuality[3].profit)
+    assert.equals(463, r.concentrationCost); assert.near(416.7, r.expectedConcentrationCost, 1e-9)
+    assert.equals(1, r.goldPerConcentration)                                             -- (17000 − 16700) / 416.7, not (17000 − 52700) / 416.7
+    inp.targetQuality = 5                                                                -- no plain plan at the target: best plain plan
+    local r5 = P.EvaluateCraft(inp)
+    assert.is_true(r5.flags.unreachableTarget); assert.equals(4, r5.expectedQuality)
+  end)
   it("EvaluateAllocation prices the allocation and its concentration", function()
     local r = P.EvaluateAllocation(scenario(), ALL_LOW)
     assert.equals(1, r.expectedQuality); assert.equals(0, r.lowerThreshold); assert.equals(700, r.nextThreshold)
