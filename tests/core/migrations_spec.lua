@@ -53,6 +53,22 @@ describe("Migrations", function()
     assert.is_false(ok); assert.equals(50, from); assert.equals(50, to); assert.equals("newer", err)
     assert.is_false(ran); assert.equals(50, g.schemaVersion)
   end)
+  it("rejects a non-number schemaVersion without throwing or changing anything", function()
+    for _, bad in ipairs({ "2", true, {} }) do
+      local g = { schemaVersion = bad }
+      local ok, from, to, err
+      assert.has_no.errors(function() ok, from, to, err = ns.Migrations.Run(g) end)
+      assert.is_false(ok); assert.equals(bad, from); assert.equals(bad, to); assert.equals("bad schemaVersion", err)
+      assert.equals(bad, g.schemaVersion)
+    end
+  end)
+  it("logs a non-number schemaVersion at boot and leaves it alone", function()
+    _G.FabricationStationDB = { global = { schemaVersion = "2" } }
+    assert.has_no.errors(function() W.boot() end)
+    assert.equals("2", ns.FS.db.global.schemaVersion)
+    assert.equals("Migrations", ns.FS.db.global.diagnostics.errors[1].source)
+    assert.is_nil(ns.FS.dbIsNewer)
+  end)
   it("does not flag an up-to-date database", function()
     W.boot(); assert.is_nil(ns.FS.dbIsNewer); assert.equals(0, #W.printed)
   end)

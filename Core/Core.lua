@@ -36,7 +36,8 @@ function FS:LogError(source, errText, stack)
   local entry = { time = self:Now(), source = source, err = errText, stack = stack }
   local db = self.db
   local list
-  if db and db.global then
+  -- A database from a newer version is never written to; errors stay in memory for this session.
+  if db and db.global and not self.dbIsNewer then
     db.global.diagnostics = db.global.diagnostics or {}
     list = db.global.diagnostics.errors
     if not list then list = {}; db.global.diagnostics.errors = list end
@@ -174,13 +175,15 @@ function FS:ApplyModuleSettings()
   end
 end
 
--- Enables or disables a user-toggleable module now and remembers the choice. Returns false for an
--- unknown or core module.
+-- Enables or disables a module now and remembers the choice. Returns false for an unknown module
+-- and for an attempt to disable a core module. A core module can be enabled (to recover from a
+-- failure); that choice is not stored. Nothing is stored while the saved data is from a newer version.
 function FS:SetModuleEnabled(name, enabled)
   local module = self:GetModule(name, true)
-  if not module or module.coreModule then return false end
+  if not module then return false end
   enabled = enabled and true or false
-  self.db.global.settings.modules[name] = enabled
+  if module.coreModule and not enabled then return false end
+  if not module.coreModule and not self.dbIsNewer then self.db.global.settings.modules[name] = enabled end
   if enabled then
     self.failedModules[name] = nil
     module:Enable()

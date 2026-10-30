@@ -46,6 +46,30 @@ describe("DB", function()
     local errs = ns.FS.db.global.diagnostics.errors
     assert.equals(50, #errs); assert.equals("e55", errs[50].err); assert.equals("e6", errs[1].err)
   end)
+  it("writes nothing to a newer database, keeping errors in memory", function()
+    _G.FabricationStationDB = { global = { schemaVersion = 999 } }
+    ns.FS:LogError("X", "before")
+    W.boot()
+    ns.FS:LogError("X", "after")
+    local g = ns.FS.db.global
+    assert.same({}, g.diagnostics.errors); assert.same({}, g.settings.modules); assert.equals(999, g.schemaVersion)
+    assert.equals(2, #ns.FS.pendingErrors); assert.equals("before", ns.FS.pendingErrors[1].err)
+    assert.equals("after", ns.FS.pendingErrors[2].err)
+    assert.equals(1, #W.printed); assert.matches("newer version", W.printed[1])
+  end)
+  it("keeps the in-memory buffer capped at 50 on a newer database", function()
+    _G.FabricationStationDB = { global = { schemaVersion = 999 } }
+    W.boot()
+    for i = 1, 55 do ns.FS:LogError("X", "e" .. i) end
+    assert.equals(50, #ns.FS.pendingErrors); assert.same({}, ns.FS.db.global.diagnostics.errors)
+  end)
+  it("runs migrations before flushing pending errors", function()
+    ns.FS:LogError("X", "pre")
+    ns.Migrations.Register(2, function() error("bad") end)
+    W.boot()
+    local errs = ns.FS.db.global.diagnostics.errors
+    assert.equals("pre", errs[1].err); assert.equals("Migrations", errs[2].source)
+  end)
   it("does not share default tables between boots", function()
     W.boot(); ns.FS.db.global.queue.entries[1] = "x"
     assert.same({}, ns.DBDefaults.global.queue.entries)

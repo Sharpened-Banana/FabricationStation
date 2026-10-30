@@ -23,9 +23,12 @@ end
 
 -- Returns ok, fromVersion, toVersion, err. Stops at the first failure, leaving schemaVersion at the
 -- last migration that succeeded. A database from a newer addon version is returned untouched with
--- err == "newer".
+-- err == "newer"; a stored schemaVersion that is not a number is returned untouched with
+-- err == "bad schemaVersion".
 function Migrations.Run(global)
-  local from = rawget(global, "schemaVersion") or 0
+  local from = rawget(global, "schemaVersion")
+  if from == nil then from = 0 end
+  if type(from) ~= "number" then return false, from, from, "bad schemaVersion" end
   if from > latest then return false, from, from, "newer" end
   local current = from
   for version = from + 1, latest do

@@ -29,16 +29,22 @@ function ns.FS:InitDB()
   self.db = LibStub("AceDB-3.0"):New("FabricationStationDB", ns.DBDefaults, true)
   local global = self.db.global
 
-  -- Errors logged before the DB existed go in first, so migration errors land after them.
+  local ok, from, to, err = ns.Migrations.Run(global)
+  if err == "newer" then
+    -- Read-only session: pending errors stay in memory and LogError/SetModuleEnabled skip the db.
+    self.dbIsNewer = true
+    print("FabricationStation: saved data is from a newer version; nothing was changed.")
+    return
+  end
+
+  -- Errors logged before the DB existed go in first, so the migration error below lands after them.
   local list = global.diagnostics.errors
   for _, entry in ipairs(self.pendingErrors) do ns.Util.PushCapped(list, entry, self.MAX_ERRORS) end
   self.pendingErrors = {}
 
-  local ok, from, to, err = ns.Migrations.Run(global)
   if ok then return end
-  if err == "newer" then
-    self.dbIsNewer = true
-    print("FabricationStation: saved data is from a newer version; nothing was changed.")
+  if err == "bad schemaVersion" then
+    self:LogError("Migrations", ("saved schemaVersion is not a number (%s); migrations skipped"):format(tostring(from)))
   else
     self:LogError("Migrations", ("migration from version %d stopped at %d: %s"):format(from, to, err))
   end
