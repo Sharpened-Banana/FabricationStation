@@ -1,4 +1,5 @@
--- Fake Blizzard_Professions frames for UI specs: ProfessionsFrame.CraftingPage.{SchematicForm, RecipeList.ScrollBox}
+-- Fake Blizzard_Professions frames for UI specs: ProfessionsFrame.CraftingPage.{SchematicForm, RecipeList.ScrollBox},
+-- ProfessionsFrame.OrdersPage
 -- on 1a's CreateFrame fake, the transaction behind the schematic form, and the globals Blizzard_Professions defines
 -- (ProfessionsRecipeSchematicFormMixin, Professions, ScrollBoxListMixin).
 --
@@ -7,6 +8,7 @@
 -- opts.withoutScrollBox  build no CraftingPage.RecipeList.ScrollBox
 -- opts.withoutSchematicForm  build no CraftingPage.SchematicForm
 -- opts.loaded            C_AddOns.IsAddOnLoaded("Blizzard_Professions") answers true from now on
+-- opts.orderType         ProfessionsFrame.OrdersPage.orderType (default 2, Personal)
 -- opts.slots             the transaction's slot indexes (default { 1, 2, 3 }, make_world's sample recipe);
 --                        transaction:GetAllocations(slotIndex) answers nil for any other slot, as Blizzard's does
 --
@@ -16,6 +18,7 @@
 --
 -- form fields (the recording handle; not a Blizzard object):
 --   frame, craftingPage, schematicForm, transaction, recipeScrollBox (nil with withoutScrollBox)
+--   ordersPage, showOrdersCalls  ProfessionsFrame.OrdersPage and the number of ShowOrders calls
 --   slotCalls[slotIndex]  "Clear" and "Allocate:<itemID>:<quantity>" in call order, per transaction slot
 --   calls                 "UpdateAllSlots" and "TriggerEvent:<event>" made on the schematic form
 --   manuallyAllocated     the last transaction:SetManuallyAllocated value (false at first)
@@ -162,6 +165,15 @@ local function fake_professions_frame(opts)
     rawset(list, "ScrollBox", form.recipeScrollBox)
   end
   rawset(page, "RecipeList", recorded("RecipeList", list))
+
+  -- Crafting Orders page: ShowOrders(offset, isSorted) counts its calls in form.showOrdersCalls; orderType is the
+  -- shown order type (Personal by default).
+  form.showOrdersCalls = 0
+  local ordersPage = CreateFrame("Frame", nil, frame)
+  rawset(ordersPage, "orderType", opts.orderType or 2)
+  rawset(ordersPage, "ShowOrders", function() form.showOrdersCalls = form.showOrdersCalls + 1 end)
+  form.ordersPage = recorded("OrdersPage", ordersPage)
+  rawset(frame, "OrdersPage", form.ordersPage)
   form.craftingPage = recorded("CraftingPage", page)
   rawset(frame, "CraftingPage", form.craftingPage)
   form.frame = recorded("ProfessionsFrame", frame)

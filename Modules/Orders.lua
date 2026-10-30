@@ -590,3 +590,398 @@ function Orders:GetBestClaimable(views, claim)
   if best then return best end
   return nil, "none"
 end
+
+---------------------------------------------------------------------------
+-- Board: live views and the saved snapshot
+---------------------------------------------------------------------------
+-- The live set holds the views of the board as it is open now (keyed by orderID; emptied when the Professions frame
+-- closes). db.global.ordersSnapshot = { time, charKey, orders = {[orderID] = OrderView} } keeps the last board seen,
+-- for the Orders tab and for later sessions. A stored view is a deep copy of plain values whose `result` keeps only
+-- SNAPSHOT_RESULT_KEYS (never Recipes' cached result table). While the saved data is read-only (newer version) the
+-- snapshot and personal counts live in session-only copies and nothing is written.
+
+local PROFESSIONS_ADDON = "Blizzard_Professions"
+local RESCORE_KEY = "orders.rescore"
+local HOOK_MISSING = "hook target missing: ProfessionsFrame.OrdersPage.ShowOrders"
+
+local SNAPSHOT_RESULT_KEYS = {
+  "expectedQuality", "reagentCost", "expectedSale", "profit", "concentrationCost", "goldPerConcentration", "flags",
+}
+
+local live = {}            -- [orderID] = OrderView (current board)
+local pending = {}         -- [orderID] = FulfilledOrder without time/charKey, from the FulfillOrder post-hook
+local sessionSnapshot      -- snapshot while the saved data is read-only
+local sessionState         -- ordersState while the saved data is read-only
+
+local function snapshot_table()
+  local snap
+  if writable() then
+    local g = global()
+    if type(g.ordersSnapshot) ~= "table" then g.ordersSnapshot = {} end
+    snap = g.ordersSnapshot
+  else
+    if not sessionSnapshot then
+      local g = global()
+      local stored = g and g.ordersSnapshot
+      sessionSnapshot = type(stored) == "table" and copy(stored) or {}
+    end
+    snap = sessionSnapshot
+  end
+  if type(snap.orders) ~= "table" then snap.orders = {} end
+  return snap
+end
+
+local function state_for(charKey)
+  local root
+  if writable() then
+    local g = global()
+    if type(g.ordersState) ~= "table" then g.ordersState = {} end
+    root = g.ordersState
+  else
+    if not sessionState then
+      local g = global()
+      local stored = g and g.ordersState
+      sessionState = type(stored) == "table" and copy(stored) or {}
+    end
+    root = sessionState
+  end
+  if type(root[charKey]) ~= "table" then root[charKey] = {} end
+  local state = root[charKey]
+  if type(state.personalCounts) ~= "table" then state.personalCounts = {} end
+  return state
+end
+
+-- Deep copy of a view for the snapshot, with a trimmed `result`.
+local function stored_copy(view)
+  local out = {}
+  for k, v in pairs(view) do
+    if k ~= "result" then out[k] = copy(v) end
+  end
+  if type(view.result) == "table" then
+    local result = {}
+    for _, k in ipairs(SNAPSHOT_RESULT_KEYS) do result[k] = copy(view.result[k]) end
+    out.result = result
+  end
+  return out
+end
+
+local function expired(view, now)
+  return type(view.expiresAt) == "number" and view.expiresAt < now
+end
+
+local function by_order_id(a, b)
+  return number_or(a.orderID, 0) < number_or(b.orderID, 0)
+end
+
+-- A board page was shown: orders (C_CraftingOrders.GetCrafterOrders(), cumulative across pages) replace every view
+-- of that order type, in the live set and in the snapshot. One scoring context for the whole board, one ScoreInput
+-- per order. A snapshot made by another character is started afresh (its personal orders are not this one's).
+-- Expired stored views are dropped.
+function Orders:OnBoardShown(orderTypeEnum, orders)
+  local typeName = self.ORDER_TYPES[orderTypeEnum]
+  local charKey = ns.FS:CharKey()
+  local snap = snapshot_table()
+  if snap.charKey ~= nil and snap.charKey ~= charKey then snap.orders = {} end
+  for id, view in pairs(live) do
+    if view.orderType == typeName then live[id] = nil end
+  end
+  for id, view in pairs(snap.orders) do
+    if type(view) ~= "table" or view.orderType == typeName then snap.orders[id] = nil end
+  end
+  local ctx = self:BuildContext(charKey)
+  for _, info in ipairs(type(orders) == "table" and orders or {}) do
+    local input = self:Normalize(info)
+    if input and input.orderID ~= nil then
+      local view = self:ScoreInput(input, ctx)
+      live[input.orderID] = view
+      snap.orders[input.orderID] = stored_copy(view)
+    end
+  end
+  local now = ns.FS:Now()
+  for id, view in pairs(snap.orders) do
+    if expired(view, now) then snap.orders[id] = nil end
+  end
+  snap.time = now
+  snap.charKey = charKey
+  self:SendMessage(ns.Msg.ORDERS_CHANGED)
+end
+
+-- { time, charKey, orders = { OrderView } } (stored views, by orderID, leaving out expired ones).
+function Orders:GetSnapshot()
+  local snap = snapshot_table()
+  local now, list = ns.FS:Now(), {}
+  for _, view in pairs(snap.orders) do
+    if type(view) == "table" and not expired(view, now) then list[#list + 1] = view end
+  end
+  table.sort(list, by_order_id)
+  return { time = snap.time, charKey = snap.charKey, orders = list }
+end
+
+-- The views of the board as it is open now, by orderID (empty after the Professions frame closes).
+function Orders:GetLiveViews()
+  local list = {}
+  for _, view in pairs(live) do list[#list + 1] = view end
+  table.sort(list, by_order_id)
+  return list
+end
+
+-- The live view, else the stored one (nil when unknown or expired).
+function Orders:GetView(orderID)
+  if orderID == nil then return nil end
+  if live[orderID] then return live[orderID] end
+  local view = snapshot_table().orders[orderID]
+  if type(view) == "table" and not expired(view, ns.FS:Now()) then return view end
+  return nil
+end
+
+-- Empties the live set (the Professions frame closed).
+function Orders:ClearLive()
+  live = {}
+  self:SendMessage(ns.Msg.ORDERS_CHANGED)
+end
+
+-- Rescores every live and stored view from its stored input, with one context for the snapshot's character (an
+-- order seen on another character is scored for that character, not the one logged in now).
+function Orders:Rescore()
+  local snap = snapshot_table()
+  local ctx = self:BuildContext(snap.charKey or ns.FS:CharKey())
+  for id, view in pairs(live) do
+    local fresh = self:ScoreInput(view.input, ctx)
+    live[id] = fresh
+    if snap.orders[id] ~= nil then snap.orders[id] = stored_copy(fresh) end
+  end
+  for id, view in pairs(snap.orders) do
+    if live[id] == nil and type(view) == "table" and type(view.input) == "table" then
+      snap.orders[id] = stored_copy(self:ScoreInput(view.input, ctx))
+    end
+  end
+  self:SendMessage(ns.Msg.ORDERS_CHANGED)
+end
+
+-- Changes one order's input with mutate(input) and scores it once; the live view and the stored copy both take the
+-- new view. False when the order is not known.
+local function update_order(self, orderID, mutate)
+  if orderID == nil then return false end
+  local snap = snapshot_table()
+  local view = live[orderID]
+  local stored = snap.orders[orderID]
+  if type(stored) ~= "table" then stored = nil end
+  local base = view or stored
+  if not base or type(base.input) ~= "table" then return false end
+  mutate(base.input)
+  local fresh = self:ScoreInput(base.input, self:BuildContext(base.charKey or snap.charKey or ns.FS:CharKey()))
+  if view then live[orderID] = fresh end
+  if stored then snap.orders[orderID] = stored_copy(fresh) end
+  self:SendMessage(ns.Msg.ORDERS_CHANGED)
+  return true
+end
+
+-- CRAFTINGORDERS_UPDATE_CUSTOMER_NAME(customerName, orderID): the name arrives after the board. NPC orders keep no
+-- customer.
+function Orders:OnCustomerNameUpdated(_, name, orderID)
+  update_order(self, orderID, function(input)
+    if input.orderType ~= "npc" then input.customer = customer_name(name) end
+  end)
+end
+
+-- CRAFTINGORDERS_UPDATE_REWARDS(npcOrderRewards, orderID).
+function Orders:OnRewardsUpdated(_, rewards, orderID)
+  update_order(self, orderID, function(input) input.rewards = rewards_of(rewards) end)
+end
+
+---------------------------------------------------------------------------
+-- Claiming (click only)
+---------------------------------------------------------------------------
+
+-- The order this character has claimed, as an OrderInput, or nil.
+function Orders:GetClaimedOrder()
+  return self:Normalize(C_CraftingOrders.GetClaimedOrder())
+end
+
+-- Claims the best claimable order on the live board (GetBestClaimable) for the open profession, calling
+-- C_CraftingOrders.ClaimOrder at most once. ClaimOrder is protected (HasRestrictions): this runs only from the
+-- "Claim Best Order" button's OnClick (tests/orders/claim_click_only_spec.lua enforces it).
+-- -> view, or nil and "disabled" | "noProfession" | "alreadyClaimed" | "none".
+function Orders:ClaimBest()
+  if not self:IsEnabled() then return nil, "disabled" end
+  local info = C_TradeSkillUI.GetChildProfessionInfo()
+  local profession = type(info) == "table" and info.profession or nil
+  if profession == nil then return nil, "noProfession" end
+  local claimInfo = C_CraftingOrders.GetOrderClaimInfo(profession)
+  local claim = {
+    claimsRemaining = type(claimInfo) == "table" and claimInfo.claimsRemaining or nil,
+    hasClaimed = C_CraftingOrders.GetClaimedOrder() ~= nil,
+  }
+  local view, reason = self:GetBestClaimable(self:GetLiveViews(), claim)
+  if not view then return nil, reason end
+  C_CraftingOrders.ClaimOrder(view.orderID, profession)
+  return view
+end
+
+---------------------------------------------------------------------------
+-- Fulfilment
+---------------------------------------------------------------------------
+
+local function crafted_quality(link)
+  if type(link) ~= "string" then return nil end
+  local quality = C_TradeSkillUI.GetItemCraftedQualityByItemInfo(link)
+  return type(quality) == "number" and quality or nil
+end
+
+-- Post-hook on C_CraftingOrders.FulfillOrder(orderID, crafterNote, profession): remembers what is being delivered
+-- (the claimed order, else the board view) until the server answers. Quality comes from the crafted item's link
+-- (nil without one).
+function Orders:OnFulfillClicked(orderID, _, _)
+  local input = self:GetClaimedOrder()
+  if not (input and input.orderID == orderID) then
+    local view = self:GetView(orderID)
+    input = view and view.input
+  end
+  if type(input) ~= "table" or orderID == nil then return end
+  local tip = input.tipAmount
+  local rewardsValue, rewards = self:ValueRewards(input.rewards, orderID)
+  pending[orderID] = {
+    orderID = orderID,
+    orderType = input.orderType,
+    customer = input.orderType ~= "npc" and input.customer or nil,
+    npcCreatureID = input.npcCreatureID,
+    recipeID = input.recipeID,
+    itemID = input.itemID,
+    quality = crafted_quality(input.outputItemHyperlink),
+    tip = tip,
+    consortiumCut = input.consortiumCut,
+    commission = type(tip) == "number" and tip - number_or(input.consortiumCut, 0) or nil,
+    rewards = rewards,
+    rewardsValue = rewardsValue,
+  }
+end
+
+-- CRAFTINGORDERS_FULFILL_ORDER_RESPONSE(result, orderID): on Ok sends ns.Msg.ORDER_FULFILLED with the
+-- FulfilledOrder (Customers records the customer's order from it; NPC orders have no customer) and removes the order
+-- from the board and the snapshot. Any other result keeps the pending fulfilment for a retry.
+function Orders:OnFulfillResponse(_, result, orderID)
+  local results = Enum and Enum.CraftingOrderResult
+  local okCode = type(results) == "table" and results.Ok or 0
+  if result ~= okCode then return end
+  local fulfilled = pending[orderID]
+  pending[orderID] = nil
+  if fulfilled then
+    fulfilled.time = ns.FS:Now()
+    fulfilled.charKey = ns.FS:CharKey()
+    self:SendMessage(ns.Msg.ORDER_FULFILLED, fulfilled)
+  end
+  local snap = snapshot_table()
+  if live[orderID] ~= nil or snap.orders[orderID] ~= nil then
+    live[orderID] = nil
+    snap.orders[orderID] = nil
+    self:SendMessage(ns.Msg.ORDERS_CHANGED)
+  end
+end
+
+---------------------------------------------------------------------------
+-- Personal order counts
+---------------------------------------------------------------------------
+
+-- infos = C_CraftingOrders.GetPersonalOrdersInfo() = { {profession, numPersonalOrders, professionName} }. Counts are
+-- kept per character in db.global.ordersState[charKey].personalCounts[profession]; the first count seen for a
+-- profession is a baseline. A rise is an arrival, announced as ns.Msg.PERSONAL_ORDER_ARRIVED(professionName, count,
+-- delta). -> arrivals { {profession, professionName, count, delta} }.
+function Orders:UpdatePersonalCounts(infos)
+  local arrivals = {}
+  if type(infos) ~= "table" then return arrivals end
+  local counts = state_for(ns.FS:CharKey()).personalCounts
+  for _, info in ipairs(infos) do
+    local profession = type(info) == "table" and info.profession or nil
+    local count = type(info) == "table" and info.numPersonalOrders or nil
+    if profession ~= nil and type(count) == "number" then
+      local previous = counts[profession]
+      counts[profession] = count
+      if type(previous) == "number" and count > previous then
+        arrivals[#arrivals + 1] = {
+          profession = profession, professionName = info.professionName, count = count, delta = count - previous,
+        }
+      end
+    end
+  end
+  for _, a in ipairs(arrivals) do
+    self:SendMessage(ns.Msg.PERSONAL_ORDER_ARRIVED, a.professionName, a.count, a.delta)
+  end
+  return arrivals
+end
+
+---------------------------------------------------------------------------
+-- Hooks and lifecycle
+---------------------------------------------------------------------------
+
+-- Post-hooks ProfessionsFrame.OrdersPage:ShowOrders (capture the board) and ProfessionsFrame OnHide (clear the live
+-- set), once per session: hooks cannot be undone, so while Orders is off their bodies return at once. Nothing is
+-- written on Blizzard frames. A missing target is logged and announced once; the rest of Orders keeps working.
+-- -> true when the hooks are in place.
+function Orders:InstallBoardHook()
+  if self.attached then return true end
+  local frame = ProfessionsFrame
+  local page = type(frame) == "table" and frame.OrdersPage or nil
+  if not (type(page) == "table" and type(page.ShowOrders) == "function") then
+    if not self.hookMissingReported then
+      self.hookMissingReported = true
+      ns.FS:LogError("Orders", HOOK_MISSING)
+      print("FabricationStation: Orders could not attach to the crafting order board (ShowOrders not found); "
+        .. "orders are not scored there. See /fs settings > Diagnostics.")
+    end
+    return false
+  end
+  hooksecurefunc(page, "ShowOrders", ns.FS:Wrap("Orders", function(shownPage)
+    if not self:IsEnabled() then return end
+    self:OnBoardShown(shownPage.orderType, C_CraftingOrders.GetCrafterOrders())
+  end))
+  frame:HookScript("OnHide", ns.FS:Wrap("Orders", function()
+    if not self:IsEnabled() then return end
+    self:ClearLive()
+  end))
+  self.attached = true
+  return true
+end
+
+local function attach_if_ready(self)
+  if C_AddOns.IsAddOnLoaded(PROFESSIONS_ADDON) and ProfessionsFrame then self:InstallBoardHook() end
+end
+
+function Orders:OnEnable()
+  local function wrap(fn) return ns.FS:Wrap("Orders", fn) end
+  local function personal_counts() self:UpdatePersonalCounts(C_CraftingOrders.GetPersonalOrdersInfo()) end
+
+  self:RegisterEvent("ADDON_LOADED", wrap(function(_, name)
+    if name == PROFESSIONS_ADDON then self:InstallBoardHook() end
+  end))
+  self:RegisterEvent("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", wrap(function(...) self:OnCustomerNameUpdated(...) end))
+  self:RegisterEvent("CRAFTINGORDERS_UPDATE_REWARDS", wrap(function(...) self:OnRewardsUpdated(...) end))
+  self:RegisterEvent("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", wrap(function(...) self:OnFulfillResponse(...) end))
+  self:RegisterEvent("CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS", wrap(personal_counts))
+  self:RegisterEvent("CRAFTINGORDERS_UPDATE_ORDER_COUNT", wrap(function(_, orderType)
+    local types = Enum and Enum.CraftingOrderType
+    if orderType == (type(types) == "table" and types.Personal or 2) then personal_counts() end
+  end))
+
+  local rescore = wrap(function() self:Rescore() end)
+  local function schedule() ns.FS:Debounce(RESCORE_KEY, 0.5, rescore) end
+  self:RegisterMessage(ns.Msg.PRICES_CHANGED, wrap(schedule))
+  self:RegisterMessage(ns.Msg.RECIPES_CHANGED, wrap(schedule))
+  self:RegisterMessage(ns.Msg.CUSTOMERS_CHANGED, wrap(schedule))
+
+  if not self.hooked then
+    hooksecurefunc(C_CraftingOrders, "FulfillOrder", wrap(function(orderID, note, profession)
+      if not self:IsEnabled() then return end
+      self:OnFulfillClicked(orderID, note, profession)
+    end))
+    self.hooked = true
+  end
+  attach_if_ready(self)
+end
+
+-- Hooks stay installed (their bodies return early); the live board and pending fulfilments are dropped.
+function Orders:OnDisable()
+  ns.FS:CancelDebounce(RESCORE_KEY)
+  live = {}
+  pending = {}
+  self:SendMessage(ns.Msg.ORDERS_CHANGED)
+end

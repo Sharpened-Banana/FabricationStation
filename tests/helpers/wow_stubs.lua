@@ -647,7 +647,9 @@ local function install(overrides)
 
   -- hooksecurefunc([tbl,] name, fn): replaces tbl[name] (or _G[name]) with a function that calls the
   -- original, then fn with the same arguments, and returns the original's results. Like the client it
-  -- errors when the target is not a function; hooks cannot be removed.
+  -- errors when the target is not a function; hooks cannot be removed. The replacement is rawset: the
+  -- client's secure hook is not an addon write, so fakes that record field writes (professions_frame.lua)
+  -- do not see it.
   local function pack(...) return { n = select("#", ...), ... } end
   local function hooksecurefunc(a, b, c)
     local tbl, name, fn
@@ -657,11 +659,11 @@ local function install(overrides)
     local target = tbl or _G
     local original = target[name]
     if type(original) ~= "function" then error(usage .. ": " .. name .. " is not a function", 2) end
-    target[name] = function(...)
+    rawset(target, name, function(...)
       local results = pack(original(...))
       fn(...)
       return unpack(results, 1, results.n)
-    end
+    end)
     W.hooks[#W.hooks + 1] = { tbl, name, fn }
   end
 
