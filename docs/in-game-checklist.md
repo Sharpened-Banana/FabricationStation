@@ -1,8 +1,9 @@
-# FabricationStation phase 1a: in-game verification checklist
+# FabricationStation phases 1a and 1b: in-game verification checklist
 
 Phase 1a is verified against stubs only. These checks need the real WoW client (retail, Midnight 12.1.5)
 and cannot be run in CI. Work through them in order. Checks 1-9 are the original plan checks; checks 10-15 come
-from code reviews and each name the exact thing to look for.
+from code reviews and each name the exact thing to look for. Phase 1b (crafting) has its own section,
+[Phase 1b](#phase-1b-crafting), numbered 1b-1 to 1b-15; run it after the phase 1a checks.
 
 The Settings tab is the "Settings" tab in the main window (`/fs settings`). Its left-hand tree has the groups
 General, Prices, Modules and Diagnostics.
@@ -154,6 +155,91 @@ General, Prices, Modules and Diagnostics.
     - Still `GameData not generated`: some generated table still has no build.
 
     Note the README's open items: the wago.tools URL and CurvePoint header style are unverified.
+
+## Phase 1b (crafting)
+
+Phase 1b (recipe evaluation, queue, profession panel, recipe-list labels, tooltips, self-check) is also verified
+against stubs only. Report results the same way as above, numbered 1b-1 to 1b-15. In the `/dump` lines,
+`FS` stands for `LibStub("AceAddon-3.0"):GetAddon("FabricationStation")`; run
+`/run FS = LibStub("AceAddon-3.0"):GetAddon("FabricationStation")` once first. Crafting settings are in
+Settings > Crafting; module toggles are in Settings > Modules.
+
+### Taint and Blizzard events
+
+1b-1. **Apply taint check.** Apply ("Apply fills the reagent slots in Blizzard's crafting window") ships off.
+    Run `/console taintLog 1` and `/reload`. First confirm the API Apply needs: run
+    `/dump Professions.CreateCraftingReagent ~= nil, Professions.CreateCraftingReagentByItemID ~= nil`; at least
+    one must be `true` (report both). Then turn on Settings > Crafting > applyWritesBlizzardSlots, open a quality
+    recipe, press Apply on the Q2 row of the panel's reagent list, and press Blizzard's Create. Log out, open
+    `Logs/taint.log` and search for `FabricationStation`. Expected: no line names FabricationStation. If one does,
+    turn the setting off again and send the log lines; Apply stays off by default until this check passes. If the
+    recipe has a required spark slot, also note whether Apply filled it.
+1b-2. **No taint from callbacks alone.** Panel, recipe-list labels and Settings > Crafting > selfCheck on, Apply
+    off, `/console taintLog 1`. Select several recipes, craft one with Blizzard's own Create button, then enter
+    combat (a training dummy is enough). Expected: no `ADDON_ACTION_BLOCKED` or `ADDON_ACTION_FORBIDDEN`
+    popup or chat line, and no `taint.log` line naming FabricationStation.
+1b-3. **Event names fire.** With the profession window open, selecting a recipe must recalibrate it and refresh
+    the panel (`ProfessionsRecipeListMixin.Event.OnRecipeSelected`), and changing a reagent rank in Blizzard's
+    quality dialog must update the panel's predicted quality and skill bar at once
+    (`Professions.TransactionUpdated` / AllocationsModified). Expected: both happen without reselecting the
+    recipe. If the panel does not react to rank changes, report it.
+
+### Queue and shopping list
+
+1b-4. **Auctionator shopping list.** Run `/dump Auctionator.API.v1.ConvertToSearchString ~= nil,
+    Auctionator.API.v1.CreateShoppingList ~= nil`. Expected: `true, true`. Queue two crafts that need reagents of
+    different ranks you do not hold, press Shopping List in the Queue tab, and open Auctionator's Shopping tab.
+    Expected: a list named `FabricationStation` with each missing reagent at the right rank (tier) and quantity
+    (the term fields used are `searchString`, `isExact`, `quantity`, `tier`). Repeat right after `/reload` with an
+    item whose name the client has not cached: the status line says `N item(s) skipped, try again` and a second
+    press adds it.
+1b-5. **Warband reagents.** With Settings > Crafting > queueUseWarband on and some reagents only in the warband
+    bank (not in bags, bank or reagent bank), queue one craft and press Craft Next at the crafting station.
+    Expected: the craft starts and uses the warband reagents. If Blizzard refuses it (reagents missing), report
+    it: Craft Next would then need to treat warband reagents as missing.
+1b-6. **Required spark slot.** Pick a recipe with a required modifying (spark) slot. Expected: the panel's and
+    Recipes tab's reagent cost and profit include the spark's price, the Queue tab lists it under Missing when you
+    have none, it is on the shopping list, and Craft Next succeeds once you hold it (the spark goes to
+    `CraftRecipe`). Also check against a real craft whether a resourcefulness proc ever refunds the spark: the
+    addon assumes it never does.
+1b-7. **Craft Next failures.** Press Craft Next away from the crafting station (or with too little concentration for
+    a concentration entry). Expected: Blizzard's error, and Craft Next answers normally on the next click. Report
+    whether the "Still crafting" (busy) answer clears at once (`UNIT_SPELLCAST_FAILED` fired) or only after 30 s.
+1b-8. **Craft Next decrements.** Queue 3 of a multicraft-capable recipe and craft until a multicraft proc: the entry
+    must lose exactly one per craft, proc or not. Queue an enchant (a recipe with no output item): its entry must lose
+    one on its cast. Start a craft and interrupt it by moving: the next Craft Next click must not answer "busy".
+
+### Performance and layout
+
+1b-9. **Recalibration CPU.** On a character with about 300 known recipes, open the profession window and craft 10
+    items in a row. Watch the frame rate (`/fps` or Blizzard's performance overlay) while the recipe scan runs.
+    Expected: no visible hitch; report the lowest frame rate seen and Settings > Crafting > scanBudgetMs.
+1b-10. **Panel layout.** At 1920×1080 and 2560×1440 UI sizes, select a recipe with five quality rows and a full
+    breakdown (nine lines). Expected: nothing overlaps or is cut off, and with the self-check line hidden (selfCheck
+    off) there is no empty gap where it would be.
+1b-11. **Row labels.** With long recipe names and Blizzard's count / skill-up markers on rows, the profit labels must not
+    overlap the text. Scroll the list and collapse/expand a category: every visible recipe row is relabelled, category
+    rows have no label, and unlearned recipes (if shown) have none.
+1b-12. **Tooltips.** With Auctionator installed, hover a crafted item: Auctionator's lines are unchanged, the
+    `Craft cost` and `Crafters` lines appear once (hover again, and in a second tooltip such as a chat link), and the
+    first hover of an item many recipes make shows no hitch. For an item quality none of your characters can reach,
+    expect `Craft cost: quality not reachable`.
+
+### Self-check and data
+
+1b-13. **Self-check.** With selfCheck on and a calibrated recipe selected, change reagent ranks. Before real GameData:
+    report the panel's check line. After real GameData (check 15): expected `Math check: OK` while you change ranks.
+    Also compare a few game thresholds with difficulty × the GameData fraction (they must agree to 1e-6) and confirm
+    the game's `concentrationCost` is a whole number:
+    `/dump C_TradeSkillUI.GetCraftingOperationInfo(<recipeID>, {}, nil, false)`.
+1b-14. **Empty GameData.** With the shipped placeholder GameData (before check 15), expected: every result in the
+    Recipes tab, panel, Queue tab ("~" cost) and recipe-list labels ("~") is marked as an estimate, and there are no
+    Lua errors on the first window open, the first scan and the first tooltip.
+1b-15. **Read-only saved data.** Make the saved data look newer: in the SavedVariables file set
+    `FabricationStationDB.global.schemaVersion` above the current one (back up the file first), then log in. Expected:
+    every queue button (Add to Queue, Clear, quantity, Remove, restock) says the queue is read-only, Calibrate (select
+    a recipe) does not persist (`/dump FabricationStationDB.global.recipeCalib` unchanged after `/reload`), and
+    restoring the backup brings everything back.
 
 ## Not done here
 
