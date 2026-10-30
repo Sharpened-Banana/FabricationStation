@@ -1,0 +1,613 @@
+-- Fake WoW API + Ace3 layer for unit tests.
+--   local W = install_wow_stubs(overrides)
+-- Every call rebuilds all fakes from scratch. `overrides` is deep-merged into the default globals
+-- (plain tables merge key by key, anything else replaces). Returns the handle `W`.
+
+local unpack = unpack or table.unpack
+local realPrint = print
+
+-- Globals this module has put into _G, so the next install can remove them again.
+local installedNames = {}
+local framesByName = {}
+
+local function is_plain_table(v) return type(v) == "table" and getmetatable(v) == nil end
+
+local function deep_copy(v)
+  if type(v) ~= "table" then return v end
+  local out = {}
+  for k, x in pairs(v) do out[k] = deep_copy(x) end
+  return out
+end
+
+local function deep_merge(dst, src)
+  for k, v in pairs(src) do
+    if is_plain_table(v) and is_plain_table(dst[k]) then deep_merge(dst[k], v) else dst[k] = v end
+  end
+  return dst
+end
+
+local function join_args(...)
+  local parts = {}
+  for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+  return table.concat(parts, " ")
+end
+
+local function noop() end
+
+-- A table whose unknown Capitalized keys are no-op methods (so `frame:SetBackdrop(...)` works),
+-- while lower-case field lookups still return nil.
+local function method_stub_meta()
+  return { __index = function(_, k)
+    if type(k) == "string" and k:match("^%u") then return noop end
+  end }
+end
+
+local function install(overrides)
+  overrides = overrides or {}
+
+  -- Undo the previous install.
+  for name in pairs(installedNames) do _G[name] = nil end
+  _G.print = realPrint
+  for name in pairs(framesByName) do _G[name] = nil end
+  installedNames, framesByName = {}, {}
+  _G.FabricationStationDB = nil
+
+  local W = {
+    now = 1700000000,
+    messages = {},
+    printed = {},
+    slash = {},
+    config = { registered = {}, notified = 0, opened = {}, blizOptions = {} },
+    ldb = { objects = {} },
+    dbicon = { registered = {}, shown = {} },
+    auctionator = { prices = {}, ages = {}, vendor = {}, lists = {}, dbCallbacks = {}, exact = {} },
+  }
+
+  ---------------------------------------------------------------------------
+  -- Clock and C_Timer
+  ---------------------------------------------------------------------------
+  local timers, timerSeq = {}, 0
+
+  local function schedule(seconds, fn, handle)
+    timerSeq = timerSeq + 1
+    handle = handle or {}
+    handle.due = W.now + (seconds or 0)
+    handle.seq = timerSeq
+    handle.fn = fn
+    timers[#timers + 1] = handle
+    return handle
+  end
+
+  local function remove_timer(handle)
+    for i = #timers, 1, -1 do
+      if timers[i] == handle then table.remove(timers, i) end
+    end
+  end
+
+  local function new_handle(seconds, fn, iterations, repeating)
+    local handle = { cancelled = false, iterations = iterations, interval = seconds, repeating = repeating }
+    function handle:Cancel() self.cancelled = true; remove_timer(self) end
+    function handle:IsCancelled() return self.cancelled end
+    return schedule(seconds, fn, handle)
+  end
+
+  local C_Timer = {
+    After = function(seconds, fn) new_handle(seconds, fn, 1, false).afterOnly = true end,
+    NewTimer = function(seconds, fn) return new_handle(seconds, fn, 1, false) end,
+    NewTicker = function(seconds, fn, iterations)
+      return new_handle(math.max(seconds, 1e-9), fn, iterations, true)
+    end,
+  }
+
+  function W.advance(seconds)
+    local target = W.now + (seconds or 0)
+    while true do
+      local nextTimer
+      for _, t in ipairs(timers) do
+        if t.due <= target and (not nextTimer or t.due < nextTimer.due
+          or (t.due == nextTimer.due and t.seq < nextTimer.seq)) then
+          nextTimer = t
+        end
+      end
+      if not nextTimer then break end
+      remove_timer(nextTimer)
+      if nextTimer.due > W.now then W.now = nextTimer.due end
+      if not nextTimer.cancelled then
+        local again = false
+        if nextTimer.repeating then
+          if nextTimer.iterations then
+            nextTimer.iterations = nextTimer.iterations - 1
+            again = nextTimer.iterations > 0
+          else
+            again = true
+          end
+        end
+        if again then schedule(nextTimer.interval, nextTimer.fn, nextTimer) end
+        if nextTimer.afterOnly then nextTimer.fn() else nextTimer.fn(nextTimer) end
+      end
+    end
+    W.now = target
+  end
+
+  ---------------------------------------------------------------------------
+  -- Frames
+  ---------------------------------------------------------------------------
+  local frameMT = method_stub_meta()
+
+  local function new_object(extra)
+    local o = setmetatable({}, frameMT)
+    for k, v in pairs(extra or {}) do o[k] = v end
+    return o
+  end
+
+  local function make_fontstring()
+    local fs = new_object()
+    local text
+    function fs:SetText(t) text = t end
+    function fs:GetText() return text end
+    return fs
+  end
+
+  local function CreateFrame(frameType, name, parent, template)
+    local f = new_object({ frameType = frameType, name = name, template = template })
+    local shown, scripts, points, w, h, par = true, {}, {}, 0, 0, parent
+    function f:Show() shown = true end
+    function f:Hide() shown = false end
+    function f:IsShown() return shown end
+    function f:IsVisible() return shown end
+    function f:SetScript(event, fn) scripts[event] = fn end
+    function f:GetScript(event) return scripts[event] end
+    function f:SetPoint(point, a, b, c, d)
+      local rel, relPoint, x, y = par, point
+      if type(a) == "number" then
+        x, y = a, b or 0
+      else
+        if a ~= nil then rel = a end
+        relPoint = b or point
+        x, y = c or 0, d or 0
+      end
+      points[#points + 1] = { point, rel, relPoint, x, y }
+    end
+    function f:GetPoint(i)
+      local p = points[i or 1]
+      if p then return unpack(p, 1, 5) end
+    end
+    function f:GetNumPoints() return #points end
+    function f:ClearAllPoints() points = {} end
+    function f:SetSize(width, height) w, h = width, height end
+    function f:GetSize() return w, h end
+    function f:SetWidth(width) w = width end
+    function f:SetHeight(height) h = height end
+    function f:GetWidth() return w end
+    function f:GetHeight() return h end
+    function f:SetParent(p) par = p end
+    function f:GetParent() return par end
+    function f:GetName() return name end
+    function f:CreateFontString() return make_fontstring() end
+    if name then
+      framesByName[name] = true
+      _G[name] = f
+    end
+    return f
+  end
+
+  ---------------------------------------------------------------------------
+  -- LibStub and Ace3 fakes
+  ---------------------------------------------------------------------------
+  local libs = {}
+  local LibStub = setmetatable({}, { __call = function(self, name, silent) return self:GetLibrary(name, silent) end })
+  function LibStub:GetLibrary(name, silent)
+    local lib = libs[name]
+    if not lib and not silent then error(('Cannot find a library instance of "%s".'):format(tostring(name)), 2) end
+    return lib
+  end
+  function LibStub:NewLibrary(name)
+    if libs[name] then return nil end
+    libs[name] = {}
+    return libs[name]
+  end
+  function LibStub:IterateLibraries() return pairs(libs) end
+
+  -- AceEvent: per-object event and message registrations.
+  local eventRegs, messageRegs = {}, {}  -- [name] = { [obj] = handler }
+
+  local function register(regs, self, name, handler)
+    if handler == nil then handler = name end
+    if type(handler) == "string" and type(self[handler]) ~= "function" then
+      error(("Cannot register %q: method %q not found on the object"):format(tostring(name), handler), 3)
+    elseif type(handler) ~= "string" and type(handler) ~= "function" then
+      error("Invalid handler for " .. tostring(name), 3)
+    end
+    regs[name] = regs[name] or {}
+    regs[name][self] = handler
+  end
+
+  local function dispatch(regs, name, ...)
+    local bucket = regs[name]
+    if not bucket then return end
+    local snapshot = {}
+    for obj, handler in pairs(bucket) do snapshot[#snapshot + 1] = { obj, handler } end
+    -- Registration order is not tracked by pairs(); sort by object id for stable output.
+    table.sort(snapshot, function(a, b) return (a[1].__order or 0) < (b[1].__order or 0) end)
+    for _, entry in ipairs(snapshot) do
+      local obj, handler = entry[1], entry[2]
+      if bucket[obj] == handler then  -- still registered
+        if type(handler) == "string" then obj[handler](obj, name, ...) else handler(name, ...) end
+      end
+    end
+  end
+
+  local function unregister_all(regs, self)
+    for _, bucket in pairs(regs) do bucket[self] = nil end
+  end
+
+  local AceEvent = {}
+  function AceEvent.Embed(_, target)
+    function target:RegisterEvent(event, handler) register(eventRegs, self, event, handler) end
+    function target:UnregisterEvent(event) if eventRegs[event] then eventRegs[event][self] = nil end end
+    function target:UnregisterAllEvents() unregister_all(eventRegs, self) end
+    function target:IsEventRegistered(event) return eventRegs[event] ~= nil and eventRegs[event][self] ~= nil end
+    function target:RegisterMessage(message, handler) register(messageRegs, self, message, handler) end
+    function target:UnregisterMessage(message) if messageRegs[message] then messageRegs[message][self] = nil end end
+    function target:UnregisterAllMessages() unregister_all(messageRegs, self) end
+    function target:SendMessage(message, ...)
+      local rec = { message, ... }
+      W.messages[#W.messages + 1] = rec
+      dispatch(messageRegs, message, ...)
+    end
+    return target
+  end
+  libs["AceEvent-3.0"] = AceEvent
+
+  function W.fire(event, ...) dispatch(eventRegs, event, ...) end
+
+  -- AceConsole
+  local AceConsole = {}
+  function AceConsole.Embed(_, target)
+    function target:RegisterChatCommand(cmd, handler)
+      if type(handler) == "string" then
+        local obj = self
+        W.slash[cmd] = function(...) return obj[handler](obj, ...) end
+      else
+        W.slash[cmd] = handler
+      end
+    end
+    function target:UnregisterChatCommand(cmd) W.slash[cmd] = nil end
+    function target:Print(...) W.printed[#W.printed + 1] = join_args(...) end
+    return target
+  end
+  libs["AceConsole-3.0"] = AceConsole
+
+  -- AceAddon
+  local addons, addonOrder, orderCounter = {}, {}, 0
+
+  local function embed_libs(obj, ...)
+    for i = 1, select("#", ...) do
+      local libname = select(i, ...)
+      local lib = LibStub(libname)
+      if type(lib.Embed) == "function" then lib:Embed(obj) end
+    end
+  end
+
+  local addonMethods = {}
+
+  local function new_object_with_methods(name, parent, ...)
+    orderCounter = orderCounter + 1
+    local obj = { name = name, modules = {}, orderedModules = {}, enabledState = true, __order = orderCounter,
+      initialized = false, running = false, parent = parent }
+    for k, v in pairs(addonMethods) do obj[k] = v end
+    embed_libs(obj, ...)
+    return obj
+  end
+
+  local function disable_object(obj)
+    if not obj.running then return false end
+    obj.running = false
+    if obj.OnDisable then obj:OnDisable() end
+    if obj.running == false then
+      if obj.UnregisterAllEvents then obj:UnregisterAllEvents() end
+      if obj.UnregisterAllMessages then obj:UnregisterAllMessages() end
+      for _, m in ipairs(obj.orderedModules) do disable_object(m) end
+    end
+    return not obj.running
+  end
+
+  local function enable_object(obj)
+    if obj.running or not obj.enabledState then return false end
+    obj.running = true
+    if obj.OnEnable then obj:OnEnable() end
+    if obj.running then
+      for _, m in ipairs(obj.orderedModules) do enable_object(m) end
+    end
+    return obj.running
+  end
+
+  function addonMethods:NewModule(name, prototype, ...)
+    if self.modules[name] then error(("Module %q already exists."):format(tostring(name)), 2) end
+    local libsToEmbed = { ... }
+    if type(prototype) == "string" then table.insert(libsToEmbed, 1, prototype); prototype = nil end
+    local module = new_object_with_methods(name, self, unpack(libsToEmbed))
+    if type(prototype) == "table" then
+      for k, v in pairs(prototype) do module[k] = v end
+    end
+    module.IsModule = function() return true end
+    self.modules[name] = module
+    self.orderedModules[#self.orderedModules + 1] = module
+    return module
+  end
+  function addonMethods:GetModule(name, silent)
+    local m = self.modules[name]
+    if not m and not silent then error(("Cannot find Module %q."):format(tostring(name)), 2) end
+    return m
+  end
+  function addonMethods:IterateModules() return pairs(self.modules) end
+  function addonMethods:SetEnabledState(state) self.enabledState = state and true or false end
+  function addonMethods:IsEnabled() return self.enabledState end
+  function addonMethods:Enable()
+    self:SetEnabledState(true)
+    if self.initialized then return enable_object(self) end
+  end
+  function addonMethods:Disable()
+    self:SetEnabledState(false)
+    return disable_object(self)
+  end
+  function addonMethods:GetName() return self.name end
+
+  local AceAddon = {}
+  function AceAddon:NewAddon(objectOrName, ...)
+    local name = objectOrName
+    local obj
+    if type(objectOrName) == "table" then
+      obj = objectOrName
+      name = obj.name
+    end
+    if addons[name] then error(("Addon %q already exists."):format(tostring(name)), 2) end
+    local fresh = new_object_with_methods(name, nil, ...)
+    if obj then
+      for k, v in pairs(fresh) do if obj[k] == nil then obj[k] = v end end
+      -- Re-embed so closures bind to the caller's table.
+      embed_libs(obj, ...)
+    else
+      obj = fresh
+    end
+    addons[name] = obj
+    addonOrder[#addonOrder + 1] = obj
+    return obj
+  end
+  function AceAddon:GetAddon(name, silent)
+    local a = addons[name]
+    if not a and not silent then error(("Cannot find an AceAddon called %q."):format(tostring(name)), 2) end
+    return a
+  end
+  function AceAddon:IterateAddons() return pairs(addons) end
+  libs["AceAddon-3.0"] = AceAddon
+
+  -- Boot: OnInitialize (addon, then its modules depth-first in creation order), then OnEnable.
+  local function initialize(obj)
+    if obj.initialized then return end
+    obj.initialized = true
+    if obj.OnInitialize then obj:OnInitialize() end
+    for _, m in ipairs(obj.orderedModules) do initialize(m) end
+  end
+
+  function W.boot()
+    for _, a in ipairs(addonOrder) do initialize(a) end
+    for _, a in ipairs(addonOrder) do enable_object(a) end
+  end
+
+  -- AceDB
+  local AceDB = {}
+  local function fill_defaults(dst, defaults)
+    for k, v in pairs(defaults) do
+      if dst[k] == nil then
+        dst[k] = deep_copy(v)
+      elseif type(v) == "table" and type(dst[k]) == "table" then
+        fill_defaults(dst[k], v)
+      end
+    end
+  end
+  function AceDB:New(sv, defaults)
+    if type(sv) == "string" then
+      if _G[sv] == nil then _G[sv] = {} end
+      sv = _G[sv]
+    end
+    sv.global = sv.global or {}
+    if defaults and defaults.global then fill_defaults(sv.global, defaults.global) end
+    return { sv = sv, global = sv.global, defaults = defaults }
+  end
+  libs["AceDB-3.0"] = AceDB
+
+  -- AceGUI
+  local AceGUI = {}
+  function AceGUI:Create(widgetType)
+    local w = setmetatable({ type = widgetType, frame = CreateFrame("Frame") }, method_stub_meta())
+    return w
+  end
+  libs["AceGUI-3.0"] = AceGUI
+
+  -- AceConfig family
+  local AceConfigRegistry = {}
+  function AceConfigRegistry:RegisterOptionsTable(app, options)
+    W.config.registered[app] = options
+  end
+  function AceConfigRegistry:NotifyChange() W.config.notified = W.config.notified + 1 end
+  function AceConfigRegistry:GetOptionsTable(app)
+    local o = W.config.registered[app]
+    if type(o) == "function" then return function() return o("dialog", "AceConfigDialog-3.0") end end
+    if o then return function() return o end end
+  end
+  libs["AceConfigRegistry-3.0"] = AceConfigRegistry
+
+  local AceConfig = {}
+  function AceConfig:RegisterOptionsTable(app, options) AceConfigRegistry:RegisterOptionsTable(app, options) end
+  libs["AceConfig-3.0"] = AceConfig
+
+  local AceConfigDialog = {}
+  function AceConfigDialog:Open(app, container)
+    W.config.opened[#W.config.opened + 1] = { app = app, container = container }
+  end
+  function AceConfigDialog:Close() end
+  function AceConfigDialog:AddToBlizOptions(app, name)
+    W.config.blizOptions[#W.config.blizOptions + 1] = { app = app, name = name }
+    return CreateFrame("Frame")
+  end
+  function AceConfigDialog:SetDefaultSize() end
+  libs["AceConfigDialog-3.0"] = AceConfigDialog
+
+  -- LibDataBroker and LibDBIcon
+  local LDB = {}
+  function LDB:NewDataObject(name, obj)
+    if W.ldb.objects[name] then return nil end
+    obj = obj or {}
+    W.ldb.objects[name] = obj
+    return obj
+  end
+  function LDB:GetDataObjectByName(name) return W.ldb.objects[name] end
+  libs["LibDataBroker-1.1"] = LDB
+
+  local DBIcon = {}
+  function DBIcon:Register(name, obj, db)
+    W.dbicon.registered[name] = { obj = obj, db = db }
+    W.dbicon.shown[name] = not (db and db.hide)
+  end
+  function DBIcon:Show(name) W.dbicon.shown[name] = true end
+  function DBIcon:Hide(name) W.dbicon.shown[name] = false end
+  function DBIcon:IsRegistered(name) return W.dbicon.registered[name] ~= nil end
+  function DBIcon:Refresh() end
+  function DBIcon:GetMinimapButton() return nil end
+  libs["LibDBIcon-1.0"] = DBIcon
+
+  ---------------------------------------------------------------------------
+  -- Auctionator v1 (signatures from Auctionator v321; see plan "Verified facts")
+  ---------------------------------------------------------------------------
+  local function check_caller(callerID)
+    if type(callerID) ~= "string" or callerID == "" then error("Invalid callerID", 3) end
+    W.auctionator.lastCallerID = callerID
+  end
+  local function check_item_id(itemID)
+    if type(itemID) ~= "number" then error("Invalid itemID", 3) end
+    return itemID
+  end
+  local function item_id_from_link(link)
+    if type(link) ~= "string" then error("Invalid itemLink", 3) end
+    return tonumber(link:match("item:(%d+)"))
+  end
+
+  local v1 = {}
+  function v1.GetAuctionPriceByItemID(callerID, itemID)
+    check_caller(callerID); return W.auctionator.prices[check_item_id(itemID)]
+  end
+  function v1.GetAuctionPriceByItemLink(callerID, itemLink)
+    check_caller(callerID); return W.auctionator.prices[item_id_from_link(itemLink)]
+  end
+  function v1.GetAuctionAgeByItemID(callerID, itemID)
+    check_caller(callerID); return W.auctionator.ages[check_item_id(itemID)]
+  end
+  function v1.GetVendorPriceByItemID(callerID, itemID)
+    check_caller(callerID); return W.auctionator.vendor[check_item_id(itemID)]
+  end
+  function v1.IsAuctionDataExactByItemID(callerID, itemID)
+    check_caller(callerID); return W.auctionator.exact[check_item_id(itemID)] and true or false
+  end
+  function v1.RegisterForDBUpdate(callerID, callback)
+    check_caller(callerID)
+    if type(callback) ~= "function" then error("Invalid callback", 2) end
+    W.auctionator.dbCallbacks[#W.auctionator.dbCallbacks + 1] = callback
+  end
+  function v1.CreateShoppingList(callerID, name, searchStrings)
+    check_caller(callerID)
+    if type(name) ~= "string" or type(searchStrings) ~= "table" then error("Invalid shopping list", 2) end
+    W.auctionator.lists[name] = searchStrings
+  end
+  function v1.ConvertToSearchString(callerID, term)
+    check_caller(callerID)
+    if type(term) ~= "table" or type(term.searchString) ~= "string" then error("Invalid search term", 2) end
+    -- The real format is richer; tests only need a deterministic string.
+    local s = term.searchString
+    if term.isExact then s = '"' .. s .. '"' end
+    return s
+  end
+
+  function W.removeAuctionator() _G.Auctionator = nil end
+
+  ---------------------------------------------------------------------------
+  -- Default globals
+  ---------------------------------------------------------------------------
+  local emptyList = function() return {} end
+  local retNil = function() return nil end
+  local retFalse = function() return false end
+  local retZero = function() return 0 end
+
+  local globals = {
+    C_TradeSkillUI = {
+      GetRecipeSchematic = retNil, GetRecipeInfo = retNil, GetCraftingOperationInfo = retNil,
+      GetConcentrationCurrencyID = retZero, GetChildProfessionInfo = retNil, GetChildProfessionInfos = emptyList,
+      GetProfessionInfoByRecipeID = retNil, GetProfessionInfoBySkillLineID = retNil, GetProfessionSlots = emptyList,
+      GetItemReagentQualityByItemInfo = retNil, IsNPCCrafting = retFalse, GetRecipeCooldown = retNil,
+      GetFilteredRecipeIDs = emptyList, IsTradeSkillReady = retFalse, IsTradeSkillLinked = retFalse,
+      IsTradeSkillGuild = retFalse,
+    },
+    C_CraftingOrders = {
+      ClaimOrder = retNil, FulfillOrder = retNil, GetClaimedOrder = retNil, GetCrafterOrders = emptyList,
+      GetCraftingOrderTime = retZero, GetPersonalOrdersInfo = emptyList,
+    },
+    C_Item = { GetItemCount = retZero, GetItemNameByID = retNil, RequestLoadItemDataByID = noop },
+    C_CurrencyInfo = {
+      GetCurrencyInfo = retNil, GetCurrencyListInfo = retNil, GetCurrencyListLink = retNil,
+      GetCurrencyListSize = retZero,
+    },
+    C_ProfSpecs = {
+      GetConfigIDForSkillLine = retZero, GetSpecTabIDsForSkillLine = emptyList, SkillLineHasSpecialization = retFalse,
+      GetTabInfo = retNil, GetChildrenForPath = emptyList, GetPerksForPath = emptyList,
+      GetUnlockRankForPerk = retNil,
+    },
+    C_Traits = { GetNodeInfo = retNil, GetEntryInfo = retNil, GetDefinitionInfo = retNil, GetTreeCurrencyInfo = emptyList },
+    C_Container = { GetContainerNumSlots = retZero, GetContainerItemInfo = retNil },
+    C_Bank = { CanViewBank = retFalse },
+    C_Timer = C_Timer,
+    Enum = {
+      CraftingReagentType = { Modifying = 0, Basic = 1, Finishing = 2, Automatic = 3 },
+      TradeskillSlotDataType = { Reagent = 1, ModifiedReagent = 2 },
+      BagIndex = {
+        Backpack = 0, Bag_1 = 1, Bag_2 = 2, Bag_3 = 3, Bag_4 = 4, ReagentBag = 5,
+        CharacterBankTab_1 = 6, CharacterBankTab_2 = 7, CharacterBankTab_3 = 8, CharacterBankTab_4 = 9,
+        CharacterBankTab_5 = 10, CharacterBankTab_6 = 11,
+        AccountBankTab_1 = 12, AccountBankTab_2 = 13, AccountBankTab_3 = 14, AccountBankTab_4 = 15,
+        AccountBankTab_5 = 16,
+      },
+      BankType = { Character = 0, Account = 2 },
+      ProfessionsSpecPathState = { Locked = 0, Progressing = 1, Completed = 2 },
+      ProfessionsSpecPerkState = { Unearned = 0, Earned = 1, Pending = 2 },
+    },
+    LibStub = LibStub,
+    time = function() return math.floor(W.now) end,
+    GetServerTime = function() return math.floor(W.now) end,
+    GetBuildInfo = function() return "12.1.5", "70575", "Oct 23 2026", 120105 end,
+    UnitName = function() return "Thrall" end,
+    UnitClass = function() return "Mage", "MAGE", 8 end,
+    GetRealmName = function() return "Argent Dawn" end,
+    GetNormalizedRealmName = function() return "ArgentDawn" end,
+    GetMoney = retZero,
+    GetInventoryItemLink = retNil,
+    CreateFrame = CreateFrame,
+    UIParent = CreateFrame("Frame", "UIParent"),
+    UISpecialFrames = {},
+    print = function(...) W.printed[#W.printed + 1] = join_args(...) end,
+    debugstack = function() return "stack traceback:\n\t[stub]" end,
+    wipe = function(t) for k in pairs(t) do t[k] = nil end return t end,
+    tinsert = table.insert,
+    tremove = table.remove,
+    Auctionator = { API = { v1 = v1 } },
+  }
+  framesByName.UIParent = nil  -- UIParent is installed through `globals` and tracked below
+
+  deep_merge(globals, overrides)
+  for name, value in pairs(globals) do
+    installedNames[name] = true
+    _G[name] = value
+  end
+  -- Frames created by CreateFrame while building defaults/overrides are tracked in framesByName.
+  return W
+end
+
+return install

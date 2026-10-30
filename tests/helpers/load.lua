@@ -16,15 +16,17 @@ function M.load_files(ns, paths)
 end
 
 -- Loads the TOC file list in order, skipping .xml entries, stopping after lastFile
--- (or loading everything when lastFile is nil).
+-- (or loading everything when lastFile is nil). Errors when lastFile is given but is not a
+-- loadable (non-.xml) file in the TOC.
 function M.load_addon(ns, lastFile)
-  local paths = {}
+  local paths, found = {}, false
   for _, f in ipairs(toc.read_toc("FabricationStation.toc").files) do
     if not f:match("%.xml$") then
       paths[#paths + 1] = f
-      if lastFile and f == lastFile then break end
+      if lastFile and f == lastFile then found = true; break end
     end
   end
+  if lastFile and not found then error("lastFile not found in FabricationStation.toc: " .. tostring(lastFile), 2) end
   return M.load_files(ns, paths)
 end
 

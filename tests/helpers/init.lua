@@ -7,5 +7,5 @@ load_files = load.load_files
 load_addon = load.load_addon
 run_cmd = load.run_cmd
 
--- Filled in by Task 2 (WoW API stubs).
-install_wow_stubs = function() end
+-- WoW API and Ace3 stub layer (see wow_stubs.lua).
+install_wow_stubs = require("wow_stubs")
