@@ -36,6 +36,17 @@
 --   fakeEvaluate(recipeID, result|fn|nil)  Recipes:Evaluate returns `result` (or fn(charKey, opts, recipeID))
 --               for that recipe, whatever the character and options; nil restores the real evaluation
 --   evaluated   list of { recipeID, charKey, opts } for every Evaluate call made after the first fakeEvaluate
+--   openProfession(skillLineID)  sets openLine (Scanner:IsProfessionOpen then reports that line open)
+--   haveAll(charKey)    1000 in the bags of every reagent of every world recipe for that character
+--   cooldown(charKey, recipeID, readyAt, charges?)  stores the profession record's cooldown entry
+--   names       [itemID] = name answered by C_Item.GetItemNameByID (nil = not cached)
+--   loadRequests  itemIDs passed to C_Item.RequestLoadItemDataByID, in call order
+--   crafts      C_TradeSkillUI.CraftRecipe calls, each { n = select("#", ...), ... } of its arguments
+--   recordAuctionatorTerms()  wraps the stub Auctionator v1 and returns { terms, lists }: terms are
+--               copies of the ConvertToSearchString terms, lists are { caller, name, searchStrings }
+--               of CreateShoppingList calls. Call it again after replacing the Auctionator global.
+-- C_TradeSkillUI.GetProfessionInfoByRecipeID answers { professionID = schematic.skillLineID } for world
+-- recipes. These game fakes are installed unless opts.stubs supplies the same function.
 -- Later tasks extend this helper with the fakes their specs use.
 
 local install = require("wow_stubs")
@@ -302,6 +313,54 @@ local function make_world(opts)
       end
     end
     fakes[recipeID] = result
+  end
+
+  -- Craft actions (Task 12): item names, CraftRecipe and the open profession.
+  world.names, world.loadRequests, world.crafts = {}, {}, {}
+  local stubs = opts.stubs or {}
+  local function fake(apiName, fnName, fn)
+    if type(stubs[apiName]) == "table" and stubs[apiName][fnName] ~= nil then return end
+    _G[apiName][fnName] = fn
+  end
+  fake("C_Item", "GetItemNameByID", function(itemID) return world.names[itemID] end)
+  fake("C_Item", "RequestLoadItemDataByID", function(itemID) world.loadRequests[#world.loadRequests + 1] = itemID end)
+  fake("C_TradeSkillUI", "CraftRecipe", function(...)
+    world.crafts[#world.crafts + 1] = { n = select("#", ...), ... }
+  end)
+  fake("C_TradeSkillUI", "GetProfessionInfoByRecipeID", function(recipeID)
+    local s = world.schematics[recipeID]
+    return s and { professionID = s.skillLineID } or nil
+  end)
+
+  function world.openProfession(skillLineID) world.openLine = skillLineID end
+  function world.haveAll(charKey)
+    local items = world.items[charKey]
+    for _, s in pairs(world.schematics) do
+      for _, sl in ipairs(s.reagentSlots or {}) do
+        for _, itemID in ipairs(sl.reagents or {}) do items[itemID] = { bags = 1000, bank = 0, reagentBank = 0 } end
+      end
+    end
+  end
+  function world.cooldown(charKey, recipeID, readyAt, charges)
+    local line = world.schematics[recipeID] and world.schematics[recipeID].skillLineID or SKILL_LINE
+    local p = world.chars[charKey].professions[line]
+    p.cooldowns = p.cooldowns or {}
+    p.cooldowns[recipeID] = { readyAt = readyAt, charges = charges or 0, maxCharges = charges and 1 or 0, time = W.now }
+  end
+  function world.recordAuctionatorTerms()
+    local rec = { terms = {}, lists = {} }
+    local v1 = _G.Auctionator and _G.Auctionator.API and _G.Auctionator.API.v1
+    if not v1 then return rec end
+    local convert, create = v1.ConvertToSearchString, v1.CreateShoppingList
+    function v1.ConvertToSearchString(callerID, term)
+      rec.terms[#rec.terms + 1] = deep_copy(term)
+      return convert(callerID, term)
+    end
+    function v1.CreateShoppingList(callerID, name, searchStrings)
+      rec.lists[#rec.lists + 1] = { caller = callerID, name = name, searchStrings = deep_copy(searchStrings) }
+      return create(callerID, name, searchStrings)
+    end
+    return rec
   end
 
   return ns, W, world

@@ -1,0 +1,304 @@
+describe("Queue craft actions", function()
+  local ns, W, world, Q, api
+  before_each(function()
+    ns, W, world = make_world({ last = "Modules/QueueCraft.lua" })
+    world.fakeEvaluate(9001, { allocation = { {slotIndex=1,itemID=1001,quantity=2}, {slotIndex=2,itemID=2002,quantity=1} }, reagentCost = 900, flags = {} })
+    api = world.recordAuctionatorTerms()                       -- wraps W.auctionator: api.terms, api.lists
+    Q = ns.FS:GetModule("Queue")
+  end)
+  it("exports exact items with quantity and rank tier", function()
+    world.names[1001], world.names[2002] = "Bright Ore", "Glimmer Dust"
+    Q:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm" })
+    assert.is_true((Q:ExportShoppingList()))
+    assert.same({ searchString = "Bright Ore", isExact = true, quantity = 6, tier = 1 }, api.terms[1])
+    assert.same({ searchString = "Glimmer Dust", isExact = true, quantity = 3, tier = 2 }, api.terms[2])
+    assert.same({ "FabricationStation", "FabricationStation" }, { api.lists[1].caller, api.lists[1].name })
+  end)
+  it("skips_uncached_names", function()
+    world.names[1001] = "Bright Ore"
+    Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+    local ok, info = Q:ExportShoppingList()
+    assert.is_true(ok); assert.same({ added = 1, skipped = 1 }, info); assert.same({ 2002 }, world.loadRequests)
+  end)
+  it("reports missing Auctionator", function()
+    W.removeAuctionator(); Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+    assert.same({ false, "noAuctionator" }, { Q:ExportShoppingList() })
+  end)
+  it("craft_next_window_closed", function()
+    Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+    local r = Q:CraftNext()
+    assert.equals("open", r.status); assert.equals("Main-Realm", r.charKey); assert.equals(2906, r.skillLineID); assert.equals(0, #world.crafts)
+  end)
+  it("craft_next_other_character", function()
+    world.openProfession(2906); Q:Add({ recipeID = 9001, quantity = 1, charKey = "Alt-Realm" })
+    local r = Q:CraftNext()
+    assert.equals("open", r.status); assert.equals("Alt-Realm", r.charKey); assert.equals(0, #world.crafts)
+  end)
+  it("craft_next_crafts_one_and_counts_on_result", function()
+    world.openProfession(2906); world.haveAll("Main-Realm")
+    local id = Q:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm", useConcentration = true })
+    local r = Q:CraftNext(); assert.same({ "crafted", id }, { r.status, r.entryID })
+    local c = world.crafts[1]                                  -- recorded CraftRecipe arguments
+    assert.equals(9001, c[1]); assert.equals(1, c[2]); assert.is_table(c[3]); assert.is_nil(c[4]); assert.is_nil(c[5]); assert.is_true(c[6])
+    assert.equals(3, Q:GetEntries()[1].quantity)
+    W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 77 })
+    W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 77 })    -- multicraft extra, same operation
+    assert.equals(2, Q:GetEntries()[1].quantity)
+  end)
+  it("craft_next_missing_and_cooldown", function()
+    world.openProfession(2906); Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+    assert.equals("missing", Q:CraftNext().status)
+    world.haveAll("Main-Realm"); world.cooldown("Main-Realm", 9001, W.now + 3600)
+    local r = Q:CraftNext(); assert.equals("cooldown", r.status); assert.equals(W.now + 3600, r.readyAt)
+  end)
+  it("craft_next_empty", function() assert.equals("empty", Q:CraftNext().status) end)
+
+  it("is a core module", function() assert.is_true(ns.FS:GetModule("QueueCraft").coreModule) end)
+
+  describe("shopping list", function()
+    before_each(function()
+      world.names[1001], world.names[2002], world.names[3001] = "Bright Ore", "Glimmer Dust", "Flux"
+    end)
+    it("hands the converted search strings to Auctionator under the FabricationStation caller ID", function()
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      local ok, info = Q:ExportShoppingList()
+      assert.is_true(ok); assert.same({ added = 2, skipped = 0 }, info)
+      assert.same({ '"Bright Ore"', '"Glimmer Dust"' }, W.auctionator.lists.FabricationStation)
+      assert.equals("FabricationStation", W.auctionator.lastCallerID)
+    end)
+    it("sums every character's shortfall, sorted by item ID", function()
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Alt-Realm" })
+      Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      world.items["Main-Realm"][1001] = { bags = 1, bank = 0, reagentBank = 0 }
+      Q:ExportShoppingList()
+      assert.same({ 5, 3 }, { api.terms[1].quantity, api.terms[2].quantity })
+      assert.same({ "Bright Ore", "Glimmer Dust" }, { api.terms[1].searchString, api.terms[2].searchString })
+    end)
+    it("leaves out the tier for a single-reagent slot", function()
+      world.fakeEvaluate(9001, { allocation = { {slotIndex=3,itemID=3001,quantity=2} }, reagentCost = 1000, flags = {} })
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      Q:ExportShoppingList()
+      assert.same({ searchString = "Flux", isExact = true, quantity = 2 }, api.terms[1])
+    end)
+    it("is empty when nothing is missing", function()
+      assert.same({ false, "empty" }, { Q:ExportShoppingList() })
+      world.haveAll("Main-Realm"); Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      assert.same({ false, "empty" }, { Q:ExportShoppingList() })
+      assert.equals(0, #api.lists)
+    end)
+    it("creates no list when every name is still loading", function()
+      world.names[1001], world.names[2002] = nil, nil
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      local ok, info = Q:ExportShoppingList()
+      assert.is_true(ok); assert.same({ added = 0, skipped = 2 }, info)
+      assert.equals(0, #api.lists); assert.same({ 1001, 2002 }, world.loadRequests)
+    end)
+    it("reports an Auctionator failure and logs it", function()
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      _G.Auctionator.API.v1.CreateShoppingList = function() error("list boom") end
+      assert.same({ false, "auctionatorError" }, { Q:ExportShoppingList() })
+      local errors = ns.FS.db.global.diagnostics.errors
+      assert.equals("Queue:ShoppingList", errors[#errors].source)
+      _G.Auctionator.API.v1.ConvertToSearchString = function() error("convert boom") end
+      assert.same({ false, "auctionatorError" }, { Q:ExportShoppingList() })
+    end)
+    it("treats an Auctionator without the shopping list API as missing", function()
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      _G.Auctionator.API.v1.CreateShoppingList = nil
+      assert.same({ false, "noAuctionator" }, { Q:ExportShoppingList() })
+    end)
+  end)
+
+  describe("cooldowns", function()
+    local entry
+    before_each(function() entry = { recipeID = 9001, quantity = 1, charKey = "Main-Realm" } end)
+    it("is ready without a record, once readyAt has passed, or with a charge left", function()
+      assert.is_nil(Q:GetCooldownReadyAt(entry))
+      world.cooldown("Main-Realm", 9001, W.now + 60)
+      assert.equals(W.now + 60, Q:GetCooldownReadyAt(entry))
+      assert.is_nil(Q:GetCooldownReadyAt({ recipeID = 9001, quantity = 1, charKey = "Alt-Realm" }))
+      world.cooldown("Main-Realm", 9001, W.now + 60, 1)
+      assert.is_nil(Q:GetCooldownReadyAt(entry))
+      world.cooldown("Main-Realm", 9001, W.now)
+      assert.is_nil(Q:GetCooldownReadyAt(entry))
+    end)
+    it("is ready for a recipe without a schematic", function()
+      world.cooldown("Main-Realm", 9001, W.now + 60)
+      world.schematics[9001] = nil
+      assert.is_nil(Q:GetCooldownReadyAt(entry))
+    end)
+  end)
+
+  describe("Craft Next", function()
+    before_each(function() world.openProfession(2906) end)
+    it("passes the Blizzard reagent table, the order and concentration off", function()
+      world.haveAll("Main-Realm")
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", orderID = 42 })
+      Q:CraftNext()
+      local c = world.crafts[1]
+      assert.same({ { reagent = { itemID = 1001 }, dataSlotIndex = 11, quantity = 2 },
+        { reagent = { itemID = 2002 }, dataSlotIndex = 12, quantity = 1 } }, c[3])
+      assert.equals(42, c[5]); assert.is_false(c[6]); assert.equals(6, c.n)
+    end)
+    it("checks the open profession through the recipe's profession ID", function()
+      world.openProfession(1234); world.haveAll("Main-Realm")
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      assert.equals("open", Q:CraftNext().status); assert.equals(0, #world.crafts)
+      _G.C_TradeSkillUI.GetProfessionInfoByRecipeID = function() return { professionID = 1234 } end
+      assert.equals("crafted", Q:CraftNext().status)
+    end)
+    it("skips entries on cooldown and crafts the next one", function()
+      world.haveAll("Main-Realm"); world.cooldown("Main-Realm", 9002, W.now + 60)
+      local schematic = {}
+      for k, v in pairs(world.schematics[9001]) do schematic[k] = v end
+      schematic.recipeID = 9002; world.schematics[9002] = schematic
+      world.fakeEvaluate(9002, { allocation = {}, reagentCost = 0, flags = {} })
+      Q:Add({ recipeID = 9002, quantity = 1, charKey = "Main-Realm" })
+      local id = Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      local r = Q:CraftNext()
+      assert.same({ "crafted", id }, { r.status, r.entryID }); assert.equals(9001, world.crafts[1][1])
+    end)
+    it("reports the first blocker in queue order", function()
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Alt-Realm" })
+      local id = Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      assert.same({ "open", "Alt-Realm" }, { Q:CraftNext().status, Q:CraftNext().charKey })
+      Q:Clear()
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Alt-Realm" })
+      local r = Q:CraftNext()
+      assert.equals("missing", r.status); assert.same({ [1001] = 2, [2002] = 1 }, r.missing)
+      assert.equals("Main-Realm", r.charKey); assert.are_not.equal(id, r.entryID)
+    end)
+    it("reports the earliest cooldown when every entry waits", function()
+      world.cooldown("Main-Realm", 9001, W.now + 600); world.cooldown("Alt-Realm", 9001, W.now + 60)
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      local alt = Q:Add({ recipeID = 9001, quantity = 1, charKey = "Alt-Realm" })
+      local r = Q:CraftNext()
+      assert.same({ "cooldown", W.now + 60, alt, "Alt-Realm" }, { r.status, r.readyAt, r.entryID, r.charKey })
+    end)
+    it("counts a crafting order's provided reagents and, when enabled, the warband", function()
+      world.items["Main-Realm"][2002] = { bags = 1, bank = 0, reagentBank = 0 }
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", providedReagents = { [1001] = 2 } })
+      assert.equals("crafted", Q:CraftNext().status)
+      Q:Clear()
+      world.items["Main-Realm"][2002] = nil; world.warband[1001], world.warband[2002] = 2, 1
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      assert.equals("crafted", Q:CraftNext().status)
+      ns.FS.db.global.settings.crafting = { queueUseWarband = false }
+      assert.equals("missing", Q:CraftNext().status)
+    end)
+    it("reports an entry whose recipe cannot be evaluated as missing", function()
+      world.fakeEvaluate(9001, function() return nil end)
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      local r = Q:CraftNext()
+      assert.equals("missing", r.status); assert.same({}, r.missing); assert.equals(0, #world.crafts)
+    end)
+    it("decrements once per operation, removes at zero, ignores other items", function()
+      world.haveAll("Main-Realm")
+      local id = Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 1 })        -- nothing pending
+      assert.equals(2, Q:GetEntries()[1].quantity)
+      Q:CraftNext(); Q:CraftNext()
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 7777, operationID = 2 })
+      assert.equals(2, Q:GetEntries()[1].quantity)
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5001, operationID = 3 })
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 4 })
+      assert.equals(0, #Q:GetEntries())
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 5 })
+      assert.equals(0, #Q:GetEntries()); assert.is_number(id)
+    end)
+    it("does not decrement restock entries", function()
+      world.fakeEvaluate(9001, function(charKey)
+        return { allocation = {}, reagentCost = 0, expectedYield = 1, flags = {}, profit = charKey == "Main-Realm" and 9 or 1 }
+      end)
+      world.counts[5002] = 0; Q:SetRestock(5002, 3)
+      local r = Q:CraftNext()
+      assert.same({ "crafted", "restock:5002" }, { r.status, r.entryID })
+      local id = Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", targetQuality = 1 })
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 9 })
+      local entries = Q:GetEntries()
+      assert.same({ id, 1 }, { entries[1].id, entries[1].quantity })
+    end)
+    it("changes nothing on a craft result while the saved data is newer", function()
+      world.haveAll("Main-Realm")
+      Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      assert.equals("crafted", Q:CraftNext().status)
+      ns.FS.dbIsNewer = true
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 1 })
+      assert.equals(2, ns.FS.db.global.queue.entries[1].quantity)
+    end)
+    it("logs a failing result handler without turning the module off", function()
+      world.haveAll("Main-Realm")
+      Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      Q:CraftNext()
+      local orig = Q.SetQuantity
+      Q.SetQuantity = function() error("boom") end
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 1 })
+      Q.SetQuantity = orig
+      assert.is_true(ns.FS:GetModule("QueueCraft"):IsEnabled()); assert.is_true(Q:IsEnabled())
+      local errors = ns.FS.db.global.diagnostics.errors
+      assert.equals("QueueCraft:CraftResult", errors[#errors].source)
+    end)
+    it("stops counting results when disabled", function()
+      world.haveAll("Main-Realm")
+      Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      Q:CraftNext()
+      ns.FS:GetModule("QueueCraft"):Disable()
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 1 })
+      assert.equals(2, Q:GetEntries()[1].quantity)
+    end)
+  end)
+end)
+
+-- Structural rule (global constraints): C_TradeSkillUI.CraftRecipe is called only inside
+-- Queue:CraftNext, and Queue:CraftNext is called only from OnClick handlers.
+describe("click-only crafting", function()
+  local function lua_files()
+    local out = {}
+    local p = io.popen("find Modules UI -name '*.lua' | sort")
+    for line in p:lines() do out[#out + 1] = line end
+    p:close()
+    return out
+  end
+  local function code_lines(path)
+    local out, n = {}, 0
+    for line in io.lines(path) do
+      n = n + 1
+      out[n] = (line:gsub("%-%-.*$", ""))
+    end
+    return out
+  end
+
+  it("calls CraftRecipe only inside Queue:CraftNext", function()
+    local hits = {}
+    for _, path in ipairs(lua_files()) do
+      local lines = code_lines(path)
+      local inside = false
+      for i, line in ipairs(lines) do
+        if line:match("^function Queue:CraftNext%(") then inside = true
+        elseif line:match("^end") then inside = false end
+        if line:find("CraftRecipe", 1, true) then
+          hits[#hits + 1] = path .. ":" .. i
+          assert.is_true(inside, path .. ":" .. i .. " calls CraftRecipe outside Queue:CraftNext")
+        end
+      end
+    end
+    assert.same({ "Modules/QueueCraft.lua" }, { (hits[1] or ""):match("^[^:]+") })
+    assert.equals(1, #hits)
+  end)
+
+  it("calls Queue:CraftNext only from OnClick handlers", function()
+    for _, path in ipairs(lua_files()) do
+      local lines = code_lines(path)
+      for i, line in ipairs(lines) do
+        if line:find("CraftNext(", 1, true) and not line:match("function Queue:CraftNext%(") then
+          -- The innermost function that encloses the call must be an OnClick handler.
+          local j = i
+          while j > 0 and not lines[j]:find("function", 1, true) do j = j - 1 end
+          assert.is_truthy(j > 0 and lines[j]:find("OnClick", 1, true),
+            path .. ":" .. i .. " calls CraftNext outside an OnClick handler")
+        end
+      end
+    end
+  end)
+end)

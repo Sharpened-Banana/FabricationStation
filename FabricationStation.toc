@@ -31,6 +31,7 @@ Modules\CraftingData.lua
 Modules\Recipes.lua
 Modules\RecipeScan.lua
 Modules\Queue.lua
+Modules\QueueCraft.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Settings.lua
