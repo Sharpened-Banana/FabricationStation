@@ -12,6 +12,9 @@
 --     running callbacks at the advance's target time waits for the next W.advance, as it waits for
 --     the next frame in the client. Created earlier inside a longer advance (W.now < target), it runs
 --     within that advance, as later frames would have run it.
+--   * hooksecurefunc hook bodies run inline after the original, so an error in a hook propagates to the caller
+--     (the client reports it and carries on). Hooks are recorded in W.hooks as { tbl, name, fn }
+--     (tbl is nil for a global function, so the name is at [2] and fn at [3] either way).
 --   * time() and GetServerTime() return W.now unfloored (fractional after a sub-second advance), so
 --     tests can compare stored timestamps with W.now. The client returns whole seconds; tests of
 --     logic that floors or divides time should advance by whole seconds.
@@ -119,6 +122,7 @@ local function install(overrides)
     dbicon = { registered = {}, shown = {} },
     auctionator = { prices = {}, ages = {}, vendor = {}, lists = {}, dbCallbacks = {}, exact = {} },
     errors = {},  -- errors reported through geterrorhandler()
+    hooks = {},   -- every hooksecurefunc call: { tbl|nil, name, fn }
   }
 
   ---------------------------------------------------------------------------
@@ -641,6 +645,26 @@ local function install(overrides)
     TooltipDataProcessor.postCalls[#TooltipDataProcessor.postCalls + 1] = { dataType = dataType, fn = fn }
   end
 
+  -- hooksecurefunc([tbl,] name, fn): replaces tbl[name] (or _G[name]) with a function that calls the
+  -- original, then fn with the same arguments, and returns the original's results. Like the client it
+  -- errors when the target is not a function; hooks cannot be removed.
+  local function pack(...) return { n = select("#", ...), ... } end
+  local function hooksecurefunc(a, b, c)
+    local tbl, name, fn
+    if type(a) == "table" then tbl, name, fn = a, b, c else name, fn = a, b end
+    local usage = 'Usage: hooksecurefunc([table,] "function", hookfunc)'
+    if type(name) ~= "string" or type(fn) ~= "function" then error(usage, 2) end
+    local target = tbl or _G
+    local original = target[name]
+    if type(original) ~= "function" then error(usage .. ": " .. name .. " is not a function", 2) end
+    target[name] = function(...)
+      local results = pack(original(...))
+      fn(...)
+      return unpack(results, 1, results.n)
+    end
+    W.hooks[#W.hooks + 1] = { tbl, name, fn }
+  end
+
   local globals = {
     C_TradeSkillUI = {
       GetRecipeSchematic = retNil, GetRecipeInfo = retNil, GetCraftingOperationInfo = retNil,
@@ -648,12 +672,13 @@ local function install(overrides)
       GetProfessionInfoByRecipeID = retNil, GetProfessionInfoBySkillLineID = retNil, GetProfessionSlots = emptyList,
       GetItemReagentQualityByItemInfo = retNil, IsNPCCrafting = retFalse, GetRecipeCooldown = retNil,
       GetFilteredRecipeIDs = emptyList, IsTradeSkillReady = retFalse, IsTradeSkillLinked = retFalse,
-      IsTradeSkillGuild = retFalse,
+      IsTradeSkillGuild = retFalse, CraftRecipe = noop, GetItemCraftedQualityByItemInfo = retNil,
     },
     C_CraftingOrders = {
       ClaimOrder = retNil, FulfillOrder = retNil, GetClaimedOrder = retNil, GetCrafterOrders = emptyList,
-      GetCraftingOrderTime = retZero, GetPersonalOrdersInfo = emptyList,
+      GetCraftingOrderTime = retZero, GetPersonalOrdersInfo = emptyList, GetOrderClaimInfo = retNil,
     },
+    C_DateAndTime = { GetSecondsUntilWeeklyReset = retZero },
     C_Item = { GetItemCount = retZero, GetItemNameByID = retNil, RequestLoadItemDataByID = noop },
     C_CurrencyInfo = {
       GetCurrencyInfo = retNil, GetCurrencyListInfo = retNil, GetCurrencyListLink = retNil,
@@ -685,6 +710,11 @@ local function install(overrides)
       TooltipDataType = { Item = 0 },
     },
     TooltipDataProcessor = TooltipDataProcessor,
+    hooksecurefunc = hooksecurefunc,
+    GetInboxInvoiceInfo = retNil, GetInboxHeaderInfo = retNil, TakeInboxMoney = noop, AutoLootMailItem = noop,
+    PlaySound = noop,
+    SOUNDKIT = { RAID_WARNING = 8959 },
+    ScrollUtil = { AddAcquiredFrameCallback = noop, AddReleasedFrameCallback = noop },
     LibStub = LibStub,
     ButtonFrameTemplate_HidePortrait = noop,
     ButtonFrameTemplate_HideButtonBar = noop,

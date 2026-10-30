@@ -33,6 +33,7 @@ Modules\RecipeScan.lua
 Modules\Queue.lua
 Modules\QueueCraft.lua
 Modules\SelfCheck.lua
+Modules\Customers.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua
