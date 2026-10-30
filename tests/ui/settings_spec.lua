@@ -30,6 +30,34 @@ describe("Settings tab", function()
     assert.is_truthy(group.frame:GetParent())
     assert.is_not.equals(_G.UIParent, group.frame:GetParent())
   end)
+  it("gives the group the container's strata and lays it out again when the container resizes", function()
+    local AceGUI = LibStub("AceGUI-3.0"); local realCreate = AceGUI.Create
+    local group, layouts = nil, 0
+    AceGUI.Create = function(self, widgetType)
+      local w = realCreate(self, widgetType); group = w
+      w.frame.SetFrameStrata = function(f, strata) f.strata = strata end
+      w.DoLayout = function() layouts = layouts + 1 end
+      return w
+    end
+    local realCreateFrame = _G.CreateFrame
+    _G.CreateFrame = function(...)
+      local f = realCreateFrame(...)
+      f.GetFrameStrata = function() return "HIGH" end
+      return f
+    end
+    MW:Show(); MW:SelectTab("settings")
+    assert.equals("HIGH", group.frame.strata)
+    local container = group.frame:GetParent()
+    local onSize = container:GetScript("OnSizeChanged"); assert.is_function(onSize)
+    local before = layouts; onSize(container, 500, 400); assert.equals(before + 1, layouts)
+  end)
+  it("logs a failing relayout without stopping the window", function()
+    MW:Show(); MW:SelectTab("settings")
+    local container = W.config.opened[1].container.frame:GetParent()
+    W.config.opened[1].container.DoLayout = function() error("layout broke") end
+    assert.has_no.errors(function() container:GetScript("OnSizeChanged")(container, 1, 1) end)
+    assert.is_true(MW:IsEnabled()); assert.equals("Tab:settings", ns.FS.db.global.diagnostics.errors[1].source)
+  end)
   it("re-opens the same group when refreshed", function()
     MW:Show(); MW:SelectTab("settings"); local n = #W.config.opened
     MW:RefreshTab("settings")

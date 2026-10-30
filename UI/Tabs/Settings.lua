@@ -16,13 +16,22 @@ local function open_options()
   if group then LibStub("AceConfigDialog-3.0"):Open(APP, group) end
 end
 
+local function relayout()
+  if group then group:DoLayout() end
+end
+
 local function build(container)
   group = LibStub("AceGUI-3.0"):Create("SimpleGroup")
   group.frame:SetParent(container)
+  -- An AceGUI SimpleGroup frame is FULLSCREEN_DIALOG strata by default, which would draw the options
+  -- above every other window; it takes the main window's strata instead.
+  group.frame:SetFrameStrata(container:GetFrameStrata())
   group.frame:ClearAllPoints()
   group.frame:SetAllPoints(container)
   group.frame:Show()
   group:SetLayout("Fill")
+  -- Resizing the main window resizes the container; the options are laid out again to fit it.
+  container:HookScript("OnSizeChanged", ns.FS:Wrap("Tab:settings", relayout))
   open_options()
 end
 

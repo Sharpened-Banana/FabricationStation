@@ -102,6 +102,15 @@ General, Prices, Modules and Diagnostics.
       no overflow past the border. Check at a small and a large size, and that the size survives `/reload`.
     - The Settings tab shows the options tree inside the main window, not a separate Blizzard options window.
       (It is also registered in Blizzard's AddOns settings panel; that is a second copy, not the tab.)
+    - Settings tab strata: with the Settings tab showing, open another window that overlaps the main window
+      (for example the character pane `C`, or the game menu with Escape after closing nothing else) and
+      drag the main window under it. The options must not draw on top of the other window while the rest of
+      the main window is underneath; the options and the window frame stay together. To check directly,
+      hover the options and run `/fstack`: the options frames report the main window's strata (`HIGH`), not
+      `FULLSCREEN_DIALOG`.
+    - Settings tab resize: with the Settings tab showing, drag the resize grip to make the window much
+      smaller and then much larger. The options tree and its right-hand panel must follow the new size
+      each time (no options cut off at the old edge, no empty band left where the old size ended).
     - GameData status is not in the window chrome. It appears in two places in the Settings tab, with the
       same text in both, and before real data is generated it must say `GameData not generated` (all
       strings in check 15): Settings > General (second line, after the minimap checkbox), and
