@@ -4,6 +4,7 @@ local FS = LibStub("AceAddon-3.0"):NewAddon("FabricationStation", "AceEvent-3.0"
 ns.FS = FS
 
 local MAX_ERRORS = 50
+FS.MAX_ERRORS = MAX_ERRORS
 
 FS.pendingErrors = {}      -- errors logged before the DB exists; Task 4's InitDB flushes them
 FS.failedModules = {}      -- [moduleName] = errText
@@ -45,10 +46,11 @@ function FS:LogError(source, errText, stack)
   ns.Util.PushCapped(list, entry, MAX_ERRORS)
 end
 
+-- Records the failure and notifies first, then disables inside pcall, so a throwing OnDisable can
+-- never stop the bookkeeping or escape SafeCall.
 local function disable_failed_module(self, moduleName, errText)
   local module = self:GetModule(moduleName, true)
   if not (module and module:IsEnabled()) then return end
-  module:Disable()
   self.failedModules[moduleName] = errText
   self:SendMessage(ns.Msg.MODULE_FAILED, moduleName, errText)
   if not announced[moduleName] then
@@ -56,6 +58,8 @@ local function disable_failed_module(self, moduleName, errText)
     print(("FabricationStation: %s stopped after an error and was turned off. See /fs settings > Diagnostics.")
       :format(moduleName))
   end
+  local ok, disableErr = pcall(module.Disable, module)
+  if not ok then self:LogError(moduleName, tostring(disableErr)) end
 end
 
 local function finish(self, moduleName, stack, ok, ...)
@@ -135,7 +139,83 @@ function FS:HandleSlash(input)
   end
 end
 
+---------------------------------------------------------------------------
+-- Options registry
+---------------------------------------------------------------------------
+
+FS.optionGroups = {}   -- [key] = AceConfig group table
+local optionsLive = false  -- true once the options table is registered with AceConfig
+
+local function notify_options_changed()
+  if optionsLive then LibStub("AceConfigRegistry-3.0"):NotifyChange("FabricationStation") end
+end
+
+function FS:RegisterOptions(key, group)
+  self.optionGroups[key] = group
+  notify_options_changed()
+end
+
+function FS:GetOptionsTable()
+  if self.modulesGroup then self.modulesGroup.args = self:BuildModuleToggles() end
+  local args = {}
+  for key, group in pairs(self.optionGroups) do args[key] = group end
+  return { type = "group", name = "FabricationStation", childGroups = "tab", args = args }
+end
+
+---------------------------------------------------------------------------
+-- Module toggles
+---------------------------------------------------------------------------
+
+-- Turns off every module the user switched off in a previous session. Run before modules enable.
+function FS:ApplyModuleSettings()
+  local stored = self.db.global.settings.modules
+  for name, module in self:IterateModules() do
+    if stored[name] == false and not module.coreModule then module:SetEnabledState(false) end
+  end
+end
+
+-- Enables or disables a user-toggleable module now and remembers the choice. Returns false for an
+-- unknown or core module.
+function FS:SetModuleEnabled(name, enabled)
+  local module = self:GetModule(name, true)
+  if not module or module.coreModule then return false end
+  enabled = enabled and true or false
+  self.db.global.settings.modules[name] = enabled
+  if enabled then
+    self.failedModules[name] = nil
+    module:Enable()
+  else
+    module:Disable()
+  end
+  notify_options_changed()
+  return true
+end
+
+function FS:BuildModuleToggles()
+  local names = {}
+  for name, module in self:IterateModules() do
+    if not module.coreModule then names[#names + 1] = name end
+  end
+  table.sort(names)
+  local args = {}
+  for i, name in ipairs(names) do
+    args[name] = {
+      type = "toggle", order = i,
+      name = self.failedModules[name] and (name .. " (stopped after an error)") or name,
+      get = function() return self:GetModule(name):IsEnabled() end,
+      set = function(_, value) self:SetModuleEnabled(name, value) end,
+    }
+  end
+  return args
+end
+
 function FS:OnInitialize()
   self:RegisterChatCommand("fs", "HandleSlash")
   self:RegisterChatCommand("fabstation", "HandleSlash")
+  self:InitDB()
+  self:ApplyModuleSettings()
+  self.modulesGroup = { type = "group", name = "Modules", order = 90, args = {} }
+  self:RegisterOptions("modules", self.modulesGroup)
+  LibStub("AceConfig-3.0"):RegisterOptionsTable("FabricationStation", function() return ns.FS:GetOptionsTable() end)
+  optionsLive = true
 end
