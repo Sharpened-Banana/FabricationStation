@@ -43,8 +43,20 @@ function Tooltips:RegisterLineProvider(id, fn)
   end
 end
 
+-- left, right texts of a provider line, or nil when the line cannot be shown.
+local function line_texts(line)
+  if type(line) ~= "table" or type(line[1]) ~= "string" then return nil end
+  local right = line[2]
+  if right == nil then return line[1], "" end
+  if type(right) == "number" then return line[1], tostring(right) end
+  if type(right) == "string" then return line[1], right end
+  return nil
+end
+
 -- { {left, right} } from every provider that has not failed, in registration order. A provider that raises is
--- logged as "Tooltips:<id>" and skipped for the rest of the session; malformed results are ignored.
+-- logged as "Tooltips:<id>" and skipped for the rest of the session. Malformed results are ignored: a line needs a
+-- string left text (AddDoubleLine raises otherwise); a number on the right becomes text, a nil right becomes "",
+-- and a line with any other right is skipped.
 function Tooltips:CollectLines(itemID)
   local out = {}
   for _, entry in ipairs(providers) do
@@ -55,7 +67,8 @@ function Tooltips:CollectLines(itemID)
         ns.FS:LogError(SOURCE .. ":" .. entry.id, tostring(lines))
       elseif type(lines) == "table" then
         for _, line in ipairs(lines) do
-          if type(line) == "table" then out[#out + 1] = { line[1], line[2] } end
+          local left, right = line_texts(line)
+          if left then out[#out + 1] = { left, right } end
         end
       end
     end
@@ -73,7 +86,8 @@ local function short_name(charKey)
   return tostring(charKey):match("^([^-]+)") or tostring(charKey)
 end
 
--- better(a, b): candidate a beats b (lower cost; a tie goes to a non-estimated cost; then the earlier one).
+-- better(a, b): candidate a beats b (lower cost; a tie goes to a non-estimated cost). Equal candidates are broken
+-- by charKey where the order matters (the sort below).
 local function better(a, b)
   if b == nil then return true end
   if a.cost ~= b.cost then return a.cost < b.cost end
@@ -104,8 +118,6 @@ local function analyse(itemID)
     end
   end
   if #order == 0 then return nil end
-  local rank = {}
-  for i, charKey in ipairs(order) do rank[charKey] = i end
   table.sort(order, function(a, b)
     local ca, cb = best[a], best[b]
     if ca and cb then
@@ -114,7 +126,7 @@ local function analyse(itemID)
     elseif ca or cb then
       return ca ~= nil
     end
-    return rank[a] < rank[b]
+    return a < b
   end)
   return { cheapest = best[order[1]], crafters = order }
 end
@@ -184,7 +196,7 @@ function Tooltips:OnEnable()
   self:RegisterMessage(ns.Msg.PRICES_CHANGED, clear_cache)
   self:RegisterMessage(ns.Msg.DATA_CHANGED, clear_cache)
   if not hooked then
-    hooked = true
     TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, on_tooltip)
+    hooked = true
   end
 end

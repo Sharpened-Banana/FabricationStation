@@ -638,7 +638,7 @@ local function install(overrides)
     TooltipDataProcessor.postCalls[#TooltipDataProcessor.postCalls + 1] = { dataType = dataType, fn = fn }
   end
 
-local globals = {
+  local globals = {
     C_TradeSkillUI = {
       GetRecipeSchematic = retNil, GetRecipeInfo = retNil, GetCraftingOperationInfo = retNil,
       GetConcentrationCurrencyID = retZero, GetChildProfessionInfo = retNil, GetChildProfessionInfos = emptyList,

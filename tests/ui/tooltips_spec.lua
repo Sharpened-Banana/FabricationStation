@@ -14,7 +14,11 @@ describe("Tooltips", function()
 
   local function fake_tooltip()
     local tip = { lines = {} }
-    function tip:AddDoubleLine(left, right) self.lines[#self.lines + 1] = { left, right } end
+    -- Like the client: a non-string left text raises.
+    function tip:AddDoubleLine(left, right)
+      if type(left) ~= "string" then error("bad argument #1 to 'AddDoubleLine' (string expected)") end
+      self.lines[#self.lines + 1] = { left, right }
+    end
     return tip
   end
 
@@ -88,6 +92,25 @@ describe("Tooltips", function()
       assert.same({ cost_line(4800, "Main"), { "Crafters", "Main" } }, T:CollectLines(5002))
     end)
 
+    it("breaks ties between crafters by character key, whatever recipe is seen first", function()
+      boot({ recipes = 2 })
+      -- Two recipes make item 5002: 9001 is known only by Main, 9002 only by Alt.
+      world.schematics[9002].outputItemIDs = { [1] = 5003, [2] = 5002 }
+      world.chars["Alt-Realm"].professions[2906].recipes = { [9002] = true }
+      world.chars["Main-Realm"].professions[2906].recipes = { [9001] = true }
+      world.fakeEvaluate(9001, { reagentCost = 700, flags = {} })
+      world.fakeEvaluate(9002, { reagentCost = 700, flags = {} })
+      assert.same({ cost_line(700, "Alt"), { "Crafters", "Alt, Main" } }, T:CollectLines(5002))
+    end)
+
+    it("takes the cheapest over every recipe that makes the item", function()
+      boot({ recipes = 2 })
+      world.schematics[9002].outputItemIDs = { [1] = 5003, [2] = 5002 }
+      world.fakeEvaluate(9001, { reagentCost = 900, flags = {} })
+      world.fakeEvaluate(9002, { reagentCost = 400, flags = {} })
+      assert.same({ cost_line(400, "Alt"), { "Crafters", "Alt, Main" } }, T:CollectLines(5002))
+    end)
+
     it("replaces a provider with the same id in place", function()
       T:RegisterLineProvider("a", function() return { { "a", "1" } } end)
       T:RegisterLineProvider("b", function() return { { "b", "1" } } end)
@@ -107,6 +130,15 @@ describe("Tooltips", function()
       T:RegisterLineProvider("junk", function() return "nope" end)
       T:RegisterLineProvider("mixed", function() return { 5, { "ok", "yes" } } end)
       assert.same({ { "ok", "yes" } }, T:CollectLines(424242))
+    end)
+
+    it("skips lines without a string left text and normalises the right text", function()
+      T:RegisterLineProvider("bad", function()
+        return { { "only-left" }, { nil, "x" }, { 5, 6 }, { "obj", {} }, { "num", 7 }, { "ok", "yes" } }
+      end)
+      T:RegisterLineProvider("after", function() return { { "after", "1" } } end)
+      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main, Alt" }, { "only-left", "" }, { "num", "7" },
+        { "ok", "yes" }, { "after", "1" } }, T:CollectLines(5002))
     end)
 
     it("rejects a bad registration", function()
@@ -134,6 +166,22 @@ describe("Tooltips", function()
       world.prices[3001] = nil
       world.bumpPriceVersion()
       assert.same({ "Craft cost", "no price" }, T:CollectLines(5002)[1])
+    end)
+
+    it("clears the cache on FS_DATA_CHANGED", function()
+      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main, Alt" } }, T:CollectLines(5002))
+      world.chars["Alt-Realm"].professions[2906].dropped = true
+      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main, Alt" } }, T:CollectLines(5002))  -- still cached
+      T:SendMessage(ns.Msg.DATA_CHANGED, "Alt-Realm", "professions")
+      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main" } }, T:CollectLines(5002))
+    end)
+
+    it("clears the cache when the module is enabled again", function()
+      T:CollectLines(5002)
+      ns.FS:SetModuleEnabled("Tooltips", false)
+      world.chars["Alt-Realm"].professions[2906].dropped = true  -- no message: only OnEnable can notice
+      ns.FS:SetModuleEnabled("Tooltips", true)
+      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main" } }, T:CollectLines(5002))
     end)
 
     it("registered_provider_not_cached", function()
@@ -204,6 +252,16 @@ describe("Tooltips", function()
       post_call().fn(tip, { id = 5002 })
       assert.is_false(T:IsEnabled())
       assert.equals("Tooltips", ns.FS.db.global.diagnostics.errors[1].source)
+    end)
+
+    it("malformed provider lines are dropped and the module stays enabled", function()
+      T:RegisterLineProvider("bad", function() return { { "only-left" }, { nil, "x" }, { 5, 6 } } end)
+      T:RegisterLineProvider("after", function() return { { "after", "1" } } end)
+      local tip = fake_tooltip()
+      post_call().fn(tip, { id = 5002 })
+      assert.is_true(T:IsEnabled())
+      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main, Alt" }, { "only-left", "" }, { "after", "1" } },
+        tip.lines)
     end)
 
     it("a failing provider does not turn the module off", function()
