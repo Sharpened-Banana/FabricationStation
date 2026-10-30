@@ -84,6 +84,17 @@ describe("Scanner professions", function()
     assert.equals(164, p.parentSkillLineID); assert.equals("Midnight", p.expansionName)
     local q = Scanner:GetProfession(K, 2822); assert.equals(100, q.skill); assert.equals(100, q.maxSkill)
   end)
+  it("stores parentSkillLineID only when the info gives a positive number", function()
+    for _, bad in ipairs({ 0, -1, "164" }) do
+      W = install_wow_stubs(fixture({ C_TradeSkillUI = { GetChildProfessionInfo = function()
+        return { professionID = 2871, professionName = "Midnight Blacksmithing", skillLevel = 75, maxSkillLevel = 100,
+          skillModifier = 5, parentProfessionID = bad, expansionName = "Midnight", profession = 1 }
+      end } }))
+      _G.FabricationStationDB = { global = { characters = { [K] = { professions = { [2871] = { parentSkillLineID = 164 } } } } } }
+      ns = load_addon({}, "Modules/Scanner.lua"); W.boot(); Scanner = ns.FS:GetModule("Scanner")
+      scan(); assert.equals(164, Scanner:GetProfession(K, 2871).parentSkillLineID, tostring(bad))
+    end
+  end)
   it("debounces bursts of profession events into one scan", function()
     W.fire("TRADE_SKILL_SHOW"); W.fire("TRADE_SKILL_DATA_SOURCE_CHANGED"); W.fire("NEW_RECIPE_LEARNED")
     W.advance(0.4); assert.is_nil(Scanner:GetProfession(K, 2871))
@@ -254,6 +265,15 @@ describe("Scanner dropped professions", function()
     api.GetProfessionInfo = function(index) if index == 1 then return "Name", 0, 1, 100, 0, 0, 164 end end
     boot(nil, api)
     assert.is_nil(Scanner:GetProfession(K, 2900).dropped); assert.equals(0, count())
+  end)
+  it("marks nothing when GetProfessions yields no professions at all", function()
+    local api = professions_api(); api.GetProfessions = function() return nil, nil, nil, nil, nil end
+    boot(nil, api)
+    assert.is_nil(Scanner:GetProfession(K, 2900).dropped); assert.is_nil(Scanner:GetProfession(K, 2871).dropped)
+    assert.equals(0, count())
+    _G.GetProfessions = function() end
+    W.fire("SKILL_LINES_CHANGED"); W.advance(0.5)
+    assert.is_nil(Scanner:GetProfession(K, 2871).dropped); assert.equals(0, count())
   end)
   it("logs an API error once and keeps the module running", function()
     local api = professions_api(); api.GetProfessions = function() error("nope") end

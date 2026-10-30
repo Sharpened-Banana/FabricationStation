@@ -95,7 +95,9 @@ local function apply_profession_info(p, info)
   p.skill = info.skillLevel or p.skill
   p.maxSkill = info.maxSkillLevel or p.maxSkill
   p.skillModifier = info.skillModifier or p.skillModifier
-  p.parentSkillLineID = info.parentProfessionID or p.parentSkillLineID
+  -- Only a positive number is a real base skill line (0 or a missing value would mark the record dropped).
+  local parent = info.parentProfessionID
+  if type(parent) == "number" and parent > 0 then p.parentSkillLineID = parent end
   p.expansionName = info.expansionName or p.expansionName
 end
 
@@ -634,19 +636,22 @@ end
 -- Base skill lines (e.g. 164 Blacksmithing) the character knows now. GetProfessions returns the
 -- spellbook indices of prof1, prof2, archaeology, fishing and cooking (nil when unlearned), and the
 -- 7th return of GetProfessionInfo(index) is the base skill line. Neither is in the generated API
--- docs, so both are feature-tested. Nil when the client lacks them or an answer is incomplete.
+-- docs, so both are feature-tested. Nil when the client lacks them, an answer is incomplete, or no
+-- profession is reported at all (not loaded yet; never read as "every profession dropped").
 local function known_base_lines()
   if type(GetProfessions) ~= "function" or type(GetProfessionInfo) ~= "function" then return nil end
   local indices = { GetProfessions() }
-  local known = {}
+  local known, any = {}, false
   for i = 1, 5 do
     local index = indices[i]
     if index then
       local skillLine = select(7, GetProfessionInfo(index))
       if type(skillLine) ~= "number" then return nil end
       known[skillLine] = true
+      any = true
     end
   end
+  if not any then return nil end
   return known
 end
 
