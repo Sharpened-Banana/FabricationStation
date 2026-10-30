@@ -162,6 +162,23 @@ describe("Math.Optimizer", function()
     assert.equals(0, O.AllocationCost(slots, { {slotIndex=7,itemID=7001,quantity=1} }))                                          -- not a required slot
     assert.equals(0, O.AllocationCost(slots, {}))
   end)
+  it("fractional weights are rounded to integers and stay fast", function()
+    local function slots(ws)
+      local out = {}
+      for i, w in ipairs(ws) do out[i] = slot(i, 10, w, { 100 + i, 200 + 3 * i, 300 + 7 * i }) end
+      return out
+    end
+    local function run(ws)
+      return O.CheapestByQuality({ maxQuality = 5, baseDifficulty = 700, baseSkill = 300, maxReagentSkill = 280, slots = slots(ws) })
+    end
+    local t = os.clock()
+    local per = run({ 10.4, 20.2, 30.1, 40.3, 50.2, 59.6 })
+    assert.is_true(os.clock() - t < 0.25, "took " .. (os.clock() - t) .. " s")
+    assert.same(run({ 10, 20, 30, 40, 50, 60 }), per)
+    -- A positive weight below 0.5 still counts: it rounds to 1, not to an unweighted 0.
+    assert.same(O.CheapestByQuality(input(500, { slot(1, 10, 1, {100, 300}) })),
+                O.CheapestByQuality(input(500, { slot(1, 10, 0.3, {100, 300}) })))
+  end)
   it("allocation cost matches the plan's reagent cost", function()
     local slots = { slot(1, 10, 48, {100, 300}), slot(2, 4, 32, {10, 30, 45}), slot(3, 2, 0, {500, 50}) }
     for q, plan in pairs(O.CheapestByQuality(input(500, slots))) do

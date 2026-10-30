@@ -4,7 +4,7 @@
 --
 -- Each slot's rank mixes ("compositions") are enumerated and the cheapest kept per unit count, where a slot's
 -- units are sum(2 * RankFactor(rank) * n): 2 ranks give {0, 2} per item, 3 ranks {0, 1, 2}. A knapsack over the
--- slots (unit counts scaled by weight / GCD of the weights) gives the cheapest cost for every reachable weighted
+-- slots (unit counts scaled by rounded weight / GCD of the weights) gives the cheapest cost for every reachable weighted
 -- unit total u; reagent skill is maxReagentSkill * u / Umax, the same value Quality.ReagentSkill gives.
 -- Every composition uses exactly the slot's quantity, so reagent skill never exceeds maxReagentSkill.
 local ADDON_NAME, ns = ...
@@ -151,20 +151,20 @@ function Optimizer.CheapestByQuality(input)
   local maxReagentSkill = input.maxReagentSkill or Quality.DEFAULT_REAGENT_SKILL_FACTOR * baseDifficulty
   local thresholds = Quality.Thresholds(input.maxQuality, baseDifficulty, input.thresholdFractions) or {}
 
-  -- Weights divided by their GCD keep the unit totals small; non-integer weights are used as they are.
-  local g = 0
-  for _, s in ipairs(slots) do
+  -- Positive weights are rounded to integers (at least 1, so a weighted slot never turns unweighted); a
+  -- non-integer weight would make nearly every unit total distinct and blow up the knapsack's state space.
+  -- Divided by their GCD they keep the unit totals small. GameData weights are integers, so this is a guard.
+  local weights, g = {}, 0
+  for i, s in ipairs(slots) do
     local w = s.weight or 0
-    if w > 0 then
-      if w ~= math.floor(w) then g = -1; break end
-      g = gcd(g, w)
-    end
+    weights[i] = w > 0 and math.max(1, Math.Round(w)) or 0
+    if weights[i] > 0 then g = gcd(g, weights[i]) end
   end
   if g <= 0 then g = 1 end
 
   local prepared, umax, missingPrice = {}, 0, false
   for i, s in ipairs(slots) do
-    local w = (s.weight or 0) > 0 and s.weight / g or 0
+    local w = weights[i] / g
     umax = umax + (s.quantity or 0) * 2 * w
     local comps = Optimizer.Compositions(s)
     if next(comps) == nil then
