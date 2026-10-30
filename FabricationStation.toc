@@ -21,6 +21,7 @@ Data\GameData_Spec.lua
 Data\GameData_Manual.lua
 Math\Quality.lua
 Math\Concentration.lua
+Math\Stats.lua
 Modules\Scanner.lua
 Modules\Prices.lua
 Modules\Diagnostics.lua
