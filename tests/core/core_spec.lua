@@ -55,8 +55,8 @@ describe("Core", function()
     it("prints the documented message and sends the error text", function()
       ns.FS:NewModule("Boom", "AceEvent-3.0"); W.boot()
       local _, err = ns.FS:SafeCall("Boom", function() error("boom") end)
-      assert.equals("FabricationStation: Boom stopped after an error and was turned off. See /fs settings > Diagnostics.",
-        W.printed[1])
+      assert.equals("FabricationStation: Boom stopped after an error and was turned off. "
+        .. "Turn it back on in /fs settings > Modules > Stopped modules; the error is in Diagnostics.", W.printed[1])
       assert.equals(err, W.messages[1][3]); assert.equals(err, ns.FS.failedModules.Boom)
     end)
     it("with a non-module source only logs", function()

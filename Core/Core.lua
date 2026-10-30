@@ -12,6 +12,7 @@ FS.slashCommands = {}      -- [name] = { fn = function(argString), help = string
 
 local announced = {}       -- modules already announced as failed this session
 local debounceTimers = {}  -- [key] = C_Timer handle
+local notify_options_changed  -- defined with the options registry below
 
 ---------------------------------------------------------------------------
 -- Identity and time
@@ -56,11 +57,12 @@ local function disable_failed_module(self, moduleName, errText)
   self:SendMessage(ns.Msg.MODULE_FAILED, moduleName, errText)
   if not announced[moduleName] then
     announced[moduleName] = true
-    print(("FabricationStation: %s stopped after an error and was turned off. See /fs settings > Diagnostics.")
-      :format(moduleName))
+    print(("FabricationStation: %s stopped after an error and was turned off. "
+      .. "Turn it back on in /fs settings > Modules > Stopped modules; the error is in Diagnostics."):format(moduleName))
   end
   local ok, disableErr = pcall(module.Disable, module)
   if not ok then self:LogError(moduleName, tostring(disableErr)) end
+  notify_options_changed()
 end
 
 local function finish(self, moduleName, stack, ok, ...)
@@ -147,7 +149,7 @@ end
 FS.optionGroups = {}   -- [key] = AceConfig group table
 local optionsLive = false  -- true once the options table is registered with AceConfig
 
-local function notify_options_changed()
+function notify_options_changed()
   if optionsLive then LibStub("AceConfigRegistry-3.0"):NotifyChange("FabricationStation") end
 end
 
@@ -194,6 +196,35 @@ function FS:SetModuleEnabled(name, enabled)
   return true
 end
 
+local STOPPED_ORDER = 1000  -- the stopped-modules section goes after every toggle
+
+-- Adds the "Stopped modules" section: every module in failedModules, core modules included, with
+-- its error and a "Turn on again" button. Nothing is added while no module has failed.
+local function add_stopped_modules(self, args)
+  local names = {}
+  for name in pairs(self.failedModules) do
+    if self:GetModule(name, true) then names[#names + 1] = name end
+  end
+  if #names == 0 then return end
+  table.sort(names)
+  args.stoppedHeader = { type = "header", order = STOPPED_ORDER, name = "Stopped modules" }
+  for i, name in ipairs(names) do
+    local order = STOPPED_ORDER + i * 2
+    args["stopped_" .. name] = {
+      type = "description", order = order, width = "double",
+      name = ("%s stopped after an error: %s"):format(name, tostring(self.failedModules[name])),
+    }
+    -- Wrapped under the module's name: if it fails again while enabling, it is stopped again and
+    -- listed here again instead of the error escaping into the options dialog.
+    args["turnOn_" .. name] = {
+      type = "execute", order = order + 1, name = "Turn on again",
+      func = self:Wrap(name, function() self:SetModuleEnabled(name, true) end),
+    }
+  end
+end
+
+-- The Modules group's args: a toggle per optional module (or a note that there are none yet),
+-- then the stopped-modules section.
 function FS:BuildModuleToggles()
   local names = {}
   for name, module in self:IterateModules() do
@@ -209,6 +240,8 @@ function FS:BuildModuleToggles()
       set = function(_, value) self:SetModuleEnabled(name, value) end,
     }
   end
+  if #names == 0 then args.none = { type = "description", order = 1, name = "No optional modules yet." } end
+  add_stopped_modules(self, args)
   return args
 end
 
