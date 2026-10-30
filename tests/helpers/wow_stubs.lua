@@ -1,4 +1,11 @@
 -- Fake WoW API + Ace3 layer for unit tests.
+--
+-- Deliberate divergences from real WoW/Ace3 (so tests stay simple and failures stay loud):
+--   * Errors in OnInitialize/OnEnable and in event/message handlers propagate to the caller.
+--     Real Ace3 routes them to geterrorhandler() and carries on.
+--   * AceDB does no logout stripping of default values and has no "*" / "**" wildcard defaults.
+--   * Frame Show/Hide do not fire OnShow/OnHide.
+--   * frame:RegisterEvent is a no-op (use W.fire to drive AceEvent handlers).
 --   local W = install_wow_stubs(overrides)
 -- Every call rebuilds all fakes from scratch. `overrides` is deep-merged into the default globals
 -- (plain tables merge key by key, anything else replaces). Returns the handle `W`.
@@ -34,6 +41,35 @@ end
 
 local function noop() end
 
+-- WoW strsplit(delimiter, subject [, pieces]): every character of `delimiter` is a separator
+-- (it is a character set, not a pattern). With `pieces`, the last piece keeps the remainder.
+local function strsplit(delimiter, subject, pieces)
+  local seps = {}
+  for i = 1, #delimiter do seps[delimiter:sub(i, i)] = true end
+  local out, startIdx = {}, 1
+  for i = 1, #subject do
+    if pieces and #out >= pieces - 1 then break end
+    if seps[subject:sub(i, i)] then
+      out[#out + 1] = subject:sub(startIdx, i - 1)
+      startIdx = i + 1
+    end
+  end
+  out[#out + 1] = subject:sub(startIdx)
+  return unpack(out)
+end
+
+-- WoW strtrim(str [, chars]): strips leading and trailing characters found in `chars`
+-- (default: space, tab, CR, LF). `chars` is a character set, not a pattern.
+local function strtrim(str, chars)
+  chars = chars or " \t\r\n"
+  local set = {}
+  for i = 1, #chars do set[chars:sub(i, i)] = true end
+  local first, last = 1, #str
+  while first <= last and set[str:sub(first, first)] do first = first + 1 end
+  while last >= first and set[str:sub(last, last)] do last = last - 1 end
+  return str:sub(first, last)
+end
+
 -- A table whose unknown Capitalized keys are no-op methods (so `frame:SetBackdrop(...)` works),
 -- while lower-case field lookups still return nil.
 local function method_stub_meta()
@@ -61,6 +97,7 @@ local function install(overrides)
     ldb = { objects = {} },
     dbicon = { registered = {}, shown = {} },
     auctionator = { prices = {}, ages = {}, vendor = {}, lists = {}, dbCallbacks = {}, exact = {} },
+    errors = {},  -- errors reported through geterrorhandler()
   }
 
   ---------------------------------------------------------------------------
@@ -594,6 +631,10 @@ local function install(overrides)
     UISpecialFrames = {},
     print = function(...) W.printed[#W.printed + 1] = join_args(...) end,
     debugstack = function() return "stack traceback:\n\t[stub]" end,
+    date = os.date,
+    strsplit = strsplit,
+    strtrim = strtrim,
+    geterrorhandler = function() return function(err) W.errors[#W.errors + 1] = err end end,
     wipe = function(t) for k in pairs(t) do t[k] = nil end return t end,
     tinsert = table.insert,
     tremove = table.remove,

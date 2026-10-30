@@ -1,0 +1,14 @@
+local _, ns = ...
+
+-- AceEvent message names. Modules talk to each other only through these and the public contract.
+ns.Msg = {
+  DATA_CHANGED = "FS_DATA_CHANGED",
+  PRICES_CHANGED = "FS_PRICES_CHANGED",
+  RECIPES_CHANGED = "FS_RECIPES_CHANGED",
+  QUEUE_CHANGED = "FS_QUEUE_CHANGED",
+  ORDERS_CHANGED = "FS_ORDERS_CHANGED",
+  CUSTOMERS_CHANGED = "FS_CUSTOMERS_CHANGED",
+  LEDGER_CHANGED = "FS_LEDGER_CHANGED",
+  ALTS_CHANGED = "FS_ALTS_CHANGED",
+  MODULE_FAILED = "FS_MODULE_FAILED",
+}

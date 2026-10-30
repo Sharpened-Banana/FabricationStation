@@ -3,6 +3,7 @@ describe("load_addon", function()
     assert.has_error(function() load_addon({}, "Core/Nope.lua") end, "lastFile not found in FabricationStation.toc: Core/Nope.lua")
   end)
   it("loads the whole TOC when lastFile is nil", function()
+    install_wow_stubs()  -- the addon files call LibStub at load time
     local ns = {}
     assert.equals(ns, load_addon(ns))
   end)
