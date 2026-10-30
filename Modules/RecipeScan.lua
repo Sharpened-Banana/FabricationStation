@@ -257,11 +257,14 @@ local function on_update()
   ns.FS:SafeCall("Recipes:Scan", function() Recipes:_ScanStep(Recipes:GetSetting("scanBudgetMs")) end)
 end
 
--- Owned counts only change results while owned reagents are free.
+-- Owned counts only change results while owned reagents are free; the concentration amount never does.
+-- Only a "spec" or "professions" change can move the live numbers of recipes already calibrated: those are
+-- calibrated again. A recipe learned since ("recipes") is not in `calibrated` yet, so it is calibrated anyway.
 local function on_data_changed(_, charKey, kind)
+  if kind == "concentration" then return end
   if (kind == "items" or kind == "warband") and not Recipes:IsOwnedReagentsFree() then return end
-  if kind ~= "items" and kind ~= "warband" and (charKey == nil or charKey == ns.FS:CharKey()) then
-    for recipeID in pairs(calibrated) do calibrated[recipeID] = nil end   -- the live numbers may have moved
+  if (kind == "spec" or kind == "professions") and (charKey == nil or charKey == ns.FS:CharKey()) then
+    for recipeID in pairs(calibrated) do calibrated[recipeID] = nil end
   end
   -- "warband" carries the current character but is account-wide.
   local target = kind ~= "warband" and charKey or nil

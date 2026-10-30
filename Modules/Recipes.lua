@@ -147,10 +147,12 @@ local function bump_every_stamp()
 end
 
 -- FS_DATA_CHANGED(charKey, kind): owned counts only change results while owned reagents are free, so
--- "items" (that character) and "warband" (account-wide: every character) bump stamps only then; every
--- other kind bumps the character's stamp. Item stamps always move, for results computed with
+-- "items" (that character) and "warband" (account-wide: every character) bump stamps only then;
+-- "concentration" (the amount the character has) never does: Evaluate does not read it. Every other kind
+-- bumps the character's stamp. Item stamps always move, for results computed with
 -- opts.ownedReagentsFree = true while the setting is off. "recipes" also marks the item index dirty.
 local function on_data_changed(_, charKey, kind)
+  if kind == "concentration" then return end
   if kind == "items" then
     if charKey == nil then return end
     itemStamps[charKey] = (itemStamps[charKey] or 0) + 1
@@ -190,11 +192,31 @@ local function total_skill(info)
   return info.baseSkill + (info.bonusSkill or 0)
 end
 
+local DAY = 86400
+
+local function older_than(time, now, days)
+  return type(time) ~= "number" or now - time > days * DAY
+end
+
+-- Whether two calibrations hold the same values (time aside).
+local function same_values(a, b)
+  if a.baseSkill ~= b.baseSkill or a.baseDifficulty ~= b.baseDifficulty or a.maxReagentSkill ~= b.maxReagentSkill
+    or a.craftingDataID ~= b.craftingDataID then
+    return false
+  end
+  local sa, sb = type(a.stats) == "table" and a.stats or {}, type(b.stats) == "table" and b.stats or {}
+  for k, v in pairs(sa) do if sb[k] ~= v then return false end end
+  for k, v in pairs(sb) do if sa[k] ~= v then return false end end
+  return true
+end
+
 -- Calibrates recipeID for the current character from two live operation infos without
 -- concentration: no reagents, and every quality slot at its top rank. Returns the CalibRecord, or
 -- nil when the recipe has no schematic or live data is unavailable (profession window closed).
--- The record is stored and the character's data stamp bumped unless the saved data is from a newer
--- version (then the record is only returned).
+-- The record is stored unless the saved data is from a newer version (then it is only returned). The
+-- character's data stamp is bumped only when results can change: no previous record, a stored value
+-- changed, or the previous record was old enough to flag staleData. Re-calibrating unchanged values keeps
+-- every cached evaluation.
 function Recipes:Calibrate(recipeID)
   local S = scanner()
   local schematic = S:GetSchematic(recipeID)
@@ -226,8 +248,12 @@ function Recipes:Calibrate(recipeID)
   local g = global()
   g.recipeCalib = g.recipeCalib or {}
   g.recipeCalib[charKey] = g.recipeCalib[charKey] or {}
+  local old = g.recipeCalib[charKey][recipeID]
   g.recipeCalib[charKey][recipeID] = record
-  bump_stamp(charKey)
+  if type(old) ~= "table" or not same_values(old, record)
+    or older_than(old.time, record.time, self:GetSetting("staleCalibrationDays")) then
+    bump_stamp(charKey)
+  end
   return record
 end
 
@@ -304,8 +330,6 @@ end
 ---------------------------------------------------------------------------
 -- Evaluation
 ---------------------------------------------------------------------------
-
-local DAY = 86400
 
 -- Deterministic text for a cache key: tables recursively with keys sorted (by type, then value).
 local function serialize(v)
@@ -390,10 +414,6 @@ local function used_prices(r, ctx)
   local outputs = ctx.schematic.outputItemIDs or {}
   used[#used + 1] = ctx.results[outputs[r.expectedQuality]]
   return used
-end
-
-local function older_than(time, now, days)
-  return type(time) ~= "number" or now - time > days * DAY
 end
 
 local function evaluate(recipeID, charKey, o, schematic)

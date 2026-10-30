@@ -259,12 +259,18 @@ describe("Recipes:Evaluate", function()
 
   describe("data stamps", function()
     local function stamps() return R:GetDataStamp("Main-Realm"), R:GetDataStamp("Alt-Realm") end
-    it("bumps the character's stamp for every kind but items and warband", function()
-      for _, kind in ipairs({ "professions", "recipes", "concentration", "spec" }) do
+    it("bumps the character's stamp for every kind but items, warband and concentration", function()
+      for _, kind in ipairs({ "professions", "recipes", "spec" }) do
         local m, a = stamps()
         ns.FS:SendMessage("FS_DATA_CHANGED", "Main-Realm", kind)
         assert.equals(m + 1, R:GetDataStamp("Main-Realm"), kind); assert.equals(a, R:GetDataStamp("Alt-Realm"), kind)
       end
+    end)
+    it("keeps cached results on a concentration change: Evaluate never reads the amount", function()
+      local m = stamps()
+      local a = R:Evaluate(9001, "Main-Realm", {})
+      ns.FS:SendMessage("FS_DATA_CHANGED", "Main-Realm", "concentration")
+      assert.equals(m, R:GetDataStamp("Main-Realm")); assert.equals(a, R:Evaluate(9001, "Main-Realm", {}))
     end)
     it("bumps for items only while owned reagents are free", function()
       local m = stamps()

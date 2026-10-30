@@ -17,6 +17,47 @@ describe("Recipes calibration", function()
   it("bumps the data stamp", function()
     local s = R:GetDataStamp("Main-Realm"); R:Calibrate(9001); assert.equals(s + 1, R:GetDataStamp("Main-Realm"))
   end)
+  describe("re-calibration", function()
+    it("keeps the data stamp and the cached results when nothing changed, but refreshes the time", function()
+      R:Calibrate(9001)
+      local s, a = R:GetDataStamp("Main-Realm"), R:Evaluate(9001, "Main-Realm", {})
+      W.now = W.now + 600
+      local c = R:Calibrate(9001)
+      assert.equals(s, R:GetDataStamp("Main-Realm")); assert.equals(a, R:Evaluate(9001, "Main-Realm", {}))
+      assert.equals(W.now, c.time); assert.equals(c, R:GetCalibration("Main-Realm", 9001))
+    end)
+    it("bumps the data stamp when a stored value changed", function()
+      R:Calibrate(9001)
+      local live = world.live[9001]
+      for _, change in ipairs({ { baseSkill = 490 }, { baseDifficulty = 720 }, { craftingDataID = 2589 },
+        { bonusStats = { { bonusStatName = "Multicraft", ratingPct = 25 } } } }) do
+        world.live[9001] = function(allocation)
+          local info = live(allocation)
+          for k, v in pairs(change) do info[k] = v end
+          return info
+        end
+        local s = R:GetDataStamp("Main-Realm")
+        R:Calibrate(9001)
+        assert.equals(s + 1, R:GetDataStamp("Main-Realm"), next(change))
+      end
+      world.live[9001] = function(allocation)
+        local info = live(allocation)
+        if #allocation > 0 then info.bonusSkill = info.bonusSkill + 10 end
+        return info
+      end
+      local s = R:GetDataStamp("Main-Realm")
+      R:Calibrate(9001); assert.equals(s + 1, R:GetDataStamp("Main-Realm"))    -- maxReagentSkill 290
+    end)
+    it("bumps the data stamp when the old calibration was stale, so staleData clears", function()
+      R:Calibrate(9001)
+      ns.FS.db.global.recipeCalib["Main-Realm"][9001].time = W.now - 15 * 86400
+      local a = R:Evaluate(9001, "Main-Realm", {})
+      assert.is_true(a.flags.staleData)
+      R:Calibrate(9001)
+      local b = R:Evaluate(9001, "Main-Realm", {})
+      assert.are_not.equal(a, b); assert.is_false(b.flags.staleData)
+    end)
+  end)
   it("returns nil when the window is closed", function()
     world.live[9001] = nil; assert.is_nil(R:Calibrate(9001)); assert.is_nil(R:GetCalibration("Main-Realm", 9001))
   end)

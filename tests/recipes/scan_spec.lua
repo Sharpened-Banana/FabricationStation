@@ -596,6 +596,44 @@ describe("recipe scan", function()
       assert.is_true(calibrated[9001] > first)
     end)
 
+    it("does not recalibrate or re-evaluate after a concentration change", function()
+      world.openLine = 2906
+      R:StartScan("Main-Realm"); finish_scan()
+      local first, before = calibrated[9001], R:Evaluate(9001, "Main-Realm", {})
+      ns.FS:GetModule("Scanner"):SendMessage("FS_DATA_CHANGED", "Main-Realm", "concentration")
+      W.advance(2); finish_scan()
+      assert.equals(first, calibrated[9001])
+      assert.equals(before, R:Evaluate(9001, "Main-Realm", {}))
+    end)
+
+    it("recalibrates after a spec change, and only newly learned recipes after a recipes change", function()
+      world.openLine = 2906
+      R:StartScan("Main-Realm"); finish_scan()
+      local first = calibrated[9001]
+      ns.FS:GetModule("Scanner"):SendMessage("FS_DATA_CHANGED", "Main-Realm", "spec")
+      W.advance(2); finish_scan()
+      assert.is_true(calibrated[9001] > first)
+      first = calibrated[9001]
+      -- a recipe learned now: copy 9001 as 9005
+      local s = {}
+      for k, v in pairs(world.schematics[9001]) do s[k] = v end
+      s.recipeID = 9005; world.schematics[9005] = s
+      world.chars["Main-Realm"].professions[2906].recipes[9005] = true
+      world.live[9005] = function() calibrated[9005] = (calibrated[9005] or 0) + 1; return { baseSkill = 100, baseDifficulty = 700 } end
+      ns.FS:GetModule("Scanner"):SendMessage("FS_DATA_CHANGED", "Main-Realm", "recipes")
+      W.advance(2); finish_scan()
+      assert.equals(first, calibrated[9001]); assert.is_not_nil(R:GetCalibration("Main-Realm", 9005))
+    end)
+
+    it("a scan after an unchanged recalibration reuses every cached result", function()
+      world.openLine = 2906
+      R:StartScan("Main-Realm"); finish_scan()
+      local before = R:Evaluate(9001, "Main-Realm", {})
+      world.openLine = nil; R:StartScan("Main-Realm"); finish_scan()       -- window closed: forget what was calibrated
+      world.openLine = 2906; R:StartScan("Main-Realm"); finish_scan()      -- reopened: calibrated again, same values
+      assert.equals(before, R:Evaluate(9001, "Main-Realm", {}))
+    end)
+
     it("announces once even though calibration changed the data stamp", function()
       world.openLine = 2906
       R:StartScan("Main-Realm"); finish_scan()
