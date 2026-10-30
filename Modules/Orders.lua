@@ -306,3 +306,264 @@ function Orders:ValueRewards(rewards, orderID)
   end
   return total, valued, unpriced
 end
+
+---------------------------------------------------------------------------
+-- Scoring
+---------------------------------------------------------------------------
+
+Orders.RISKS = { "noMatsLowTip", "unreachableQuality", "noConcentration", "expiringSoon", "blockedCustomer" }
+Orders.RISK_LABELS = {
+  noMatsLowTip = "No mats, low tip",
+  unreachableQuality = "Can't reach min quality",
+  noConcentration = "Not enough concentration",
+  expiringSoon = "Expiring soon",
+  blockedCustomer = "Blocked customer",
+}
+
+local function skill_line_of(recipeID)
+  local scanner = ns.FS:GetModule("Scanner", true)
+  local schematic = scanner and scanner.GetSchematic and scanner:GetSchematic(recipeID)
+  return type(schematic) == "table" and schematic.skillLineID or nil
+end
+
+-- Best goldPerConcentration of one profession (skill line) for charKey: the first ranked result with a price and
+-- a rate (1b sorts those first), floored at 0; 0 when there is none. Ruling P2: concentration is valued at the
+-- rate of the profession that spends it, never another profession's.
+local function best_gpc(charKey, skillLineID)
+  local recipes = ns.FS:GetModule("Recipes", true)
+  if skillLineID == nil or not (recipes and recipes.GetRanked) then return 0 end
+  local ranked = recipes:GetRanked({
+    charKey = charKey, skillLineID = skillLineID, usesConcentration = true, sortBy = "goldPerConcentration",
+  })
+  for _, r in ipairs(ranked or {}) do
+    local gpc = r.goldPerConcentration
+    if type(gpc) == "number" and not (type(r.flags) == "table" and r.flags.noPrice) then
+      return math.max(0, gpc)
+    end
+  end
+  return 0
+end
+
+-- Per-character scoring context: ctx = { charKey, now, bestGPCFor = fn(recipeID) -> copper per concentration point
+-- (that recipe's profession, Ruling P2), concentrationFor = fn(recipeID) -> points|nil (the profession's
+-- concentration projected to now; nil without a snapshot) }. Both are memoised per skill line, so build one context
+-- per board refresh and score every order with it.
+function Orders:BuildContext(charKey)
+  local now = ns.FS:Now()
+  local gpcBySkill, concBySkill = {}, {}
+  local ctx = { charKey = charKey, now = now }
+  function ctx.bestGPCFor(recipeID)
+    local skillLineID = skill_line_of(recipeID)
+    if skillLineID == nil then return 0 end
+    if gpcBySkill[skillLineID] == nil then gpcBySkill[skillLineID] = best_gpc(charKey, skillLineID) end
+    return gpcBySkill[skillLineID]
+  end
+  function ctx.concentrationFor(recipeID)
+    local skillLineID = skill_line_of(recipeID)
+    local scanner = ns.FS:GetModule("Scanner", true)
+    if skillLineID == nil or not (scanner and scanner.ProjectConcentration) then return nil end
+    if concBySkill[skillLineID] == nil then
+      concBySkill[skillLineID] = { value = scanner:ProjectConcentration(charKey, skillLineID, now) }
+    end
+    return concBySkill[skillLineID].value
+  end
+  return ctx
+end
+
+-- The rate used for this order: ctx.bestGPCFor (BuildContext), else a fixed ctx.bestGPC (tests, callers that
+-- know the rate), else 0.
+local function gpc_for(ctx, recipeID)
+  local rate = ctx.bestGPCFor and ctx.bestGPCFor(recipeID) or ctx.bestGPC
+  return type(rate) == "number" and math.max(0, rate) or 0
+end
+
+local function blocked(input)
+  if input.orderType == "npc" or input.customer == nil then return false end
+  local customers = ns.FS:GetModule("Customers", true)
+  return customers ~= nil and customers.IsBlocked ~= nil and customers:IsBlocked(input.customer) == true
+end
+
+-- Order-specific noPrice: the crafter pays for a reagent (allocated beyond what the customer provides) that has no
+-- price, or the cost is unknown. A missing output price does not matter: the customer receives the item.
+local function paid_reagent_unpriced(r, provided)
+  if r.reagentCost == nil then return true end
+  local needed = {}
+  for _, a in ipairs(type(r.allocation) == "table" and r.allocation or {}) do
+    if type(a) == "table" and a.itemID ~= nil then
+      needed[a.itemID] = (needed[a.itemID] or 0) + number_or(a.quantity, 0)
+    end
+  end
+  for itemID, qty in pairs(needed) do
+    if qty - number_or(provided[itemID], 0) > 0 and item_price(itemID) == nil then return true end
+  end
+  return false
+end
+
+-- OrderInput + ctx (BuildContext, or any table with charKey, now, bestGPCFor|bestGPC, concentrationFor) -> OrderView.
+-- Money is copper; unknown money is nil, never 0: net is nil when the reagent cost is unknown, score is nil when a
+-- paid reagent has no price or the recipe is unknown (nil scores sort last and are never "best").
+--   commission = tip - consortium cut; net = commission + priced rewards - reagent cost (flags.unpricedReward: some
+--   reward has no value, so net is a lower bound); score = net - expected concentration x the profession's best
+--   gold per concentration, when concentration is needed to reach minQuality.
+function Orders:ScoreInput(input, ctx)
+  local settings = self:Settings()
+  local provided = type(input.provided) == "table" and input.provided or {}
+  local tip = input.tipAmount
+  local commission = type(tip) == "number" and tip - number_or(input.consortiumCut, 0) or nil
+  local rewardsValue, rewards, unpriced = self:ValueRewards(input.rewards, input.orderID)
+
+  -- minQuality and RecipeResult.expectedQuality are both the recipe's own tier (1..maxQuality): Blizzard compares
+  -- order.minQuality with the projected quality directly. Quality 1 needs no target.
+  local target = type(input.minQuality) == "number" and input.minQuality > 1 and input.minQuality or nil
+  local recipes = ns.FS:GetModule("Recipes", true)
+  local function evaluate(useConcentration)
+    if not (recipes and recipes.Evaluate) then return nil end
+    return recipes:Evaluate(input.recipeID, ctx.charKey,
+      { targetQuality = target, providedReagents = provided, useConcentration = useConcentration })
+  end
+  local function short_of_target(result)
+    return target ~= nil and ((result.flags or {}).unreachableTarget == true or (result.expectedQuality or 0) < target)
+  end
+
+  local r, usedConc = evaluate(nil), false
+  if r and short_of_target(r) then
+    r, usedConc = evaluate(true) or r, true
+  end
+  local rflags = r and type(r.flags) == "table" and r.flags or {}
+
+  local concCost = (r and usedConc) and number_or(r.concentrationCost, 0) or 0
+  local concCharge = (r and usedConc) and number_or(r.expectedConcentrationCost, concCost) or 0
+  local reagentCost = r and r.reagentCost
+  local net = (commission ~= nil and type(reagentCost) == "number") and commission + rewardsValue - reagentCost or nil
+  local noPrice = r == nil or paid_reagent_unpriced(r, provided)
+  local unknownRecipe = r == nil or rflags.unknownRecipe == true
+  local charge = math.floor(concCharge * gpc_for(ctx, input.recipeID))
+  local score = (net ~= nil and not noPrice and not unknownRecipe) and net - charge or nil
+
+  -- Risks, in Orders.RISKS order. Quality risks need a result (a nil result is flags.unknownRecipe instead).
+  local unreachable = r ~= nil and short_of_target(r)
+  local risks = {}
+  if input.reagentState == "none" and commission ~= nil then
+    -- Unknown cost: still low when the commission alone is under the margin (the cost cannot be negative).
+    local margin = commission - (type(reagentCost) == "number" and reagentCost or 0)
+    if margin < number_or(settings.lowTipMargin, self.SETTINGS_DEFAULTS.lowTipMargin) then
+      risks[#risks + 1] = "noMatsLowTip"
+    end
+  end
+  if unreachable then risks[#risks + 1] = "unreachableQuality" end
+  if usedConc and not unreachable and ctx.concentrationFor then
+    local available = ctx.concentrationFor(input.recipeID)
+    if type(available) == "number" and concCost > available then risks[#risks + 1] = "noConcentration" end
+  end
+  if type(input.expiresAt) == "number" and type(ctx.now) == "number"
+    and input.expiresAt - ctx.now < number_or(settings.expiringSoonSeconds, self.SETTINGS_DEFAULTS.expiringSoonSeconds) then
+    risks[#risks + 1] = "expiringSoon"
+  end
+  if blocked(input) then risks[#risks + 1] = "blockedCustomer" end
+
+  return {
+    orderID = input.orderID,
+    orderType = input.orderType,
+    customer = input.customer,
+    recipeID = input.recipeID,
+    itemID = input.itemID,
+    minQuality = input.minQuality,
+    tip = tip,
+    consortiumCut = input.consortiumCut,
+    commission = commission,
+    rewards = rewards,
+    rewardsValue = rewardsValue,
+    expiresAt = input.expiresAt,
+    result = r,
+    usedConcentration = usedConc,
+    concentrationCost = concCost,
+    concentrationCharge = charge,
+    net = net,
+    goldPerConcentration = (concCost > 0 and net ~= nil) and math.floor(net / concCost) or nil,
+    score = score,
+    risks = risks,
+    flags = {
+      noPrice = noPrice,
+      unknownRecipe = unknownRecipe,
+      unpricedReward = unpriced == true,
+      estimated = rflags.estimated == true,
+      stalePrice = rflags.stalePrice == true,
+    },
+    charKey = ctx.charKey,
+    input = input,
+  }
+end
+
+-- Contract entry point: one CraftingOrderInfo scored for the current character (nil for a non-table). To score a
+-- whole board, build one context and call ScoreInput per order instead.
+function Orders:Score(orderInfo)
+  local input = self:Normalize(orderInfo)
+  if not input then return nil end
+  return self:ScoreInput(input, self:BuildContext(ns.FS:CharKey()))
+end
+
+---------------------------------------------------------------------------
+-- Filters and best claim
+---------------------------------------------------------------------------
+
+local function has_risk_in(view, set)
+  if type(set) ~= "table" then return false end
+  for _, risk in ipairs(view.risks or {}) do
+    if set[risk] then return true end
+  end
+  return false
+end
+
+-- True when filters (default: Settings().filters) hide the view: its type is switched off in orderTypes (a view
+-- without a known type is never hidden by type), it has a risk in hideRisks, hideUnscored and no score, or
+-- minScore is set and the score is below it (a nil score is left to hideUnscored).
+function Orders:IsHidden(view, filters)
+  filters = filters or self:Settings().filters
+  local types = filters.orderTypes
+  if type(types) == "table" and view.orderType ~= nil and not types[view.orderType] then return true end
+  if has_risk_in(view, filters.hideRisks) then return true end
+  if filters.hideUnscored and view.score == nil then return true end
+  if type(filters.minScore) == "number" and view.score ~= nil and view.score < filters.minScore then return true end
+  return false
+end
+
+-- Best first: higher score, nil scores last, then lower orderID (table.sort is not stable).
+local function better(a, b)
+  if a.score ~= nil and b.score ~= nil then
+    if a.score ~= b.score then return a.score > b.score end
+  elseif a.score ~= nil or b.score ~= nil then
+    return a.score ~= nil
+  end
+  return number_or(a.orderID, 0) < number_or(b.orderID, 0)
+end
+
+-- The visible views (IsHidden false), best first, as a new list.
+function Orders:Filter(views, filters)
+  filters = filters or self:Settings().filters
+  local out = {}
+  for _, view in ipairs(views or {}) do
+    if not self:IsHidden(view, filters) then out[#out + 1] = view end
+  end
+  table.sort(out, better)
+  return out
+end
+
+-- The order to claim next: the highest score above settings.claimMinScore with no risk in
+-- settings.claimBlockingRisks; a public order also needs claim.claimsRemaining > 0 (unknown counts as none).
+-- claim = { claimsRemaining = n, hasClaimed = bool } -> view, or nil and "alreadyClaimed" | "none".
+-- It only picks: claiming happens from a button the player clicks.
+function Orders:GetBestClaimable(views, claim)
+  claim = claim or {}
+  if claim.hasClaimed then return nil, "alreadyClaimed" end
+  local settings = self:Settings()
+  local minScore = number_or(settings.claimMinScore, self.SETTINGS_DEFAULTS.claimMinScore)
+  local best
+  for _, view in ipairs(views or {}) do
+    local ok = view.score ~= nil and view.score > minScore
+      and not has_risk_in(view, settings.claimBlockingRisks)
+      and (view.orderType ~= "public" or number_or(claim.claimsRemaining, 0) > 0)
+    if ok and (best == nil or better(view, best)) then best = view end
+  end
+  if best then return best end
+  return nil, "none"
+end
