@@ -19,6 +19,7 @@ Data\GameData_Reagents.lua
 Data\GameData_Difficulty.lua
 Data\GameData_Spec.lua
 Data\GameData_Manual.lua
+Data\OrderRewards.lua
 Math\Quality.lua
 Math\Concentration.lua
 Math\Stats.lua
@@ -34,6 +35,7 @@ Modules\Queue.lua
 Modules\QueueCraft.lua
 Modules\SelfCheck.lua
 Modules\Customers.lua
+Modules\Orders.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua
