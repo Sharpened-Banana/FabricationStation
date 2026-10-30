@@ -30,6 +30,8 @@
 --   live        [recipeID] = function(allocation, applyConcentration) -> CraftingOperationInfo
 --               (absent = no live data, Scanner:GetLiveOperationInfo returns nil)
 --   openLine    skill line Scanner:IsProfessionOpen reports open (nil = closed)
+--   liveReagents(infos, recipeID)  the open transaction's CraftingReagentInfo list for recipeID (default 9001);
+--               creates the fake Professions frame when the world has none (opts.professions) and returns it
 --   bumpPriceVersion()  version + 1 and FS_PRICES_CHANGED
 --   priceValues()       { [itemID] = copper } from world.prices (the BuildInput `prices` argument)
 --   outputOf(recipeID)  the recipe's quality-2 item
@@ -335,6 +337,15 @@ local function make_world(opts)
   end)
 
   function world.openProfession(skillLineID) world.openLine = skillLineID end
+  -- Blizzard's transaction for the self-check: what CreateCraftingReagentInfoTbl returns (infos), for recipeID
+  -- (default 9001, or the recipe already shown). Builds the fake Professions frame when the world has none.
+  -- Returns the fake_professions_frame handle (world.form).
+  function world.liveReagents(infos, recipeID)
+    world.form = world.form or professions_frame({})
+    world.form.reagentInfos = infos or {}
+    if recipeID ~= nil or not world.form.recipeInfo then world.form.recipeInfo = { recipeID = recipeID or 9001 } end
+    return world.form
+  end
   function world.haveAll(charKey)
     local items = world.items[charKey]
     for _, s in pairs(world.schematics) do

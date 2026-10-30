@@ -529,9 +529,9 @@ function Panel:ApplyAllocation(allocation)
   return true
 end
 
--- One line under the buttons (Task 19's self-check reports here too).
-function Panel:SetStatus(text)
-  set_status(text, "plain")
+-- One line under the buttons (SelfCheck reports here too). tone: a TONES key, "plain" by default.
+function Panel:SetStatus(text, tone)
+  set_status(text, tone)
 end
 
 local function read_only()
