@@ -73,7 +73,8 @@ describe("Orders scoring", function()
     assert.equal(1086400, v.expiresAt); assert.equal(50000, v.consortiumCut); assert.equal(0, v.rewardsValue)
     assert.same({}, v.rewards); assert.equal(ev.plain, v.result); assert.equal(i, v.input)
     assert.equal("Me-Silvermoon", v.charKey); assert.equal(0, v.concentrationCost); assert.is_nil(v.goldPerConcentration)
-    assert.same({noPrice=false, unknownRecipe=false, unpricedReward=false, estimated=false, stalePrice=false}, v.flags)
+    assert.same({noPrice=false, unknownRecipe=false, unpricedReward=false, estimated=false, stalePrice=false,
+      unknownConcentrationValue=false, recraft=false}, v.flags)
   end)
 
   it("asks Recipes for the minimum quality with the customer's reagents, and concentration only when needed", function()
@@ -175,6 +176,36 @@ describe("Orders scoring", function()
     assert.is_nil(v.orderType); assert.same({}, v.risks)
   end)
 
+  it("does not charge concentration for an unreachable target, nor ask for its rate", function()
+    ev.conc.expectedQuality = 3
+    local asked = 0
+    local v = O:ScoreInput(input({minQuality=4}), ctx({bestGPC=P2.NIL, bestGPCFor=function() asked = asked + 1 return 1000 end}))
+    assert.equal(0, asked); assert.equal(0, v.concentrationCharge); assert.equal(250000, v.score)
+    assert.same({"unreachableQuality"}, v.risks)
+  end)
+
+  it("asks for the rate only when concentration is spent", function()
+    local asked = 0
+    local c = ctx({bestGPC=P2.NIL, bestGPCFor=function() asked = asked + 1 return 1000 end})
+    O:ScoreInput(input(), c); assert.equal(0, asked)
+    assert.equal(200000, O:ScoreInput(input({minQuality=4}), c).score); assert.equal(1, asked)
+  end)
+
+  it("does not score a recraft as a fresh craft", function()
+    local evaluated = 0
+    ns.FS:GetModule("Recipes").Evaluate = function() evaluated = evaluated + 1 return ev.conc end
+    ev.conc.expectedQuality = 3   -- would be unreachable as a fresh craft
+    local v = O:ScoreInput(input({isRecraft=true, minQuality=4, customer="Bad-Silvermoon", expiresAt=1001800}), ctx())
+    assert.equal(0, evaluated); assert.is_nil(v.result)
+    assert.is_true(v.flags.recraft); assert.is_true(v.flags.estimated)
+    assert.is_false(v.flags.noPrice); assert.is_false(v.flags.unknownRecipe)
+    assert.is_nil(v.score); assert.is_nil(v.net); assert.equal(450000, v.commission)
+    assert.is_false(v.usedConcentration); assert.equal(0, v.concentrationCost)
+    assert.same({"expiringSoon","blockedCustomer"}, v.risks)   -- no unreachableQuality
+    v.risks = {}
+    assert.same({nil, "none"}, {O:GetBestClaimable({v}, {claimsRemaining=1})})
+  end)
+
   it("scores the order with Normalize and the current character's context", function()
     local seenCtx
     local realScore = O.ScoreInput
@@ -191,11 +222,12 @@ describe("Orders:BuildContext (Ruling P2: concentration at the same profession's
   local ns, O, rankedCalls, projected
   -- Recipe 1 is Alchemy (2871), recipe 2 Blacksmithing (2872), recipe 3 has no cached schematic.
   local schematics = { [1] = {skillLineID=2871}, [2] = {skillLineID=2872} }
-  local ranked = {
-    [2871] = { {goldPerConcentration=nil, flags={noPrice=true}}, {goldPerConcentration=900, flags={}} },
-    [2872] = { {goldPerConcentration=3000, flags={}} },
-  }
+  local ranked
   before_each(function()
+    ranked = {
+      [2871] = { {goldPerConcentration=nil, flags={noPrice=true}}, {goldPerConcentration=900, flags={}} },
+      [2872] = { {goldPerConcentration=3000, flags={}} },
+    }
     local W
     ns, W = P2.boot(); rankedCalls, projected = {}, {}
     W.now = 5000
@@ -248,13 +280,34 @@ describe("Orders:BuildContext (Ruling P2: concentration at the same profession's
     assert.equal(2, #rankedCalls)
   end)
 
-  it("floors a negative rate at 0, and uses 0 without results or a schematic", function()
+  it("floors a known negative rate at 0", function()
     ranked[2872] = { {goldPerConcentration=-50, flags={}} }
     local c = O:BuildContext("Me-Silvermoon")
-    assert.equal(0, c.bestGPCFor(2)); assert.equal(0, c.bestGPCFor(3))
+    assert.equal(0, c.bestGPCFor(2))
+    local v = O:ScoreInput(order(2), c)
+    assert.equal(500000, v.score); assert.equal(0, v.concentrationCharge); assert.is_false(v.flags.unknownConcentrationValue)
+  end)
+
+  it("has no rate without ranked rows, with only unpriced rows, or without a schematic", function()
     ranked[2872] = {}
-    assert.equal(0, O:BuildContext("Me-Silvermoon").bestGPCFor(2))
-    ranked[2872] = { {goldPerConcentration=3000, flags={}} }
+    ranked[2871] = { {goldPerConcentration=900, flags={noPrice=true}} }
+    local c = O:BuildContext("Me-Silvermoon")
+    assert.is_nil(c.bestGPCFor(2)); assert.is_nil(c.bestGPCFor(1)); assert.is_nil(c.bestGPCFor(3))
+    c.bestGPCFor(2); assert.equal(2, #rankedCalls)   -- an unknown rate is memoised too
+  end)
+
+  it("leaves score nil when the concentration needed has no known value", function()
+    ranked[2872] = {}   -- scan not finished for this profession
+    local c = O:BuildContext("Me-Silvermoon")
+    local v = O:ScoreInput(order(2), c)
+    assert.is_true(v.usedConcentration); assert.equal(500000, v.net)
+    assert.is_nil(v.score); assert.is_nil(v.concentrationCharge); assert.is_true(v.flags.unknownConcentrationValue)
+    assert.same({nil, "none"}, {O:GetBestClaimable({v}, {claimsRemaining=1})})
+    -- an order that needs no concentration is unaffected and does not ask for the rate
+    local plain = order(2); plain.minQuality = 1
+    local p = O:ScoreInput(plain, O:BuildContext("Me-Silvermoon"))
+    assert.equal(500000, p.score); assert.is_false(p.flags.unknownConcentrationValue)
+    assert.equal(1, #rankedCalls)
   end)
 
   it("projects the profession's concentration to now", function()
@@ -265,11 +318,13 @@ describe("Orders:BuildContext (Ruling P2: concentration at the same profession's
     assert.same({}, O:ScoreInput(order(1), c).risks)
   end)
 
-  it("works without Recipes or Scanner", function()
+  it("works without Recipes or Scanner, with no rate", function()
     ns.FS:GetModule("Recipes").GetRanked = nil
-    ns.FS:GetModule("Scanner").GetSchematic = function() return nil end
     local c = O:BuildContext("Me-Silvermoon")
-    assert.equal(0, c.bestGPCFor(1)); assert.is_nil(c.concentrationFor(1))
+    assert.is_nil(c.bestGPCFor(1))
+    ns.FS:GetModule("Scanner").GetSchematic = function() return nil end
+    c = O:BuildContext("Me-Silvermoon")
+    assert.is_nil(c.bestGPCFor(1)); assert.is_nil(c.concentrationFor(1))
   end)
 end)
 

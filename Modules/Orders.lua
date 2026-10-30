@@ -327,11 +327,13 @@ local function skill_line_of(recipeID)
 end
 
 -- Best goldPerConcentration of one profession (skill line) for charKey: the first ranked result with a price and
--- a rate (1b sorts those first), floored at 0; 0 when there is none. Ruling P2: concentration is valued at the
--- rate of the profession that spends it, never another profession's.
+-- a rate (1b sorts those first), floored at 0. Ruling P2: concentration is valued at the rate of the profession
+-- that spends it, never another profession's. nil when the rate cannot be known (no skill line, Recipes or
+-- GetRanked missing, no ranked rows yet because the scan has not finished, or only unpriced rows): unknown is
+-- never 0. A known rate of 0 or less is 0.
 local function best_gpc(charKey, skillLineID)
   local recipes = ns.FS:GetModule("Recipes", true)
-  if skillLineID == nil or not (recipes and recipes.GetRanked) then return 0 end
+  if skillLineID == nil or not (recipes and recipes.GetRanked) then return nil end
   local ranked = recipes:GetRanked({
     charKey = charKey, skillLineID = skillLineID, usesConcentration = true, sortBy = "goldPerConcentration",
   })
@@ -341,11 +343,11 @@ local function best_gpc(charKey, skillLineID)
       return math.max(0, gpc)
     end
   end
-  return 0
+  return nil
 end
 
 -- Per-character scoring context: ctx = { charKey, now, bestGPCFor = fn(recipeID) -> copper per concentration point
--- (that recipe's profession, Ruling P2), concentrationFor = fn(recipeID) -> points|nil (the profession's
+-- or nil when unknown (that recipe's profession, Ruling P2), concentrationFor = fn(recipeID) -> points|nil (the profession's
 -- concentration projected to now; nil without a snapshot) }. Both are memoised per skill line, so build one context
 -- per board refresh and score every order with it.
 function Orders:BuildContext(charKey)
@@ -354,9 +356,9 @@ function Orders:BuildContext(charKey)
   local ctx = { charKey = charKey, now = now }
   function ctx.bestGPCFor(recipeID)
     local skillLineID = skill_line_of(recipeID)
-    if skillLineID == nil then return 0 end
-    if gpcBySkill[skillLineID] == nil then gpcBySkill[skillLineID] = best_gpc(charKey, skillLineID) end
-    return gpcBySkill[skillLineID]
+    if skillLineID == nil then return nil end
+    if gpcBySkill[skillLineID] == nil then gpcBySkill[skillLineID] = { value = best_gpc(charKey, skillLineID) } end
+    return gpcBySkill[skillLineID].value
   end
   function ctx.concentrationFor(recipeID)
     local skillLineID = skill_line_of(recipeID)
@@ -371,10 +373,11 @@ function Orders:BuildContext(charKey)
 end
 
 -- The rate used for this order: ctx.bestGPCFor (BuildContext), else a fixed ctx.bestGPC (tests, callers that
--- know the rate), else 0.
+-- know the rate). nil when unknown.
 local function gpc_for(ctx, recipeID)
-  local rate = ctx.bestGPCFor and ctx.bestGPCFor(recipeID) or ctx.bestGPC
-  return type(rate) == "number" and math.max(0, rate) or 0
+  local rate
+  if ctx.bestGPCFor then rate = ctx.bestGPCFor(recipeID) else rate = ctx.bestGPC end
+  return type(rate) == "number" and math.max(0, rate) or nil
 end
 
 local function blocked(input)
@@ -401,10 +404,13 @@ end
 
 -- OrderInput + ctx (BuildContext, or any table with charKey, now, bestGPCFor|bestGPC, concentrationFor) -> OrderView.
 -- Money is copper; unknown money is nil, never 0: net is nil when the reagent cost is unknown, score is nil when a
--- paid reagent has no price or the recipe is unknown (nil scores sort last and are never "best").
+-- paid reagent has no price, the recipe is unknown, the concentration needed has no known value
+-- (flags.unknownConcentrationValue) or the order is a recraft (nil scores sort last and are never "best").
 --   commission = tip - consortium cut; net = commission + priced rewards - reagent cost (flags.unpricedReward: some
 --   reward has no value, so net is a lower bound); score = net - expected concentration x the profession's best
---   gold per concentration, when concentration is needed to reach minQuality.
+--   gold per concentration, when concentration is needed to reach minQuality (an unreachable target is not charged).
+--   A recraft (input.isRecraft) is not a fresh craft, so Recipes is not asked: flags.recraft and flags.estimated,
+--   result/net/score nil, and no quality or concentration risk.
 function Orders:ScoreInput(input, ctx)
   local settings = self:Settings()
   local provided = type(input.provided) == "table" and input.provided or {}
@@ -425,23 +431,38 @@ function Orders:ScoreInput(input, ctx)
     return target ~= nil and ((result.flags or {}).unreachableTarget == true or (result.expectedQuality or 0) < target)
   end
 
-  local r, usedConc = evaluate(nil), false
-  if r and short_of_target(r) then
-    r, usedConc = evaluate(true) or r, true
+  local recraft = input.isRecraft == true
+  local r, usedConc
+  if not recraft then
+    r, usedConc = evaluate(nil), false
+    if r and short_of_target(r) then
+      r, usedConc = evaluate(true) or r, true
+    end
   end
+  usedConc = usedConc == true
   local rflags = r and type(r.flags) == "table" and r.flags or {}
+  -- Quality risks need a result (a nil result is flags.unknownRecipe, or a recraft).
+  local unreachable = r ~= nil and short_of_target(r)
 
   local concCost = (r and usedConc) and number_or(r.concentrationCost, 0) or 0
-  local concCharge = (r and usedConc) and number_or(r.expectedConcentrationCost, concCost) or 0
   local reagentCost = r and r.reagentCost
   local net = (commission ~= nil and type(reagentCost) == "number") and commission + rewardsValue - reagentCost or nil
-  local noPrice = r == nil or paid_reagent_unpriced(r, provided)
-  local unknownRecipe = r == nil or rflags.unknownRecipe == true
-  local charge = math.floor(concCharge * gpc_for(ctx, input.recipeID))
-  local score = (net ~= nil and not noPrice and not unknownRecipe) and net - charge or nil
+  local noPrice = not recraft and (r == nil or paid_reagent_unpriced(r, provided))
+  local unknownRecipe = not recraft and (r == nil or rflags.unknownRecipe == true)
+  -- Concentration is charged only when it is spent to reach a reachable target; its rate is asked only then.
+  local charge, unknownConcValue = 0, false
+  if usedConc and not unreachable then
+    local rate = gpc_for(ctx, input.recipeID)
+    if rate == nil then
+      charge, unknownConcValue = nil, true
+    else
+      charge = math.floor(number_or(r.expectedConcentrationCost, concCost) * rate)
+    end
+  end
+  local scorable = net ~= nil and charge ~= nil and not (noPrice or unknownRecipe or recraft)
+  local score = scorable and net - charge or nil
 
-  -- Risks, in Orders.RISKS order. Quality risks need a result (a nil result is flags.unknownRecipe instead).
-  local unreachable = r ~= nil and short_of_target(r)
+  -- Risks, in Orders.RISKS order.
   local risks = {}
   if input.reagentState == "none" and commission ~= nil then
     -- Unknown cost: still low when the commission alone is under the margin (the cost cannot be negative).
@@ -486,8 +507,10 @@ function Orders:ScoreInput(input, ctx)
       noPrice = noPrice,
       unknownRecipe = unknownRecipe,
       unpricedReward = unpriced == true,
-      estimated = rflags.estimated == true,
+      estimated = recraft or rflags.estimated == true,
       stalePrice = rflags.stalePrice == true,
+      unknownConcentrationValue = unknownConcValue,
+      recraft = recraft,
     },
     charKey = ctx.charKey,
     input = input,
