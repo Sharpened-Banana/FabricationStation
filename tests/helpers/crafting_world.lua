@@ -33,6 +33,9 @@
 --   priceValues()       { [itemID] = copper } from world.prices (the BuildInput `prices` argument)
 --   outputOf(recipeID)  the recipe's quality-2 item
 --   messages(name)      the W.messages records named `name`
+--   fakeEvaluate(recipeID, result|fn|nil)  Recipes:Evaluate returns `result` (or fn(charKey, opts, recipeID))
+--               for that recipe, whatever the character and options; nil restores the real evaluation
+--   evaluated   list of { recipeID, charKey, opts } for every Evaluate call made after the first fakeEvaluate
 -- Later tasks extend this helper with the fakes their specs use.
 
 local install = require("wow_stubs")
@@ -280,6 +283,25 @@ local function make_world(opts)
       if rec[1] == name then out[#out + 1] = rec end
     end
     return out
+  end
+
+  -- Recipes:Evaluate stand-ins for specs of modules that only consume results. Installed on the first call.
+  local fakes, realEvaluate = {}, nil
+  world.evaluated = {}
+  function world.fakeEvaluate(recipeID, result)
+    local Recipes = ns.FS:GetModule("Recipes")
+    if not realEvaluate then
+      realEvaluate = Recipes.Evaluate
+      function Recipes.Evaluate(self, id, charKey, evalOpts)
+        charKey = charKey or ns.FS:CharKey()
+        world.evaluated[#world.evaluated + 1] = { recipeID = id, charKey = charKey, opts = evalOpts }
+        local fake = fakes[id]
+        if fake == nil then return realEvaluate(self, id, charKey, evalOpts) end
+        if type(fake) == "function" then return fake(charKey, evalOpts, id) end
+        return fake
+      end
+    end
+    fakes[recipeID] = result
   end
 
   return ns, W, world
