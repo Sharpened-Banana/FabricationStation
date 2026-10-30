@@ -11,6 +11,13 @@
 --   Schematic 1001 slots: 1 Basic (ModifiedReagent data slot) items {2002, 2001} x5, 2 Modifying 4001,
 --   3 Finishing 5001, 4 Basic (plain Reagent data slot) 6001 x2, 5 Automatic 7001.
 --   Reagent quality ranks: 2001 -> 1, 2002 -> 2.
+--   Specialization (2871 only): configID 55, 3 unspent "Knowledge", tab 10 (state 1, root path 100);
+--   paths 100 -> {101, 102}, 102 -> {100} (a cycle); path state 1, spend entry pathID * 10;
+--   node ranks 100 = 11/31, 101 = 1/31, 102 = 0/31; perks of 101 = {900} (state 2, entry 9000, unlock rank 5).
+--   Concentration currency 3256 (2871 only): 500 / 1000, 360000 ms per cycle, 1 per cycle.
+--   Moxie currency 3300: 42 (GameData MoxieCurrency is empty until a test maps it).
+--   Cooldowns: 1001 -> 3600 s, no charges; 1002 -> no cooldown, 1 of 2 charges.
+--   Tools: GetProfessionSlots(1) -> {20, 21}; slot 20 holds "link20", 21 is empty.
 
 local function is_plain_table(v) return type(v) == "table" and getmetatable(v) == nil end
 
@@ -71,6 +78,27 @@ local function operation_info(id)
     craftingDataID = 777, concentrationCurrencyID = 3256, concentrationCost = 20, bonusStats = {} }
 end
 
+local CONFIG = 55
+local CHILDREN = { [100] = { 101, 102 }, [102] = { 100 } }
+local NODE_RANKS = { [100] = 11, [101] = 1, [102] = 0 }
+local PERKS = { [101] = { 900 } }
+
+local CURRENCIES = {
+  [3256] = { quantity = 500, maxQuantity = 1000, rechargingCycleDurationMS = 360000, rechargingAmountPerCycle = 1 },
+  [3300] = { quantity = 42, maxQuantity = 0, rechargingCycleDurationMS = 0, rechargingAmountPerCycle = 0 },
+}
+
+local function copy(t)
+  local out = {}
+  for k, v in pairs(t) do out[k] = v end
+  return out
+end
+
+local function recipe_cooldown(id)
+  if id == 1001 then return 3600, true, 0, 0 end
+  if id == 1002 then return nil, false, 1, 2 end
+end
+
 local function fixture(overrides)
   local world = {
     C_TradeSkillUI = {
@@ -93,7 +121,38 @@ local function fixture(overrides)
       GetRecipeSchematic = schematic,
       GetItemReagentQualityByItemInfo = function(itemID) return REAGENT_QUALITY[itemID] end,
       GetCraftingOperationInfo = operation_info,
+      GetConcentrationCurrencyID = function(id) return id == CHILD and 3256 or 0 end,
+      GetRecipeCooldown = recipe_cooldown,
+      GetProfessionSlots = function(profession) return profession == 1 and { 20, 21 } or {} end,
     },
+    C_ProfSpecs = {
+      SkillLineHasSpecialization = function(id) return id == CHILD end,
+      GetConfigIDForSkillLine = function(id) return id == CHILD and CONFIG or 0 end,
+      GetSpecTabIDsForSkillLine = function(id) return id == CHILD and { 10 } or {} end,
+      GetStateForTab = function() return 1 end,
+      GetRootPathForTab = function(tab) if tab == 10 then return 100 end end,
+      GetChildrenForPath = function(path) return CHILDREN[path] and copy(CHILDREN[path]) or {} end,
+      GetStateForPath = function() return 1 end,
+      GetSpendEntryForPath = function(path) return path * 10 end,
+      GetPerksForPath = function(path)
+        local out = {}
+        for i, perkID in ipairs(PERKS[path] or {}) do out[i] = { perkID = perkID, isMajorPerk = false } end
+        return out
+      end,
+      GetStateForPerk = function() return 2 end,
+      GetEntryIDForPerk = function(perkID) return perkID * 10 end,
+      GetUnlockRankForPerk = function() return 5 end,
+      GetCurrencyInfoForSkillLine = function() return { numAvailable = 3, currencyName = "Knowledge" } end,
+    },
+    C_Traits = {
+      GetNodeInfo = function(configID, nodeID)
+        if configID == CONFIG and NODE_RANKS[nodeID] then return { currentRank = NODE_RANKS[nodeID], maxRanks = 31 } end
+      end,
+    },
+    C_CurrencyInfo = {
+      GetCurrencyInfo = function(id) return CURRENCIES[id] and copy(CURRENCIES[id]) end,
+    },
+    GetInventoryItemLink = function(_, invSlot) if invSlot == 20 then return "link20" end end,
     ProfessionsFrame = { IsShown = function() return true end },
   }
   return deep_merge(world, overrides or {})

@@ -1,6 +1,7 @@
 local ADDON_NAME, ns = ...
 
--- Scanner: every game-state snapshot (characters, professions, known recipes, schematics).
+-- Scanner: every game-state snapshot (characters, professions, known recipes, schematics,
+-- specialization, concentration, Moxie, cooldowns, profession tools).
 -- Professions are keyed by the child (expansion) skill line, e.g. Midnight Blacksmithing, never the
 -- base profession. Nothing is written while the saved data is from a newer version (ns.FS.dbIsNewer).
 local Scanner = ns.FS:NewModule("Scanner", "AceEvent-3.0")
@@ -12,7 +13,10 @@ local SCAN_DEBOUNCE = 0.5
 local PROFESSION_EVENTS = { "TRADE_SKILL_SHOW", "TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED",
   "NEW_RECIPE_LEARNED" }
 
+local SPEC_EVENTS = { "SKILL_LINE_SPECS_RANKS_CHANGED", "TRAIT_CONFIG_UPDATED" }
+
 local loggedFetchErrors = {}  -- [recipeID] = true; one diagnostics entry per recipe per session
+local loggedStateErrors = {}  -- [what] = true; one diagnostics entry per state snapshot kind per session
 
 ---------------------------------------------------------------------------
 -- Helpers
@@ -58,6 +62,27 @@ local function ensure_character(charKey)
   c.itemsTime = c.itemsTime or {}
   c.knowledgeWeekly = c.knowledgeWeekly or {}
   return c
+end
+
+local function profession_record(c, line)
+  local p = c.professions[line]
+  if not p then p = {}; c.professions[line] = p end
+  p.recipes = p.recipes or {}
+  p.cooldowns = p.cooldowns or {}
+  p.tools = p.tools or {}
+  return p
+end
+
+-- Runs fn(...) protected. A failing state snapshot is logged once per `what` per session and never
+-- disables the module. Returns true when fn ran without error.
+local function guarded(what, fn, ...)
+  local ok, err = pcall(fn, ...)
+  if ok then return true end
+  if not loggedStateErrors[what] then
+    loggedStateErrors[what] = true
+    ns.FS:LogError("Scanner", ("%s: %s"):format(what, tostring(err)))
+  end
+  return false
 end
 
 -- Copies the header fields of a ProfessionInfo into a ProfessionRecord, keeping known values the
@@ -192,6 +217,108 @@ local function store_schematic(schematic)
 end
 
 ---------------------------------------------------------------------------
+-- Profession state: specialization, concentration, Moxie, cooldowns, tools
+---------------------------------------------------------------------------
+
+-- Walks every tab's path tree depth-first; the visited set ends cycles. Ranks are the raw
+-- C_Traits currentRank (Blizzard's UI shows currentRank - 1 when > 0).
+local function read_spec(line, configID, now)
+  local PS = C_ProfSpecs
+  local currency = PS.GetCurrencyInfoForSkillLine(line) or {}
+  local spec = { configID = configID, unspent = currency.numAvailable, currencyName = currency.currencyName,
+    tabs = {}, paths = {}, perks = {}, time = now }
+  local visited = {}
+  for _, tabID in ipairs(PS.GetSpecTabIDsForSkillLine(line) or {}) do
+    spec.tabs[tabID] = PS.GetStateForTab(tabID, configID)
+    local stack = { PS.GetRootPathForTab(tabID) }
+    while #stack > 0 do
+      local pathID = table.remove(stack)
+      if not visited[pathID] then
+        visited[pathID] = true
+        local node = C_Traits.GetNodeInfo(configID, pathID)
+        spec.paths[pathID] = { rank = node and node.currentRank or 0, maxRank = node and node.maxRanks or 0,
+          state = PS.GetStateForPath(pathID, configID), spendEntryID = PS.GetSpendEntryForPath(pathID) }
+        for _, perk in ipairs(PS.GetPerksForPath(pathID) or {}) do
+          local perkID = perk.perkID
+          spec.perks[perkID] = { state = PS.GetStateForPerk(perkID, configID), entryID = PS.GetEntryIDForPerk(perkID),
+            unlockRank = PS.GetUnlockRankForPerk(perkID), pathID = pathID }
+        end
+        local children = PS.GetChildrenForPath(pathID) or {}
+        for i = #children, 1, -1 do stack[#stack + 1] = children[i] end
+      end
+    end
+  end
+  return spec
+end
+
+-- No specialization clears the snapshot; a zero config id (not loaded yet) keeps the last one.
+-- Returns true when a snapshot was taken.
+local function snapshot_spec(p, line, now)
+  if not C_ProfSpecs.SkillLineHasSpecialization(line) then p.spec = nil; return false end
+  local configID = C_ProfSpecs.GetConfigIDForSkillLine(line)
+  if not configID or configID == 0 then return false end
+  p.spec = read_spec(line, configID, now)
+  return true
+end
+
+local function read_concentration(currencyID, now)
+  local info = C_CurrencyInfo.GetCurrencyInfo(currencyID)
+  if not info then return nil end
+  return { currencyID = currencyID, value = info.quantity, max = info.maxQuantity, time = now,
+    perCycle = info.rechargingAmountPerCycle or 0, cycleSeconds = (info.rechargingCycleDurationMS or 0) / 1000 }
+end
+
+-- The concentration currency a profession tracks: the snapshot's, else the client's (0 = none).
+local function concentration_id(p, line)
+  local id = p.concentration and p.concentration.currencyID
+  if not id then id = C_TradeSkillUI.GetConcentrationCurrencyID(line) end
+  if id and id ~= 0 then return id end
+end
+
+-- Open-profession snapshot: currency id 0 means the profession has no concentration.
+local function snapshot_concentration(p, line, now)
+  local id = C_TradeSkillUI.GetConcentrationCurrencyID(line) or 0
+  if id == 0 then p.concentration = nil; return end
+  p.concentration = read_concentration(id, now) or p.concentration
+end
+
+local function moxie_id(line)
+  local map = ns.GameData.Get("MoxieCurrency")
+  return map and map[line]
+end
+
+-- Returns true when a snapshot was taken. An unmapped skill line has no Moxie.
+local function snapshot_moxie(p, line, now)
+  local id = moxie_id(line)
+  if not id then p.moxie = nil; return false end
+  local info = C_CurrencyInfo.GetCurrencyInfo(id)
+  if not info then return false end
+  p.moxie = { currencyID = id, value = info.quantity, time = now }
+  return true
+end
+
+-- A recipe without cooldown or charges has no entry.
+local function refresh_cooldown(p, recipeID, now)
+  local cd, _, charges, maxCharges = C_TradeSkillUI.GetRecipeCooldown(recipeID)
+  if (cd or 0) > 0 or (maxCharges or 0) > 0 then
+    p.cooldowns[recipeID] = { readyAt = now + (cd or 0), charges = charges or 0, maxCharges = maxCharges or 0, time = now }
+  else
+    p.cooldowns[recipeID] = nil
+  end
+end
+
+local function snapshot_tools(p, child, now)
+  if not child.profession then return end
+  local tools = {}
+  for _, slot in ipairs(C_TradeSkillUI.GetProfessionSlots(child.profession) or {}) do
+    local link = GetInventoryItemLink("player", slot)
+    if link then tools[slot] = link end
+  end
+  p.tools = tools
+  p.toolsTime = now
+end
+
+---------------------------------------------------------------------------
 -- Public API
 ---------------------------------------------------------------------------
 
@@ -212,6 +339,19 @@ end
 function Scanner:GetProfession(charKey, skillLineID)
   local c = self:GetCharacter(charKey)
   return c and c.professions and c.professions[skillLineID]
+end
+
+-- Concentration at atTime (default Now()) from the last snapshot, capped at max. Nil without one.
+function Scanner:ProjectConcentration(charKey, skillLineID, atTime)
+  local p = self:GetProfession(charKey, skillLineID)
+  local c = p and p.concentration
+  if not c then return nil end
+  atTime = atTime or ns.FS:Now()
+  local perCycle, cycleSeconds = c.perCycle or 0, c.cycleSeconds or 0
+  if atTime <= c.time or perCycle <= 0 or cycleSeconds <= 0 then return c.value, c.max end
+  local value = c.value + math.floor((atTime - c.time) / cycleSeconds) * perCycle
+  if c.max then value = math.min(c.max, value) end
+  return value, c.max
 end
 
 function Scanner:IsProfessionOpen(skillLineID)
@@ -287,7 +427,8 @@ local function recipe_ids()
 end
 
 -- Snapshots the open profession: the open child's header, every known recipe filed under its own
--- child skill line, and those lines' skill. Returns true when a scan ran.
+-- child skill line with its cooldown, those lines' skill, and the open child's specialization,
+-- concentration, Moxie and tools. Sends one FS_DATA_CHANGED ("recipes"). Returns true when a scan ran.
 function Scanner:ScanProfession()
   if not writable() or not can_scan() then return false end
   local charKey = ns.FS:CharKey()
@@ -296,18 +437,16 @@ function Scanner:ScanProfession()
   local touched = {}
 
   local function record(line)
-    local p = c.professions[line]
-    if not p then p = { recipes = {} }; c.professions[line] = p end
-    p.recipes = p.recipes or {}
+    local p = profession_record(c, line)
     touched[line] = p
     return p
   end
 
   local child = C_TradeSkillUI.GetChildProfessionInfo()
   local childLine = child and child.professionID
-  if childLine and childLine ~= 0 then apply_profession_info(record(childLine), child) end
+  if childLine and childLine ~= 0 then apply_profession_info(record(childLine), child) else childLine = nil end
 
-  local learned = {}
+  local learned, learnedLine = {}, {}
   for _, id in ipairs(recipe_ids()) do
     local info = C_TradeSkillUI.GetRecipeInfo(id)
     local line = info and recipe_line(id)
@@ -315,8 +454,10 @@ function Scanner:ScanProfession()
       if info.learned then
         record(line).recipes[id] = true
         learned[#learned + 1] = id
+        learnedLine[id] = line
       elseif c.professions[line] and c.professions[line].recipes then
         c.professions[line].recipes[id] = nil
+        if c.professions[line].cooldowns then c.professions[line].cooldowns[id] = nil end
       end
     end
   end
@@ -325,6 +466,20 @@ function Scanner:ScanProfession()
     if line ~= childLine then apply_profession_info(p, C_TradeSkillUI.GetProfessionInfoBySkillLineID(line)) end
     p.time = now
   end
+
+  guarded("cooldowns", function()
+    for _, id in ipairs(learned) do refresh_cooldown(touched[learnedLine[id]], id, now) end
+  end)
+  if childLine then
+    local p = touched[childLine]
+    guarded("spec", snapshot_spec, p, childLine, now)
+    guarded("concentration", snapshot_concentration, p, childLine, now)
+    guarded("moxie", snapshot_moxie, p, childLine, now)
+    guarded("tools", snapshot_tools, p, child, now)
+  end
+  local lines = {}
+  for line in pairs(touched) do lines[line] = true end
+  self.openLines = { child = childLine, lines = lines }  -- what ScanCooldowns refreshes after a craft
 
   self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "recipes")
 
@@ -335,6 +490,65 @@ function Scanner:ScanProfession()
   table.sort(stale)
   if #stale > 0 then self:CacheSchematics(stale) end
   return true
+end
+
+-- Re-snapshots the open child profession's specialization; sends FS_DATA_CHANGED "spec".
+function Scanner:ScanSpec()
+  if not writable() or not self:IsProfessionOpen() then return false end
+  local child = C_TradeSkillUI.GetChildProfessionInfo()
+  local line = child and child.professionID
+  if not line or line == 0 then return false end
+  local charKey = ns.FS:CharKey()
+  local p = profession_record(ensure_character(charKey), line)
+  local now, taken = ns.FS:Now(), false
+  guarded("spec", function() taken = snapshot_spec(p, line, now) end)
+  if taken then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "spec") end
+  return taken
+end
+
+-- Refreshes the cooldowns of every recipe the last scan filed while that profession is still open;
+-- sends FS_DATA_CHANGED "professions".
+function Scanner:ScanCooldowns()
+  local open = self.openLines
+  if not writable() or not open or not self:IsProfessionOpen(open.child) then return false end
+  local charKey = ns.FS:CharKey()
+  local c = ensure_character(charKey)
+  local now = ns.FS:Now()
+  local ok = guarded("cooldowns", function()
+    for line in pairs(open.lines) do
+      local p = profession_record(c, line)
+      for id in pairs(p.recipes) do refresh_cooldown(p, id, now) end
+    end
+  end)
+  if ok then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "professions") end
+  return ok
+end
+
+-- Refreshes this character's concentration and Moxie snapshots that track currencyType (nil = all),
+-- with no profession window needed. Sends "professions" for Moxie and "concentration" for
+-- concentration, once each when anything was refreshed.
+function Scanner:RefreshCurrencies(currencyType)
+  if not writable() then return end
+  local charKey = ns.FS:CharKey()
+  local c = self:GetCharacter(charKey)
+  if not (c and c.professions) then return end
+  local now = ns.FS:Now()
+  local moxie, concentration = false, false
+  for line, p in pairs(c.professions) do
+    guarded("moxie", function()
+      local id = moxie_id(line)
+      if id and (currencyType == nil or id == currencyType) and snapshot_moxie(p, line, now) then moxie = true end
+    end)
+    guarded("concentration", function()
+      local id = concentration_id(p, line)
+      if id and (currencyType == nil or id == currencyType) then
+        local snap = read_concentration(id, now)
+        if snap then p.concentration = snap; concentration = true end
+      end
+    end)
+  end
+  if moxie then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "professions") end
+  if concentration then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "concentration") end
 end
 
 ---------------------------------------------------------------------------
@@ -352,10 +566,31 @@ function Scanner:OnEnable()
     c.lastSeen = ns.FS:Now()
     c.class = select(2, UnitClass("player"))
     c.gold = GetMoney()
+    self:RefreshCurrencies(nil)
   end
 
   local scan = ns.FS:Wrap("Scanner", function() self:ScanProfession() end)
   local function schedule_scan() ns.FS:Debounce("scanner.profession", SCAN_DEBOUNCE, scan) end
   for _, event in ipairs(PROFESSION_EVENTS) do self:RegisterEvent(event, schedule_scan) end
   self:RegisterEvent("PLAYER_MONEY", ns.FS:Wrap("Scanner", function() self:UpdateGold() end))
+
+  local scanSpec = ns.FS:Wrap("Scanner", function() self:ScanSpec() end)
+  local function schedule_spec(event, configID)
+    if not writable() or not self:IsProfessionOpen() then return end
+    if event == "TRAIT_CONFIG_UPDATED" then
+      local child = C_TradeSkillUI.GetChildProfessionInfo()
+      local line = child and child.professionID
+      if not line or configID ~= C_ProfSpecs.GetConfigIDForSkillLine(line) then return end
+    end
+    ns.FS:Debounce("scanner.spec", SCAN_DEBOUNCE, scanSpec)
+  end
+  for _, event in ipairs(SPEC_EVENTS) do self:RegisterEvent(event, ns.FS:Wrap("Scanner", schedule_spec)) end
+
+  local scanCooldowns = ns.FS:Wrap("Scanner", function() self:ScanCooldowns() end)
+  self:RegisterEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", function()
+    ns.FS:Debounce("scanner.cooldowns", SCAN_DEBOUNCE, scanCooldowns)
+  end)
+  self:RegisterEvent("CURRENCY_DISPLAY_UPDATE", ns.FS:Wrap("Scanner", function(_, currencyType)
+    self:RefreshCurrencies(currencyType)
+  end))
 end
