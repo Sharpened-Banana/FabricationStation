@@ -137,6 +137,61 @@ describe("Scanner profession state", function()
     C_ProfSpecs.GetSpecTabIDsForSkillLine = function() error("boom") end
     scan(); assert.is_true(Scanner:IsEnabled())
     local p = Scanner:GetProfession(K, 2871); assert.is_true(p.recipes[1001]); assert.equals(500, p.concentration.value)
+    local errors = ns.FS.db.global.diagnostics.errors
+    assert.equals(1, #errors); assert.equals("Scanner", errors[1].source); assert.matches("^spec: .*boom", errors[1].err)
+    scan(); assert.equals(1, #ns.FS.db.global.diagnostics.errors)  -- logged once per session
+  end)
+  it("writes nothing from a craft event when the saved data turns out to be from a newer version", function()
+    scan(); local p1, p2 = Scanner:GetProfession(K, 2871), Scanner:GetProfession(K, 2822)
+    local cd1, cd2 = p1.cooldowns[1001], p2.cooldowns[1002]; assert.is_table(cd1); assert.is_table(cd2)
+    ns.FS.dbIsNewer = true  -- the scan above proved the cooldown refresh is armed; now the guard must stop it
+    C_TradeSkillUI.GetRecipeCooldown = function() return nil end
+    local before = #W.messages
+    W.advance(10); W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", {}); W.advance(0.5)
+    assert.equals(cd1, p1.cooldowns[1001]); assert.equals(cd2, p2.cooldowns[1002]); assert.equals(before, #W.messages)
+    ns.FS.dbIsNewer = nil  -- sanity: the same event does refresh once the data is writable again
+    W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", {}); W.advance(0.5)
+    assert.is_nil(p1.cooldowns[1001]); assert.equals(before + 1, #W.messages)
+  end)
+  it("does not re-announce currencies whose value, max and rate are unchanged", function()
+    ns.GameData.Define("MoxieCurrency", 70575, { [2871] = 3300 }); scan(); _G.ProfessionsFrame = nil
+    local before = #W.messages
+    W.advance(60); W.fire("CURRENCY_DISPLAY_UPDATE"); W.fire("CURRENCY_DISPLAY_UPDATE", 3256); W.fire("CURRENCY_DISPLAY_UPDATE", 3300)
+    assert.equals(before, #W.messages)
+    assert.equals(W.now, Scanner:GetProfession(K, 2871).concentration.time)  -- the snapshot itself still moves forward
+    assert.equals(W.now, Scanner:GetProfession(K, 2871).moxie.time)
+  end)
+  it("announces a currency refresh when value, max or rate changed", function()
+    ns.GameData.Define("MoxieCurrency", 70575, { [2871] = 3300 }); scan(); _G.ProfessionsFrame = nil
+    local info = { quantity = 500, maxQuantity = 1000, rechargingCycleDurationMS = 360000, rechargingAmountPerCycle = 1 }
+    C_CurrencyInfo.GetCurrencyInfo = function(id) if id == 3256 then return info end; if id == 3300 then return { quantity = 43 } end end
+    W.fire("CURRENCY_DISPLAY_UPDATE")
+    assert.equals(1, count("professions")); assert.equals(0, count("concentration"))  -- Moxie 42 -> 43 only
+    for _, change in ipairs({ { "quantity", 510 }, { "maxQuantity", 1100 }, { "rechargingAmountPerCycle", 2 }, { "rechargingCycleDurationMS", 300000 } }) do
+      local n = count("concentration"); info[change[1]] = change[2]
+      W.fire("CURRENCY_DISPLAY_UPDATE", 3256); assert.equals(n + 1, count("concentration"), change[1])
+      W.fire("CURRENCY_DISPLAY_UPDATE", 3256); assert.equals(n + 1, count("concentration"), change[1])
+    end
+  end)
+  it("looks up each skill line's concentration currency once, not on every currency event", function()
+    W = install_wow_stubs(fixture())
+    _G.FabricationStationDB = { global = { characters = { [K] = { professions = { [2871] = { recipes = {} }, [2822] = { recipes = {} } } } } } }
+    local lookups = 0
+    local lookup = C_TradeSkillUI.GetConcentrationCurrencyID
+    C_TradeSkillUI.GetConcentrationCurrencyID = function(line) lookups = lookups + 1; return lookup(line) end
+    ns = load_addon({}, "Modules/Scanner.lua"); W.boot(); Scanner = ns.FS:GetModule("Scanner")
+    local atLogin = lookups; assert.is_true(atLogin >= 1)
+    for _ = 1, 3 do W.fire("CURRENCY_DISPLAY_UPDATE"); W.fire("CURRENCY_DISPLAY_UPDATE", 3256) end
+    assert.equals(atLogin, lookups)
+    assert.equals(500, Scanner:GetProfession(K, 2871).concentration.value)
+  end)
+  it("does not cap projected concentration when the max is 0 or unknown", function()
+    scan(); local c = Scanner:GetProfession(K, 2871).concentration
+    c.max = 0; assert.same({ 510, 0 }, { Scanner:ProjectConcentration(K, 2871, c.time + 3600) })
+    c.max = nil; assert.same({ 510, nil }, { Scanner:ProjectConcentration(K, 2871, c.time + 3600) })
+  end)
+  it("keeps the open-profession bookkeeping private", function()
+    scan(); assert.is_nil(Scanner.openLines)
   end)
   it("writes nothing on state events when the saved data is from a newer version", function()
     W = install_wow_stubs(fixture())

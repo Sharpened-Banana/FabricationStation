@@ -17,6 +17,8 @@ local SPEC_EVENTS = { "SKILL_LINE_SPECS_RANKS_CHANGED", "TRAIT_CONFIG_UPDATED" }
 
 local loggedFetchErrors = {}  -- [recipeID] = true; one diagnostics entry per recipe per session
 local loggedStateErrors = {}  -- [what] = true; one diagnostics entry per state snapshot kind per session
+local concentrationIDs = {}   -- [skillLineID] = currencyID, or false when the line has none; filled lazily
+local openLines              -- { child = skillLineID, lines = { [skillLineID] = true } } of the last profession scan
 
 ---------------------------------------------------------------------------
 -- Helpers
@@ -268,16 +270,32 @@ local function read_concentration(currencyID, now)
     perCycle = info.rechargingAmountPerCycle or 0, cycleSeconds = (info.rechargingCycleDurationMS or 0) / 1000 }
 end
 
--- The concentration currency a profession tracks: the snapshot's, else the client's (0 = none).
+-- True when the recharge state differs; the snapshot time alone never counts as a change.
+local function concentration_changed(old, new)
+  return old == nil or old.currencyID ~= new.currencyID or old.value ~= new.value or old.max ~= new.max
+    or old.perCycle ~= new.perCycle or old.cycleSeconds ~= new.cycleSeconds
+end
+
+-- The client's concentration currency for a skill line (0 = none), cached per line for the session.
+-- A nil answer (data not loaded yet) is not cached.
+local function lookup_concentration_id(line)
+  local cached = concentrationIDs[line]
+  if cached ~= nil then return cached or nil end
+  local id = C_TradeSkillUI.GetConcentrationCurrencyID(line)
+  if id == nil then return nil end
+  concentrationIDs[line] = id ~= 0 and id or false
+  return id ~= 0 and id or nil
+end
+
+-- The concentration currency a profession tracks: the snapshot's, else the client's.
 local function concentration_id(p, line)
-  local id = p.concentration and p.concentration.currencyID
-  if not id then id = C_TradeSkillUI.GetConcentrationCurrencyID(line) end
-  if id and id ~= 0 then return id end
+  return p.concentration and p.concentration.currencyID or lookup_concentration_id(line)
 end
 
 -- Open-profession snapshot: currency id 0 means the profession has no concentration.
 local function snapshot_concentration(p, line, now)
   local id = C_TradeSkillUI.GetConcentrationCurrencyID(line) or 0
+  concentrationIDs[line] = id ~= 0 and id or false
   if id == 0 then p.concentration = nil; return end
   p.concentration = read_concentration(id, now) or p.concentration
 end
@@ -287,14 +305,16 @@ local function moxie_id(line)
   return map and map[line]
 end
 
--- Returns true when a snapshot was taken. An unmapped skill line has no Moxie.
+-- Returns true when a snapshot was taken, and true again when its currency or value changed.
+-- An unmapped skill line has no Moxie.
 local function snapshot_moxie(p, line, now)
   local id = moxie_id(line)
   if not id then p.moxie = nil; return false end
   local info = C_CurrencyInfo.GetCurrencyInfo(id)
   if not info then return false end
+  local old = p.moxie
   p.moxie = { currencyID = id, value = info.quantity, time = now }
-  return true
+  return true, old == nil or old.currencyID ~= id or old.value ~= info.quantity
 end
 
 -- A recipe without cooldown or charges has no entry.
@@ -350,7 +370,7 @@ function Scanner:ProjectConcentration(charKey, skillLineID, atTime)
   local perCycle, cycleSeconds = c.perCycle or 0, c.cycleSeconds or 0
   if atTime <= c.time or perCycle <= 0 or cycleSeconds <= 0 then return c.value, c.max end
   local value = c.value + math.floor((atTime - c.time) / cycleSeconds) * perCycle
-  if c.max then value = math.min(c.max, value) end
+  if c.max and c.max > 0 then value = math.min(c.max, value) end
   return value, c.max
 end
 
@@ -479,7 +499,7 @@ function Scanner:ScanProfession()
   end
   local lines = {}
   for line in pairs(touched) do lines[line] = true end
-  self.openLines = { child = childLine, lines = lines }  -- what ScanCooldowns refreshes after a craft
+  openLines = { child = childLine, lines = lines }  -- what ScanCooldowns refreshes after a craft
 
   self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "recipes")
 
@@ -509,7 +529,7 @@ end
 -- Refreshes the cooldowns of every recipe the last scan filed while that profession is still open;
 -- sends FS_DATA_CHANGED "professions".
 function Scanner:ScanCooldowns()
-  local open = self.openLines
+  local open = openLines
   if not writable() or not open or not self:IsProfessionOpen(open.child) then return false end
   local charKey = ns.FS:CharKey()
   local c = ensure_character(charKey)
@@ -525,8 +545,8 @@ function Scanner:ScanCooldowns()
 end
 
 -- Refreshes this character's concentration and Moxie snapshots that track currencyType (nil = all),
--- with no profession window needed. Sends "professions" for Moxie and "concentration" for
--- concentration, once each when anything was refreshed.
+-- with no profession window needed. Snapshots always take the new time; "professions" (Moxie) and
+-- "concentration" are sent once each, and only when a value, max or recharge rate actually changed.
 function Scanner:RefreshCurrencies(currencyType)
   if not writable() then return end
   local charKey = ns.FS:CharKey()
@@ -537,13 +557,19 @@ function Scanner:RefreshCurrencies(currencyType)
   for line, p in pairs(c.professions) do
     guarded("moxie", function()
       local id = moxie_id(line)
-      if id and (currencyType == nil or id == currencyType) and snapshot_moxie(p, line, now) then moxie = true end
+      if id and (currencyType == nil or id == currencyType) then
+        local _, changed = snapshot_moxie(p, line, now)
+        if changed then moxie = true end
+      end
     end)
     guarded("concentration", function()
       local id = concentration_id(p, line)
       if id and (currencyType == nil or id == currencyType) then
         local snap = read_concentration(id, now)
-        if snap then p.concentration = snap; concentration = true end
+        if snap then
+          if concentration_changed(p.concentration, snap) then concentration = true end
+          p.concentration = snap
+        end
       end
     end)
   end
