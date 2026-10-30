@@ -1,0 +1,10 @@
+## Interface: 120105
+## Title: FabricationStation
+## Notes: All-in-one crafting: profit, quality, concentration, queue, orders and alts.
+## Author: lonezebra
+## Version: @project-version@
+## SavedVariables: FabricationStationDB
+## OptionalDeps: Auctionator
+## IconTexture: Interface\Icons\Trade_Engineering
+
+embeds.xml

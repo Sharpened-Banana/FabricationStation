@@ -1,0 +1,4 @@
+return {
+  _all = { lpath = "./?.lua;./tests/helpers/?.lua;./tools/lib/?.lua", helper = "tests/helpers/init.lua" },
+  default = { ROOT = { "tests" }, pattern = "_spec", recursive = true },
+}
