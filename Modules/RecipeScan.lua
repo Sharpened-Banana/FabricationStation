@@ -22,6 +22,11 @@ local scan = {
 }
 local stepStart, stepBudget = 0, 0
 local calibrated = {}    -- [recipeID] = true: calibrated since the profession window opened
+-- What the calibrations in `calibrated` were made against: the open lines ("2906,..." of the current
+-- character's open professions) and, per open skill line, its skill, skillModifier and tools. A change of
+-- either makes those recipes calibrate again (a skill or tool change arrives only as "recipes").
+local calibratedOpen     -- the open-lines key of the last pass that calibrated, nil = none since opening
+local calibratedAgainst = {}  -- [skillLineID] = "skill|skillModifier|tools" signature
 local logged = {}        -- [key] = true: failures already logged this session
 local debounceKeys = {}  -- [key] = true: debounce keys in use
 local startTimer         -- the one-shot first scan after enabling
@@ -89,21 +94,59 @@ end
 -- The pass
 ---------------------------------------------------------------------------
 
+-- Forgets every calibration made since the window opened: the next pass calibrates the open profession again.
+local function forget_calibrated()
+  for recipeID in pairs(calibrated) do calibrated[recipeID] = nil end
+  for line in pairs(calibratedAgainst) do calibratedAgainst[line] = nil end
+  calibratedOpen = nil
+end
+
+-- "skill|skillModifier|tools" of a profession record: what its live numbers depend on besides the spec.
+local function signature(record)
+  local tools = type(record.tools) == "table" and record.tools or {}
+  local parts = {}
+  for _, slot in ipairs(sorted_keys(tools)) do parts[#parts + 1] = tostring(slot) .. "=" .. tostring(tools[slot]) end
+  return tostring(record.skill) .. "|" .. tostring(record.skillModifier) .. "|" .. table.concat(parts, ",")
+end
+
+local function recipes_of(record)
+  return sorted_keys(type(record.recipes) == "table" and record.recipes or {})
+end
+
 -- Calibrates the open profession's known recipes for the current character, once each per window opening.
+-- A recipe is calibrated again after the window was closed (TRADE_SKILL_SHOW/TRADE_SKILL_CLOSE, or a pass that
+-- found it closed), when the set of open professions changed, or when its profession's skill, skillModifier or
+-- tools differ from what it was calibrated against. Calibrate stores (and bumps stamps) only on changed values,
+-- so a recalibration that finds nothing new costs only the live calls.
 local function calibrate_open_professions(charKey)
   local S = ns.FS:GetModule("Scanner")
   if not S:IsProfessionOpen() then
-    for recipeID in pairs(calibrated) do calibrated[recipeID] = nil end
+    forget_calibrated()
     return
   end
+  local open, lines = {}, {}
   for _, prof in ipairs(professions_of(charKey)) do
     if S:IsProfessionOpen(prof.skillLineID) then
-      for _, recipeID in ipairs(sorted_keys(type(prof.record.recipes) == "table" and prof.record.recipes or {})) do
-        if not calibrated[recipeID] then
-          calibrated[recipeID] = true
-          guarded("calibrate:" .. recipeID, function() return Recipes:Calibrate(recipeID) end)
-          checkpoint()
-        end
+      open[#open + 1] = prof
+      lines[#lines + 1] = tostring(prof.skillLineID)
+    end
+  end
+  local openKey = table.concat(lines, ",")
+  if calibratedOpen ~= nil and calibratedOpen ~= openKey then forget_calibrated() end
+  calibratedOpen = openKey
+  for _, prof in ipairs(open) do
+    local sig = signature(prof.record)
+    if calibratedAgainst[prof.skillLineID] ~= sig then
+      for _, recipeID in ipairs(recipes_of(prof.record)) do calibrated[recipeID] = nil end
+      calibratedAgainst[prof.skillLineID] = sig
+    end
+  end
+  for _, prof in ipairs(open) do
+    for _, recipeID in ipairs(recipes_of(prof.record)) do
+      if not calibrated[recipeID] then
+        calibrated[recipeID] = true
+        guarded("calibrate:" .. recipeID, function() return Recipes:Calibrate(recipeID) end)
+        checkpoint()
       end
     end
   end
@@ -258,13 +301,14 @@ local function on_update()
 end
 
 -- Owned counts only change results while owned reagents are free; the concentration amount never does.
--- Only a "spec" or "professions" change can move the live numbers of recipes already calibrated: those are
--- calibrated again. A recipe learned since ("recipes") is not in `calibrated` yet, so it is calibrated anyway.
+-- A "spec" or "professions" change can move the live numbers of recipes already calibrated: those are
+-- calibrated again. A recipe learned since ("recipes") is not in `calibrated` yet, so it is calibrated anyway; a
+-- skill, skillModifier or tools change (also only "recipes") is caught by calibrate_open_professions.
 local function on_data_changed(_, charKey, kind)
   if kind == "concentration" then return end
   if (kind == "items" or kind == "warband") and not Recipes:IsOwnedReagentsFree() then return end
   if (kind == "spec" or kind == "professions") and (charKey == nil or charKey == ns.FS:CharKey()) then
-    for recipeID in pairs(calibrated) do calibrated[recipeID] = nil end
+    forget_calibrated()
   end
   -- "warband" carries the current character but is account-wide.
   local target = kind ~= "warband" and charKey or nil
@@ -289,6 +333,10 @@ function Recipes:OnEnable()
   listener = listener or LibStub("AceEvent-3.0"):Embed({})
   listener:RegisterMessage(ns.Msg.PRICES_CHANGED, ns.FS:Wrap("Recipes:Scan", function() Recipes:StartScan(nil) end))
   listener:RegisterMessage(ns.Msg.DATA_CHANGED, ns.FS:Wrap("Recipes:Scan", on_data_changed))
+  -- Each opening (or closing) of a profession window starts the calibrations afresh, even when no pass ran
+  -- while it was closed. The profession scan of the opening then announces "recipes", which starts the pass.
+  listener:RegisterEvent("TRADE_SKILL_SHOW", ns.FS:Wrap("Recipes:Scan", forget_calibrated))
+  listener:RegisterEvent("TRADE_SKILL_CLOSE", ns.FS:Wrap("Recipes:Scan", forget_calibrated))
   -- Rank something soon after login, without waiting for the first price or data change.
   if startTimer then startTimer:Cancel() end
   startTimer = C_Timer.NewTimer(FIRST_SCAN_DELAY, ns.FS:Wrap("Recipes:Scan", function()
@@ -298,11 +346,15 @@ function Recipes:OnEnable()
 end
 
 function Recipes:OnDisable()
-  if listener then listener:UnregisterAllMessages() end
+  if listener then
+    listener:UnregisterAllMessages()
+    listener:UnregisterAllEvents()
+  end
   if startTimer then startTimer:Cancel(); startTimer = nil end
   for key in pairs(debounceKeys) do ns.FS:CancelDebounce(key) end
   debounceKeys = {}
   results = {}
+  forget_calibrated()
   reset()
   if baseOnDisable then baseOnDisable(self) end
 end

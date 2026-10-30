@@ -606,7 +606,75 @@ describe("recipe scan", function()
       assert.equals(before, R:Evaluate(9001, "Main-Realm", {}))
     end)
 
-    it("recalibrates after a spec change, and only newly learned recipes after a recipes change", function()
+    -- Phase 2 Task 0 (N1): calibrations must not go stale after a skill or tool change arriving as "recipes".
+    describe("after a skill or tool change", function()
+      local skill
+      before_each(function()
+        skill = 100
+        for id = 9001, 9004 do
+          world.live[id] = function()
+            calibrated[id] = (calibrated[id] or 0) + 1
+            return { baseSkill = skill, baseDifficulty = 700 }
+          end
+        end
+        world.openLine = 2906
+        R:StartScan("Main-Realm"); finish_scan()
+        assert.equals(100, R:GetCalibration("Main-Realm", 9002).baseSkill)
+      end)
+      local function recipes_changed()
+        ns.FS:GetModule("Scanner"):SendMessage("FS_DATA_CHANGED", "Main-Realm", "recipes")
+        W.advance(2); finish_scan()
+      end
+
+      it("recalibrates when the window is opened again, though no pass ran while it was closed", function()
+        world.openLine = nil; W.fire("TRADE_SKILL_CLOSE")
+        skill = 120                                    -- e.g. a better tool equipped while the window was closed
+        world.openLine = 2906; W.fire("TRADE_SKILL_SHOW")
+        recipes_changed()                              -- the profession scan of the opening
+        for id = 9001, 9004 do assert.equals(120, R:GetCalibration("Main-Realm", id).baseSkill) end
+      end)
+
+      it("recalibrates when the profession scan reports a new skill", function()
+        skill = 101
+        world.chars["Main-Realm"].professions[2906].skill = 501
+        recipes_changed()
+        for id = 9001, 9004 do assert.equals(101, R:GetCalibration("Main-Realm", id).baseSkill) end
+        assert.equals(101, R:Evaluate(9001, "Main-Realm", { targetQuality = 1 }).perQuality[1].skill)
+      end)
+
+      it("recalibrates when the skill modifier changes", function()
+        skill = 105
+        world.chars["Main-Realm"].professions[2906].skillModifier = 5
+        recipes_changed()
+        assert.equals(105, R:GetCalibration("Main-Realm", 9003).baseSkill)
+      end)
+
+      it("recalibrates when the profession tools change", function()
+        skill = 110
+        world.chars["Main-Realm"].professions[2906].tools = { [20] = "|Hitem:222222|h[Better Hammer]|h" }
+        recipes_changed()
+        assert.equals(110, R:GetCalibration("Main-Realm", 9004).baseSkill)
+        local before = calibrated[9004]
+        world.chars["Main-Realm"].professions[2906].tools = { [20] = "|Hitem:222222|h[Better Hammer]|h" }   -- same tools, new table
+        recipes_changed()
+        assert.equals(before, calibrated[9004])
+      end)
+
+      it("recalibrates when another profession was open in between", function()
+        world.openLine = 1234; R:StartScan("Main-Realm"); finish_scan()
+        skill = 130
+        world.openLine = 2906; R:StartScan("Main-Realm"); finish_scan()
+        assert.equals(130, R:GetCalibration("Main-Realm", 9001).baseSkill)
+      end)
+
+      it("does not recalibrate on a recipes change with the same skill, tools and window", function()
+        local first = calibrated[9001]
+        recipes_changed()
+        assert.equals(first, calibrated[9001])
+      end)
+    end)
+
+    it("recalibrates after a spec change, and only newly learned recipes after a recipes change that moved no skill, tool or window", function()
       world.openLine = 2906
       R:StartScan("Main-Realm"); finish_scan()
       local first = calibrated[9001]
