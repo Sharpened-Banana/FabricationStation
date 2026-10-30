@@ -278,6 +278,7 @@ Module `"SelfCheck"`; `ns.SelfCheck.QUALITY_FIELD = "craftingQuality"`; `ns.Self
 ## Phase 2+ shapes (owned by later plans, listed here so phase 3/4 can depend on them)
 
 - `Orders:GetSnapshot() -> { time, orders = { OrderView } }`, `Orders:Score(orderInfo) -> OrderView` where `OrderView = { orderID, orderType = "public"|"guild"|"personal"|"npc", customer, recipeID, minQuality, tip, rewards, expiresAt, result = RecipeResult, score, risks = { "noMatsLowTip"|"unreachableQuality"|"noConcentration"|"expiringSoon"|"blockedCustomer" } }`
+  - **[phase 2 Task 4]** `OrderView.flags` also carries `unknownConcentrationValue` (concentration needed but its gold/point is not yet known → score nil) and `recraft` (recraft orders are not evaluated as fresh crafts → estimated, score nil). Score is nil whenever a needed value is unknown; `GetBestClaimable` never picks a nil score. UIs show these flags rather than a generic "no price". Concentration is charged at the best goldPerConcentration of the same skill line for that character.
 - `Customers:Get(nameRealm) -> CustomerRecord|nil`, `Customers:Search(text) -> { CustomerRecord }`, `Customers:IsBlocked(nameRealm) -> bool`
 - `Ledger:Add(entry)`, `Ledger:Query(filter) -> { LedgerEntry }`, `Ledger:Benchmark(recipeID, quality) -> { median, p25, p75, n } | nil`
 - `Alts:GetOverview() -> { AltRow }` (phase 3 defines AltRow)
