@@ -50,6 +50,15 @@ describe("Prices", function()
     assert.equals(500, P:Get(2001).value); P:Get(2001); assert.equals(1, #ns.FS.db.global.diagnostics.errors)
     assert.equals("Prices", ns.FS.db.global.diagnostics.errors[1].source)
   end)
+  it("logs the first failure of each Auctionator function once", function()
+    W.auctionator.prices[2001] = 100
+    Auctionator.API.v1.GetAuctionAgeByItemID = function() error("age broke") end
+    Auctionator.API.v1.GetVendorPriceByItemID = function() error("vendor broke") end
+    P:Get(2001); P:Get(2001)
+    W.auctionator.prices[2001] = nil; P:Get(2001); P:Get(2001)
+    local errs = ns.FS.db.global.diagnostics.errors
+    assert.equals(2, #errs); assert.matches("age broke", errs[1].err); assert.matches("vendor broke", errs[2].err)
+  end)
   it("survives the age lookup throwing and treats the price as stale", function()
     W.auctionator.prices[2001] = 100
     Auctionator.API.v1.GetAuctionAgeByItemID = function() error("boom") end
@@ -133,6 +142,23 @@ describe("Prices", function()
       local o = group().args.staleAfterDays
       assert.equals("range", o.type); assert.equals(1, o.min); assert.equals(14, o.max); assert.equals(1, o.step)
       assert.equals(3, o.get()); o.set(nil, 9); assert.equals(9, ns.FS.db.global.settings.prices.staleAfterDays)
+    end)
+    it("bumps the price version when staleAfterDays changes", function()
+      local v = P:GetVersion(); group().args.staleAfterDays.set(nil, 9)
+      assert.equals(v + 1, P:GetVersion()); assert.same({ "FS_PRICES_CHANGED", v + 1 }, W.messages[#W.messages])
+      group().args.staleAfterDays.set(nil, 9); assert.equals(v + 1, P:GetVersion())
+    end)
+    it("bumps the price version when ownedReagentsFree changes", function()
+      local v = P:GetVersion(); group().args.ownedReagentsFree.set(nil, true)
+      assert.equals(v + 1, P:GetVersion()); assert.same({ "FS_PRICES_CHANGED", v + 1 }, W.messages[#W.messages])
+      group().args.ownedReagentsFree.set(nil, true); assert.equals(v + 1, P:GetVersion())
+    end)
+    it("writes neither setting and bumps nothing while the saved data is newer", function()
+      ns.FS.dbIsNewer = true; local v, n = P:GetVersion(), #W.messages
+      group().args.staleAfterDays.set(nil, 9); group().args.ownedReagentsFree.set(nil, true)
+      assert.equals(3, ns.FS.db.global.settings.prices.staleAfterDays)
+      assert.is_false(ns.FS.db.global.settings.costing.ownedReagentsFree)
+      assert.equals(v, P:GetVersion()); assert.equals(n, #W.messages)
     end)
     it("edits the owned-reagents-free toggle", function()
       local o = group().args.ownedReagentsFree

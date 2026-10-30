@@ -12,7 +12,7 @@ local DB_UPDATE_DEBOUNCE = 1
 local DEFAULT_STALE_DAYS = 3
 
 local version = 1               -- price version; starts at 1 every session
-local apiErrorLogged = false    -- only the first Auctionator failure per session is logged
+local apiErrorLogged = {}       -- [function name] = true once that function's first failure is logged
 local draft = { item = "", price = "" }  -- the override editor's inputs
 local listGroup = { type = "group", name = "Manual prices", order = 50, inline = true, args = {} }
 
@@ -37,17 +37,17 @@ local function valid_item_id(itemID)
   return type(itemID) == "number" and itemID == itemID and itemID > 0 and itemID < math.huge
 end
 
--- Calls an Auctionator function protected. The first failure of the session is logged; later ones
--- are silent. Returns the function's first result, or nil on failure.
+-- Calls an Auctionator function protected. The first failure of each function per session is
+-- logged; later ones are silent. Returns the function's first result, or nil on failure.
 local function call_api(name, itemID)
   local api = Prices:AuctionatorAPI()
   local fn = api and api[name]
   if type(fn) ~= "function" then return nil end
   local ok, result = pcall(fn, CALLER_ID, itemID)
   if ok then return result end
-  if not apiErrorLogged then
-    apiErrorLogged = true
-    ns.FS:LogError("Prices", tostring(result))
+  if not apiErrorLogged[name] then
+    apiErrorLogged[name] = true
+    ns.FS:LogError("Prices", ("%s: %s"):format(name, tostring(result)))
   end
   return nil
 end
@@ -200,6 +200,17 @@ local function settings()
   return g and g.settings
 end
 
+-- Stores settings[section][key] = value. Prices depend on these settings, so a change bumps the
+-- version (FS_PRICES_CHANGED). Nothing is written while the saved data is from a newer version.
+local function set_setting(section, key, value)
+  if not writable() then return end
+  local s = settings()
+  s[section] = s[section] or {}
+  if s[section][key] == value then return end
+  s[section][key] = value
+  bump_version()
+end
+
 local function row_name(itemID)
   return function()
     local copper = (overrides() or {})[itemID]
@@ -262,7 +273,7 @@ function Prices:OnInitialize()
           return s and s.prices and s.prices.staleAfterDays or DEFAULT_STALE_DAYS
         end,
         set = function(_, value)
-          if writable() then settings().prices.staleAfterDays = value end
+          set_setting("prices", "staleAfterDays", value)
         end,
       },
       ownedReagentsFree = {
@@ -272,7 +283,7 @@ function Prices:OnInitialize()
           return s and s.costing and s.costing.ownedReagentsFree or false
         end,
         set = function(_, value)
-          if writable() then settings().costing.ownedReagentsFree = value and true or false end
+          set_setting("costing", "ownedReagentsFree", value and true or false)
         end,
       },
       overridesHeader = { type = "header", order = 10, name = "Manual prices" },

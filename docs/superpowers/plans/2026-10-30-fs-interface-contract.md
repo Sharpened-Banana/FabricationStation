@@ -164,7 +164,7 @@ Note: a full profession scan announces its spec, concentration and Moxie changes
 
 - `Prices:Get(itemID) -> PriceResult` where `PriceResult = { value = copper|nil, source = "override"|"auction"|"vendor"|nil, ageDays = number|nil }`. Order: override → Auctionator auction (> 0) with age → Auctionator vendor (> 0) → `{}`. Never returns `value = 0` for unknown (an explicit 0 override is allowed).
 - `Prices:SetOverride(itemID, copper|nil) -> bool` — rejects non-numbers/negatives, floors, nil removes; success bumps the version and sends `FS_PRICES_CHANGED`.
-- `Prices:GetVersion() -> integer` (starts at 1 each session; increments on every debounced Auctionator DB update or override change)
+- `Prices:GetVersion() -> integer` (starts at 1 each session; increments on every debounced Auctionator DB update, override change, and change of `settings.prices.staleAfterDays` or `settings.costing.ownedReagentsFree` from the Prices options)
 - `Prices:HasSource() -> boolean` (Auctionator API v1 present)
 - `Prices:AuctionatorAPI() -> table|nil` — the ONLY accessor to `Auctionator.API.v1`; other modules call through it with caller ID `"FabricationStation"`.
 - **[1a additions]**: `Prices:IsStale(priceResult) -> bool` (true only for `source == "auction"` with `ageDays` nil or `> settings.prices.staleAfterDays`), `Prices:GetLastUpdate() -> serverTime|nil`, `Prices:GetOverrides() -> { [itemID] = copper }`.
