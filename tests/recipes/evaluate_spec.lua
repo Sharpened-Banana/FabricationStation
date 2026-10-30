@@ -113,6 +113,14 @@ describe("Recipes:Evaluate", function()
       local r = R:Evaluate(9001, "Main-Realm", {})
       assert.is_true(r.flags.estimated); assert.equals(1, r.expectedQuality)
     end)
+    it("never flags a no-quality recipe (maxQuality 0, 1 or nil) as estimated for missing thresholds", function()
+      ns.GameData.Define("QualityThresholds", nil, {})
+      for i, mq in ipairs({ 0, 1, false }) do
+        world.schematics[9001].maxQuality = mq or nil
+        local r = R:Evaluate(9001, "Main-Realm", { targetQuality = i })   -- distinct cache keys
+        assert.is_false(r.flags.estimated, tostring(mq)); assert.equals(1, r.expectedQuality, tostring(mq))
+      end
+    end)
     it("flags as estimated when GameData has no quality thresholds for the recipe", function()
       ns.GameData.Define("QualityThresholds", nil, {})
       local r = R:Evaluate(9001, "Main-Realm", {})
@@ -177,6 +185,33 @@ describe("Recipes:Evaluate", function()
       local opt = ns.FS:GetOptionsTable().args.crafting.args.staleCalibrationDays
       opt.set(nil, 20); assert.are_not.equal(b, R:Evaluate(9001, "Main-Realm", {}))
     end)
+    it("recomputes when the shared schematic is replaced, for every character", function()
+      local a = R:Evaluate(9001, "Alt-Realm", {})
+      assert.equals(700, a.difficulty)
+      local s = {}
+      for k, v in pairs(world.schematics[9001]) do s[k] = v end
+      s.baseDifficulty = 1400
+      world.schematics[9001] = s
+      ns.FS:SendMessage("FS_DATA_CHANGED", "Main-Realm", "recipes")
+      local b = R:Evaluate(9001, "Alt-Realm", {})
+      assert.are_not.equal(a, b); assert.equals(1400, b.difficulty)
+    end)
+    it("recomputes when the same schematic table is re-stamped with a new build or time", function()
+      local a = R:Evaluate(9001, "Alt-Realm", {})
+      world.schematics[9001].build = 70600
+      local b = R:Evaluate(9001, "Alt-Realm", {}); assert.are_not.equal(a, b)
+      world.schematics[9001].time = W.now + 1
+      assert.are_not.equal(b, R:Evaluate(9001, "Alt-Realm", {}))
+    end)
+    it("recomputes after a day boundary so time-based flags do not freeze", function()
+      ns.FS.db.global.recipeCalib["Main-Realm"][9001].time = W.now - 14 * 86400 + 60
+      local a = R:Evaluate(9001, "Main-Realm", {})
+      assert.is_false(a.flags.staleData)
+      assert.equals(a, R:Evaluate(9001, "Main-Realm", {}))
+      W.now = W.now + 86400
+      local b = R:Evaluate(9001, "Main-Realm", {})
+      assert.are_not.equal(a, b); assert.is_true(b.flags.staleData)
+    end)
     it("an owned-free result recomputes when items change, even with the setting off", function()
       local a = R:Evaluate(9001, "Main-Realm", { targetQuality = 1, ownedReagentsFree = true })
       world.items["Main-Realm"][1001] = { bags = 10, bank = 0, reagentBank = 0 }
@@ -210,7 +245,9 @@ describe("Recipes:Evaluate", function()
       assert.equals(m + 1, R:GetDataStamp("Main-Realm")); assert.equals(a + 1, R:GetDataStamp("Alt-Realm"))
     end)
     it("ignores a message without a character", function()
+      local m, a = stamps()
       assert.has_no.errors(function() ns.FS:SendMessage("FS_DATA_CHANGED", nil, "spec") end)
+      assert.equals(m, R:GetDataStamp("Main-Realm")); assert.equals(a, R:GetDataStamp("Alt-Realm"))
     end)
   end)
 

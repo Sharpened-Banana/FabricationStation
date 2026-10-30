@@ -32,7 +32,7 @@ local attached = false     -- the recipe-selection callback is registered (once 
 
 local itemStamps = {}      -- [charKey] = integer, bumped on every "items" message for that character
 local warbandStamp = 0     -- bumped on every "warband" message
-local cache = {}           -- [cacheKey] = { stamp, itemStamp|nil, result }
+local cache = {}           -- [cacheKey] = { stamp, itemStamp|nil, day, schematic, build, time, result }
 local cachePriceVersion    -- Prices:GetVersion() the cache entries were computed with
 local itemIndex            -- [itemID] = { { recipeID, quality } }; nil = rebuild on the next lookup
 
@@ -342,9 +342,10 @@ local function owned_count(itemID, charKey)
   return (c.bags or 0) + (c.bank or 0) + (c.reagentBank or 0) + (c.warband or 0)
 end
 
--- RecipeInput and the PriceResults behind it for recipeID on charKey. nil without a schematic.
-local function build(recipeID, charKey, o, optionalItemIDs)
-  local schematic = scanner():GetSchematic(recipeID)
+-- RecipeInput and the PriceResults behind it for recipeID on charKey (schematic nil = fetch it). nil without
+-- a schematic.
+local function build(recipeID, charKey, o, optionalItemIDs, schematic)
+  schematic = schematic or scanner():GetSchematic(recipeID)
   if not schematic then return nil end
   local calib = Recipes:GetCalibration(charKey, recipeID)
   local prof, known = find_profession(charKey, recipeID, schematic.skillLineID)
@@ -392,8 +393,8 @@ local function older_than(time, now, days)
   return type(time) ~= "number" or now - time > days * DAY
 end
 
-local function evaluate(recipeID, charKey, o)
-  local input, ctx = build(recipeID, charKey, o, nil)
+local function evaluate(recipeID, charKey, o, schematic)
+  local input, ctx = build(recipeID, charKey, o, nil, schematic)
   if not input then return nil end
   local r = ns.Math.Profit.EvaluateCraft(input)
   local mathFlags = r.flags or {}
@@ -408,10 +409,13 @@ local function evaluate(recipeID, charKey, o)
   local now, days = ns.FS:Now(), Recipes:GetSetting("staleCalibrationDays")
   local char = scanner():GetCharacter(charKey)
   local calib = ctx.calib
-  -- No thresholds (an unsupported maxQuality) predict quality 1 whatever the skill: never present that as real.
-  -- Default thresholds stand in when GameData lacks the recipe's: also an estimate.
-  local noThresholds = ns.Math.Quality.Thresholds(input.maxQuality, input.baseDifficulty or 0, input.thresholdFractions) == nil
-  local defaultThresholds = (input.maxQuality or 1) > 1 and input.thresholdFractions == nil
+  -- A recipe with qualities (maxQuality > 1; 0, 1 and nil mean none) is an estimate when it has no thresholds
+  -- (an unsupported maxQuality predicts quality 1 whatever the skill: never present that as real), or when
+  -- default thresholds stand in because GameData lacks the recipe's.
+  local hasQualities = (input.maxQuality or 1) > 1
+  local noThresholds = hasQualities
+    and ns.Math.Quality.Thresholds(input.maxQuality, input.baseDifficulty or 0, input.thresholdFractions) == nil
+  local defaultThresholds = hasQualities and input.thresholdFractions == nil
 
   r.recipeID, r.charKey, r.priceAgeDays = recipeID, charKey, priceAgeDays
   r.flags = {
@@ -429,10 +433,13 @@ end
 -- RecipeResult (contract) for recipeID crafted by charKey (nil = current character); nil when the recipe's
 -- schematic is not cached. opts = { targetQuality, useConcentration, providedReagents = {[itemID] = n},
 -- ownedReagentsFree (nil = 1a's settings.costing.ownedReagentsFree) }. Results are cached per recipe,
--- character and opts (defaults filled) while Prices:GetVersion() and GetDataStamp(charKey) are unchanged;
--- treat them as read-only.
+-- character and opts (defaults filled) while Prices:GetVersion(), GetDataStamp(charKey), the schematic
+-- (the cached table and its build and time: schematics are shared by every character) and the day
+-- (floor(Now() / 86400), so time-based flags and price ages move) are unchanged; treat them as read-only.
 function Recipes:Evaluate(recipeID, charKey, opts)
   charKey = charKey or ns.FS:CharKey()
+  local schematic = scanner():GetSchematic(recipeID)
+  if not schematic then return nil end
   local o = full_opts(opts)
   local version = prices():GetVersion()
   if version ~= cachePriceVersion then
@@ -442,11 +449,18 @@ function Recipes:Evaluate(recipeID, charKey, opts)
   local stamp = self:GetDataStamp(charKey)
   -- Owned-free results also follow item counts when the setting (and so the data stamp) does not.
   local itemStamp = o.ownedReagentsFree and ((itemStamps[charKey] or 0) + warbandStamp) or nil
+  local day = math.floor(ns.FS:Now() / DAY)
   local entry = cache[key]
-  if entry and entry.stamp == stamp and entry.itemStamp == itemStamp then return entry.result end
+  if entry and entry.stamp == stamp and entry.itemStamp == itemStamp and entry.day == day
+    and entry.schematic == schematic and entry.build == schematic.build and entry.time == schematic.time then
+    return entry.result
+  end
 
-  local result = evaluate(recipeID, charKey, o)
-  if result then cache[key] = { stamp = stamp, itemStamp = itemStamp, result = result } end
+  local result = evaluate(recipeID, charKey, o, schematic)
+  if result then
+    cache[key] = { stamp = stamp, itemStamp = itemStamp, day = day, schematic = schematic, build = schematic.build,
+      time = schematic.time, result = result }
+  end
   return result
 end
 

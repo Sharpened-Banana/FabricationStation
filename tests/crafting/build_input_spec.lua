@@ -122,5 +122,14 @@ describe("CraftingData.BuildInput", function()
       assert.equals(0, input.optionals[1].price); assert.equals(2000, input.optionals[2].price)
       assert.equals(0, input.optionals[3].price)
     end)
+    it("prices an optional for the copies the slot still needs, not one unit", function()
+      schematic.reagentSlots[4].quantity = 2
+      local prices = world.priceValues(); prices[7001], prices[7002] = 1000, 2000
+      local input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = prices, optionalItemIDs = {} })
+      assert.equals(2000, input.optionals[1].price); assert.equals(4000, input.optionals[2].price)
+      input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = prices, optionalItemIDs = {},
+        owned = { [7001] = 1 }, provided = { [7002] = 2 } })
+      assert.equals(1000, input.optionals[1].price); assert.equals(0, input.optionals[2].price)
+    end)
   end)
 end)
