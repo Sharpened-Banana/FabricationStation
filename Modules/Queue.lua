@@ -23,15 +23,26 @@ local function writable()
   return global() ~= nil and not ns.FS.dbIsNewer
 end
 
--- db.global.queue with its tables present (AceDB defaults supply them; a damaged save may not).
+-- db.global.queue with its tables present (AceDB defaults supply them; a damaged save may not), for
+-- writes. Nil while the saved data is read-only: callers check writable() first, this re-checks.
 local function store()
+  if not writable() then return nil end
   local g = global()
-  if not g then return nil end
   g.queue = type(g.queue) == "table" and g.queue or {}
   local q = g.queue
   q.entries = type(q.entries) == "table" and q.entries or {}
   q.restock = type(q.restock) == "table" and q.restock or {}
   return q
+end
+
+-- The saved queue for reads: { entries, restock } without repairing or reassigning anything in the
+-- saved data (a newer or damaged save stays as it is; missing or malformed parts read as empty).
+local function view()
+  local g = global()
+  local q = g and g.queue
+  if type(q) ~= "table" then return { entries = {}, restock = {} } end
+  return { entries = type(q.entries) == "table" and q.entries or {},
+    restock = type(q.restock) == "table" and q.restock or {} }
 end
 
 local function recipes()
@@ -133,7 +144,7 @@ end
 
 local function find_index(q, id)
   for i, e in ipairs(q.entries) do
-    if e.id == id then return i end
+    if type(e) == "table" and e.id == id then return i end
   end
   return nil
 end
@@ -141,7 +152,7 @@ end
 -- Removes the stored entry `id`; unknown ids (and restock entries) are ignored.
 function Queue:Remove(id)
   local q = store()
-  if not q or not writable() then return end
+  if not q then return end
   local i = find_index(q, id)
   if not i then return end
   table.remove(q.entries, i)
@@ -152,7 +163,7 @@ end
 function Queue:SetQuantity(id, n)
   if type(n) ~= "number" or n ~= n then return end
   local q = store()
-  if not q or not writable() then return end
+  if not q then return end
   local i = find_index(q, id)
   if not i then return end
   local quantity = positive_int(n)
@@ -169,31 +180,55 @@ end
 -- Removes every stored entry; restock targets stay.
 function Queue:Clear()
   local q = store()
-  if not q or not writable() or #q.entries == 0 then return end
+  if not q or #q.entries == 0 then return end
   q.entries = {}
   changed(self)
 end
 
 -- Entries in insertion order, then the computed restock entries (by itemID). Copies: changing them
 -- changes nothing.
-function Queue:GetEntries()
-  local q = store()
-  if not q then return {} end
+-- The stored entries that look like entries (a damaged or newer save may hold anything).
+local function stored_entries(q)
   local out = {}
-  for i, e in ipairs(q.entries) do out[i] = copy_entry(e) end
+  for _, e in ipairs(q.entries) do
+    if type(e) == "table" and type(e.recipeID) == "number" and type(e.quantity) == "number" then out[#out + 1] = e end
+  end
+  return out
+end
+
+local function restock_target(q, itemID)
+  local target = q.restock[itemID]
+  return type(target) == "number" and target or nil
+end
+
+function Queue:GetEntries()
+  local q = view()
+  local real = stored_entries(q)
+  local out = {}
+  for i, e in ipairs(real) do out[i] = copy_entry(e) end
   local itemIDs = {}
-  for itemID in pairs(q.restock) do itemIDs[#itemIDs + 1] = itemID end
+  for itemID in pairs(q.restock) do
+    if type(itemID) == "number" and restock_target(q, itemID) then itemIDs[#itemIDs + 1] = itemID end
+  end
   table.sort(itemIDs)
   for _, itemID in ipairs(itemIDs) do
-    local e = restock_entry(itemID, q.restock[itemID], q.entries)
+    local e = restock_entry(itemID, restock_target(q, itemID), real)
     if e then out[#out + 1] = e end
   end
   return out
 end
 
+-- One entry by id (a copy): stored entries are looked up directly; only a "restock:<itemID>" id
+-- computes its one restock entry.
 local function find_entry(id)
-  for _, e in ipairs(Queue:GetEntries()) do
-    if e.id == id then return e end
+  local q = view()
+  if type(id) == "string" and id:sub(1, #RESTOCK_PREFIX) == RESTOCK_PREFIX then
+    local itemID = tonumber(id:sub(#RESTOCK_PREFIX + 1))
+    local target = itemID and restock_target(q, itemID)
+    return target and restock_entry(itemID, target, stored_entries(q)) or nil
+  end
+  for _, e in ipairs(stored_entries(q)) do
+    if e.id == id then return copy_entry(e) end
   end
   return nil
 end
@@ -206,7 +241,7 @@ end
 function Queue:SetRestock(itemID, target)
   if type(itemID) ~= "number" then return end
   local q = store()
-  if not q or not writable() then return end
+  if not q then return end
   local value = type(target) == "number" and positive_int(target) or nil
   if q.restock[itemID] == value then return end
   q.restock[itemID] = value
@@ -214,8 +249,7 @@ function Queue:SetRestock(itemID, target)
 end
 
 function Queue:GetRestockTargets()
-  local q = store()
-  return q and copy_map(q.restock) or {}
+  return copy_map(view().restock)
 end
 
 ---------------------------------------------------------------------------

@@ -95,6 +95,49 @@ describe("Queue", function()
       assert.equals(0, #ns.FS.db.global.queue.entries); assert.same({}, ns.FS.db.global.queue.restock)
       assert.is_nil(ns.FS.db.global.queue.nextID)
     end)
+    it("blocks Remove, SetQuantity and Clear on existing entries while the saved data is newer", function()
+      local a = Q:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm" })
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Alt-Realm" })
+      ns.FS.dbIsNewer = true
+      local n = #world.messages("FS_QUEUE_CHANGED")
+      Q:Remove(a); Q:SetQuantity(a, 7); Q:SetQuantity(a, 0); Q:Clear()
+      local entries = ns.FS.db.global.queue.entries
+      assert.equals(2, #entries); assert.equals(a, entries[1].id); assert.equals(3, entries[1].quantity)
+      assert.equals(n, #world.messages("FS_QUEUE_CHANGED"))
+    end)
+    it("reads a damaged newer save without repairing it", function()
+      local g = ns.FS.db.global
+      local saved = { entries = "future format", restock = 5, extra = { 1 } }
+      g.queue = saved
+      ns.FS.dbIsNewer = true
+      assert.same({}, Q:GetEntries()); assert.same({}, Q:GetRestockTargets())
+      assert.same({}, Q:GetMissingReagents(nil)); assert.same({}, Q:GetEntryMissing(1)); assert.is_nil(Q:GetEntryCost(1))
+      assert.equals(saved, g.queue)
+      assert.same({ entries = "future format", restock = 5, extra = { 1 } }, saved)
+      g.queue = nil
+      assert.same({}, Q:GetEntries()); assert.same({}, Q:GetRestockTargets())
+      assert.is_nil(g.queue)
+      g.queue = { restock = { [5002] = 3 } }
+      world.counts[5002] = 0
+      assert.equals(1, #Q:GetEntries())
+      assert.same({ restock = { [5002] = 3 } }, g.queue)
+    end)
+  end)
+
+  describe("entry lookup", function()
+    it("finds a stored entry without evaluating the restock targets", function()
+      world.counts[5002] = 0; Q:SetRestock(5002, 20)
+      local id = Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      world.evaluated = {}
+      assert.equals(1800, Q:GetEntryCost(id))
+      assert.equals(1, #world.evaluated)
+      assert.same({ [1001] = 4, [2002] = 2 }, Q:GetEntryMissing(id))
+    end)
+    it("still finds restock entries by their id", function()
+      world.counts[5002] = 12; Q:SetRestock(5002, 20)
+      assert.equals(6300, Q:GetEntryCost("restock:5002"))
+      assert.is_nil(Q:GetEntryCost("restock:9999")); assert.is_nil(Q:GetEntryCost("restock:x"))
+    end)
   end)
 
   describe("evaluation options", function()
@@ -135,6 +178,14 @@ describe("Queue", function()
       world.items["Alt-Realm"][1001] = { bags = 6, bank = 0, reagentBank = 0 }
       world.warband[2002] = 10
       assert.same({}, Q:GetMissingReagents("Alt-Realm")); assert.same({}, Q:GetMissingReagents(nil))
+    end)
+    it("lets two entries of one character share that character's stock", function()
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      world.items["Main-Realm"][1001] = { bags = 3, bank = 0, reagentBank = 0 }
+      world.items["Main-Realm"][2002] = { bags = 2, bank = 0, reagentBank = 0 }
+      assert.same({ [1001] = 1 }, Q:GetMissingReagents("Main-Realm"))                   -- 2 + 2 − 3; 1 + 1 − 2
+      assert.same({ [1001] = 7, [2002] = 3 }, Q:GetMissingReagents(nil))                -- Alt's 6/3 plus Main's 1/0
     end)
     it("is empty for a character with no entries", function()
       assert.same({}, Q:GetMissingReagents("Main-Realm"))
