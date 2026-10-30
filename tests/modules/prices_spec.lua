@@ -145,6 +145,12 @@ describe("Prices", function()
       assert.equals("500c", a.newPrice.get()); a.add.func()
       assert.equals(500, P:GetOverrides()[2001]); assert.equals("", a.newItem.get()); assert.equals("", a.newPrice.get())
     end)
+    it("adds an override using the real ns.UI parsers", function()
+      ns.UI = nil; load_files(ns, { "UI/Util.lua" })
+      local a = group().args
+      a.newItem.set(nil, "12345"); a.newPrice.set(nil, "1g 50s"); a.add.func()
+      assert.equals(15000, P:GetOverrides()[12345]); assert.equals("", a.newItem.get()); assert.equals("", a.newPrice.get())
+    end)
     it("keeps the inputs and prints a message for invalid input", function()
       local a = group().args
       a.newItem.set(nil, "ore"); a.newPrice.set(nil, "500c"); a.add.func()

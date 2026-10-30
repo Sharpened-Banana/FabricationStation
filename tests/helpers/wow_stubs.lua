@@ -630,6 +630,8 @@ local function install(overrides)
       ProfessionsSpecPerkState = { Unearned = 0, Earned = 1, Pending = 2 },
     },
     LibStub = LibStub,
+    ButtonFrameTemplate_HidePortrait = noop,
+    ButtonFrameTemplate_HideButtonBar = noop,
     -- Unfloored on purpose; see "Deliberate divergences" at the top of this file.
     time = function() return W.now end,
     GetServerTime = function() return W.now end,

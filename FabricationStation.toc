@@ -21,3 +21,5 @@ Data\GameData_Spec.lua
 Data\GameData_Manual.lua
 Modules\Scanner.lua
 Modules\Prices.lua
+UI\Util.lua
+UI\MainWindow.lua
