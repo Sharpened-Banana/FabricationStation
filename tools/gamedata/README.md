@@ -21,6 +21,9 @@ busted && luacheck .
   `Data/GameData_Manual.lua`. It prints `unknown ProfessionEffect type <N> (<count> rows)` to stderr for effect
   types it cannot name (expected for Midnight's Ingenuity). `--min-expansion N` (default 11) sets the oldest
   expansion whose recipes get `RecipeLabels`.
+- After generating for a new build, bump the build number in `Data/GameData_Manual.lua` to match and re-check
+  its Moxie currency IDs against the printed candidates. Otherwise `GameData.Status()` lists `MoxieCurrency` as
+  mismatched.
 - A bad or truncated export fails with `bad export of <Table>`. Delete that CSV and fetch again.
 - `lua tools/gamedata/generate.lua --empty --out Data` writes placeholder files that define every table with a
   nil build. The addon then reports "GameData not generated".

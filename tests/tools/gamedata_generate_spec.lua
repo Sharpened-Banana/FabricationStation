@@ -3,9 +3,18 @@ local GENERATED = { "GameData_Professions.lua", "GameData_Reagents.lua", "GameDa
 local DEFINES = { "ProfessionLines", "ReagentQuality", "ReagentCategories", "OptionalReagents", "CraftingData", "ItemCraftingData",
   "QualityThresholds", "ConcentrationCurves", "SpecEntryEffects", "RecipeLabels" }
 
+-- Every temp dir a test creates; removed after each test.
+local created = {}
+
 local function tmpdir()
   local d = os.tmpname(); os.remove(d); os.execute("mkdir -p " .. d)
+  created[#created + 1] = d
   return d
+end
+
+local function cleanup()
+  for _, d in ipairs(created) do os.execute("rm -rf '" .. d .. "'") end
+  created = {}
 end
 
 local function slurp(path)
@@ -34,9 +43,11 @@ local function fixture_copy()
 end
 
 describe("tools/gamedata/generate.lua", function()
+  after_each(cleanup)
+
   it("generates loadable, build-stamped data files from cached CSVs", function()
-    local out = os.tmpname(); os.remove(out); os.execute("mkdir -p " .. out)
-    assert.equals(0, run_cmd("lua tools/gamedata/generate.lua --build 12.1.5.70575 --cache tests/fixtures/gamedata/12.1.5.70575 --out " .. out .. " >/dev/null"))
+    local out = tmpdir()
+    assert.equals(0, run_cmd("lua tools/gamedata/generate.lua --build 12.1.5.70575 --cache tests/fixtures/gamedata/12.1.5.70575 --out " .. out .. " >/dev/null 2>/dev/null"))
     local ns = load_files({}, { "Data/GameData.lua", out .. "/GameData_Reagents.lua", out .. "/GameData_Difficulty.lua",
       out .. "/GameData_Spec.lua", out .. "/GameData_Professions.lua" })
     assert.equals(70575, ns.GameData.Build()); assert.equals(2, ns.GameData.Get("ReagentQuality")[2002].rank)
@@ -90,8 +101,8 @@ describe("tools/gamedata/generate.lua", function()
   end)
 
   it("--empty writes ungenerated stubs", function()
-    local out = os.tmpname(); os.remove(out); os.execute("mkdir -p " .. out)
-    assert.equals(0, run_cmd("lua tools/gamedata/generate.lua --empty --build 12.1.5.70575 --out " .. out .. " >/dev/null"))
+    local out = tmpdir()
+    assert.equals(0, run_cmd("lua tools/gamedata/generate.lua --empty --build 12.1.5.70575 --out " .. out .. " >/dev/null 2>/dev/null"))
     local ns = load_files({}, { "Data/GameData.lua", out .. "/GameData_Reagents.lua" })
     assert.is_true(ns.GameData.Status(70575).missing)
   end)
@@ -165,6 +176,8 @@ describe("tools/gamedata/generate.lua", function()
 end)
 
 describe("tools/gamedata tables and fetch.sh", function()
+  after_each(cleanup)
+
   local function tables()
     local list = {}
     for line in io.lines("tools/gamedata/tables.txt") do
@@ -184,10 +197,9 @@ describe("tools/gamedata tables and fetch.sh", function()
     local build = "0.0.0.1"
     local dir = "tools/gamedata/cache/" .. build
     os.execute("mkdir -p " .. dir)
+    created[#created + 1] = dir
     for _, t in ipairs(tables()) do spit(dir .. "/" .. t .. ".csv", "ID\n") end
-    local code = run_cmd("bash tools/gamedata/fetch.sh " .. build .. " >/dev/null 2>&1")
-    os.execute("rm -rf " .. dir)
-    assert.equals(0, code)
+    assert.equals(0, run_cmd("bash tools/gamedata/fetch.sh " .. build .. " >/dev/null 2>&1"))
   end)
 
   it("fetch.sh rejects a malformed build", function()
