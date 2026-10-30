@@ -114,6 +114,7 @@ Read from CraftSim `main` @ e15fb18 (2026-10-21, data build 12.1.5.70448) and Bl
 { expectedQuality, qualityChances = {[q] = 1}, skill, difficulty, thresholds, lowerThreshold, nextThreshold,
   allocation = ReagentAllocation, reagentCost, requiredCost, expectedSale, profit,
   concentrationCost, expectedConcentrationCost, goldPerConcentration,
+  concentrationCostForAllocation,   -- Concentration.Cost at this allocation's skill (what the game shows for it)
   multicraftValue, resourcefulnessValue, ingenuityValue, expectedYield,
   perQuality = { [q] = { allocation, reagentCost, skill, profit } }, missingPrice = bool }
 
@@ -174,7 +175,7 @@ Expected: FAIL — cannot open `tools/gamedata/crafting.lua`.
 
 `fetch_crafting_csv.sh <build> <outDir>` runs `curl -fsSL "https://wago.tools/db2/<Table>/csv?build=<build>" -o <outDir>/<Table>.csv` for: `CraftingData CraftingDifficulty CurvePoint Item ModifiedCraftingReagentItem ModifiedCraftingCategory CraftingReagentQuality CraftingReagentEffect ProfessionEffect ProfessionEffectType`.
 
-`crafting.lua` (Lua 5.1, runnable as `lua tools/gamedata/crafting.lua <csvDir> <build>`; returns `{ build_tables, emit }` when loaded with `dofile`): a quoted-field CSV reader, then the joins from the verified-sources table — curves (skill-curve `Pos_0 ÷ 100`), weights (`Item.ModifiedCraftingReagentItemID → ModifiedCraftingReagentItem.ModifiedCraftingCategoryID → ModifiedCraftingCategory.MatQualityWeight`, keep > 0), optional reagents (Item ClassID 7 SubclassID 18 optional / 19 finishing / 11 spark; latest `CraftingReagentQuality` row by ID for the item; `MaxDifficultyAdjustment > 0` → `stats.increasedifficulty`; else `CraftingReagentEffect` by `ModifiedCraftingCategoryID` → `ProfessionEffect.Amount × (finishing and ReagentEffectPct/100 or 1)` keyed by `ProfessionEffectType.Name_lang` lower-cased with spaces and "(DNT...)" removed). Header comment credits CraftSim `DevTools/DataMining/*/mapper.py`. `emit` writes one entry per line, keys sorted, header `local ADDON_NAME, ns = ...` and `-- Generated from wago.tools build <build>; do not edit`.
+`crafting.lua` (Lua 5.1; returns `{ build_tables, emit }`; runs as a script only when `select("#", ...) >= 2`, i.e. `lua tools/gamedata/crafting.lua <csvDir> <build>`): a quoted-field CSV reader, then the joins from the verified-sources table — curves (skill-curve `Pos_0 ÷ 100`), weights (`Item.ModifiedCraftingReagentItemID → ModifiedCraftingReagentItem.ModifiedCraftingCategoryID → ModifiedCraftingCategory.MatQualityWeight`, keep > 0), optional reagents (Item ClassID 7 SubclassID 18 optional / 19 finishing / 11 spark; latest `CraftingReagentQuality` row by ID for the item; `MaxDifficultyAdjustment > 0` → `stats.increasedifficulty`; else `CraftingReagentEffect` by `ModifiedCraftingCategoryID` → `ProfessionEffect.Amount × (finishing and ReagentEffectPct/100 or 1)` keyed by `ProfessionEffectType.Name_lang` lower-cased with spaces and "(DNT...)" removed). Header comment credits CraftSim `DevTools/DataMining/*/mapper.py`. `emit` writes one entry per line, keys sorted, header `local ADDON_NAME, ns = ...` and `-- Generated from wago.tools build <build>; do not edit`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -339,7 +340,9 @@ function Concentration.Cost(curve, skill, difficulty, lessFactors)
   local s, e = bracket(skill / difficulty, curve.curve)
   local x0, y0 = s and s[1] or 0, s and s[2] or 0
   local x1, y1 = e and e[1] or 1, e and e[2] or 1
-  local k = (bracket(difficulty, curve.constant) or curve.constant[1])[2]  -- constants are flat in current data; interpolate by difficulty if the next point differs
+  local c0, c1 = bracket(difficulty, curve.constant)                      -- cost constant by recipe difficulty
+  c0 = c0 or curve.constant[1]
+  local k = (not c1 or c1[1] == c0[1]) and c0[2] or c0[2] + (c1[2] - c0[2]) * (difficulty - c0[1]) / (c1[1] - c0[1])
   local skillStart, skillEnd = difficulty * x0, difficulty * x1
   local value = (skillEnd == skillStart) and y0 or y0 + (y1 - y0) * (skill - skillStart) / (skillEnd - skillStart)
   local cost = value * k
@@ -449,7 +452,7 @@ git commit -m "feat: add Math.Stats multicraft, resourcefulness and optional rea
 local ns = load_files({}, { "Math/Quality.lua", "Math/Optimizer.lua" })
 local O = ns.Math.Optimizer
 local function slot(i, q, w, prices) local items = {}
-  for r, p in ipairs(prices) do items[r] = { itemID = i * 1000 + r, rank = r, price = p, owned = 0, provided = 0 } end
+  for r, p in ipairs(prices) do items[r] = { itemID = i * 1000 + r, rank = r, price = p or nil, owned = 0, provided = 0 } end  -- false = no price
   return { slotIndex = i, quantity = q, weight = w, items = items } end
 local function input(baseSkill, slots) return { maxQuality = 2, baseDifficulty = 700, baseSkill = baseSkill, maxReagentSkill = 280, slots = slots } end
 describe("Math.Optimizer", function()
@@ -476,9 +479,9 @@ describe("Math.Optimizer", function()
     assert.equals(100, per[2].reagentCost)                  -- cheapest priced rank, no skill
   end)
   it("missing_rank_price", function()
-    local per, missing = O.CheapestByQuality(input(500, { slot(1, 10, 48, {100, nil}), slot(2, 5, 32, {200, 300}) }))
+    local per, missing = O.CheapestByQuality(input(500, { slot(1, 10, 48, {100, false}), slot(2, 5, 32, {200, 300}) }))
     assert.is_false(missing); assert.is_nil(per[2])         -- rank 2 of slot 1 unusable, 20/80 units not enough
-    local _, missing2 = O.CheapestByQuality(input(500, { slot(1, 10, 48, {nil, nil}) }))
+    local _, missing2 = O.CheapestByQuality(input(500, { slot(1, 10, 48, {false, false}) }))
     assert.is_true(missing2)
   end)
   it("mixed_rank_slots", function()
@@ -486,13 +489,13 @@ describe("Math.Optimizer", function()
     assert.is_table(per[2]); assert.is_true(per[2].skill >= 700)
   end)
   it("owned and provided reagents cost nothing up to their count", function()
-    local s = slot(1, 10, 48, {100, 300}); s.items[2].owned = 5; s.items[1].provided = 0
-    assert.equals(1100, O.Compositions(s)[10].cost)          -- 5 rank2: 5 owned free, 5 rank1 at 100... = 500? see note
+    local s = slot(1, 10, 48, {100, 300}); s.items[2].owned = 5
+    assert.equals(500, O.Compositions(s)[10].cost)           -- 5 rank2 owned (free) + 5 rank1 at 100
   end)
 end)
 ```
 
-Note for the last case: with 5 rank-2 owned, the composition "5×rank2 + 5×rank1" (units 10) costs `0 + 5×100 = 500`; the asserted 1100 is wrong on purpose — fix the expected value to `500` while writing the test so the test states the rule "cost = Σ max(0, n_rank − owned_rank − provided_rank) × price".
+Composition cost rule: `Σ max(0, n_rank − owned_rank − provided_rank) × price_rank`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -513,14 +516,14 @@ for s, sl in ipairs(weighted) do
   for u, c in pairs(best) do
     for cu, comp in pairs(sl.comps) do
       local nu, nc = u + cu * sl.w, c + comp.cost
-      if nb[nu] == nil or nc < nb[nu] or (nc == nb[nu] and false) then nb[nu], pick[nu] = nc, { prev = u, comp = comp } end
+      if nb[nu] == nil or nc < nb[nu] then nb[nu], pick[nu] = nc, { prev = u, comp = comp } end
     end
   end
   best, choice[s] = nb, pick
 end
 for q = 1, maxQuality do
   local need = (q == 1) and 0 or (thresholds[q - 1] - baseSkill)
-  local uNeed = need <= 0 and 0 or math.ceil(need * Umax / maxReagentSkill - 1e-9)
+  local uNeed = need <= 0 and 0 or (Umax > 0 and math.ceil(need * Umax / maxReagentSkill - 1e-9) or math.huge)
   -- answer = min cost over u >= uNeed in best; ties prefer larger u (more skill → cheaper concentration)
   -- walk choice[] backwards from the chosen u to rebuild counts per slot; skill = baseSkill + maxReagentSkill * u / Umax
 end
@@ -557,6 +560,8 @@ Rules `EvaluateCraft` follows (spec §6.1):
 - Optionals: `Stats.ApplyOptionals` → `skill = baseSkill + skillBonus + reagentSkill`, `difficulty = baseDifficulty + difficultyBonus`; thresholds use `difficulty`, reagent skill uses `baseDifficulty`.
 - Plans without concentration: one per reachable quality `q` from `Optimizer.CheapestByQuality`. Plans with concentration: for each reachable `q < maxQuality`, quality `q+1` at `Concentration.Cost(curve, skill_q, difficulty, less)`.
 - Per plan: `reagentCost = required + optional cost`; `resourcefulnessValue = Stats.ResourcefulnessSaving(requiredCost, ...)`; `expectedSale = ExpectedSale({[q]=1}, outputPrices, ExpectedYield(...))`; `profit = expectedSale − (reagentCost − resourcefulnessValue)`; `multicraftValue = price_q × (expectedYield − baseYield) × AH_CUT`, `baseYield = (min + max) / 2`.
+- `missingPrice = true` when any reachable quality's output price is nil, or a required slot had no priced option; `profit`/`expectedSale` are nil only when the chosen plan's own output price is nil.
+- `concentrationCostForAllocation` = `Concentration.Cost(curve, skill, difficulty, less)` at the returned allocation's skill (0 at max quality, nil without curve).
 - `targetQuality` set → use that quality's plan (with concentration when `useConcentration`); else the max-profit plan of the requested kind. A plan whose output price is nil has `expectedSale = nil`, `profit = nil`, `missingPrice = true`, and never wins over a priced plan.
 - `goldPerConcentration` = `GoldPerPoint(best concentration plan profit, best non-concentration plan profit, Expected(cost, ingenuity, 0.5 + ingenuityExtra))`; `concentrationCost`, `expectedConcentrationCost` and `ingenuityValue = cost × ingenuity × (0.5 + extra)` describe that concentration plan; all 0/nil when no concentration plan exists or `curve` is nil.
 - Copper outputs pass through `Round`.
@@ -568,7 +573,7 @@ local ns = load_files({}, { "Math/Quality.lua","Math/Concentration.lua","Math/St
 local P = ns.Math.Profit
 local MID = { constant = { {0,200},{1000,200} }, curve = { {0,2.35},{0.6,2.2},{0.8,1.1},{0.9999,1.0},{1.0,0} } }
 local function slot(i, q, w, prices) local items = {}
-  for r, p in ipairs(prices) do items[r] = { itemID = i * 1000 + r, rank = r, price = p, owned = 0, provided = 0 } end
+  for r, p in ipairs(prices) do items[r] = { itemID = i * 1000 + r, rank = r, price = p or nil, owned = 0, provided = 0 } end  -- false = no price
   return { slotIndex = i, quantity = q, weight = w, items = items } end
 local function scenario(over) local t = { maxQuality = 2, baseDifficulty = 700, baseSkill = 500, maxReagentSkill = 280,
   slots = { slot(1,10,48,{100,300}), slot(2,5,32,{200,300}), slot(3,2,0,{500}) }, optionals = {},
@@ -605,6 +610,7 @@ describe("Math.Profit.EvaluateCraft", function()
   it("EvaluateAllocation predicts a given allocation", function()
     local r = P.EvaluateAllocation(scenario(), { {slotIndex=1,itemID=1002,quantity=10}, {slotIndex=2,itemID=2002,quantity=5}, {slotIndex=3,itemID=3001,quantity=2} })
     assert.equals(780, r.skill); assert.equals(2, r.expectedQuality); assert.equals(5500, r.reagentCost)
+    assert.equals(0, r.concentrationCostForAllocation)
   end)
 end)
 ```
@@ -647,7 +653,7 @@ git commit -m "feat: add Math.Profit expected profit and concentration evaluatio
   - `Recipes:ToCraftingReagentInfo(recipeID, allocation, optionalItemIDs|nil) -> { { reagent = { itemID }, dataSlotIndex, quantity } }` — only `ModifiedReagent` slots; nil when no live schematic.
   - `Recipes:FromCraftingReagentInfo(recipeID, infos) -> allocation, optionalItemIDs`.
   - `Recipes:LogMismatch(record)` — appends `{ time, recipeID, charKey, field, predicted, actual, fixture }` to `db.global.diagnostics.mismatches`, keeps the newest 200.
-  - Test helper `make_world(opts) -> ns, world` (loads Core + Math + listed files, installs fake `Scanner`/`Prices` AceModules backed by `world` tables: `world.schematics`, `world.chars`, `world.items`, `world.prices`, `world.live`); `world.recipe9001` is the Task 6 scenario as a Schematic (`outputItemIDs = {[1]=5001,[2]=5002}`, slots 1–3 with items 1001/1002, 2001/2002, 3001, weights 48/32/0 in a fake `ns.GameData.Crafting.reagentWeights`, curve under `craftingDataID` 2588).
+  - Test helper `make_world(opts) -> ns, world`: installs 1a's WoW stubs, loads Core + `Math/*` + `opts.files`, and registers fake `Scanner`/`Prices` AceModules backed by `world` tables (`schematics, chars, items, warband, counts, prices, live, liveSchematic, messages(name)`). Base world: recipe 9001 = the Task 6 scenario as a Schematic (`skillLineID` 2906, `maxQuality` 2, `baseDifficulty` 700, `outputItemIDs = {[1]=5001,[2]=5002}`, slots 1–3 with reagents 1001/1002, 2001/2002, 3001); `ns.GameData.Crafting` fake with weights 48/32 and curve `MID` under `craftingDataID` 2588; prices 1001=100, 1002=300, 2001=200, 2002=300, 3001=500, 5001=60000, 5002=100000 (`ageDays` 1); characters `Main-Realm` and `Alt-Realm` both know 9001 at profession skill 500; current character `Main-Realm`. `opts.calibrate = { [charKey] = {recipeID...} }` writes CalibRecords `{ baseSkill = 500, baseDifficulty = 700, maxReagentSkill = 280, craftingDataID = 2588, maxQuality = 2, stats = { multicraft = 0.2, resourcefulness = 0.25, ingenuity = 0.2 } }`; `opts.recipes = n` clones 9001 as recipes 9001..9000+n with distinct prices. Later tasks extend this helper with the fakes their specs use (`fakeEvaluate`, `fakeAuctionator`, `openProfession`, `fakeProfessionsFrame`, `fire`, ...).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -714,6 +720,7 @@ git commit -m "feat: add Recipes calibration, reagent info conversion and mismat
 ### Task 8: Recipes:Evaluate, cache, WhoCanCraft, FindRecipesForItem
 
 **Files:**
+- Modify: `tests/helpers/crafting_world.lua` (fakes this spec uses)
 - Modify: `Modules/Recipes.lua`
 - Test: `tests/recipes/evaluate_spec.lua`
 
@@ -723,7 +730,7 @@ git commit -m "feat: add Recipes calibration, reagent info conversion and mismat
 
 Input building: `baseSkill`, `baseDifficulty`, `maxReagentSkill`, `stats` and curve (`concentrationCurves[calib.craftingDataID]`) come from the calibration. Without one: `baseSkill = profession.skill`, `baseDifficulty = schematic.baseDifficulty`, `maxReagentSkill = nil`, `stats = {}`, curve nil, `flags.staleData = true`, `flags.estimated = true`. Calibration older than `staleCalibrationDays` or a character whose `lastSeen` is older → `flags.staleData = true`. Item prices from `Prices:Get(itemID).value`; any price used with `ageDays > stalePriceDays` → `flags.stalePrice`; `priceAgeDays` = max age used. `ownedReagentsFree` → `owned = bags + bank + reagentBank + warband` of that character; `providedReagents` → `provided`. Recipe not in `profession.recipes` → `flags.unknownRecipe = true` (still evaluated). `flags.noPrice = result.missingPrice`.
 
-Cache: key `recipeID .. "|" .. charKey .. "|" .. optsKey(opts)` (opts serialised with sorted keys); entry valid while `Prices:GetVersion()` and `GetDataStamp(charKey)` are unchanged. `FS_DATA_CHANGED(charKey, kind)` bumps that character's stamp, except `kind == "items"` bumps it only when `ownedReagentsFree` is on (queue-missing math reads counts directly). `FS_PRICES_CHANGED` needs no handler (version is in the check).
+Cache: key `recipeID .. "|" .. charKey .. "|" .. optsKey(opts)` (opts serialised with sorted keys, after filling `ownedReagentsFree` from settings when nil); entry valid while `Prices:GetVersion()` and `GetDataStamp(charKey)` are unchanged. `FS_DATA_CHANGED(charKey, kind)` bumps that character's stamp, except `kind == "items"` bumps it only when `ownedReagentsFree` is on (queue-missing math reads counts directly). `FS_PRICES_CHANGED` needs no handler (version is in the check).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -743,7 +750,7 @@ describe("Recipes:Evaluate", function()
   it("estimates_without_calibration", function()
     local r = R:Evaluate(9001, "Alt-Realm", {})                 -- Alt knows 9001, profession skill 500, never calibrated
     assert.is_true(r.flags.staleData); assert.is_true(r.flags.estimated)
-    assert.equals(280, r.perQuality[2] and (r.perQuality[2].skill - 500) and 280 or 280) -- maxReagentSkill = 0.40 × 700
+    assert.equals(703, r.perQuality[2].skill)                   -- 500 + default 0.40 × 700 = 280 max reagent skill
     assert.is_nil(r.goldPerConcentration)                       -- no curve without craftingDataID
   end)
   it("flags stale and missing prices", function()
@@ -772,8 +779,6 @@ describe("Recipes:Evaluate", function()
 end)
 ```
 
-Replace the placeholder assert in `estimates_without_calibration` with: `assert.equals(780, R:Evaluate(9001, "Alt-Realm", { targetQuality = 2 }).perQuality[2].skill)`? No — use the exact rule: with base skill 500 and default max reagent skill 280 the q2 plan has skill 703, so `assert.equals(703, r.perQuality[2].skill)`.
-
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `busted tests/recipes/evaluate_spec.lua`
@@ -789,7 +794,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Modules/Recipes.lua tests/recipes/evaluate_spec.lua
+git add Modules/Recipes.lua tests/recipes/evaluate_spec.lua tests/helpers/crafting_world.lua
 git commit -m "feat: add Recipes:Evaluate with flags, caching, WhoCanCraft and item lookup"
 ```
 
@@ -837,8 +842,6 @@ describe("golden fixtures", function()
 end)
 ```
 
-`EvaluateAllocation` exposes `concentrationCostForAllocation` = `Concentration.Cost` at the allocation's skill (add to Task 6's MathResult when implementing this step).
-
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `busted tests/recipes/recorder_spec.lua tests/math/golden_spec.lua`
@@ -875,6 +878,7 @@ git commit -m "test: add golden math fixtures from live operation info and pin c
 ### Task 10: Recipe scan (time-sliced) and GetRanked
 
 **Files:**
+- Modify: `tests/helpers/crafting_world.lua` (fakes this spec uses)
 - Create: `Modules/RecipeScan.lua`
 - Modify: `FabricationStation.toc`
 - Test: `tests/recipes/scan_spec.lua`
@@ -896,12 +900,10 @@ describe("recipe scan", function()
     _G.debugprofilestop = function() clock = clock + 1; return clock end   -- every call costs 1 ms
   end)
   it("is time-sliced and announces once", function()
-    local sent = spy.on(ns.FS, "SendMessage")
     R:StartScan(nil)
     local steps = 0
     repeat steps = steps + 1 until R:_ScanStep(4) or steps > 50
     assert.is_true(steps >= 3); assert.is_false(R:IsScanning())
-    assert.spy(sent).was.called_with(match._, "FS_RECIPES_CHANGED")
     assert.equals(1, #world.messages("FS_RECIPES_CHANGED"))
   end)
   it("ranks by profit with unpriced results last", function()
@@ -935,7 +937,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Modules/RecipeScan.lua tests/recipes/scan_spec.lua FabricationStation.toc
+git add Modules/RecipeScan.lua tests/recipes/scan_spec.lua FabricationStation.toc tests/helpers/crafting_world.lua
 git commit -m "feat: add time-sliced recipe scan and GetRanked"
 ```
 
@@ -944,6 +946,7 @@ git commit -m "feat: add time-sliced recipe scan and GetRanked"
 ### Task 11: Queue core — entries, restock, missing reagents, costs
 
 **Files:**
+- Modify: `tests/helpers/crafting_world.lua` (fakes this spec uses)
 - Create: `Modules/Queue.lua`
 - Modify: `FabricationStation.toc`
 - Test: `tests/queue/queue_spec.lua`
@@ -978,7 +981,7 @@ describe("Queue", function()
     world.items["Alt-Realm"][1001] = { bags = 4, bank = 0, reagentBank = 0 }
     world.warband[1001], world.warband[2002] = 1, 2
     assert.same({ [1001] = 1, [2002] = 1 }, Q:GetMissingReagents("Alt-Realm"))
-    assert.same({ [1001] = 3, [2002] = 1 }, Q:GetMissingReagents(nil))
+    assert.same({ [1001] = 3, [2002] = 2 }, Q:GetMissingReagents(nil))   -- Alt 2 + Main 2 − 1; Alt 3 + Main 1 − 2
     ns.FS.db.global.settings.crafting = { queueUseWarband = false }
     assert.same({ [1001] = 2, [2002] = 3 }, Q:GetMissingReagents("Alt-Realm"))
   end)
@@ -1015,7 +1018,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Modules/Queue.lua tests/queue/queue_spec.lua FabricationStation.toc
+git add Modules/Queue.lua tests/queue/queue_spec.lua FabricationStation.toc tests/helpers/crafting_world.lua
 git commit -m "feat: add Queue entries, restock targets and missing reagents"
 ```
 
@@ -1024,6 +1027,7 @@ git commit -m "feat: add Queue entries, restock targets and missing reagents"
 ### Task 12: Queue — shopping list, Craft Next, cooldowns
 
 **Files:**
+- Modify: `tests/helpers/crafting_world.lua` (fakes this spec uses)
 - Create: `Modules/QueueCraft.lua`
 - Modify: `FabricationStation.toc`
 - Test: `tests/queue/craft_spec.lua`
@@ -1032,7 +1036,7 @@ git commit -m "feat: add Queue entries, restock targets and missing reagents"
 - Consumes: Task 11; `Prices:AuctionatorAPI()`; `Scanner:GetSchematic`, `Scanner:GetProfession(charKey, skillLineID).cooldowns[recipeID]` (expected `{ readyAt = serverSeconds, charges?, maxCharges? }` — if 1a stored another shape, adapt only `GetCooldownReadyAt`); `Recipes:ToCraftingReagentInfo`; `C_Item.GetItemNameByID`, `C_Item.RequestLoadItemDataByID`; `C_TradeSkillUI.CraftRecipe`, `C_TradeSkillUI.GetProfessionInfoByRecipeID`, `C_TradeSkillUI.GetBaseProfessionInfo`; event `TRADE_SKILL_ITEM_CRAFTED_RESULT`.
 - Produces: `Queue:ExportShoppingList() -> ok: bool, info: { added = n, skipped = n } | "noAuctionator" | "empty"` (contract name); `Queue:CraftNext() -> CraftNextResult` where `CraftNextResult = { status = "crafted"|"open"|"missing"|"cooldown"|"empty", entryID?, charKey?, skillLineID?, missing?, readyAt? }`; `Queue:GetCooldownReadyAt(entry) -> serverSeconds|nil`; `Queue:IsProfessionOpenFor(entry) -> bool`.
 
-Craft Next order: walk `GetEntries()`; skip entries whose cooldown is not ready; the first entry that is on the current character, has its profession open (`ProfessionsFrame:IsShown()` and `GetProfessionInfoByRecipeID(recipeID).parentProfessionID == GetBaseProfessionInfo().professionID`), and has no missing reagents for one craft is crafted: `C_TradeSkillUI.CraftRecipe(recipeID, 1, Recipes:ToCraftingReagentInfo(recipeID, allocation), nil, orderID, useConcentration and true or false)`. The entry is remembered as pending; quantity drops by 1 on the next `TRADE_SKILL_ITEM_CRAFTED_RESULT` whose `itemID` is one of that recipe's outputs (multicraft results of one craft count once per `operationID`). If no entry is craftable, report the first blocking reason in queue order: other character/profession → `"open"`; missing → `"missing"`; all on cooldown → `"cooldown"` with the earliest `readyAt`.
+Shopping list: items and quantities from `GetMissingReagents(nil)`, terms sorted by itemID. Craft Next order: walk `GetEntries()`; skip entries whose cooldown is not ready; the first entry that is on the current character, has its profession open (`ProfessionsFrame:IsShown()` and `GetProfessionInfoByRecipeID(recipeID).parentProfessionID == GetBaseProfessionInfo().professionID`), and has no missing reagents for one craft is crafted: `C_TradeSkillUI.CraftRecipe(recipeID, 1, Recipes:ToCraftingReagentInfo(recipeID, allocation), nil, orderID, useConcentration and true or false)`. The entry is remembered as pending; quantity drops by 1 on the next `TRADE_SKILL_ITEM_CRAFTED_RESULT` whose `itemID` is one of that recipe's outputs (multicraft results of one craft count once per `operationID`). If no entry is craftable, report the first blocking reason in queue order: other character/profession → `"open"`; missing → `"missing"`; all on cooldown → `"cooldown"` with the earliest `readyAt`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1071,14 +1075,16 @@ describe("Queue craft actions", function()
   end)
   it("craft_next_other_character", function()
     world.openProfession(9001); Q:Add({ recipeID = 9001, quantity = 1, charKey = "Alt-Realm" })
-    assert.same({ "open", "Alt-Realm" }, { Q:CraftNext().status, Q:CraftNext().charKey }); assert.equals(0, #world.crafts)
+    local r = Q:CraftNext()
+    assert.equals("open", r.status); assert.equals("Alt-Realm", r.charKey); assert.equals(0, #world.crafts)
   end)
   it("craft_next_crafts_one_and_counts_on_result", function()
     world.openProfession(9001); world.haveAll("Main-Realm")
     local id = Q:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm", useConcentration = true })
     local r = Q:CraftNext()
     assert.same({ "crafted", id }, { r.status, r.entryID })
-    assert.same({ 9001, 1, false and nil, nil, nil, true }, { world.crafts[1][1], world.crafts[1][2], nil, world.crafts[1][4], world.crafts[1][5], world.crafts[1][6] })
+    local c = world.crafts[1]                                  -- recorded CraftRecipe arguments
+    assert.equals(9001, c[1]); assert.equals(1, c[2]); assert.is_table(c[3]); assert.is_nil(c[4]); assert.is_nil(c[5]); assert.is_true(c[6])
     assert.equals(3, Q:GetEntries()[1].quantity)
     world.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 77 })
     world.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 77 })   -- multicraft extra, same op
@@ -1093,8 +1099,6 @@ describe("Queue craft actions", function()
   end)
 end)
 ```
-
-Tidy the `craft_next_crafts_one_and_counts_on_result` call assertion when writing it to: `assert.equals(9001, c[1]); assert.equals(1, c[2]); assert.is_table(c[3]); assert.is_nil(c[4]); assert.is_nil(c[5]); assert.is_true(c[6])` with `local c = world.crafts[1]`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1111,7 +1115,7 @@ Expected: PASS; grep output empty now (Task 15/16 add the only callers, both ins
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Modules/QueueCraft.lua tests/queue/craft_spec.lua FabricationStation.toc
+git add Modules/QueueCraft.lua tests/queue/craft_spec.lua FabricationStation.toc tests/helpers/crafting_world.lua
 git commit -m "feat: add Auctionator shopping list, click-only Craft Next and cooldown checks"
 ```
 
@@ -1138,7 +1142,9 @@ describe("Dashboard", function()
     D:RegisterWidget("b", { order = 50, title = "B", build = function() end, refresh = function() end })
     D:RegisterWidget("a", { order = 5,  title = "A", build = function() end, refresh = function() end })
     D:RegisterWidget("b", { order = 1,  title = "B2", build = function() end, refresh = function() end })
-    local w = D:GetWidgets(); assert.same({ "B2", "A", "topCrafts" }, { w[1].title, w[2].title, w[3].id and w[3].title and "topCrafts" })
+    local w = D:GetWidgets()
+    assert.same({ "b", "a", "topCrafts", "queueSummary", "concentration" }, { w[1].id, w[2].id, w[3].id, w[4].id, w[5].id })
+    assert.equals("B2", w[1].title)
   end)
   it("isolates a failing widget", function()
     D:RegisterWidget("bad", { order = 1, title = "Bad", build = function() error("boom") end, refresh = function() end })
@@ -1155,8 +1161,7 @@ describe("Dashboard", function()
 end)
 ```
 
-Fix the first test's last element while writing it to compare `w[3].id == "topCrafts"` directly; `RegisterWidget` stores `id` on the def.
-
+`RegisterWidget` stores `id` on the def.
 `ConcentrationModel` input rows come from `Scanner:ProjectConcentration`; `fullAt = now + (max − value) / regenPerSec` where `regenPerSec` is derived from two projections one hour apart (`ProjectConcentration(c, s, now + 3600) − ProjectConcentration(c, s, now)`) so the dashboard does not hard-code a regen rate.
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1286,6 +1291,7 @@ git commit -m "feat: add Queue tab with shopping list, Craft Next and restock ed
 ### Task 16: Profession side panel
 
 **Files:**
+- Modify: `tests/helpers/crafting_world.lua` (fakes this spec uses)
 - Create: `UI/ProfessionPanel.lua`
 - Modify: `FabricationStation.toc`
 - Test: `tests/ui/profession_panel_spec.lua`
@@ -1314,7 +1320,7 @@ describe("ProfessionPanel model", function()
     concentrationCost = 314, goldPerConcentration = 6, profit = 120010, priceAgeDays = 1, flags = {} }
   it("threshold bar from the live prediction", function()
     local m = M.BuildModel(result, { skill = 690, difficulty = 700, lowerThreshold = 0, nextThreshold = 700, expectedQuality = 1 })
-    assert.near(690 / 700, m.barFill, 1e-9); assert.equals(10, m.skillToNext); assert.equals(1, #m.perQualityRows - 1)
+    assert.near(690 / 700, m.barFill, 1e-9); assert.equals(10, m.skillToNext); assert.equals(2, #m.perQualityRows)
   end)
   it("full bar at max quality", function()
     assert.equals(1, M.BuildModel(result, { skill = 780, difficulty = 700, lowerThreshold = 700, expectedQuality = 2 }).barFill)
@@ -1353,7 +1359,7 @@ In game with `/console taintLog 1`: open a profession, select a quality recipe, 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add UI/ProfessionPanel.lua tests/ui/profession_panel_spec.lua FabricationStation.toc
+git add UI/ProfessionPanel.lua tests/ui/profession_panel_spec.lua FabricationStation.toc tests/helpers/crafting_world.lua
 git commit -m "feat: add profession side panel with prediction, reagents per quality and queue buttons"
 ```
 
@@ -1362,6 +1368,7 @@ git commit -m "feat: add profession side panel with prediction, reagents per qua
 ### Task 17: Recipe-list profit labels
 
 **Files:**
+- Modify: `tests/helpers/crafting_world.lua` (fakes this spec uses)
 - Create: `UI/RecipeListLabels.lua`
 - Modify: `FabricationStation.toc`
 - Test: `tests/ui/recipe_list_labels_spec.lua`
@@ -1419,7 +1426,7 @@ Expected: PASS. In game: labels appear on recipe rows, update after an Auctionat
 - [ ] **Step 5: Commit**
 
 ```bash
-git add UI/RecipeListLabels.lua tests/ui/recipe_list_labels_spec.lua FabricationStation.toc
+git add UI/RecipeListLabels.lua tests/ui/recipe_list_labels_spec.lua FabricationStation.toc tests/helpers/crafting_world.lua
 git commit -m "feat: add toggleable profit labels on Blizzard recipe list rows"
 ```
 
@@ -1428,13 +1435,14 @@ git commit -m "feat: add toggleable profit labels on Blizzard recipe list rows"
 ### Task 18: Tooltips module and craft-cost line
 
 **Files:**
+- Modify: `tests/helpers/crafting_world.lua` (fakes this spec uses)
 - Create: `UI/Tooltips.lua`
 - Modify: `FabricationStation.toc`
 - Test: `tests/ui/tooltips_spec.lua`
 
 **Interfaces:**
 - Consumes: `TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, fn(tooltip, data))` (`data.id` = itemID), `tooltip:AddDoubleLine`, `Recipes:FindRecipesForItem/WhoCanCraft/Evaluate`, `Recipes:GetSetting("tooltipCraftCost")`, `ns.UI.FormatMoney`.
-- Produces: module `"Tooltips"`; `Tooltips:RegisterLineProvider(id, fn(itemID) -> { {left, right}, ... })` (contract; same id replaces); `Tooltips:CollectLines(itemID) -> { {left, right} }` (providers in registration order, each `pcall`ed; an erroring provider is disabled for the session and logged via `ns.FS.db.global.diagnostics.errors` through `SafeCall`'s logger); built-in provider `"craftCost"`: for each `{recipeID, quality}` of the item, the cheapest `Evaluate(recipeID, charKey, { targetQuality = quality }).reagentCost` across `WhoCanCraft`, line `{ "Craft cost", FormatMoney(cost) .. " (" .. shortName(charKey) .. ")" }`; "no price" when every candidate lacks a price; nothing when nobody can craft it. Results cached per itemID until `FS_RECIPES_CHANGED`.
+- Produces: module `"Tooltips"`; `Tooltips:RegisterLineProvider(id, fn(itemID) -> { {left, right}, ... })` (contract; same id replaces); `Tooltips:CollectLines(itemID) -> { {left, right} }` (providers in registration order, each `pcall`ed; an erroring provider is disabled for the session and logged via `ns.FS.db.global.diagnostics.errors` through `SafeCall`'s logger); built-in provider `"craftCost"`: for each `{recipeID, quality}` of the item, the cheapest `Evaluate(recipeID, charKey, { targetQuality = quality }).reagentCost` across `WhoCanCraft` (ties: non-estimated results first, then `WhoCanCraft` order), line `{ "Craft cost", FormatMoney(cost) .. " (" .. shortName(charKey) .. ")" }`; "no price" when every candidate lacks a price; nothing when nobody can craft it. Built-in provider `"crafters"` (registered second): `{ "Crafters", "Main, Alt" }` — short names from `WhoCanCraft`, cheapest first (spec §5.4 "which characters can craft it"). Holdings lines are phase 3. Results cached per itemID until `FS_RECIPES_CHANGED`; both lines off when `tooltipCraftCost` is off.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1442,20 +1450,21 @@ git commit -m "feat: add toggleable profit labels on Blizzard recipe list rows"
 describe("Tooltips", function()
   local ns, T
   before_each(function() install_fake_frames(); ns = make_world({ files = { "Modules/Recipes.lua", "UI/Tooltips.lua" }, calibrate = { ["Main-Realm"] = { 9001 } } }); T = ns.FS:GetModule("Tooltips") end)
-  it("craft cost line names the cheapest character", function()
-    assert.same({ { "Craft cost", "48s (Main)" } }, T:CollectLines(5002))     -- 4800 copper, FormatMoney fake = "<s>s"
+  it("craft cost and crafters lines", function()
+    assert.same({ { "Craft cost", ns.UI.FormatMoney(4800) .. " (Main)" }, { "Crafters", "Main, Alt" } }, T:CollectLines(5002))
   end)
   it("no line for items nobody crafts", function() assert.same({}, T:CollectLines(424242)) end)
   it("isolates a failing provider", function()
     T:RegisterLineProvider("bad", function() error("boom") end)
     T:RegisterLineProvider("ok", function() return { { "x", "y" } } end)
-    assert.same({ { "Craft cost", "48s (Main)" }, { "x", "y" } }, T:CollectLines(5002))
-    assert.same({ { "Craft cost", "48s (Main)" }, { "x", "y" } }, T:CollectLines(5002))   -- bad stays disabled, no error
+    local want = { { "Craft cost", ns.UI.FormatMoney(4800) .. " (Main)" }, { "Crafters", "Main, Alt" }, { "x", "y" } }
+    assert.same(want, T:CollectLines(5002))
+    assert.same(want, T:CollectLines(5002))                   -- bad stays disabled, no error
   end)
 end)
 ```
 
-(`Alt-Realm` is uncalibrated, so its estimate costs 4800 too; ties keep the first in `WhoCanCraft` order — make the fake world give Alt a higher price for rank-2 reagents so "Main" wins unambiguously.)
+(`Alt-Realm` is uncalibrated; its estimate also costs 4800, and the tie rule picks Main.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1472,8 +1481,8 @@ Expected: PASS. In game: hovering a crafted item shows "Craft cost"; Auctionator
 - [ ] **Step 5: Commit**
 
 ```bash
-git add UI/Tooltips.lua tests/ui/tooltips_spec.lua FabricationStation.toc
-git commit -m "feat: add Tooltips line provider registry and craft-cost line"
+git add UI/Tooltips.lua tests/ui/tooltips_spec.lua FabricationStation.toc tests/helpers/crafting_world.lua
+git commit -m "feat: add Tooltips line provider registry with craft-cost and crafters lines"
 ```
 
 ---
@@ -1481,6 +1490,7 @@ git commit -m "feat: add Tooltips line provider registry and craft-cost line"
 ### Task 19: In-game self-check
 
 **Files:**
+- Modify: `tests/helpers/crafting_world.lua` (fakes this spec uses)
 - Create: `Modules/SelfCheck.lua`
 - Modify: `UI/ProfessionPanel.lua` (status line), `FabricationStation.toc`
 - Test: `tests/recipes/selfcheck_spec.lua`
@@ -1532,6 +1542,6 @@ In game: changing reagent ranks on a recipe keeps the panel at "Math check: OK";
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Modules/SelfCheck.lua UI/ProfessionPanel.lua tests/recipes/selfcheck_spec.lua FabricationStation.toc
+git add Modules/SelfCheck.lua UI/ProfessionPanel.lua tests/recipes/selfcheck_spec.lua FabricationStation.toc tests/helpers/crafting_world.lua
 git commit -m "feat: add in-game math self-check with mismatch log and fixtures"
 ```
