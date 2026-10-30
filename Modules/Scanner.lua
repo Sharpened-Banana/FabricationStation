@@ -126,9 +126,14 @@ local function normalize_slot(raw, index)
   }
 end
 
+-- A schematic is stamped with the client build only when it is complete: the operation info
+-- (baseDifficulty, craftingDataID, concentration) was read, or the recipe has none. An unstamped
+-- schematic (build = nil) is stale and is fetched again by the next scan or GetSchematic.
 local function normalize(recipeID, raw)
   local recipeInfo = C_TradeSkillUI.GetRecipeInfo(recipeID) or {}
-  local op = C_TradeSkillUI.GetCraftingOperationInfo(recipeID, {}, nil, false) or {}
+  local opInfo = C_TradeSkillUI.GetCraftingOperationInfo(recipeID, {}, nil, false)
+  local op = opInfo or {}
+  local complete = opInfo ~= nil or raw.hasCraftingOperationInfo == false
   local supportsQualities = recipeInfo.supportsQualities and true or false
 
   local outputItemIDs = {}
@@ -157,7 +162,7 @@ local function normalize(recipeID, raw)
     recipeType = raw.recipeType,
     supportsQualities = supportsQualities,
     craftingDataID = op.craftingDataID,
-    build = client_build(),
+    build = complete and client_build() or nil,
     time = ns.FS:Now(),
   }
 end
@@ -175,6 +180,10 @@ local function fetch_schematic(recipeID)
     loggedFetchErrors[recipeID] = true
     ns.FS:LogError("Scanner", ("schematic %s: %s"):format(tostring(recipeID), tostring(result)))
   end
+end
+
+local function is_current(schematic)
+  return schematic ~= nil and schematic.build ~= nil and schematic.build == client_build()
 end
 
 local function store_schematic(schematic)
@@ -216,9 +225,15 @@ end
 function Scanner:GetSchematic(recipeID)
   local g = global()
   local cached = g and g.schematics[recipeID]
-  if cached then return cached end
-  if not self:IsProfessionOpen() then return nil end
-  return store_schematic(fetch_schematic(recipeID))
+  -- A complete cached schematic is served as is (an outdated build is refreshed by the next scan).
+  if cached and cached.build ~= nil then return cached end
+  if not cached then
+    if not self:IsProfessionOpen() then return nil end
+    return store_schematic(fetch_schematic(recipeID))
+  end
+  -- Incomplete: retry while the recipe's own profession is open (operation info needs it).
+  if not self:IsProfessionOpen(cached.skillLineID) then return cached end
+  return store_schematic(fetch_schematic(recipeID)) or cached
 end
 
 -- Fetches and caches the given schematics, SCHEMATIC_CHUNK per frame. The first chunk runs now.
@@ -257,6 +272,7 @@ end
 function Scanner:GetLiveOperationInfo(recipeID, allocation, applyConcentration)
   local line = recipe_line(recipeID)
   if not line or not self:IsProfessionOpen(line) then return nil end
+  if not self:GetSchematic(recipeID) then return nil end
   local ok, info = pcall(function()
     return C_TradeSkillUI.GetCraftingOperationInfo(recipeID, self:ToCraftingReagentInfo(recipeID, allocation), nil,
       applyConcentration and true or false)
@@ -312,10 +328,9 @@ function Scanner:ScanProfession()
 
   self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "recipes")
 
-  local build, schematics, stale = client_build(), global().schematics, {}
+  local schematics, stale = global().schematics, {}
   for _, id in ipairs(learned) do
-    local s = schematics[id]
-    if not s or s.build ~= build then stale[#stale + 1] = id end
+    if not is_current(schematics[id]) then stale[#stale + 1] = id end
   end
   table.sort(stale)
   if #stale > 0 then self:CacheSchematics(stale) end

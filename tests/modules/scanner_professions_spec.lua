@@ -136,6 +136,39 @@ describe("Scanner professions", function()
     C_TradeSkillUI.IsTradeSkillLinked = function() return false end
     _G.ProfessionsFrame = { IsShown = function() return false end }; assert.is_false(Scanner:IsProfessionOpen())
   end)
+  it("leaves a schematic without operation info unstamped and completes it on a later scan", function()
+    local op = C_TradeSkillUI.GetCraftingOperationInfo
+    C_TradeSkillUI.GetCraftingOperationInfo = function() return nil end
+    scan(); local s = ns.FS.db.global.schematics[1001]
+    assert.is_nil(s.build); assert.is_nil(s.baseDifficulty); assert.is_nil(s.craftingDataID)
+    C_TradeSkillUI.GetCraftingOperationInfo = op
+    scan(); s = ns.FS.db.global.schematics[1001]
+    assert.equals(70575, s.build); assert.equals(300, s.baseDifficulty); assert.equals(777, s.craftingDataID)
+    assert.is_true(s.isConcentrationCapable)
+  end)
+  it("stamps a schematic whose recipe has no operation info", function()
+    C_TradeSkillUI.GetCraftingOperationInfo = function() return nil end
+    C_TradeSkillUI.GetRecipeSchematic = function(id) return { recipeID = id, hasCraftingOperationInfo = false, reagentSlotSchematics = {} } end
+    assert.equals(70575, Scanner:GetSchematic(1001).build)
+  end)
+  it("GetSchematic retries an unstamped schematic only while its profession is open", function()
+    local op = C_TradeSkillUI.GetCraftingOperationInfo
+    C_TradeSkillUI.GetCraftingOperationInfo = function() return nil end
+    assert.is_nil(Scanner:GetSchematic(1001).build)
+    C_TradeSkillUI.GetCraftingOperationInfo = op
+    local child = C_TradeSkillUI.GetChildProfessionInfo
+    C_TradeSkillUI.GetChildProfessionInfo = function() return { professionID = 2822 } end
+    assert.is_nil(Scanner:GetSchematic(1001).build)
+    C_TradeSkillUI.GetChildProfessionInfo = child
+    local s = Scanner:GetSchematic(1001)
+    assert.equals(70575, s.build); assert.equals(300, s.baseDifficulty); assert.equals(s, ns.FS.db.global.schematics[1001])
+  end)
+  it("returns no live operation info when the schematic is unavailable", function()
+    local called = false
+    C_TradeSkillUI.GetRecipeSchematic = function() return nil end
+    C_TradeSkillUI.GetCraftingOperationInfo = function() called = true; return { quality = 1 } end
+    assert.is_nil(Scanner:GetLiveOperationInfo(1001, {}, false)); assert.is_false(called)
+  end)
   it("writes nothing when the saved data is from a newer version", function()
     W = install_wow_stubs(fixture())
     _G.FabricationStationDB = { global = { schemaVersion = 999 } }

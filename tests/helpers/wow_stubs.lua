@@ -6,9 +6,13 @@
 --   * AceDB does no logout stripping of default values and has no "*" / "**" wildcard defaults.
 --   * Frame Show/Hide do not fire OnShow/OnHide.
 --   * frame:RegisterEvent is a no-op (use W.fire to drive AceEvent handlers).
---   * Each W.advance(seconds) is one frame: a zero-delay timer (C_Timer.After(0, ...)) scheduled
---     while advance is running callbacks waits for the next W.advance, as it waits for the next
---     frame in the client. Timers with a positive delay that fall due within the advance still run.
+--   * W.advance(0) is one frame: a zero-delay timer (C_Timer.After(0, ...)) created while advance is
+--     running callbacks at the advance's target time waits for the next W.advance, as it waits for
+--     the next frame in the client. Created earlier inside a longer advance (W.now < target), it runs
+--     within that advance, as later frames would have run it.
+--   * time() and GetServerTime() return W.now unfloored (fractional after a sub-second advance), so
+--     tests can compare stored timestamps with W.now. The client returns whole seconds; tests of
+--     logic that floors or divides time should advance by whole seconds.
 --   local W = install_wow_stubs(overrides)
 -- Every call rebuilds all fakes from scratch. `overrides` is deep-merged into the default globals
 -- (plain tables merge key by key, anything else replaces). Returns the handle `W`.
@@ -107,7 +111,7 @@ local function install(overrides)
   -- Clock and C_Timer
   ---------------------------------------------------------------------------
   local timers, timerSeq = {}, 0
-  local advancing, advanceSeq = false, 0
+  local advancing, advanceSeq, advanceTarget = false, 0, nil
 
   local function schedule(seconds, fn, handle)
     timerSeq = timerSeq + 1
@@ -115,8 +119,8 @@ local function install(overrides)
     handle.due = W.now + (seconds or 0)
     handle.seq = timerSeq
     handle.fn = fn
-    -- A zero-delay timer created during this advance belongs to the next frame.
-    handle.heldFor = (advancing and (seconds or 0) <= 0) and advanceSeq or nil
+    -- A zero-delay timer created at the advance's target time belongs to the next frame.
+    handle.heldFor = (advancing and (seconds or 0) <= 0 and W.now >= advanceTarget) and advanceSeq or nil
     timers[#timers + 1] = handle
     return handle
   end
@@ -145,7 +149,7 @@ local function install(overrides)
   function W.advance(seconds)
     local target = W.now + (seconds or 0)
     advanceSeq = advanceSeq + 1
-    advancing = true
+    advancing, advanceTarget = true, target
     while true do
       local nextTimer
       for _, t in ipairs(timers) do
@@ -626,8 +630,7 @@ local function install(overrides)
       ProfessionsSpecPerkState = { Unearned = 0, Earned = 1, Pending = 2 },
     },
     LibStub = LibStub,
-    -- W.now is returned as-is (fractional after a sub-second advance) so tests can compare stored
-    -- timestamps with W.now directly; the client returns whole seconds.
+    -- Unfloored on purpose; see "Deliberate divergences" at the top of this file.
     time = function() return W.now end,
     GetServerTime = function() return W.now end,
     GetBuildInfo = function() return "12.1.5", "70575", "Oct 23 2026", 120105 end,

@@ -93,6 +93,11 @@ describe("wow stubs", function()
       local hit = false; C_Timer.After(1, function() C_Timer.NewTimer(0, function() hit = true end) end)
       W.advance(1); assert.is_false(hit); W.advance(0); assert.is_true(hit)
     end)
+    it("runs a zero-delay timer created mid-way through a longer advance within that advance", function()
+      local hit = false
+      C_Timer.After(5, function() C_Timer.After(0, function() hit = true end) end)
+      W.advance(10); assert.is_true(hit); assert.equals(1700000010, W.now)
+    end)
     it("sees the due time as the current time inside a callback", function()
       local seen
       C_Timer.After(3, function() seen = GetServerTime() end)
