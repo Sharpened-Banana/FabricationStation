@@ -19,3 +19,4 @@ Data\GameData_Reagents.lua
 Data\GameData_Difficulty.lua
 Data\GameData_Spec.lua
 Data\GameData_Manual.lua
+Modules\Scanner.lua
