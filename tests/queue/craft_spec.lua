@@ -182,8 +182,9 @@ describe("Queue craft actions", function()
       assert.equals("crafted", Q:CraftNext().status)
       Q:Clear()
       world.items["Main-Realm"][2002] = nil; world.warband[1001], world.warband[2002] = 2, 1
-      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
       assert.equals("crafted", Q:CraftNext().status)
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 1 })
       ns.FS.db.global.settings.crafting = { queueUseWarband = false }
       assert.equals("missing", Q:CraftNext().status)
     end)
@@ -198,15 +199,97 @@ describe("Queue craft actions", function()
       local id = Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
       W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 1 })        -- nothing pending
       assert.equals(2, Q:GetEntries()[1].quantity)
-      Q:CraftNext(); Q:CraftNext()
+      Q:CraftNext()
       W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 7777, operationID = 2 })
       assert.equals(2, Q:GetEntries()[1].quantity)
       W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5001, operationID = 3 })
+      assert.equals(1, Q:GetEntries()[1].quantity)
+      assert.equals("crafted", Q:CraftNext().status)
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 3 })        -- already counted
+      assert.equals(1, Q:GetEntries()[1].quantity)
       W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 4 })
       assert.equals(0, #Q:GetEntries())
       W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 5 })
       assert.equals(0, #Q:GetEntries()); assert.is_number(id)
     end)
+    it("crafts a stocked entry of this character behind another character's entry", function()
+      world.haveAll("Main-Realm")
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Alt-Realm" })
+      local main = Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      local r = Q:CraftNext()
+      assert.same({ "crafted", main }, { r.status, r.entryID }); assert.equals(1, #world.crafts)
+    end)
+    it("crafts a later entry when an earlier one of this character misses reagents", function()
+      world.fakeEvaluate(9002, { allocation = {}, reagentCost = 0, flags = {} })
+      local schematic = {}
+      for k, v in pairs(world.schematics[9001]) do schematic[k] = v end
+      schematic.recipeID = 9002; world.schematics[9002] = schematic
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      local free = Q:Add({ recipeID = 9002, quantity = 1, charKey = "Main-Realm" })
+      local r = Q:CraftNext()
+      assert.same({ "crafted", free }, { r.status, r.entryID }); assert.equals(9002, world.crafts[1][1])
+    end)
+  end)
+
+  describe("pending craft", function()
+    local id
+    before_each(function()
+      world.openProfession(2906); world.haveAll("Main-Realm")
+      id = Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      assert.equals("crafted", Q:CraftNext().status)
+    end)
+    it("answers busy to a second click while the craft is pending", function()
+      local r = Q:CraftNext()
+      assert.same({ "busy", id }, { r.status, r.entryID }); assert.equals(1, #world.crafts)
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 1 })
+      assert.equals("crafted", Q:CraftNext().status); assert.equals(2, #world.crafts)
+    end)
+    it("is cleared by an interrupted or failed cast of the player", function()
+      W.fire("UNIT_SPELLCAST_INTERRUPTED", "target", "Cast-1", 9001)
+      W.fire("UNIT_SPELLCAST_INTERRUPTED", "player", "Cast-1", 12345)
+      assert.equals("busy", Q:CraftNext().status)
+      W.fire("UNIT_SPELLCAST_INTERRUPTED", "player", "Cast-1", 9001)
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 1 })     -- nothing pending any more
+      assert.equals(2, Q:GetEntries()[1].quantity)
+      assert.equals("crafted", Q:CraftNext().status)
+      W.fire("UNIT_SPELLCAST_FAILED", "player", "Cast-2", 9001)
+      assert.equals("crafted", Q:CraftNext().status); assert.equals(3, #world.crafts)
+    end)
+    it("is forgotten after 30 seconds", function()
+      W.advance(29); assert.equals("busy", Q:CraftNext().status)
+      W.advance(2); assert.equals("crafted", Q:CraftNext().status)
+    end)
+    it("is dropped when its entry is removed, so it cannot take the next entry's result", function()
+      Q:Remove(id)
+      local b = Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      local r = Q:CraftNext()
+      assert.same({ "crafted", b }, { r.status, r.entryID })
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, operationID = 1 })
+      assert.equals(1, Q:GetEntries()[1].quantity)
+    end)
+    it("ignores a succeeded cast of a recipe that makes an item", function()
+      W.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", 9001)
+      assert.equals(2, Q:GetEntries()[1].quantity); assert.equals("busy", Q:CraftNext().status)
+    end)
+  end)
+
+  describe("recipe without an output item", function()
+    it("counts the player's succeeded cast of the recipe as the finished craft", function()
+      world.openProfession(2906); world.haveAll("Main-Realm")
+      world.schematics[9001].outputItemIDs = {}
+      local id = Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      Q:CraftNext()
+      W.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", 777)
+      W.fire("UNIT_SPELLCAST_SUCCEEDED", "party1", "Cast-1", 9001)
+      assert.equals(2, Q:GetEntries()[1].quantity)
+      W.fire("UNIT_SPELLCAST_SUCCEEDED", "player", "Cast-1", 9001)
+      assert.same({ id, 1 }, { Q:GetEntries()[1].id, Q:GetEntries()[1].quantity })
+      assert.equals("crafted", Q:CraftNext().status)
+    end)
+  end)
+
+  describe("Craft Next results", function()
+    before_each(function() world.openProfession(2906) end)
     it("does not decrement restock entries", function()
       world.fakeEvaluate(9001, function(charKey)
         return { allocation = {}, reagentCost = 0, expectedYield = 1, flags = {}, profit = charKey == "Main-Realm" and 9 or 1 }
@@ -251,30 +334,59 @@ describe("Queue craft actions", function()
 end)
 
 -- Structural rule (global constraints): C_TradeSkillUI.CraftRecipe is called only inside
--- Queue:CraftNext, and Queue:CraftNext is called only from OnClick handlers.
+-- Queue:CraftNext, and Queue:CraftNext is referenced only from OnClick handlers (a call, or the
+-- function passed on, as in pcall(Queue.CraftNext, Q) or Wrap(name, Queue.CraftNext)).
 describe("click-only crafting", function()
+  local DIRS = "Core Data Math Modules UI"
+
   local function lua_files()
     local out = {}
-    local p = io.popen("find Modules UI -name '*.lua' | sort")
+    local p = io.popen("find " .. DIRS .. " -name '*.lua' | sort")
     for line in p:lines() do out[#out + 1] = line end
     p:close()
     return out
   end
-  local function code_lines(path)
-    local out, n = {}, 0
-    for line in io.lines(path) do
-      n = n + 1
-      out[n] = (line:gsub("%-%-.*$", ""))
+
+  -- Source with --[[ ]] / --[==[ ]==] block comments and -- line comments blanked (newlines kept).
+  local function strip_comments(text)
+    local out, i, n = {}, 1, #text
+    while i <= n do
+      local s = text:find("--", i, true)
+      if not s then out[#out + 1] = text:sub(i); break end
+      out[#out + 1] = text:sub(i, s - 1)
+      local eqs = text:match("^%[(=*)%[", s + 2)
+      if eqs then
+        local close = "]" .. eqs .. "]"
+        local e = text:find(close, s + 4 + #eqs, true)
+        local stop = e and (e + #close - 1) or n
+        out[#out + 1] = (text:sub(s, stop):gsub("[^\n]", ""))
+        i = stop + 1
+      else
+        i = text:find("\n", s, true) or (n + 1)
+      end
     end
-    return out
+    return table.concat(out)
   end
+
+  local function code_lines(path)
+    local f = assert(io.open(path, "r"))
+    local text = strip_comments(f:read("*a"))
+    f:close()
+    local lines = {}
+    for line in (text .. "\n"):gmatch("([^\n]*)\n") do lines[#lines + 1] = line end
+    return lines
+  end
+
+  it("blanks block and line comments", function()
+    local text = strip_comments("a --[[ x\ny ]] b -- c\nd --[==[ ]] ]==] e\n")
+    assert.equals("a \n b \nd  e\n", text)
+  end)
 
   it("calls CraftRecipe only inside Queue:CraftNext", function()
     local hits = {}
     for _, path in ipairs(lua_files()) do
-      local lines = code_lines(path)
       local inside = false
-      for i, line in ipairs(lines) do
+      for i, line in ipairs(code_lines(path)) do
         if line:match("^function Queue:CraftNext%(") then inside = true
         elseif line:match("^end") then inside = false end
         if line:find("CraftRecipe", 1, true) then
@@ -287,16 +399,19 @@ describe("click-only crafting", function()
     assert.equals(1, #hits)
   end)
 
-  it("calls Queue:CraftNext only from OnClick handlers", function()
+  it("references Queue:CraftNext only from OnClick handlers", function()
     for _, path in ipairs(lua_files()) do
       local lines = code_lines(path)
       for i, line in ipairs(lines) do
-        if line:find("CraftNext(", 1, true) and not line:match("function Queue:CraftNext%(") then
-          -- The innermost function that encloses the call must be an OnClick handler.
+        if line:find("CraftNext", 1, true) and not line:match("^function Queue:CraftNext%(") then
+          -- The line itself (SetScript("OnClick", Wrap(name, Queue.CraftNext))) or the innermost function
+          -- line at or above it (SetScript("OnClick", function() ... end)) must name OnClick.
           local j = i
-          while j > 0 and not lines[j]:find("function", 1, true) do j = j - 1 end
+          if not line:find("OnClick", 1, true) then
+            while j > 0 and not lines[j]:find("function", 1, true) do j = j - 1 end
+          end
           assert.is_truthy(j > 0 and lines[j]:find("OnClick", 1, true),
-            path .. ":" .. i .. " calls CraftNext outside an OnClick handler")
+            path .. ":" .. i .. " references CraftNext outside an OnClick handler")
         end
       end
     end

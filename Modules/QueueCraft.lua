@@ -22,10 +22,15 @@ local Queue = ns.FS:GetModule("Queue")
 local CALLER_ID = "FabricationStation"
 local LIST_NAME = "FabricationStation"
 local MAX_SEEN_OPERATIONS = 100
+local PENDING_TIMEOUT = 30   -- seconds a started craft may take before it is forgotten
+local PENDING_KEY = "QueueCraft:pending"
 
--- Crafts Craft Next started that have not produced a result yet, oldest first:
--- { entryID, outputs = { [itemID] = true } }. Session only.
-local pending = {}
+-- The one craft Craft Next started that has not finished yet, or nil. Session only:
+-- { entryID, recipeID, charKey, skillLineID, isRestock, outputs = { [itemID] = true }, hasOutputs }.
+-- While it is set Craft Next answers "busy". It is cleared by its craft result (or, for a recipe that
+-- makes no item, its UNIT_SPELLCAST_SUCCEEDED), by an interrupted or failed cast, after
+-- PENDING_TIMEOUT seconds, and when its entry no longer exists.
+local pending
 -- operationIDs already counted (a multicraft sends several results for one operation).
 local seenOperations, seenCount = {}, 0
 
@@ -156,19 +161,53 @@ local function one_craft(entry)
 end
 
 local function outputs_of(schematic)
-  local set = {}
-  for _, itemID in pairs(schematic and schematic.outputItemIDs or {}) do set[itemID] = true end
-  return set
+  local set, any = {}, false
+  for _, itemID in pairs(schematic and schematic.outputItemIDs or {}) do set[itemID] = true; any = true end
+  return set, any
+end
+
+local function entry_exists(id)
+  for _, e in ipairs(Queue:GetEntries()) do
+    if e.id == id then return e end
+  end
+  return nil
+end
+
+local function clear_pending()
+  pending = nil
+  ns.FS:CancelDebounce(PENDING_KEY)
+end
+
+local function start_pending(e, schematic, skillLineID)
+  local outputs, hasOutputs = outputs_of(schematic)
+  pending = { entryID = e.id, recipeID = e.recipeID, charKey = e.charKey, skillLineID = skillLineID,
+    isRestock = e.isRestock and true or false, outputs = outputs, hasOutputs = hasOutputs }
+  ns.FS:Debounce(PENDING_KEY, PENDING_TIMEOUT, ns.FS:Wrap("QueueCraft:PendingTimeout", clear_pending))
+end
+
+-- The pending craft finished: its entry (a real one that still exists) loses one craft.
+-- Restock entries are not decremented; they recompute from item counts.
+local function complete_pending()
+  local p = pending
+  clear_pending()
+  if not p or p.isRestock then return end
+  local e = entry_exists(p.entryID)
+  if e then Queue:SetQuantity(p.entryID, e.quantity - 1) end
 end
 
 -- Crafts one of the first queue entry that can be crafted now: not on cooldown, on the current
 -- character, its profession window open, nothing missing for one craft. Returns a CraftNextResult:
--- { status = "crafted"|"open"|"missing"|"cooldown"|"empty", entryID?, charKey?, skillLineID?,
--- missing?, readyAt? }. With nothing craftable it reports the first blocker in queue order ("open"
--- for another character or a closed/other profession window, "missing"), "cooldown" with the
--- earliest readyAt when every entry waits, "empty" without entries.
+-- { status = "crafted"|"busy"|"open"|"missing"|"cooldown"|"empty", entryID?, charKey?, skillLineID?,
+-- missing?, readyAt? }. "busy" while the craft it started last has not finished (see `pending`).
+-- With nothing craftable it reports the first blocker in queue order ("open" for another character
+-- or a closed/other profession window, "missing"), "cooldown" with the earliest readyAt when every
+-- entry waits, "empty" without entries.
 -- A protected action: call it only from an OnClick handler.
 function Queue:CraftNext()
+  if pending and not entry_exists(pending.entryID) then clear_pending() end
+  if pending then
+    return { status = "busy", entryID = pending.entryID, charKey = pending.charKey, skillLineID = pending.skillLineID }
+  end
   local entries = self:GetEntries()
   if #entries == 0 then return { status = "empty" } end
   local me = ns.FS:CharKey()
@@ -181,19 +220,21 @@ function Queue:CraftNext()
       if not waiting or readyAt < waiting.readyAt then
         waiting = { status = "cooldown", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID, readyAt = readyAt }
       end
-    elseif not blocker then
+    else
+      local blocked
       if e.charKey ~= me or not scanner():IsProfessionOpen(profession_of(e.recipeID, schematic)) then
-        blocker = { status = "open", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID }
+        blocked = { status = "open", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID }
       else
         local result, missing = one_craft(e)
         if result and next(missing) == nil then
           C_TradeSkillUI.CraftRecipe(e.recipeID, 1, scanner():ToCraftingReagentInfo(e.recipeID, result.allocation),
             nil, e.orderID, e.useConcentration and true or false)
-          if not e.isRestock then pending[#pending + 1] = { entryID = e.id, outputs = outputs_of(schematic) } end
+          start_pending(e, schematic, skillLineID)
           return { status = "crafted", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID }
         end
-        blocker = { status = "missing", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID, missing = missing }
+        blocked = { status = "missing", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID, missing = missing }
       end
+      blocker = blocker or blocked   -- the first blocker in queue order; later entries may still craft
     end
   end
   return blocker or waiting or { status = "empty" }
@@ -209,27 +250,26 @@ local function remember_operation(operationID)
   seenCount = seenCount + 1
 end
 
-local function stored_quantity(id)
-  for _, e in ipairs(Queue:GetEntries()) do
-    if e.id == id then return e.quantity end
-  end
-  return nil
-end
-
--- One result of a craft: the oldest pending craft that makes this item loses one from its entry,
--- once per operationID.
+-- One result of a craft: completes the pending craft when it makes this item, once per operationID
+-- (a multicraft sends several results for one operation).
 local function on_crafted(_, resultData)
-  if type(resultData) ~= "table" then return end
+  if not pending or type(resultData) ~= "table" then return end
   local operationID = resultData.operationID
   if operationID ~= nil and seenOperations[operationID] then return end
-  for i, p in ipairs(pending) do
-    if p.outputs[resultData.itemID] then
-      table.remove(pending, i)
-      if operationID ~= nil then remember_operation(operationID) end
-      local quantity = stored_quantity(p.entryID)
-      if quantity then Queue:SetQuantity(p.entryID, quantity - 1) end
-      return
-    end
+  if not pending.outputs[resultData.itemID] then return end
+  if operationID ~= nil then remember_operation(operationID) end
+  complete_pending()
+end
+
+-- The player's casts: an interrupted or failed cast of the pending recipe (or of an unnamed spell)
+-- forgets the pending craft; a succeeded cast completes it for a recipe that makes no item (an
+-- enchant, say), which sends no craft result. Recipe IDs are the craft spells' IDs.
+local function on_spellcast(event, unit, _, spellID)
+  if not pending or unit ~= "player" then return end
+  if event == "UNIT_SPELLCAST_SUCCEEDED" then
+    if not pending.hasOutputs and spellID == pending.recipeID then complete_pending() end
+  elseif spellID == nil or spellID == pending.recipeID then
+    clear_pending()
   end
 end
 
@@ -239,9 +279,13 @@ end
 
 function QueueCraft:OnEnable()
   self:RegisterEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", ns.FS:Wrap("QueueCraft:CraftResult", on_crafted))
+  local spellcast = ns.FS:Wrap("QueueCraft:Spellcast", on_spellcast)
+  self:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED", spellcast)
+  self:RegisterEvent("UNIT_SPELLCAST_FAILED", spellcast)
+  self:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED", spellcast)
 end
 
 function QueueCraft:OnDisable()
   self:UnregisterAllEvents()
-  pending = {}
+  clear_pending()
 end
