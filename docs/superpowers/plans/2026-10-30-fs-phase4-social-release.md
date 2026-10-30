@@ -8,7 +8,7 @@
 
 **Tech Stack:** WoW retail Lua 5.1, Ace3 (AceAddon, AceEvent, AceComm-3.0 with bundled ChatThrottleLib, AceLocale-3.0, AceConfig), `C_EncodingUtil`, `C_ChatInfo`, `C_RestrictedActions`, `C_GuildInfo`, busted + luacheck, GitHub Actions, BigWigsMods/packager@v2.
 
-**Spec:** `docs/superpowers/specs/2026-10-30-fabricationstation-design.md` (§3 design rules, §4.1 Guild/ChatScan/Onboarding row, §4.4 last bullet, §9, §13). **Binding contract:** `docs/superpowers/plans/2026-10-30-fs-interface-contract.md`. Phases 1a–3 are assumed complete; every contract name is used exactly as written there.
+**Spec:** `docs/superpowers/specs/2026-10-30-fabricationstation-design.md` (§3 design rules, §4.1 Guild/ChatScan/Onboarding row, §4.4 last bullet, §9, §13). **Binding contract:** `docs/superpowers/plans/2026-10-30-fs-interface-contract.md`. Phases 1a–3 are assumed complete; every contract name is used exactly as written there. Earlier-phase additions this plan relies on are named where consumed and come from `2026-10-30-fs-phase1a-foundation.md` (**[1a addition]**s), `2026-10-30-fs-phase1b-crafting.md`, `2026-10-30-fs-phase2-orders-customers-ledger.md` and `2026-10-30-fs-phase3-alts-planner.md`.
 
 ## Global Constraints
 
@@ -26,6 +26,8 @@
 - Packaging: `BigWigsMods/packager@v2` with `actions/checkout@v7` and `fetch-depth: 0`, `permissions: contents: write`. Env: `CF_API_TOKEN`, `WOWI_API_TOKEN`, `WAGO_API_TOKEN`, `GH_API_TOKEN` (`CF_API_KEY`/`GITHUB_OAUTH` are deprecated aliases). A tag containing `alpha`/`beta` is published as that release type, any other tag as a release. CLI `-p <curse-id> -w <wowi-id> -a <wago-id>`.
 - License: MIT. CraftSim is MIT, "Copyright (c) 2023 Florian Schneider", and is credited wherever formulas are derived from it.
 - Files begin with `local ADDON_NAME, ns = ...`. Tests use busted (`busted` from repo root), lint uses `luacheck .`, commits are conventional.
+- Reuse 1a, do not duplicate it: `/fs` subcommands register with 1a's `ns.FS:RegisterSlash(name, fn(rest), help)` (dispatched by `ns.FS:HandleSlash`, which also prints `/fs help`); module toggles use 1a's `ns.FS:SetModuleEnabled(name, enabled)` and `db.global.settings.modules`; message names live in 1a's `ns.Msg` (`Core/Bus.lua`); options groups use `ns.FS:RegisterOptions(key, group)` under 1a's AceConfig app `"FabricationStation"`; formatting uses `ns.UI.FormatMoney` / `ns.UI.FormatAge`; tab ids are lowercase. Specs build on 1a's `install_wow_stubs` handle `W` (`W.now`, `W.advance`, `W.fire`, `W.messages`, `W.printed`, `W.boot`), `load_addon` and `load_files`.
+- TOC placement (1a convention): `Locales\Locales.xml` right after `embeds.xml`; `Modules\Social\*.lua` and `Modules\Onboarding.lua` after the last phase 1b–3 `Modules\` entry; `UI\Tabs\Guild.lua` between `UI\MainWindow.lua` and `UI\Tabs\Settings.lua`; `UI\ChatToast.lua` and `UI\OnboardingWizard.lua` after the last phase 1b–3 `UI\` entry. 1a's TOC test fails on a listed file that does not exist, so each task adds only the files it creates.
 
 ## Review Focus
 
@@ -69,16 +71,21 @@ Five ways real use is most likely to break this, most likely first. Each line ha
 | `UI/ChatToast.lua` | `ns.UI.ChatToast`: request toasts |
 | `Modules/Onboarding.lua`, `UI/OnboardingWizard.lua` | First-run wizard logic and frame |
 | `tools/check_locale.lua`, `tools/check_release.lua` | Locale key/literal checker, release gate |
-| `.pkgmeta`, `FabricationStation.toc`, `.github/workflows/release.yml`, `.github/ISSUE_TEMPLATE/*`, `README.md`, `LICENSE`, `CHANGELOG.md`, `docs/RELEASE_CHECKLIST.md` | Release |
+| `.github/workflows/release.yml`, `.github/ISSUE_TEMPLATE/*`, `README.md`, `LICENSE`, `CHANGELOG.md`, `docs/RELEASE_CHECKLIST.md` | Release (new) |
 | `tests/helpers/phase4_stubs.lua` | Phase-4 fakes on top of 1a's `install_wow_stubs` |
+
+Earlier-phase files this plan modifies (never recreates): 1a's `FabricationStation.toc`, `embeds.xml`, `.pkgmeta`, `.luacheckrc`, `.github/workflows/ci.yml`, `Core/Core.lua`, `Core/Bus.lua`, `tests/helpers/init.lua` (and `tests/helpers/wow_stubs.lua` only if its fakes lack a hook named in Task 1); 1b's `UI/ProfessionPanel.lua` (Task 1) and `UI/Tooltips.lua` (Task 8); phase 1–3 UI/module files for string wrapping only (Task 13).
 
 ## Contract additions (owned by this plan)
 
-- Core (thin additions, Task 1): `ns.FS:RegisterSubcommand(name, handler(args), help)`, `ns.FS:DispatchSubcommand(input) -> handled:boolean`, `ns.FS:SetModuleEnabled(name, enabled)`, `ns.FS:IsModuleEnabled(name) -> boolean`.
-- ProfessionPanel (Task 1): `ProfessionPanel:RegisterLineProvider(id, fn(recipeID, charKey) -> { {left, right}, ... })`, `ProfessionPanel:CollectLines(recipeID, charKey) -> { {left, right} }`, `ProfessionPanel:RefreshLines()`.
+- Core (Task 1): no new slash registry. `/fs guild` and `/fs setup` use 1a's `ns.FS:RegisterSlash` / `HandleSlash`; toggles use 1a's `ns.FS:SetModuleEnabled`. The only Core additions are `ns.FS:IsModuleEnabled(name) -> boolean` (1a has no getter) and an identity fallback for `ns.L`.
+- `ns.Msg` (1a's `Core/Bus.lua`, Task 1) gains `COMM_GATE_CHANGED`, `GUILD_CHANGED`, `CHATSCAN_MATCH`.
+- ProfessionPanel (Task 1, added to 1b's `UI/ProfessionPanel.lua`, which has no line providers): `ProfessionPanel:RegisterLineProvider(id, fn(recipeID, charKey) -> { {left, right}, ... })`, `ProfessionPanel:CollectLines(recipeID, charKey) -> { {left, right} }`, `ProfessionPanel:RefreshLines()`. Accessor everywhere: `ns.FS:GetModule("ProfessionPanel")` (1b's `ns.UI.ProfessionPanel` is only the pure `BuildModel` table).
+- Tooltips (Task 8, added to 1b's `UI/Tooltips.lua`): `Tooltips:InvalidateCache()`; 1b caches lines per itemID until `FS_RECIPES_CHANGED` only.
 - `ns.L` (Task 2).
 - Bus messages: `FS_COMM_GATE_CHANGED(locked:boolean, reason:string|nil)` (Gate), `FS_GUILD_CHANGED(guildKey)` (Guild), `FS_CHATSCAN_MATCH(match)` (ChatScan).
-- Tab: `MainWindow:RegisterTab("guild", { order = 90, phase = 4, ... })`.
+- Tab: `MainWindow:RegisterTab("guild", { label, icon, order = 90, phase = 4, build, refresh })` (between Planner 80 and Settings 100).
+- Options groups: `"guild"`, `"chatScan"` via `ns.FS:RegisterOptions`.
 - Modules: `Guild`, `ChatScan`, `Onboarding`; public functions are listed in each task's Interfaces block.
 - DB (lazily created; no migration needed): `db.global.settings.guild`, `db.global.settings.chatScan`, `db.global.guildDirectory[guildKey]`, `db.global.guildMyChars[charKey]`, `db.global.onboarding`.
 
@@ -99,47 +106,52 @@ Wire text is `"<PROTO>:" .. Codec.Encode(msg)`, for example `"1:oWF0..."`. `char
 ### Task 1: Extension points and phase-4 test harness
 
 **Files:**
-- Modify: `Core/Core.lua` (subcommand registry, module toggles)
-- Modify: `UI/ProfessionPanel.lua` (line providers)
+- Modify: `Core/Core.lua` (1a; add `IsModuleEnabled` and the `ns.L` fallback only — slash dispatch and `SetModuleEnabled` already exist there)
+- Modify: `Core/Bus.lua` (1a; three `ns.Msg` names)
+- Modify: `UI/ProfessionPanel.lua` (1b Task 16; line providers — 1b has none)
+- Modify: `tests/helpers/init.lua` (expose globals `boot_phase4`, `install_phase4_stubs`), `.luacheckrc` (add both to the `tests/` globals)
 - Create: `tests/helpers/phase4_stubs.lua`
 - Test: `tests/phase4/extension_points_spec.lua`
 
 **Interfaces:**
-- Consumes: 1a `/fs` slash handler, AceAddon `module:Enable()/Disable()`, 1a's module-toggle setting, 1b ProfessionPanel render path, `install_wow_stubs`, `load_files`.
+- Consumes: 1a `ns.FS:RegisterSlash/HandleSlash`, `ns.FS:SetModuleEnabled`, `db.global.settings.modules`, `ns.Msg`, AceAddon `GetModule(name, true)` / `module:IsEnabled()`, 1b module `"ProfessionPanel"` (`ns.FS:GetModule("ProfessionPanel")`) and its render path, 1a `install_wow_stubs` / `W`, `load_addon`, `load_files`, 1b `make_world`.
 - Produces:
-  - `ns.FS:RegisterSubcommand(name: string, handler: fun(args: string), help: string)`. `ns.FS:DispatchSubcommand(input: string) -> boolean` (1a's `/fs` handler calls it first and falls through when false). `/fs help` lists the registered help lines.
-  - `ns.FS:SetModuleEnabled(name: string, enabled: boolean)` persists to the same setting the Settings tab module toggles write and calls Enable/Disable. `ns.FS:IsModuleEnabled(name) -> boolean`.
-  - `ProfessionPanel:RegisterLineProvider(id, fn)`, `ProfessionPanel:CollectLines(recipeID, charKey) -> { {left, right} }` (provider order = registration order; a provider that errors is removed and its error logged through `ns.FS:SafeCall("ProfessionPanel", ...)` semantics, while the others still return), `ProfessionPanel:RefreshLines()` (re-renders the provider section for the current recipe; no-op when hidden).
-  - `boot_phase4(paths: {string}) -> ns, w, p4`: installs `install_wow_stubs({})` then `install_phase4_stubs(w)`, loads 1a's core files plus `paths`, initializes the DB the way 1a's specs do, and returns the handles.
-  - `install_phase4_stubs(w) -> p4` with: `p4.setNow(t)` / `p4.advance(sec)` (one clock for `GetServerTime` and a fake `C_Timer.After/NewTicker` that runs due callbacks); `p4.secret(s)` (a sentinel table: `issecretvalue` returns true for it, and any string op on it raises); `p4.restriction = { chatActive = false, lockdown = false, realm = false }`; `p4.guild = { key = {"Guild","Realm"}|nil, members = {...}, exists = {[name]=bool}, postQuery = {skillLineID, recipeID, list} }`; `p4.comm = { sent = {}, embed(target) }` (fake AceComm library registered in LibStub as `"AceComm-3.0"`); fake `"AceLocale-3.0"` with silent semantics; `Enum` tables with the verified values from Global Constraints; reversible `C_EncodingUtil` fake (SerializeCBOR stores the value and returns a token; Compress/Base64 add and strip markers; Decode of an unknown token raises); `p4.encodeRaw(value)` (a wire string for any value through the fake chain, for decode-type tests); `ChatFrameUtil.SendTell/SendTellWithMessage` recorders in `p4.tells`; `SendChatMessage` and `C_ChatInfo.SendChatMessage` that `error("auto-send forbidden")`; `p4.messages(name) -> { {args...} }` (records `ns.FS:SendMessage` calls per message name); `p4.addons = { [name] = { exists, loaded } }` behind `C_AddOns.DoesAddOnExist/IsAddOnLoaded`; `p4.ignored = { [name]=true }` behind `C_FriendList.IsIgnored`; `p4.inCombat` behind `InCombatLockdown`; `p4.guild.lastQuery` / `p4.guild.queryCount` recorded by `C_GuildInfo.QueryGuildMembersForRecipe`; `C_Spell.GetSpellName`, `IsInInstance`, `GetNormalizedRealmName` (returns `"Realm"`).
+  - Slash: nothing new. Phase-4 commands call `ns.FS:RegisterSlash("guild", fn(rest), help)` (Task 9; `rest == "selftest"` handled inside) and `ns.FS:RegisterSlash("setup", fn, help)` (Task 12). 1a's `HandleSlash` prints `/fs help`.
+  - `ns.FS:IsModuleEnabled(name) -> boolean`: `local m = self:GetModule(name, true); return m ~= nil and m:IsEnabled()`. Toggling stays 1a's `ns.FS:SetModuleEnabled(name, enabled)` (stores `settings.modules[name]`, enables/disables now).
+  - `ns.L` fallback at the top of `Core/Core.lua`: `ns.L = ns.L or setmetatable({}, { __index = function(_, k) return k end })`. Specs load the addon through `load_addon` (which skips `.xml`, so never loads `Locales\Locales.xml`) or through helpers that load only `Core/*.lua` (phase 2's `P2.boot`, phase 3's `phase3_env`); after Task 13 their files read `ns.L` and get the English key back.
+  - `ns.Msg.COMM_GATE_CHANGED = "FS_COMM_GATE_CHANGED"`, `ns.Msg.GUILD_CHANGED = "FS_GUILD_CHANGED"`, `ns.Msg.CHATSCAN_MATCH = "FS_CHATSCAN_MATCH"`. Phase-4 code sends and registers through these constants.
+  - `ProfessionPanel:RegisterLineProvider(id, fn)` (same id replaces in place, as 1b's Tooltips does), `ProfessionPanel:CollectLines(recipeID, charKey) -> { {left, right} }` (provider order = registration order; a provider that errors is removed and its error logged with `ns.FS:LogError("ProfessionPanel:" .. id, err)`, while the others still return), `ProfessionPanel:RefreshLines()` (re-renders the provider section for the current recipe; no-op when hidden).
+  - `boot_phase4(paths: {string}, opts: { last: string|nil, stubs: table|nil }|nil) -> ns, W, p4`: `W = install_wow_stubs(merge(P4_GLOBALS, opts.stubs))`, where `P4_GLOBALS` sets `UnitName` → `"Me"` and `GetRealmName` / `GetNormalizedRealmName` → `"Realm"` (so `ns.FS:CharKey() == "Me-Realm"`); `p4 = install_phase4_stubs(W)`; `ns = load_addon({}, opts.last or "Core/DB.lua")`; `load_files(ns, <paths minus those the TOC already placed at or before opts.last>)` (each task adds its files to the TOC, so a later `last` already loads them and a second `NewModule` would error); `W.boot()`. Specs that need real earlier-phase modules pass `opts.last` (e.g. `"UI/MainWindow.lua"`); specs that need only a few Scanner/Recipes/Customers methods use `p4.fake_module`.
+  - `install_phase4_stubs(W) -> p4` with: the clock is 1a's (`p4.advance = W.advance`; `p4.setNow(t)` sets `W.now`; add `C_Timer.NewTicker` to the fake only if 1a's lacks it); `p4.messages(name) -> { {args...} }` filters `W.messages` by name; `p4.fake_module(ns, name, methods) -> module` (creates the module with `ns.FS:NewModule` and enables it when `GetModule(name, true)` is nil, then overwrites the given methods); `p4.secret(s)` (a sentinel table: `issecretvalue` returns true for it, and any string op on it raises); `p4.restriction = { chatActive = false, lockdown = false, realm = false }`; `p4.guild = { key = {"Guild","Realm"}|nil, members = {...}, exists = {[name]=bool}, postQuery = {skillLineID, recipeID, list} }`; `p4.comm = { sent = {}, embed(target) }` (fake AceComm library registered in 1a's fake LibStub as `"AceComm-3.0"`; 1a's fake `NewModule(name, ...)` must embed its `RegisterComm/UnregisterAllComm/SendCommMessage` when `"AceComm-3.0"` is listed — if 1a's fakes cannot register an extra library or embed an unknown mixin, add that hook to `tests/helpers/wow_stubs.lua` in this task); fake `"AceLocale-3.0"` with silent semantics (registered the same way); `Enum` tables with the verified values from Global Constraints merged into 1a's `Enum`; reversible `C_EncodingUtil` fake (SerializeCBOR stores the value and returns a token; Compress/Base64 add and strip markers; Decode of an unknown token raises); `p4.encodeRaw(value)` (a wire string for any value through the fake chain, for decode-type tests); `ChatFrameUtil.SendTell/SendTellWithMessage` recorders in `p4.tells`; `SendChatMessage` and `C_ChatInfo.SendChatMessage` that `error("auto-send forbidden")`; `p4.addons = { [name] = { exists, loaded } }` behind `C_AddOns.DoesAddOnExist/IsAddOnLoaded`; `p4.ignored = { [name]=true }` behind `C_FriendList.IsIgnored`; `p4.inCombat` behind `InCombatLockdown`; `p4.guild.lastQuery` / `p4.guild.queryCount` recorded by `C_GuildInfo.QueryGuildMembersForRecipe`; `C_Spell.GetSpellName`, `IsInInstance`, `PlaySound`, `SOUNDKIT.TELL_MESSAGE`.
 
-- [ ] **Step 1: Inventory what earlier phases already provide**
+- [ ] **Step 1: Confirm what earlier phases already provide**
 
-Run: `grep -rn "RegisterChatCommand\|Subcommand\|EnableModule\|SetModuleEnabled\|RegisterLineProvider\|modules\[" Core UI Modules tests/helpers`
-If an equivalent already exists under another name, implement the contract name above as a one-line wrapper around it. Record 1a's DB-boot call for `boot_phase4`.
+Run: `grep -rn "RegisterSlash\|HandleSlash\|SetModuleEnabled\|IsModuleEnabled\|RegisterLineProvider\|ns.Msg\|ns.L\b" Core UI Modules tests/helpers`
+Expected: 1a's `RegisterSlash`/`HandleSlash`/`SetModuleEnabled` and `ns.Msg`, 1b's `Tooltips:RegisterLineProvider`; no `IsModuleEnabled`, no ProfessionPanel line providers, no `ns.L`. If any of those three has been added since, use it and drop that part of Step 4. Also check whether 1a's fake LibStub/`NewModule` can take the AceComm/AceLocale fakes (see `install_phase4_stubs`).
 
 - [ ] **Step 2: Write the failing tests**
 
 ```lua
 describe("phase4 extension points", function()
-  local ns, w, p4
-  before_each(function() ns, w, p4 = boot_phase4({ "UI/ProfessionPanel.lua" }) end)
-
-  it("dispatches registered /fs subcommands", function()
-    local got
-    ns.FS:RegisterSubcommand("ping", function(args) got = args end, "ping help")
-    assert.is_true(ns.FS:DispatchSubcommand("ping a b"))
-    assert.are.equal("a b", got)
-    assert.is_false(ns.FS:DispatchSubcommand("nope"))
+  it("boots the phase-4 harness on 1a's stubs", function()
+    local ns, W, p4 = boot_phase4({})
+    assert.are.equal("Me-Realm", ns.FS:CharKey())
+    ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "G-Realm")
+    assert.are.same({ { "G-Realm" } }, p4.messages("FS_GUILD_CHANGED"))
+    p4.advance(5); assert.are.equal(W.now, GetServerTime())
+    assert.are.equal("Some text", ns.L["Some text"])          -- Core's identity fallback
   end)
 
-  it("persists module toggles", function()
+  it("reports module state set through 1a's SetModuleEnabled", function()
+    local ns = make_world({ last = "UI/ProfessionPanel.lua" })
     ns.FS:SetModuleEnabled("Recipes", false)
     assert.is_false(ns.FS:IsModuleEnabled("Recipes"))
-    assert.is_false(ns.FS:GetModule("Recipes"):IsEnabled())
+    assert.is_false(ns.FS.db.global.settings.modules.Recipes)
+    assert.is_false(ns.FS:IsModuleEnabled("NoSuchModule"))
   end)
 
   it("collects panel lines and drops a failing provider", function()
+    local ns = make_world({ last = "UI/ProfessionPanel.lua" })
     local P = ns.FS:GetModule("ProfessionPanel")
     P:RegisterLineProvider("a", function() return { { "A", "1" } } end)
     P:RegisterLineProvider("bad", function() error("boom") end)
@@ -150,14 +162,14 @@ describe("phase4 extension points", function()
 end)
 ```
 
-Use whatever accessor 1b exposes for ProfessionPanel (`ns.FS:GetModule("ProfessionPanel")` or `ns.UI.ProfessionPanel`) and keep that one accessor in every later task.
+The panel specs use 1b's `make_world` (it boots the real Recipes/ProfessionPanel stack on 1a's stubs). Every later task reaches the panel as `ns.FS:GetModule("ProfessionPanel")`.
 
 - [ ] **Step 3: Run to verify failure**
 
 Run: `busted tests/phase4/extension_points_spec.lua`
 Expected: FAIL (`boot_phase4` nil or methods missing).
 
-- [ ] **Step 4: Implement the stubs file and the three Core/ProfessionPanel additions** with the signatures above. Render provider lines in ProfessionPanel below the profit breakdown, one `left — right` row each, using the panel's existing font objects.
+- [ ] **Step 4: Implement the stubs file, `IsModuleEnabled`, the `ns.L` fallback, the `ns.Msg` names and the ProfessionPanel line providers** with the signatures above. Render provider lines in 1b's panel below the breakdown rows and above the Task-19 self-check status line, one `left — right` row each, using the panel's existing font objects.
 
 - [ ] **Step 5: Run tests and lint**
 
@@ -167,8 +179,8 @@ Expected: all PASS, 0 warnings.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Core/Core.lua UI/ProfessionPanel.lua tests/helpers/phase4_stubs.lua tests/phase4/extension_points_spec.lua
-git commit -m "feat: add subcommand, module-toggle and panel line-provider extension points"
+git add Core/Core.lua Core/Bus.lua UI/ProfessionPanel.lua tests/helpers .luacheckrc tests/phase4/extension_points_spec.lua
+git commit -m "feat: add module-state getter, locale fallback and panel line-provider extension points"
 ```
 
 ---
@@ -178,11 +190,11 @@ git commit -m "feat: add subcommand, module-toggle and panel line-provider exten
 **Files:**
 - Create: `Locales/Locales.xml`, `Locales/enUS.lua`, `Locales/deDE.lua`, `esES`, `esMX`, `frFR`, `itIT`, `koKR`, `ptBR`, `ruRU`, `zhCN`, `zhTW` (`.lua`), `Locales/Locales.lua`
 - Create: `tools/check_locale.lua`
-- Modify: `FabricationStation.toc` (load `Locales\Locales.xml` after `embeds.xml`, before `Core\Core.lua`), `embeds.xml` + `.pkgmeta` (add `Libs/AceLocale-3.0` if 1a did not)
+- Modify: `FabricationStation.toc` (load `Locales\Locales.xml` right after `embeds.xml`, before 1a's first Core file `Core\Util.lua`), 1a's `embeds.xml` (add `Libs\AceLocale-3.0\AceLocale-3.0.xml` after `Libs\AceConsole-3.0\AceConsole-3.0.xml`) and 1a's `.pkgmeta` (add `Libs/AceLocale-3.0: https://repos.wowace.com/wow/ace3/trunk/AceLocale-3.0` to `externals`, same source as 1a's other Ace3 libs; 1a's `tools/fetch-libs.sh` then fetches it with no change)
 - Test: `tests/locale/locale_spec.lua`
 
 **Interfaces:**
-- Produces: `ns.L` (an AceLocale table; unknown keys return the key). `tools/check_locale.lua` returns a module `{ collect_keys(paths) -> set, defined_keys(enUSPath) -> set, missing_keys(codePaths, enUSPath) -> {key}, find_literals(paths, allowlistPath) -> { {file, line, text} } }` (`find_literals` is used in Task 13), and as a script `lua tools/check_locale.lua` prints missing keys and exits 1 if there are any.
+- Produces: `ns.L` (an AceLocale table; unknown keys return the key). `tools/check_locale.lua` returns a module `{ collect_keys(paths) -> set, defined_keys(enUSPath) -> set, missing_keys(codePaths, enUSPath) -> {key}, find_literals(paths, allowlistPath) -> { {file, line, text} } }` (`find_literals` and its `file:literal` / `file:*` allowlist format are specified and used in Task 13), and as a script `lua tools/check_locale.lua` prints missing keys and exits 1 if there are any.
 
 Key style: the English text is the key. `enUS.lua` holds `L["Guild crafters"] = true` lines (source of truth in the repo). `enUS.lua` registers with `NewLocale("FabricationStation", "enUS", true, true)` (default and silent). Each other locale file:
 
@@ -193,7 +205,7 @@ if not L then return end
 --@localization(locale="deDE", format="lua_additive_table", handle-unlocalized="ignore")@
 ```
 
-`Locales.lua` (loaded last in the XML): `ns.L = LibStub("AceLocale-3.0"):GetLocale("FabricationStation")`.
+`Locales.lua` (loaded last in the XML): `ns.L = LibStub("AceLocale-3.0"):GetLocale("FabricationStation")`, assigned unconditionally (Core's Task-1 fallback only fills `ns.L` when it is still nil). In game the XML loads before Core, so the real table wins. In specs, 1a's `load_addon` skips `.xml`, so only specs that load the locale files explicitly (below) see AceLocale; all others get Core's identity fallback with the same English text.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -240,7 +252,7 @@ git commit -m "feat: add AceLocale scaffolding with enUS base and packager local
 
 **Files:**
 - Create: `Modules/Social/Util.lua`, `Modules/Social/Gate.lua`
-- Modify: `FabricationStation.toc` (add both after the Phase 1–3 modules), `.luacheckrc` (read_globals: `C_ChatInfo`, `C_RestrictedActions`, `C_EncodingUtil`, `C_GuildInfo`, `GetGuildInfo`, `IsInGuild`, `GetGuildRecipeInfoPostQuery`, `GetGuildRecipeMember`, `GetNormalizedRealmName`, `Ambiguate`, `issecretvalue`, `canaccessvalue`, `ChatFrameUtil`, `C_Spell`, `C_FriendList`, `C_AddOns`, `IsInInstance`, `Enum`)
+- Modify: `FabricationStation.toc` (add both after the last phase 1b–3 `Modules\` entry, per Global Constraints), 1a's `.luacheckrc` (append to `stds.wow.read_globals` whichever of these are not already there — 1a already lists `Enum`, `GetNormalizedRealmName`, `C_Timer`, `CreateFrame`, `UIParent`; phase 2 may have added `PlaySound`/`SOUNDKIT`: `C_ChatInfo`, `C_RestrictedActions`, `C_EncodingUtil`, `C_GuildInfo`, `GetGuildInfo`, `IsInGuild`, `GetGuildRecipeInfoPostQuery`, `GetGuildRecipeMember`, `Ambiguate`, `issecretvalue`, `canaccessvalue`, `ChatFrameUtil`, `C_Spell`, `C_FriendList`, `C_AddOns`, `IsInInstance`, `InCombatLockdown`, `PlaySound`, `SOUNDKIT`)
 - Test: `tests/social/util_spec.lua`, `tests/social/gate_spec.lua`
 
 **Interfaces:**
@@ -254,13 +266,14 @@ git commit -m "feat: add AceLocale scaffolding with enUS base and packager local
   - `Gate:IsLocked() -> locked: boolean, reason: "restriction"|"lockdown"|"realm"|"sendFailed"|nil`. Checks, in order: the event state for type Chat is not Inactive; `IsAddOnRestrictionActive(Chat)`; `C_ChatInfo.InChatMessagingLockdown()`; (`Gate.USE_REALM_FLAG` and `AreOutgoingAddonChatMessagesRestricted()`); a send failure within `Gate.SEND_FAILED_BACKOFF = 60` s. Any missing API is treated as not restricting.
   - `Gate:OnRestrictionStateChanged(restrictionType: number, state: number)`: only type `Enum.AddOnRestrictionType.Chat` matters.
   - `Gate:ReportSendResult(result: number)`: only `AddOnMessageLockdown` (11) locks.
-  - `Gate:Recheck()`: recomputes and sends `FS_COMM_GATE_CHANGED(locked, reason)` via `ns.FS:SendMessage` on transitions only. Called by the two handlers above and by Comm before a flush.
+  - `Gate:Recheck()`: recomputes and sends `FS_COMM_GATE_CHANGED(locked, reason)` via `ns.FS:SendMessage(ns.Msg.COMM_GATE_CHANGED, ...)` on transitions only. Called by the two handlers above and by Comm before a flush.
 
 - [ ] **Step 1: Verify the realm flag in-game.** In a capital city on a normal realm, run `/run print(C_ChatInfo.AreOutgoingAddonChatMessagesRestricted(), C_ChatInfo.InChatMessagingLockdown())`. If the first value is `true` there while addon messages still arrive, set `Gate.USE_REALM_FLAG = false`. Otherwise set it to `true`. Note the result in the commit message. If no game client is available, set `false` and leave the Review Focus item open.
 
 - [ ] **Step 2: Write the failing tests**
 
 ```lua
+-- both specs: before_each(function() ns, W, p4 = boot_phase4({ "Modules/Social/Util.lua", "Modules/Social/Gate.lua" }) end)
 -- util_spec.lua
 it("hashes with djb2 mod 2^32", function()
   assert.are.equal("00001505", Util.Hash32(""))
@@ -422,7 +435,7 @@ git commit -m "feat: add C_EncodingUtil codec and versioned sync protocol"
 
 **Files:**
 - Create: `Modules/Social/Comm.lua`
-- Modify: `FabricationStation.toc`; `embeds.xml` + `.pkgmeta` (add `Libs/AceComm-3.0`, which contains ChatThrottleLib, if absent)
+- Modify: `FabricationStation.toc`; 1a's `embeds.xml` (add `Libs\AceComm-3.0\AceComm-3.0.xml` after the AceLocale line) and 1a's `.pkgmeta` (add `Libs/AceComm-3.0: https://repos.wowace.com/wow/ace3/trunk/AceComm-3.0` to `externals`; that folder ships ChatThrottleLib). 1a has neither.
 - Test: `tests/social/comm_spec.lua`
 
 **Interfaces:**
@@ -517,7 +530,7 @@ git commit -m "feat: add gated AceComm transport with lockdown requeue and inbou
 - Test: `tests/social/guild_sync_spec.lua`
 
 **Interfaces:**
-- Consumes: `Scanner:GetCharacters()`, `Scanner:GetCharacter(charKey)` (`professions[skillLineID] = { skill, maxSkill, recipes = {[recipeID]=true} }`), `Recipes:Evaluate(recipeID, charKey, opts).expectedQuality`, `ns.FS:CharKey()`, `ns.FS:Now()`, `ns.FS:Debounce(key, seconds, fn)`, `ns.FS:SafeCall`, the `FS_RECIPES_CHANGED` / `FS_DATA_CHANGED` / `FS_COMM_GATE_CHANGED` messages, `Comm`, `Protocol`, `Codec.IsAvailable()`, `Util.*`, `Gate:Init()`.
+- Consumes: `Scanner:GetCharacters()`, `Scanner:GetCharacter(charKey)` (1a ProfessionRecord: `professions[childSkillLineID] = { name, skill, maxSkill, recipes = {[recipeID]=true}, ... }`), `Recipes:Evaluate(recipeID, charKey, opts).expectedQuality`, `ns.FS:CharKey()`, `ns.FS:Now()`, `ns.FS:Debounce(key, seconds, fn)`, `ns.FS:SafeCall`, `ns.FS:Wrap` (1a), the `FS_RECIPES_CHANGED` / `FS_DATA_CHANGED` / `FS_COMM_GATE_CHANGED` messages, `Comm`, `Protocol`, `Codec.IsAvailable()`, `Util.*`, `Gate:Init()`.
 - Settings defaults (`db.global.settings.guild`, applied in `OnInitialize` via `Util.ApplyDefaults`): `{ share = true, shareLevel = "quality", shareAlts = "guild", tooltipLine = true, panelLine = true, useNative = true }`. `shareLevel ∈ {"quality","recipes"}`, `shareAlts ∈ {"current","guild","all"}`.
 - Storage: `db.global.guildDirectory[guildKey] = { members = { [nameRealm] = { addonVersion, proto, lastSeen, chars = {[charKey]=hash}, lastHelloSent } }, profiles = { [charKey] = Profile + { h, owner, rt } }, native = {} }`; `db.global.guildMyChars[charKey] = guildKey|nil`.
 - Constants: `Guild.REQUEST_WINDOW = 3`, `Guild.HELLO_REPLY_COOLDOWN = 600`, `Guild.REREQUEST_COOLDOWN = 120`, `Guild.RESEND_COOLDOWN = 60`, `Guild.HELLO_DEBOUNCE = 120`, `Guild.PROFILE_MAX_AGE = 30 * 86400`, login HELLO jitter 5–20 s, reply jitter 1–10 s.
@@ -539,11 +552,11 @@ Behavior to implement (the tests pin each):
 - **OnRequest**: ignore when `share == false`. For each requested charKey in `GetSharedCharKeys()`, record the requester in `pending[charKey]` and schedule `FlushRequests` after `REQUEST_WINDOW` if not already scheduled.
 - **FlushRequests**: for each pending charKey, ≥ 2 requesters → one `D` to GUILD; 1 requester → WHISPER. Skip a target (requester name or `"GUILD"`) that got this char within `RESEND_COOLDOWN`. Prio `"BULK"`.
 - **OnData**: accept only when `members[sender].chars[msg.c] == msg.h` and `Protocol.HashProfile(msg) == msg.h`. Store `profile + { owner = sender, rt = now }`, replacing the previous entry (so moving from `lv="q"` to `lv="r"` drops qualities).
-- **Own changes**: on `FS_RECIPES_CHANGED` or `FS_DATA_CHANGED(_, "recipes"|"professions")` → `Debounce("guildHello", HELLO_DEBOUNCE, ...)` → refresh profiles, then `SendHello()` if any hash changed. On a privacy setting change → refresh and `SendHello()` immediately (a sharing-off HELLO carries `c = {}`).
+- **Own changes**: on `FS_RECIPES_CHANGED` or `FS_DATA_CHANGED(_, "recipes"|"professions")` (registered via `ns.Msg.RECIPES_CHANGED` / `ns.Msg.DATA_CHANGED`) → `Debounce("guildHello", HELLO_DEBOUNCE, ns.FS:Wrap("Guild", ...))` (1a's `Debounce` does not isolate errors) → refresh profiles, then `SendHello()` if any hash changed. On a privacy setting change → refresh and `SendHello()` immediately (a sharing-off HELLO carries `c = {}`).
 - **Login**: `PLAYER_ENTERING_WORLD` → `Gate:Init()`, `C_GuildInfo.GuildRoster()`, `RefreshOwnProfiles()`, and once a guild key is known, `SendHello()` after 5–20 s jitter. Not in a guild, or `Codec.IsAvailable()` false → no comm at all.
 - **OnVersion**: record `proto` on the member. If `proto > Protocol.VERSION`, print `ns.L["A guildmate uses a newer FabricationStation sync protocol. Update to see their data."]` once per session.
 
-- [ ] **Step 1: Write the failing tests** (`tests/social/guild_sync_spec.lua`, booted with all Social files plus a fake Scanner/Recipes from 1a/1b stubs, guild `"G-Realm"`):
+- [ ] **Step 1: Write the failing tests** (`tests/social/guild_sync_spec.lua`, booted with `boot_phase4(SOCIAL_FILES)`, guild `"G-Realm"`; `Scanner` and `Recipes` are `p4.fake_module` fakes — `Scanner:GetCharacters/GetCharacter` return the four fixture characters in 1a's `CharacterRecord` shape, `Recipes:Evaluate` is `evaluate_spy`; `settings` is `ns.FS.db.global.settings.guild`):
 
 ```lua
 it("builds quality profiles via Recipes:Evaluate and recipes-only profiles without it", function()
@@ -688,10 +701,12 @@ git commit -m "feat: add native guild recipe query fallback with passive capture
 **Files:**
 - Create: `Modules/Social/ItemIndex.lua`, `Modules/Social/GuildDirectory.lua`
 - Modify: `Modules/Social/Guild.lua` (in `OnEnable`, register providers and keep the index updated), `FabricationStation.toc`
+- Modify: `UI/Tooltips.lua` (1b Task 18): add `Tooltips:InvalidateCache()` (clears the per-itemID line cache 1b otherwise keeps until `FS_RECIPES_CHANGED`)
 - Test: `tests/social/guild_directory_spec.lua`
 
 **Interfaces:**
-- Consumes: `Scanner:GetSchematic(recipeID).outputItemIDs`, `C_TradeSkillUI.GetRecipeSchematic(recipeID, false).outputItemID`, `Scanner:GetCharacters()`, `Tooltips:RegisterLineProvider(id, fn(itemID))`, `ProfessionPanel:RegisterLineProvider`, `ProfessionPanel:RefreshLines()`, `C_GuildInfo.MemberExistsByName`, `GuildNative:Get`, `ns.L`.
+- Consumes: `Scanner:GetSchematic(recipeID).outputItemIDs`, `C_TradeSkillUI.GetRecipeSchematic(recipeID, false).outputItemID`, `Scanner:GetCharacters()`, 1b's `ns.FS:GetModule("Tooltips"):RegisterLineProvider(id, fn(itemID))` (same id replaces in place; providers run in registration order, each `pcall`ed), `ns.FS:GetModule("ProfessionPanel"):RegisterLineProvider` / `RefreshLines()` (Task 1), `ns.UI.FormatAge` (1a), `C_GuildInfo.MemberExistsByName`, `GuildNative:Get`, `ns.L`.
+- No duplicate crafters line: 1b's Tooltips already has provider `"crafters"` (`{ "Crafters", "Main, Alt" }`, the account's own characters; phase 3's `UI/AltsTooltips.lua` may re-register that id as "Crafted by"). The guild line uses its own provider id `"guildCrafters"` and label `L["Guild crafters"]`, and `GetCrafters` drops the player's own characters, so no name appears in both lines. 1b's ProfessionPanel has no crafters line, so the panel provider id `"guildCrafters"` is the only one there.
 - Produces `ns.Social.ItemIndex`:
   - `ItemIndex.New(resolve: fun(recipeID): {itemID}) -> index`, `index:Add(recipeID)` (idempotent), `index:RecipesFor(itemID) -> {recipeID}`, `index:Has(recipeID) -> boolean`.
   - `Guild.ResolveOutputs(recipeID) -> {itemID}`: every `outputItemIDs` value from `Scanner:GetSchematic`, else `{ GetRecipeSchematic(recipeID, false).outputItemID }`, else `{}`.
@@ -700,8 +715,8 @@ git commit -m "feat: add native guild recipe query fallback with passive capture
   - `Guild:GetCrafters(recipeID) -> {CrafterRow}`, where `CrafterRow = { name, owner, source = "addon"|"native", expectedQuality = int|nil, concentrationQuality = int|nil, skill = int|nil, online = bool|nil, time = number }`. Sources: current guild's profiles whose `owner` is still a guild member, plus `native[recipeID]` rows whose name is not already an addon row. The player's own characters (`Scanner:GetCharacters()`, normalized) are excluded. Quality fields are nil for `lv="r"`, native rows and `q == 0`. Sort: expectedQuality desc (nil last), then online first, then name.
   - `Guild:GetCraftersForItem(itemID) -> { { recipeID, crafters = {CrafterRow} } }` (via the index).
   - `Guild:TooltipLines(itemID) -> { {left, right} }`: at most one line, `left = L["Guild crafters"]`, `right` = up to 3 names as `L["%s (Q%d)"]` or the bare name, plus `L["+%d more"]`. Empty when the setting is off or there are no crafters. **Never** calls `GuildNative:Query`.
-  - `Guild:PanelLines(recipeID, charKey) -> { {left, right} }`: header line plus up to 5 crafters. Native rows are suffixed `L["quality unknown"]`. Addon rows carry `L["synced %s ago"]` (age from `time`, formatted with 1a's age helper if it has one, else days/hours).
-  - On `FS_GUILD_CHANGED` → `ProfessionPanel:RefreshLines()`. After each stored profile, `index:Add` for its recipes. On login, `Guild:RebuildItemIndex()` processes 200 recipeIDs per `C_Timer.After(0)` tick.
+  - `Guild:PanelLines(recipeID, charKey) -> { {left, right} }`: header line plus up to 5 crafters. Native rows are suffixed `L["quality unknown"]`. Addon rows carry `L["synced %s ago"]` (age `ns.FS:Now() - time`, formatted with 1a's `ns.UI.FormatAge`).
+  - On `FS_GUILD_CHANGED` → `Tooltips:InvalidateCache()` and `ProfessionPanel:RefreshLines()`. After each stored profile, `index:Add` for its recipes. On login, `Guild:RebuildItemIndex()` processes 200 recipeIDs per `C_Timer.After(0)` tick.
 
 - [ ] **Step 1: Verify in-game:** `/run print(C_GuildInfo.MemberExistsByName("<sameRealmMate>"), C_GuildInfo.MemberExistsByName("<sameRealmMate>-<Realm>"))` and `/run print(C_TradeSkillUI.GetRecipeSchematic(<recipeID you do not know>, false).outputItemID)` with no profession window open. If the schematic call fails for unknown recipes, keep only the Scanner path and note it in the tooltip setting's description.
 
@@ -735,15 +750,24 @@ it("renders one compact tooltip line and never queries the server", function()
   settings.tooltipLine = false; assert.are.same({}, Guild:TooltipLines(5001))
 end)
 it("marks native rows as quality unknown in panel lines", function() --[[ row for D-Realm right contains "quality unknown" ]] end)
+it("drops cached tooltip lines when the directory changes", function()
+  -- spec booted with { last = "UI/Tooltips.lua" } so the real 1b Tooltips module holds the provider
+  local T = ns.FS:GetModule("Tooltips")
+  local before = T:CollectLines(5001)
+  add_native_member(100, "E-Realm"); ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "G-Realm")
+  assert.are_not.same(before, T:CollectLines(5001))
+end)
 ```
 
+Boot this spec with `boot_phase4(SOCIAL_FILES, { last = "UI/Tooltips.lua" })` (real Scanner, Recipes, ProfessionPanel and Tooltips), then seed `Scanner:GetSchematic` / `GetCharacters` through `p4.fake_module` overrides.
+
 - [ ] **Step 3: Run to verify failure.** Run: `busted tests/social/guild_directory_spec.lua`. Expected: FAIL.
-- [ ] **Step 4: Implement** `ItemIndex.lua`, `GuildDirectory.lua` and the provider registration: `Tooltips:RegisterLineProvider("guildCrafters", function(itemID) return Guild:TooltipLines(itemID) end)` and `ProfessionPanel:RegisterLineProvider("guildCrafters", function(r, c) return Guild:PanelLines(r, c) end)`.
+- [ ] **Step 4: Implement** `ItemIndex.lua`, `GuildDirectory.lua`, `Tooltips:InvalidateCache()` in 1b's `UI/Tooltips.lua`, and the provider registration: `ns.FS:GetModule("Tooltips"):RegisterLineProvider("guildCrafters", function(itemID) return Guild:TooltipLines(itemID) end)` and `ns.FS:GetModule("ProfessionPanel"):RegisterLineProvider("guildCrafters", function(r, c) return Guild:PanelLines(r, c) end)`. Register both only when the module exists (`GetModule(name, true)`), since each can be toggled off. 1b's Tooltips adds no lines at all when its `tooltipCraftCost` setting is off; if that gate still covers every provider, the guild line is hidden with it (see Self-review notes, open decision).
 - [ ] **Step 5: Run.** Run: `busted && luacheck .`. Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Modules/Social/ItemIndex.lua Modules/Social/GuildDirectory.lua Modules/Social/Guild.lua FabricationStation.toc tests/social/guild_directory_spec.lua
+git add Modules/Social/ItemIndex.lua Modules/Social/GuildDirectory.lua Modules/Social/Guild.lua UI/Tooltips.lua FabricationStation.toc tests/social/guild_directory_spec.lua
 git commit -m "feat: add guild crafter lookup with tooltip and profession panel lines"
 ```
 
@@ -753,22 +777,26 @@ git commit -m "feat: add guild crafter lookup with tooltip and profession panel 
 
 **Files:**
 - Create: `UI/Tabs/Guild.lua`, `Modules/Social/GuildOptions.lua`
-- Modify: `FabricationStation.toc`, `Locales/enUS.lua`
+- Modify: `FabricationStation.toc` (`UI\Tabs\Guild.lua` between `UI\MainWindow.lua` and `UI\Tabs\Settings.lua`; `Modules\Social\GuildOptions.lua` with the other Social files), `Locales/enUS.lua`
 - Test: `tests/social/guild_tab_spec.lua`
 
 **Interfaces:**
-- Consumes: `MainWindow:RegisterTab(id, def)`, `ns.FS:RegisterOptions(key, group)`, `ns.FS:RegisterSubcommand`, `Guild:GetCrafters`, `Guild:GetDirectory`, `Guild:OnPrivacyChanged`, `Guild:PurgeGuild`, `GuildNative:Query`, `Codec`, `Protocol`, `Gate:IsLocked`, `C_Spell.GetSpellName`, `ChatFrameUtil.SendTell`.
+- Consumes: `MainWindow:RegisterTab(id, def)` / `RefreshTab(id)` / `GetTabs()` (1a), `ns.FS:RegisterOptions(key, group)` / `GetOptionsTable()` (1a), `ns.FS:RegisterSlash(name, fn(rest), help)` (1a), `Guild:GetCrafters`, `Guild:GetDirectory`, `Guild:OnPrivacyChanged`, `Guild:PurgeGuild`, `GuildNative:Query`, `Codec`, `Protocol`, `Gate:IsLocked`, `C_Spell.GetSpellName`, `ChatFrameUtil.SendTell`.
 - Produces:
   - `Guild:BuildTabRows(filter: { text: string|nil, skillLineID: int|nil }) -> { { recipeID, recipeName, skillLineID, crafter = CrafterRow } }`. Covers every recipe in current-guild profiles plus the native cache. Recipe names come from `C_Spell.GetSpellName(recipeID)`. `text` matches the recipe name or crafter name case-insensitively as a plain substring. Sorted by recipeName, then `GetCrafters` order.
   - `Guild:Status() -> { guildKey, addonMembers, profiles, nativeCached, gateLocked, gateReason, queue }`.
   - `Guild:SelfTest() -> { ok: boolean, wireBytes: int, chunks: int, err: string|nil }`: builds the largest own profile, `Protocol.Wire`, `Protocol.Unwire`, compares, `chunks = math.ceil(wireBytes / 254)`.
-  - Tab `"guild"`: `{ label = L["Guild"], icon = "Interface\\Icons\\INV_Misc_Tabard_01" (or any guild icon 1a's tabs pattern uses), order = 90, phase = 4, build, refresh }`. The tab shows a search box, profession dropdown and rows (recipe, crafter, Q, conc Q, source, synced age). Clicking a row calls `ChatFrameUtil.SendTell(crafter.name)`. An "Ask guild" button (enabled only when a row/recipe is selected and the gate is unlocked) calls `GuildNative:Query`. A footer shows the `Status()` summary, and `L["Sync paused (instance)"]` while locked. Refresh on `FS_GUILD_CHANGED` and `FS_COMM_GATE_CHANGED`.
+  - Tab `"guild"`, registered at file load like phases 2–3's tabs: `ns.FS:GetModule("MainWindow"):RegisterTab("guild", { label = L["Guild"], icon = "Interface\\Icons\\INV_Misc_Tabard_01", order = 90, phase = 4, build, refresh })`. The tab shows a search box, profession dropdown and rows (recipe, crafter, Q, conc Q, source, synced age). Clicking a row calls `ChatFrameUtil.SendTell(crafter.name)`. An "Ask guild" button (enabled only when a row/recipe is selected and the gate is unlocked) calls `GuildNative:Query`. A footer shows the `Status()` summary, and `L["Sync paused (instance)"]` while locked. On `FS_GUILD_CHANGED` and `FS_COMM_GATE_CHANGED` call `MainWindow:RefreshTab("guild")` (1a; no-op unless the tab is visible).
   - Options group `"guild"`: toggles `share`, `tooltipLine`, `panelLine`, `useNative`; selects `shareLevel` (`quality` = L["Recipes and expected quality"], `recipes` = L["Recipes only"]) and `shareAlts` (`current`/`guild`/`all`); an execute that calls `PurgeGuild(current)` behind an AceConfig `confirm`. The setters for share/shareLevel/shareAlts call `Guild:OnPrivacyChanged()`.
-  - `/fs guild` prints `Status()`. `/fs guild selftest` prints `SelfTest()`.
+  - `ns.FS:RegisterSlash("guild", fn(rest), L["guild sync status; 'selftest' checks the wire format"])`: empty `rest` prints `Status()`, `rest == "selftest"` prints `SelfTest()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the failing tests** (boot: `boot_phase4({ "Modules/Social/GuildOptions.lua", "UI/Tabs/Guild.lua" }, { last = "UI/MainWindow.lua" })`, so the tab registers with 1a's real MainWindow and the options land in 1a's `GetOptionsTable()`)
 
 ```lua
+local function registered_options(key) return ns.FS:GetOptionsTable().args[key] end
+local function registered_tab(id)
+  for _, t in ipairs(ns.FS:GetModule("MainWindow"):GetTabs()) do if t.id == id then return t.def end end
+end
 it("filters tab rows by text and profession", function()
   assert.are.same({ "Everforged Mace" }, uniq(map(Guild:BuildTabRows({ text = "mace" }), "recipeName")))
   assert.are.same({ "B-Realm" }, map(map(Guild:BuildTabRows({ text = "b-real" }), "crafter"), "name"))
@@ -786,6 +814,9 @@ it("privacy setters re-announce", function()
   assert.are.equal("H", last_sent_msg().t)
 end)
 it("registers the guild tab at order 90", function() assert.are.equal(90, registered_tab("guild").order) end)
+it("handles /fs guild and /fs guild selftest through 1a's slash dispatcher", function()
+  ns.FS:HandleSlash("guild selftest"); assert.truthy(W.printed[#W.printed]:find("ok", 1, true))
+end)
 ```
 
 - [ ] **Step 2: Run to verify failure.** Run: `busted tests/social/guild_tab_spec.lua`. Expected: FAIL.
@@ -874,13 +905,13 @@ git commit -m "feat: add chat crafting-request parser"
 - Test: `tests/social/chatscan_spec.lua`, `tests/social/chat_toast_spec.lua`
 
 **Interfaces:**
-- Consumes: `ChatMatcher`, `ItemIndex`, `Guild.ResolveOutputs`, `Recipes:WhoCanCraft(recipeID)`, `Recipes:Evaluate(recipeID, charKey, {})`, `Scanner:GetCharacters/GetCharacter`, `Customers:IsBlocked(nameRealm)` (only if `ns.FS:GetModule("Customers", true)` is enabled), `C_FriendList.IsIgnored`, `Gate:IsLocked`, `Util.NormalizeName`, `C_Spell.GetSpellName`, `ns.FS:RegisterOptions`, `ns.FS:Debounce`, `ChatFrameUtil.SendTellWithMessage`.
+- Consumes: `ChatMatcher`, 1b's `Recipes:FindRecipesForItem(itemID) -> { {recipeID, quality} }` (reverse index over the account's cached schematics; replaces a ChatScan-owned item index), `Recipes:WhoCanCraft(recipeID)`, `Recipes:Evaluate(recipeID, charKey, {})`, `Scanner:GetCharacters/GetCharacter`, phase 2's `Customers:IsBlocked(nameRealm)` (only when `ns.FS:IsModuleEnabled("Customers")`; true if anyone in the customer's linked group is tagged `blocked`), `C_FriendList.IsIgnored`, `Gate:IsLocked`, `Util.NormalizeName`, `C_Spell.GetSpellName`, `ns.FS:RegisterOptions`, `ns.FS:Debounce`, `ChatFrameUtil.SendTellWithMessage`.
 - Settings defaults (`db.global.settings.chatScan`): `{ enabled = true, channels = { trade = true, services = true, general = false, guild = true }, include = copy(DEFAULT_INCLUDE), exclude = copy(DEFAULT_EXCLUDE), ignore = {}, dedupeSeconds = 300, toastSeconds = 30, sound = true, nameMatch = true, whisperTemplate = L["Hi! I can craft %s. Send me a crafting order?"] }`.
 - Produces:
   - `ChatScan.ZONE_CHANNEL_KIND = { [<id>] = "general"|"trade"|"services" }` (from Step 1) and `ChatScan:ClassifyChannel(event, zoneChannelID, channelBaseName) -> kind|nil`. `CHAT_MSG_GUILD` → `"guild"`. For `CHAT_MSG_CHANNEL`, the map is used first, then a lowercased `channelBaseName` containing `L["services"]`, `L["trade"]` or `L["general"]` (in that order).
-  - `ChatScan:HandleChat(event, text, playerName, _, _, _, _, zoneChannelID, _, channelBaseName, _, lineID) -> ChatMatch|nil`. Pipeline: module enabled → `Gate:IsLocked()` → `issecretvalue(text) or issecretvalue(playerName)` (count `stats.skippedSecret`) → channel kind enabled → sender normalized, not self, not in `ignore`, not `C_FriendList.IsIgnored`, not `Customers:IsBlocked` → `ChatMatcher.Parse(...).isRequest` → candidate recipes from item links (own `ItemIndex`), recipe links, and `FindRecipeNames` when `nameMatch` (max 3) → keep recipes with non-empty `WhoCanCraft` → drop a `(sender, recipeID)` pair whose last *emitted* match is within `dedupeSeconds` (repeat sightings do not extend the window) → pick the best char per recipe (max expectedQuality, then max profit, nil profit last) → send `FS_CHATSCAN_MATCH(match)` and return the match. Register `CHAT_MSG_CHANNEL` and `CHAT_MSG_GUILD` with handlers wrapped in `SafeCall("ChatScan", ...)`.
+  - `ChatScan:HandleChat(event, text, playerName, _, _, _, _, zoneChannelID, _, channelBaseName, _, lineID) -> ChatMatch|nil`. Pipeline: module enabled → `Gate:IsLocked()` → `issecretvalue(text) or issecretvalue(playerName)` (count `stats.skippedSecret`) → channel kind enabled → sender normalized, not self, not in `ignore`, not `C_FriendList.IsIgnored`, not `Customers:IsBlocked` → `ChatMatcher.Parse(...).isRequest` → candidate recipes from item links (`Recipes:FindRecipesForItem(itemID)`), recipe links, and `FindRecipeNames` when `nameMatch` (max 3) → keep recipes with non-empty `WhoCanCraft` → drop a `(sender, recipeID)` pair whose last *emitted* match is within `dedupeSeconds` (repeat sightings do not extend the window) → pick the best char per recipe (max expectedQuality, then max profit, nil profit last) → send `FS_CHATSCAN_MATCH(match)` (`ns.Msg.CHATSCAN_MATCH`) and return the match. Register `CHAT_MSG_CHANNEL` and `CHAT_MSG_GUILD` with handlers wrapped in `SafeCall("ChatScan", ...)`.
   - `ChatMatch = { sender, kind, text, lineID, time, recipes = { { recipeID, itemID|nil, link|nil, name, best = { charKey, expectedQuality, profit|nil, noPrice: boolean } } } }`.
-  - `ChatScan:Ignore(nameRealm)`, `ChatScan:Unignore(nameRealm)`, `ChatScan:IsIgnored(nameRealm) -> boolean`, `ChatScan:RebuildIndexes()` (own ItemIndex and name index from all own characters' recipes; names lowercased; names with fewer than 6 characters skipped; rebuilt on `FS_DATA_CHANGED(_, "recipes")` via `Debounce("chatScanIndex", 5, ...)`), `ChatScan.stats = { seen, skippedSecret, matched, deduped }`.
+  - `ChatScan:Ignore(nameRealm)`, `ChatScan:Unignore(nameRealm)`, `ChatScan:IsIgnored(nameRealm) -> boolean`, `ChatScan:RebuildIndexes()` (recipe-name index from all own characters' recipes — item lookups go through 1b's `FindRecipesForItem`; names lowercased; names with fewer than 6 characters skipped; rebuilt on `FS_DATA_CHANGED(_, "recipes")` via `Debounce("chatScanIndex", 5, ...)`), `ChatScan.stats = { seen, skippedSecret, matched, deduped }`.
   - `ns.UI.ChatToast:Show(match)`: listens to `FS_CHATSCAN_MATCH`. At most 3 toasts are stacked at the top-centre; a 4th replaces the oldest. Each auto-hides after `toastSeconds` and plays `SOUNDKIT.TELL_MESSAGE` when `sound` is set. Body: sender, kind, recipe name/link, `L["You: %s on %s"]` (quality, char) and profit or `L["no price"]`. Buttons: Whisper, Ignore, Dismiss.
   - `ns.UI.ChatToast:VisibleCount() -> integer`.
   - `ns.UI.ChatToast:WhisperText(match) -> string` = `whisperTemplate:format(match.recipes[1].link or match.recipes[1].name)`. `ns.UI.ChatToast:OnWhisperClick(match)` calls `ChatFrameUtil.SendTellWithMessage(match.sender, WhisperText(match))` and nothing else.
@@ -891,7 +922,9 @@ git commit -m "feat: add chat crafting-request parser"
 - [ ] **Step 2: Write the failing tests**
 
 ```lua
--- chatscan_spec.lua; own char Me-Realm can craft recipe 100 → item 212345 (q3, profit 5000) and Alt-Realm (q2)
+-- chatscan_spec.lua; boot_phase4(SOCIAL_FILES) with p4.fake_module fakes: Recipes (FindRecipesForItem 212345 → {{100, 3}},
+-- WhoCanCraft(100) → {"Alt-Realm","Me-Realm"}, Evaluate), Scanner, and Customers { IsBlocked = function(_, n) return customers_blocked[n] end }.
+-- Own char Me-Realm can craft recipe 100 → item 212345 (q3, profit 5000) and Alt-Realm (q2)
 local function say(text, who, zone, base) return ChatScan:HandleChat("CHAT_MSG_CHANNEL", text, who or "Buyer-Realm", "", "", "", "", zone or TRADE_ID, 2, base or "Trade", 0, 1) end
 it("matches a craftable request and picks the best character", function()
   local m = say("LF crafter " .. L1)
@@ -920,7 +953,9 @@ it("respects the gate, self, ignore lists and blocked customers", function()
   p4.ignored["Buyer-Realm"] = true; assert.is_nil(say("LF crafter " .. L1)); p4.ignored["Buyer-Realm"] = nil
   customers_blocked["Buyer-Realm"] = true; assert.is_nil(say("LF crafter " .. L1))
 end)
-it("works without the Customers module", function() disable_module("Customers"); assert.truthy(say("LF crafter " .. L1)) end)
+it("works without the Customers module", function()
+  customers_blocked["Buyer-Realm"] = true; ns.FS:SetModuleEnabled("Customers", false); assert.truthy(say("LF crafter " .. L1))
+end)
 it("classifies channels and honours channel toggles", function()
   assert.are.equal("general", ChatScan:ClassifyChannel("CHAT_MSG_CHANNEL", 0, "General - City"))
   assert.are.equal("guild", ChatScan:ClassifyChannel("CHAT_MSG_GUILD"))
@@ -956,23 +991,25 @@ git commit -m "feat: add chat request scanner with click-only whisper toasts"
 - Test: `tests/onboarding/onboarding_spec.lua`
 
 **Interfaces:**
-- Consumes: `Prices:HasSource()`, `C_AddOns.DoesAddOnExist("Auctionator")`, `C_AddOns.IsAddOnLoaded("Auctionator")`, `Scanner:GetCharacters/GetCharacter`, `ns.FS:CharKey()`, `ns.FS:SetModuleEnabled/IsModuleEnabled`, `ns.FS:RegisterSubcommand`, AceConfigDialog, `db.global.settings.guild/chatScan`, `InCombatLockdown`.
+- Consumes: `Prices:HasSource()`, `C_AddOns.DoesAddOnExist("Auctionator")`, `C_AddOns.IsAddOnLoaded("Auctionator")`, `Scanner:GetCharacters/GetCharacter` (1a ProfessionRecord `name`), `ns.FS:CharKey()`, 1a's `ns.FS:SetModuleEnabled`, Task 1's `ns.FS:IsModuleEnabled`, 1a's `ns.FS:RegisterSlash`, 1a's `MainWindow:Show/SelectTab("settings")`, `LibStub("AceConfigDialog-3.0"):SelectGroup`, `db.global.settings.guild/chatScan`, `InCombatLockdown`.
 - Storage: `db.global.onboarding = { completedVersion = int|nil, time = number|nil, skipped = boolean|nil }`.
 - Produces:
-  - `Onboarding.VERSION = 1`. `Onboarding.OPTIONAL_MODULES = { "Orders", "Customers", "Ledger", "Alts", "Planner", "Guild", "ChatScan" }`. `Onboarding.APP_NAME` / `Onboarding.PRICE_GROUP`: the AceConfig application name and the price-settings group key that 1a registered (Step 1).
+  - `Onboarding.VERSION = 1`. `Onboarding.OPTIONAL_MODULES = { "Orders", "Customers", "Ledger", "Alts", "Planner", "Guild", "ChatScan" }`. `Onboarding.APP_NAME = "FabricationStation"` (1a Task 4 registers the options table under that name) and `Onboarding.PRICE_GROUP = "prices"` (1a Task 10's options group key). Every name in `OPTIONAL_MODULES` is a module from phases 2–4 (`Orders`, `Customers`, `Ledger`: phase 2; `Alts`, `Planner`: phase 3).
   - `Onboarding:ShouldShow() -> boolean` (`completedVersion == nil or completedVersion < VERSION`).
   - `Onboarding:MaybeShow()`: called 5 s after `PLAYER_ENTERING_WORLD`. If `InCombatLockdown()`, it registers `PLAYER_REGEN_ENABLED` → `Onboarding:OnRegenEnabled()` (unregisters, then `MaybeShow()`); otherwise it opens the wizard when `ShouldShow()`.
   - `Onboarding:GetSteps() -> { {id, title} }` with ids in order: `"welcome", "auctionator", "scan", "modules", "prices", "social", "done"`.
   - `Onboarding:CheckAuctionator() -> { installed: boolean, loaded: boolean, apiOK: boolean }`.
-  - `Onboarding:ScanStatus() -> { { charKey, isCurrent: boolean, time, professions = { { skillLineID, name, scanned: boolean, needsOpen: boolean } } } }`. `scanned = next(recipes) ~= nil`. `needsOpen = isCurrent and not scanned`. The name comes from `C_TradeSkillUI.GetProfessionInfoBySkillLineID(id).professionName` with an `L["Profession %d"]` fallback.
+  - `Onboarding:ScanStatus() -> { { charKey, isCurrent: boolean, time, professions = { { skillLineID, name, scanned: boolean, needsOpen: boolean } } } }`. `scanned = next(recipes) ~= nil`. `needsOpen = isCurrent and not scanned`. The name is 1a's ProfessionRecord `name`, else `C_TradeSkillUI.GetProfessionInfoBySkillLineID(id).professionName`, else `L["Profession %d"]`.
   - `Onboarding:ApplyModuleChoices(choices: {[name]=boolean})` → `SetModuleEnabled` for each name in `OPTIONAL_MODULES` only.
   - `Onboarding:ApplySocialChoices({ share: boolean, shareLevel, chatScan: boolean })` → writes the settings, then `Guild:OnPrivacyChanged()` (if Guild is enabled).
   - `Onboarding:Complete(skipped: boolean)`.
-  - `/fs setup` → `ns.UI.OnboardingWizard:Open()`.
-  - `ns.UI.OnboardingWizard:Open()` / `:Close()` / `:ShowStep(index)`: own frame (`BasicFrameTemplateWithInset`), Back / Next / Skip. Step bodies: Auctionator status with copy for each of the three states; scan explanation (`L["Log in to each crafter and open each profession window once. FabricationStation reads recipes, skill and specialization from that window."]`) plus the `ScanStatus()` list; module checkboxes; the price group embedded via `AceConfigDialog:Open(APP_NAME, container, PRICE_GROUP)` in an AceGUI SimpleGroup; social checkboxes; done (`L["Type /fs to open FabricationStation. /fs setup reopens this guide."]`). Closing with X counts as Skip.
+  - `ns.FS:RegisterSlash("setup", function() ns.UI.OnboardingWizard:Open() end, L["reopen the setup guide"])`.
+  - `ns.UI.OnboardingWizard:Open()` / `:Close()` / `:ShowStep(index)`: own frame (`BasicFrameTemplateWithInset`), Back / Next / Skip. Step bodies: Auctionator status with copy for each of the three states; scan explanation (`L["Log in to each crafter and open each profession window once. FabricationStation reads recipes, skill and specialization from that window."]`) plus the `ScanStatus()` list; module checkboxes; prices: a short explanation and an `L["Open price settings"]` button that calls `MainWindow:Show()`, `MainWindow:SelectTab("settings")` and `AceConfigDialog:SelectGroup(APP_NAME, PRICE_GROUP)` (1a's constraint keeps AceConfigDialog inside the Settings tab, so the wizard does not embed it); social checkboxes; done (`L["Type /fs to open FabricationStation. /fs setup reopens this guide."]`). Closing with X counts as Skip.
 
-- [ ] **Step 1: Find 1a's AceConfig names:** `grep -rn "AceConfig\(Registry\)\?-3.0\"):Register\|RegisterOptions(" Core Modules UI`. Set `APP_NAME` and `PRICE_GROUP` to the literal values found.
+- [ ] **Step 1: Confirm 1a's AceConfig names:** `grep -rn "RegisterOptionsTable(\|RegisterOptions(\"prices\"" Core Modules`. Expected: `"FabricationStation"` and `"prices"`. If either differs, use the literal found.
 - [ ] **Step 2: Write the failing tests**
+
+Boot: `boot_phase4({ "Modules/Onboarding.lua", "UI/OnboardingWizard.lua" }, { last = "Modules/Diagnostics.lua" })` (real 1a Scanner and Prices; `ChatScan`'s module is loaded or faked so the toggle test has it), then `p4.fake_module(ns, "Prices", { HasSource = function() return prices_has_source end })` and seed `db.global.characters` with `Me-Realm` (profession 2871, no recipes) and `Alt-Realm` (profession 2872 with recipes).
 
 ```lua
 it("shows on a fresh install, not after completion, and again after a version bump", function()
@@ -1004,7 +1041,7 @@ end)
 it("orders steps", function()
   assert.are.same({ "welcome","auctionator","scan","modules","prices","social","done" }, map(Onboarding:GetSteps(), "id"))
 end)
-it("registers /fs setup", function() assert.is_true(ns.FS:DispatchSubcommand("setup")); assert.is_true(wizard_open()) end)
+it("registers /fs setup", function() ns.FS:HandleSlash("setup"); assert.is_true(wizard_open()) end)
 ```
 
 - [ ] **Step 3: Run to verify failure.** Run: `busted tests/onboarding/onboarding_spec.lua`. Expected: FAIL.
@@ -1023,13 +1060,19 @@ git commit -m "feat: add first-run setup wizard"
 ### Task 13: Localize phase 1–3 user-facing strings
 
 **Files:**
-- Modify: `UI/**/*.lua`, `Modules/*.lua`, `Core/*.lua` (user-facing literals only), `Locales/enUS.lua`
+- Modify (user-facing literals only), as named by the earlier plans:
+  - 1a: `Core/Core.lua` (SafeCall stop notice, `/fs` help lines, `"modules"` and `"general"` option groups), `Core/DB.lua` (newer-data warning), `Modules/Prices.lua` (`"prices"` options and status lines), `Modules/Diagnostics.lua` (`/fs capture` messages, `"diagnostics"` options), `UI/Util.lua` (`FormatAge`'s `"never"`), `UI/MainWindow.lua` (header `Prices: …`, tab-failed text, slash help), `UI/Tabs/Settings.lua`, `UI/Launcher.lua` (LDB tooltip lines).
+  - 1b: `Modules/Recipes.lua` (`"crafting"` options), `Modules/RecipeScan.lua`, `Modules/Queue.lua`, `Modules/QueueCraft.lua` (status texts), `Modules/SelfCheck.lua` (`Math check: …`), `UI/Tabs/Dashboard.lua`, `UI/Tabs/Recipes.lua`, `UI/Tabs/Queue.lua`, `UI/ProfessionPanel.lua` (breakdown labels), `UI/RecipeListLabels.lua`, `UI/Tooltips.lua` (`Craft cost`, `Crafters`, `no price`).
+  - Phase 2: `Modules/Customers.lua`, `Modules/Orders.lua` (`RISK_LABELS`), `Modules/Ledger.lua`, `UI/OrdersPanel.lua`, `UI/OrderAlert.lua`, `UI/Tabs/Orders.lua`, `UI/Tabs/Customers.lua`, `UI/Tabs/Ledger.lua`, `UI/OrdersWidgets.lua`, `UI/OrdersOptions.lua`.
+  - Phase 3: `Modules/Alts.lua`, `Modules/AltsCollector.lua`, `Modules/Planner.lua`, `Modules/PlannerSpec.lua`, `UI/Widgets/ExpandGrid.lua`, `UI/Tabs/CharactersView.lua`, `UI/Tabs/PlannerView.lua`, `UI/Tabs/Characters.lua`, `UI/Tabs/Planner.lua`, `UI/AltsTooltips.lua`, `UI/AltsDashboard.lua`.
+  - `Locales/enUS.lua`.
+- Not localized (pure files that specs load without Core, so `ns.L` is absent there, and strings matched against the game client's own text): `Math/*.lua`, `Data/*.lua`, `Modules/CraftingData.lua`, `Modules/PlanCalc.lua`, 1b's `Recipes.STAT_NAMES` (matched against `bonusStatName`), phase 2's mail-subject/invoice matching in `Modules/Ledger.lua`. List them in the allowlist instead.
 - Create: `tools/locale_allowlist.txt`
 - Test: `tests/locale/no_literals_spec.lua`
 
 **Interfaces:**
-- Consumes: `tools/check_locale.lua` `find_literals(paths, allowlistPath)`. It flags string literals of ≥ 2 letters passed directly to `:SetText(`, `:AddLine(`, `:AddDoubleLine(`, `:Print(`, `print(`, `GameTooltip_SetTitle(`, or used as `label =`, `title =`, `name =`, `desc =` inside option/tab/widget tables. Allowlist lines are `file:literal` (format strings with no words, atlas/texture paths, event names, color codes).
-- Produces: no new API; every user-facing string is `ns.L[...]`.
+- Consumes: `tools/check_locale.lua` `find_literals(paths, allowlistPath)`. It flags string literals of ≥ 2 letters passed directly to `:SetText(`, `:AddLine(`, `:AddDoubleLine(`, `:Print(`, `print(`, `GameTooltip_SetTitle(`, or used as `label =`, `title =`, `name =`, `desc =` inside option/tab/widget tables. Allowlist lines are `file:literal` (format strings with no words, atlas/texture paths, event names, color codes, game-text matchers) or `file:*` (skip the whole file; used for the pure files above).
+- Produces: no new API; every user-facing string is `ns.L[...]`. Each file takes `local L = ns.L` at the top. In specs that never load `Locales\Locales.xml` (all of 1a–3's, since `load_addon` skips `.xml` and `P2.boot`/`phase3_env` load only Core), Core's Task-1 identity fallback returns the same English text, so their string assertions keep passing unchanged.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1041,7 +1084,7 @@ end)
 ```
 
 - [ ] **Step 2: Run to see the list.** Run: `busted tests/locale/no_literals_spec.lua`. Expected: FAIL listing the phase 1–3 literals.
-- [ ] **Step 3: Wrap each listed literal** as `L["…"]` (with `local L = ns.L` at the file top), add the keys to `enUS.lua`, and allowlist only non-language strings. Do not change any string's English text.
+- [ ] **Step 3: Wrap each listed literal** as `L["…"]` (with `local L = ns.L` at the file top), add the keys to `enUS.lua`, and allowlist only non-language strings and the not-localized files above. Do not change any string's English text. If the failing list names a file that is not in the Files list above, an earlier plan added it after this plan was written: localize it the same way and add it to the list.
 - [ ] **Step 4: Run.** Run: `busted && luacheck . && lua tools/check_locale.lua`. Expected: PASS.
 - [ ] **Step 5: Commit**
 
@@ -1054,7 +1097,7 @@ git commit -m "chore: route phase 1-3 UI strings through AceLocale"
 
 ### Task 14: Public docs, license, changelog, versioning, issue templates
 
-**Files:**
+**Files:** (phases 1a–3 create none of these; 1a's `.pkgmeta` and `ci.yml` are changed in Task 15)
 - Create: `README.md`, `LICENSE`, `CHANGELOG.md`, `.github/ISSUE_TEMPLATE/bug_report.yml`, `.github/ISSUE_TEMPLATE/feature_request.yml`, `.github/ISSUE_TEMPLATE/math_mismatch.yml`, `.github/ISSUE_TEMPLATE/config.yml`
 - Test: `tests/release/docs_spec.lua`
 
@@ -1063,7 +1106,7 @@ git commit -m "chore: route phase 1-3 UI strings through AceLocale"
   - **Versioning scheme** (stated in README "Versioning" and the CHANGELOG preamble): SemVer tags `vMAJOR.MINOR.PATCH`; pre-releases `vX.Y.Z-beta.N` / `vX.Y.Z-alpha.N` (the packager maps them to beta/alpha). MAJOR = a one-way SavedVariables migration users must know about, or a `Protocol.VERSION` bump. MINOR = features. PATCH = fixes and Interface bumps. The TOC `## Version` comes from the tag via `@project-version@`. `Protocol.VERSION` is an independent integer, bumped only for wire-incompatible changes. The first public release is `v1.0.0`.
   - `LICENSE`: the standard MIT text, `Copyright (c) 2026 The FabricationStation authors`, followed by a `Credits` paragraph: crafting formulas in `Math/` are derived from CraftSim (https://github.com/derfloh205/CraftSim), MIT License, Copyright (c) 2023 Florian Schneider; no CraftSim code is included; embedded libraries under `Libs/` keep their own licenses.
   - `CHANGELOG.md`: Keep a Changelog format, preamble with the versioning rules, `## [Unreleased]` with Added entries for each phase's headline features.
-  - `README.md` sections: What it does (per phase), Requirements (retail Midnight, Auctionator recommended/required for prices), Install, First run (per-character profession-window scan, `/fs setup`), Commands (`/fs`, `/fabstation`, `/fs setup`, `/fs guild`, `/fs guild selftest`, `/fs capture`), Guild sync & privacy (exactly what is shared for each `shareLevel`/`shareAlts`, how to opt out, that sync pauses in instances), Chat scanner (never whispers for you), Reporting bugs (templates), Versioning, Credits (CraftSim, Ace3, LibDataBroker, LibDBIcon, ChatThrottleLib), License.
+  - `README.md` sections: What it does (per phase), Requirements (retail Midnight, Auctionator recommended/required for prices), Install, First run (per-character profession-window scan, `/fs setup`), Commands (`/fs`, `/fabstation`, `/fs settings`, `/fs tab <id>`, `/fs setup`, `/fs guild`, `/fs guild selftest`, `/fs capture`, `/fs help`), Guild sync & privacy (exactly what is shared for each `shareLevel`/`shareAlts`, how to opt out, that sync pauses in instances), Chat scanner (never whispers for you), Reporting bugs (templates), Versioning, Credits (CraftSim, Ace3, LibDataBroker, LibDBIcon, ChatThrottleLib), License.
   - Issue forms: `bug_report.yml` (FS version, WoW build, other addons, steps, expected, actual, Lua error from BugSack/BugGrabber), `math_mismatch.yml` (recipe, character skill/spec, FS prediction vs game, `/fs capture` export string — required), `feature_request.yml`, `config.yml` (`blank_issues_enabled: false`).
 
 - [ ] **Step 1: Write the failing test**
@@ -1103,30 +1146,20 @@ git commit -m "docs: add README, MIT license with CraftSim credit, changelog and
 ### Task 15: Packaging and tag-triggered release workflow
 
 **Files:**
-- Modify: `.pkgmeta`, `FabricationStation.toc`, `.github/workflows/ci.yml` (add `workflow_call:` trigger)
+- Modify: 1a's `.pkgmeta`, 1a's `FabricationStation.toc`, 1a's `.github/workflows/ci.yml` (add `workflow_call:` trigger)
 - Create: `.github/workflows/release.yml`, `tools/check_release.lua`
 - Test: `tests/release/release_config_spec.lua`
 
 **Interfaces:**
 - Produces:
-  - `.pkgmeta` (keep 1a's externals; ensure `Libs/AceComm-3.0` and `Libs/AceLocale-3.0` are present, from the same source 1a uses for Ace3):
+  - `.pkgmeta`: 1a already has `package-as: FabricationStation`, `enable-nolib-creation: no`, `externals` (repos.wowace.com Ace3 trunk, LibStub, CallbackHandler, LibDataBroker from GitHub, LibDBIcon), `required-dependencies: [auctionator]` and `ignore: [tests, tools, docs, reports, research_notes, .luacheckrc, .busted]`; Tasks 2 and 5 added the `Libs/AceLocale-3.0` and `Libs/AceComm-3.0` externals. Keep all of that; this task only adds:
     ```yaml
-    package-as: FabricationStation
-    enable-nolib-creation: no
     manual-changelog:
       filename: CHANGELOG.md
       markup-type: markdown
-    ignore:
-      - tests
-      - tools
-      - docs
-      - reports
-      - research_notes
-    required-dependencies:
-      - auctionator
-    # externals: (1a's list + AceComm-3.0, AceLocale-3.0)
     ```
-  - TOC metadata: `## Version: @project-version@`, `## X-License: MIT`, `## OptionalDeps: Auctionator` (not `Dependencies`; spec §4.5 requires the addon to run without it), `## SavedVariables: FabricationStationDB`. Site IDs are **not** written to the TOC. The workflow passes them from repository variables so no placeholder IDs are committed.
+  - TOC metadata: 1a already has `## Interface: 120105`, `## Version: @project-version@`, `## OptionalDeps: Auctionator` (not `Dependencies`; spec §4.5 requires the addon to run without it) and `## SavedVariables: FabricationStationDB`. Add only `## X-License: MIT`. Site IDs are **not** written to the TOC. The workflow passes them from repository variables so no placeholder IDs are committed.
+  - `ci.yml`: change 1a's `on: [push, pull_request]` to the map form `on: { push: {}, pull_request: {}, workflow_call: {} }`; jobs unchanged.
   - `tools/check_release.lua <version>` (exit 0/1, prints the reason): the version matches `^%d+%.%d+%.%d+$` or `^%d+%.%d+%.%d+%-(alpha|beta)%.%d+$` (checked with two Lua patterns); `CHANGELOG.md` contains `## [<version>]`; the TOC contains `@project-version@`. As a module it returns `{ check(version, root) -> ok, reason }`.
   - `.github/workflows/release.yml`:
     ```yaml
@@ -1150,7 +1183,8 @@ git commit -m "docs: add README, MIT license with CraftSim credit, changelog and
         steps:
           - uses: actions/checkout@v7
             with: { fetch-depth: 0 }
-          - uses: leafo/gh-actions-lua@<same version as ci.yml>
+          - uses: leafo/gh-actions-lua@v13
+            with: { luaVersion: "5.1.5" }
           - run: lua tools/check_release.lua "${GITHUB_REF_NAME#v}"
           - id: ids
             run: |
@@ -1163,7 +1197,7 @@ git commit -m "docs: add README, MIT license with CraftSim credit, changelog and
             with:
               args: ${{ steps.ids.outputs.args }}
     ```
-    Use whatever Lua setup action/version 1a's `ci.yml` uses. With a missing token or ID, the packager skips that site, so the workflow already produces a GitHub release before the store projects exist.
+    The Lua action and version match 1a's `ci.yml` (`leafo/gh-actions-lua@v13`, Lua 5.1.5); `actions/checkout@v7` matches too. With a missing token or ID, the packager skips that site, so the workflow already produces a GitHub release before the store projects exist.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1178,7 +1212,7 @@ it("gates release on version format and changelog entry", function()
 end)
 it("configures .pkgmeta for public packaging", function()
   local s = read(".pkgmeta")
-  for _, k in ipairs({ "package-as: FabricationStation", "filename: CHANGELOG.md", "- tests", "- tools", "- docs", "- reports", "- research_notes", "- auctionator", "Libs/AceComm-3.0", "Libs/AceLocale-3.0" }) do
+  for _, k in ipairs({ "package-as: FabricationStation", "filename: CHANGELOG.md", "- tests", "- tools", "- docs", "- reports", "- research_notes", "- auctionator", "Libs/AceComm-3.0", "Libs/AceLocale-3.0", "Libs/AceAddon-3.0" }) do
     assert.truthy(s:find(k, 1, true), k)
   end
   assert.is_nil(s:find("\t", 1, true))                          -- YAML forbids tabs
@@ -1187,8 +1221,9 @@ it("has release TOC metadata and only existing files, locales before core", func
   local toc = read("FabricationStation.toc")
   for _, k in ipairs({ "## Version: @project-version@", "## X-License: MIT", "## SavedVariables: FabricationStationDB" }) do assert.truthy(toc:find(k, 1, true), k) end
   assert.truthy(toc:find("## OptionalDeps:[^\n]*Auctionator")); assert.is_nil(toc:find("## Dependencies:[^\n]*Auctionator"))
-  assert.truthy(toc:find("Locales\\Locales.xml", 1, true) < toc:find("Core\\Core.lua", 1, true))
-  for _, path in ipairs(toc_file_list(toc)) do assert.truthy(io.open(path:gsub("\\", "/")), path) end
+  assert.truthy(toc:find("Locales\\Locales.xml", 1, true) < toc:find("Core\\Util.lua", 1, true))
+  assert.truthy(toc:find("UI\\Tabs\\Guild.lua", 1, true) < toc:find("UI\\Tabs\\Settings.lua", 1, true))
+  for _, path in ipairs(read_toc("FabricationStation.toc").files) do assert.truthy(io.open(path), path) end
   for _, f in ipairs(lua_files_in({ "Modules/Social", "Locales" })) do assert.truthy(listed_in_toc_or_xml(f), f) end
 end)
 it("wires the packager workflow", function()
@@ -1200,7 +1235,7 @@ it("wires the packager workflow", function()
 end)
 ```
 
-`read`, `make_tmp_repo`, `toc_file_list`, `lua_files_in` and `listed_in_toc_or_xml` are helpers at the top of the spec (plain `io`/`os.tmpname`; `lua_files_in` shells `ls` through `io.popen`).
+`read`, `make_tmp_repo`, `lua_files_in` and `listed_in_toc_or_xml` are helpers at the top of the spec (plain `io`/`os.tmpname`; `lua_files_in` shells `ls` through `io.popen`). `read_toc` is 1a's global test helper (backslashes already converted to `/`).
 
 - [ ] **Step 2: Run to verify failure.** Run: `busted tests/release/release_config_spec.lua`. Expected: FAIL.
 - [ ] **Step 3: Implement** the `.pkgmeta`, TOC, workflow, `ci.yml` trigger and `check_release.lua` changes.
@@ -1246,13 +1281,13 @@ end)
 
 ```bash
 S=/tmp/fs-release-dryrun; rm -rf "$S"; mkdir -p "$S"
-curl -sSfL -o "$S/release.sh" https://raw.githubusercontent.com/BigWigsMods/packager/master/release.sh
-bash "$S/release.sh" -d -z -r "$S/out"        # add -e if svn/externals are unreachable
+curl -sSfL -o "$S/release.sh" https://raw.githubusercontent.com/BigWigsMods/packager/v2.6.1/release.sh   # same pin as 1a's tools/fetch-libs.sh
+bash "$S/release.sh" -t "$PWD" -d -z -r "$S/out"        # add -e if svn/externals are unreachable
 test -f "$S/out/FabricationStation/FabricationStation.toc" && test ! -e "$S/out/FabricationStation/tests" \
   && test ! -e "$S/out/FabricationStation/tools" && echo PACKAGE_OK
 ```
 
-Expected: `PACKAGE_OK`. Without `-e`, also `test -d "$S/out/FabricationStation/Libs/AceComm-3.0"`. Fix `.pkgmeta` if anything leaks or is missing.
+Expected: `PACKAGE_OK`. Without `-e`, also `test -d "$S/out/FabricationStation/Libs/AceComm-3.0" && test -d "$S/out/FabricationStation/Libs/AceLocale-3.0"`. Fix `.pkgmeta` if anything leaks or is missing. Then run 1a's `bash tools/fetch-libs.sh` so local `Libs/` also gains AceComm-3.0 and AceLocale-3.0.
 
 - [ ] **Step 5: Run the full suite.** Run: `busted && luacheck . && lua tools/check_locale.lua`. Expected: PASS.
 - [ ] **Step 6: Commit**
@@ -1270,3 +1305,5 @@ git commit -m "docs: add release checklist"
 
 - **Spec coverage:** §9 guild directory → Tasks 3–9. Trade-chat scanner → Tasks 10–11. Wizard → Task 12. CurseForge/Wago release → Tasks 14–16. §4.4 "addon messages blocked in instances" → Gate/Comm. §3.3 click-only → toast whisper + stubbed `SendChatMessage` that errors. §3.7 no taint → no chat filters, own frames, ProfessionPanel provider is FS's own frame. §13 `.pkgmeta` switch → Task 15. §6.1 CraftSim credit → Task 14. Localization → Tasks 2, 13.
 - **Contract names used:** `Recipes:WhoCanCraft`, `Recipes:Evaluate`, `Scanner:GetCharacters/GetCharacter/GetSchematic`, `Prices:HasSource`, `Tooltips:RegisterLineProvider`, `MainWindow:RegisterTab`, `ns.FS:RegisterOptions/SafeCall/Debounce/Now/CharKey`, `Customers:IsBlocked`, `FS_DATA_CHANGED`, `FS_RECIPES_CHANGED`. The additions are listed under "Contract additions".
+- **Earlier-phase additions used:** 1a `ns.FS:RegisterSlash/HandleSlash/SetModuleEnabled/Wrap/LogError/GetOptionsTable`, `ns.Msg`, `ns.UI.FormatAge/FormatMoney`, `MainWindow:Show/SelectTab/RefreshTab/GetTabs`, `install_wow_stubs` + `W`, `load_addon`, `load_files`, `read_toc`, AceConfig app `"FabricationStation"` and group `"prices"`; 1b `Recipes:FindRecipesForItem`, module `"ProfessionPanel"`, `Tooltips:CollectLines`, `make_world`; phase 2 module `"Customers"`; phase 3 modules `"Alts"`, `"Planner"`.
+- **Open decision (1b's tooltip gate):** 1b's Tooltips adds no lines at all when `settings.crafting.tooltipCraftCost` is off, which would also hide the guild line (and phase 3's holdings line) regardless of `settings.guild.tooltipLine`. Either accept that, or have 1b apply the gate only inside its own `craftCost`/`crafters` providers. Task 8 assumes 1b's behaviour as written.

@@ -8,7 +8,7 @@
 
 **Tech Stack:** WoW retail Lua 5.1 (Midnight 12.x), Ace3 (AceAddon, AceEvent, AceDB, AceConfig), busted, luacheck. Everything from phases 1a and 1b listed in the interface contract.
 
-**Spec:** `docs/superpowers/specs/2026-10-30-fabricationstation-design.md` (§3, §4, §5.1, §5.3, §7, §11, §12). **Binding names:** `docs/superpowers/plans/2026-10-30-fs-interface-contract.md`.
+**Spec:** `docs/superpowers/specs/2026-10-30-fabricationstation-design.md` (§3, §4, §5.1, §5.3, §7, §11, §12). **Binding names:** `docs/superpowers/plans/2026-10-30-fs-interface-contract.md`. Phases 1a (`2026-10-30-fs-phase1a-foundation.md`) and 1b (`2026-10-30-fs-phase1b-crafting.md`) are assumed complete; their **[1a addition]** / 1b additions used here are named under each task's Consumes.
 
 ## Global Constraints
 
@@ -18,13 +18,17 @@
 - Design rule 7: "Only own frames and `hooksecurefunc`-style post-hooks on Blizzard code; never write to Blizzard frame fields or call protected functions from insecure code paths outside a click." Allowed: `hooksecurefunc`, `frame:HookScript`, reading Blizzard fields, anchoring **own** frames to Blizzard frames. Not allowed: assigning any field on a Blizzard frame or table, `SetScript` on a Blizzard frame, calling Blizzard mixin methods that change state (`ViewOrder`, `SetCraftingOrderType`, …).
 - Design rule 5: only the Prices module talks to Auctionator.
 - Design rule 6: missing prices and stale data stay visible. Unknown money is `nil`, never `0`. A `nil` score sorts last and is never "best".
-- Money is integer copper; time is `ns.FS:Now()` server seconds; UI formats with `ns.UI.FormatMoney` (1a) and shows `—` for `nil`.
-- §12: event handlers and hook bodies run inside `ns.FS:SafeCall(<moduleName>, fn, ...)`; Blizzard-frame additions can each be switched off.
-- Saved data is never wiped. Phase 2 creates its DB keys lazily on first access. Modules must work before `OnInitialize`/`OnEnable` have run, so tests can call them directly.
+- Money is integer copper; time is `ns.FS:Now()` server seconds; UI formats with 1a's `ns.UI.FormatMoney(copper|nil)`, which already returns `"--"` for `nil` (never format `nil` as `0`). Ages use 1a's `ns.UI.FormatAge(seconds|nil)` (`"<1m"`, `"Nm"`, `"Nh"`, `"Nd"`, `"never"`).
+- §12: event/message handlers and hook bodies are registered as `ns.FS:Wrap("<Module>", fn)` (1a), which runs them inside `ns.FS:SafeCall("<Module>", fn, ...)`. On error 1a's `SafeCall` logs to `db.global.diagnostics.errors` (via `LogError`), disables the module if it is enabled, records `ns.FS.failedModules[name]`, sends `FS_MODULE_FAILED` and prints `FabricationStation: <Module> stopped after an error and was turned off. See /fs settings > Diagnostics.` once per session. 1a's `Debounce` does not isolate errors, so always pass it a `Wrap`ped fn. Blizzard-frame additions can each be switched off.
+- Module toggles use 1a's mechanism: every phase-2 module is a normal (non-`coreModule`) module, so it is listed automatically in 1a's `"modules"` options group; its stored state is `db.global.settings.modules[<Name>]` (applied at init by `ApplyModuleSettings`), and code that changes it calls `ns.FS:SetModuleEnabled(name, enabled)`. Phase 2 adds no separate enable flags.
+- Message names come from 1a's `ns.Msg` (`Core/Bus.lua`): `ns.Msg.PRICES_CHANGED`, `RECIPES_CHANGED`, `ORDERS_CHANGED`, `CUSTOMERS_CHANGED`, `LEDGER_CHANGED`, `MODULE_FAILED`. Task 1 adds `ns.Msg.ORDER_FULFILLED = "FS_ORDER_FULFILLED"` and `ns.Msg.PERSONAL_ORDER_ARRIVED = "FS_PERSONAL_ORDER_ARRIVED"` to `Core/Bus.lua`. Tests may assert the literal strings.
+- Other modules are looked up at call time with `ns.FS:GetModule(name)`, never cached at file load, so tests can replace them with fakes.
+- Saved data is never wiped. 1a's `ns.DBDefaults` already defines `global.customers = {}`, `global.ledger = { entries = {} }`, `global.ordersSnapshot = { orders = {} }` and `global.settings.modules = {}`; phase 2 creates every other key it uses (`ledger.costBasis`, `ledger.nameIndex`, `ordersState`, `ordersUnknownRewards`, `settings.orders/.alerts/.ledger`) lazily on first access, so modules work right after 1a's `InitDB` even before their own `OnEnable` has run. No migration is needed.
+- Blizzard_Professions is LoadOnDemand. Like 1b's ProfessionPanel, phase-2 hooks on it are installed from `OnEnable` when `ProfessionsFrame` already exists, else on the first `ADDON_LOADED` with arg `"Blizzard_Professions"`.
 - §7: alerts are "in-game sound + toast" only; §10: "Notifications outside the game" are out of scope.
 - §15: mail parsing handles the English locale first.
-- Tests: `busted` from repo root; specs at `tests/<area>/<name>_spec.lua`; lint `luacheck .` must stay clean (add new WoW globals to `.luacheckrc` `read_globals` in the task that first uses them).
-- Every new `.lua` file is added to `FabricationStation.toc` after phase-1b files in the task that creates it, in this order: `Data/OrderRewards.lua`, `Modules/Customers.lua`, `Modules/Orders.lua`, `Modules/Ledger.lua`, `UI/OrdersPanel.lua`, `UI/OrderAlert.lua`, `UI/Tabs/Orders.lua`, `UI/Tabs/Customers.lua`, `UI/Tabs/Ledger.lua`, `UI/OrdersWidgets.lua`, `UI/OrdersOptions.lua`.
+- Tests: `busted` from repo root; specs at `tests/<area>/<name>_spec.lua`; lint `luacheck .` must stay clean. 1a's `.luacheckrc` `read_globals` already has `C_CraftingOrders`, `C_CurrencyInfo`, `C_TradeSkillUI`, `Enum`, `ProfessionsFrame`, `hooksecurefunc`, `CreateFrame`, `UIParent`, `GameTooltip`, `GetNormalizedRealmName` and `date`; add only globals not already there, in the task that first uses them. Tests use 1a's harness (`install_wow_stubs`, `load_addon`, `load_files`, `read_toc`, the `W` handle) through the thin wrapper in `tests/helpers/phase2.lua` (Task 1).
+- Every new `.lua` file is added to `FabricationStation.toc` in the task that creates it, following 1a's load-order convention (1a's TOC test fails on a listed file that does not exist): `Data\OrderRewards.lua` after `Data\GameData_Manual.lua` (before 1b's `Math\Quality.lua`); `Modules\Customers.lua`, `Modules\Orders.lua`, `Modules\Ledger.lua` (in this order) after 1b's `Modules\SelfCheck.lua`; `UI\Tabs\Orders.lua`, `UI\Tabs\Customers.lua`, `UI\Tabs\Ledger.lua` (in this order) after 1b's `UI\Tabs\Queue.lua` and before `UI\Tabs\Settings.lua`; `UI\OrdersPanel.lua`, `UI\OrderAlert.lua`, `UI\OrdersWidgets.lua`, `UI\OrdersOptions.lua` (in this order) after 1b's `UI\Tooltips.lua`. TOC paths use backslashes like 1a's.
 - Commits: conventional (`feat:`, `test:`, `fix:`, `chore:`).
 
 ## Review Focus
@@ -41,8 +45,8 @@ Five inputs or conditions most likely to cause problems for a player that the sp
 - `GetInboxInvoiceInfo(index)` returns data for an unopened mail. Inside a `hooksecurefunc("TakeInboxMoney")` post-hook, the invoice and header money are still readable (Task 7). If not, switch to scanning on `MAIL_INBOX_UPDATE` with the same dedupe signature.
 - `CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS` fires at login and when an order arrives away from a crafting table (Task 9). If it only fires at the table, also poll `GetPersonalOrdersInfo()` on `PLAYER_ENTERING_WORLD`. That is a read on an event, not a timer.
 - `C_CraftingOrders.GetClaimedOrder().outputItemHyperlink` is filled after crafting, and `C_TradeSkillUI.GetItemCraftedQualityByItemInfo(link)` accepts a hyperlink (Task 5).
-- Whether `CraftRecipe`'s `craftingReagents` include customer-provided reagents on order crafts, and whether `TRADE_SKILL_ITEM_CRAFTED_RESULT.quantity` already includes multicraft (Task 7).
-- `ScrollUtil.AddAcquiredFrameCallback`, `ScrollUtil.AddReleasedFrameCallback` and `EventUtil.ContinueOnAddOnLoaded` exist on live (Task 8). After an addon-button `ClaimOrder`, Blizzard's `OrdersPage:CheckForClaimedOrder` shows the claimed order on its next `OnShow`.
+- Whether `CraftRecipe`'s `craftingReagents` include customer-provided reagents on order crafts (Task 7). 1b's Queue (Task 12) assumes a multicraft proc arrives as an extra `TRADE_SKILL_ITEM_CRAFTED_RESULT` with the same `operationID`; Task 7 follows the same rule, and the implementer confirms it in game.
+- `ScrollUtil.AddAcquiredFrameCallback` and `ScrollUtil.AddReleasedFrameCallback` exist on live (Task 8). After an addon-button `ClaimOrder`, Blizzard's `OrdersPage:CheckForClaimedOrder` shows the claimed order on its next `OnShow`.
 - `SOUNDKIT.RAID_WARNING` exists (Task 9).
 - Item and currency IDs of Midnight knowledge and Moxie rewards for `Data/OrderRewards.lua` (Task 3); wago.tools blocks automated fetching, so get them from an in-game `/dump` of `npcOrderRewards`.
 - `CraftingOrderInfo.minQuality` and `RecipeResult.expectedQuality` use the same quality-tier scale (Task 4). If they differ, map them in `Orders:Normalize`.
@@ -55,20 +59,20 @@ Five inputs or conditions most likely to cause problems for a player that the sp
 - Events: `CRAFTINGORDERS_CLAIM_ORDER_RESPONSE(result, orderID)`, `CRAFTINGORDERS_FULFILL_ORDER_RESPONSE(result, orderID)`, `CRAFTINGORDERS_CLAIMED_ORDER_ADDED`, `CRAFTINGORDERS_CLAIMED_ORDER_UPDATED(orderID)`, `CRAFTINGORDERS_UPDATE_CUSTOMER_NAME(customerName, orderID)`, `CRAFTINGORDERS_UPDATE_REWARDS(npcOrderRewards, orderID)`, `CRAFTINGORDERS_UPDATE_ORDER_COUNT(orderType, numOrders)`, `CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS` (no payload).
 - Blizzard: the commission shown is `tipAmount - consortiumCut`; time remaining is `expirationTime - C_CraftingOrders.GetCraftingOrderTime()`; claim uses `C_TradeSkillUI.GetChildProfessionInfo().profession`.
 - Frames (Blizzard_Professions, LoadOnDemand): `ProfessionsFrame.OrdersPage` (mixin `ProfessionsCraftingOrderPageMixin`) has methods `ShowOrders(offset, isSorted)`, `ShowBuckets(offset, isSorted)` and field `orderType`; list at `ProfessionsFrame.OrdersPage.BrowseFrame.OrderList.ScrollBox` with header `...OrderList.HeaderContainer`; row element data is `{option = CraftingOrderInfo|CraftingOrderBucketInfo, browseType, pageFrame}` (flat rows have `option.orderID`); detail view `ProfessionsFrame.OrdersPage.OrderView:SetOrder(order)`.
-- Crafting: `C_TradeSkillUI.CraftRecipe(recipeSpellID, numCasts, craftingReagents, recipeLevel, orderID, applyConcentration)`; event `TRADE_SKILL_ITEM_CRAFTED_RESULT(data)` with `data = {itemID, quantity, craftingQuality?, hyperlink, multicraft, resourcesReturned = { {reagent = {itemID?, currencyID?}, quantity} }?, concentrationSpent, ...}`.
+- Crafting: `C_TradeSkillUI.CraftRecipe(recipeSpellID, numCasts, craftingReagents, recipeLevel, orderID, applyConcentration)` where `craftingReagents = { {reagent = {itemID?, currencyID?}, dataSlotIndex, quantity} }` holds only `ModifiedReagent` data slots (1a "Verified facts"; 1a's `Scanner:ToCraftingReagentInfo` builds the same shape and 1b's `Queue:CraftNext` calls `CraftRecipe` with it); event `TRADE_SKILL_ITEM_CRAFTED_RESULT(data)` with `data = {itemID, quantity, operationID, craftingQuality?, hyperlink, multicraft, resourcesReturned = { {reagent = {itemID?, currencyID?}, quantity} }?, concentrationSpent, ...}`.
 - Mail (legacy globals, used by Blizzard_MailFrame): `GetInboxInvoiceInfo(index) -> invoiceType ("buyer"|"seller"|"seller_temp_invoice"), itemName, playerName, bid, buyout, deposit, consignment, moneyDelay, etaHour, etaMin, count, commerceAuction`; `GetInboxHeaderInfo(index) -> packageIcon, stationeryIcon, sender, subject, money, CODAmount, daysLeft, itemCount, wasRead, ...`; money is taken through `TakeInboxMoney(index)` (Open All and single clicks) or `AutoLootMailItem(index)`. Do not call `GetInboxText`, because it marks mail as read.
 
 ## Contract additions (Phase 2 owns these; later phases may depend on them)
 
-- Bus: `FS_ORDER_FULFILLED (fulfilled: FulfilledOrder)` and `FS_PERSONAL_ORDER_ARRIVED (professionName, count, delta)`, both sent by Orders.
+- Bus: `FS_ORDER_FULFILLED (fulfilled: FulfilledOrder)` and `FS_PERSONAL_ORDER_ARRIVED (professionName, count, delta)`, both sent by Orders; constants `ns.Msg.ORDER_FULFILLED` / `ns.Msg.PERSONAL_ORDER_ARRIVED` (added to 1a's `Core/Bus.lua` in Task 1).
 - Shapes:
   - `OrderInput = { orderID, orderType, recipeID, itemID, skillLineAbilityID, minQuality, tipAmount, consortiumCut, reagentState = "all"|"some"|"none", customer = nameRealm|nil, npcCreatureID|nil, expiresAt, provided = {[itemID]=qty}, rewards = { {itemID?, currencyID?, count} }, isRecraft, outputItemHyperlink|nil }`
-  - `OrderView` = the contract fields plus `itemID, consortiumCut, commission, rewardsValue, usedConcentration, concentrationCost, net, goldPerConcentration, flags = {noPrice, unknownRecipe, unpricedReward}, charKey, input = OrderInput`. `tip` is the gross `tipAmount`; `rewards = { {itemID?, currencyID?, count, value|nil, kind} }`.
+  - `OrderView` = the contract fields plus `itemID, consortiumCut, commission, rewardsValue, usedConcentration, concentrationCost, net, goldPerConcentration, flags = {noPrice, unknownRecipe, unpricedReward, estimated, stalePrice}, charKey, input = OrderInput`. `tip` is the gross `tipAmount`; `rewards = { {itemID?, currencyID?, count, value|nil, kind} }`. `flags.estimated` / `flags.stalePrice` are copied from 1b's `RecipeResult.flags` (estimated = no calibration for that character); `flags.noPrice` is order-specific (see Task 4) and is **not** 1b's `flags.noPrice`.
   - `FulfilledOrder = { orderID, orderType, customer|nil, npcCreatureID|nil, recipeID, itemID, quality|nil, tip, consortiumCut, commission, rewards, rewardsValue, time, charKey }`
   - `CustomerRecord = { nameRealm, firstSeen, lastSeen, orders = { {time, orderID, itemID, recipeID, quality, tip, commission, orderType} }, tipsTotal, notes, tags = {[tag]=true}, linkedTo = nameRealm|nil }`
   - `LedgerEntry = { time, type = "craft"|"sale"|"commission", itemID|nil, amount, charKey, ref|nil, recipeID?, quality?, quantity?, itemName?, cost?, incomplete?, ambiguous?, customer?, orderType?, tip?, rewardsValue?, source? }`. `amount` is negative for `craft`.
-- DB keys: `global.customers`, `global.ledger = {entries, costBasis = {[itemID]={totalCost,totalQty,recipeID}}, nameIndex = {[itemName]={itemID, ambiguous}}}`, `global.ordersSnapshot = {time, charKey, orders}`, `global.ordersState = {[charKey] = {personalCounts = {[profession]=n}}}`, `global.ordersUnknownRewards = {[key] = {count, lastSeen}}`, `global.settings.orders / .alerts / .ledger / .ordersPanel`.
-- `ns.GameData.OrderRewards = { items = {[itemID] = {kind, points?}}, currencies = {[currencyID] = {kind, points?}} }`, where kind is `"knowledge"`, `"moxie"` or `"reagent"`.
+- DB keys: `global.customers` (1a default), `global.ledger = {entries (1a default), costBasis = {[itemID]={totalCost,totalQty,recipeID}}, nameIndex = {[itemName]={itemID, ambiguous}}}`, `global.ordersSnapshot = {time, charKey, orders}` (1a default `{orders = {}}`; `orders` is keyed by `orderID` in storage, and `GetSnapshot` returns a list), `global.ordersState = {[charKey] = {personalCounts = {[profession]=n}}}`, `global.ordersUnknownRewards = {[key] = {count, lastSeen}}`, `global.settings.orders / .alerts / .ledger`. Module on/off state lives in 1a's `global.settings.modules[<Name>]`.
+- GameData table `"OrderRewards"`, defined in `Data/OrderRewards.lua` with 1a's `ns.GameData.Define("OrderRewards", <build>, tbl)` and read with `ns.GameData.Get("OrderRewards")`: `{ items = {[itemID] = {kind, points?}}, currencies = {[currencyID] = {kind, points?}} }`, where kind is `"knowledge"`, `"moxie"` or `"reagent"`. `<build>` is the same literal build that `Data/GameData_Manual.lua` uses (70575 at 1a time), never nil, because 1a's `GameData.Status` reports `missing` when any table has a nil build.
 - Module names: `Customers`, `Orders`, `Ledger`, `OrdersRowAddons`, `OrdersSidePanel`, `OrderViewWarning`, `OrderAlert`.
 
 ---
@@ -77,13 +81,20 @@ Five inputs or conditions most likely to cause problems for a player that the sp
 
 **Files:**
 - Create: `tests/helpers/phase2.lua`, `Modules/Customers.lua`
-- Modify: `FabricationStation.toc`, `.luacheckrc` (add `GetNormalizedRealmName`, `date`)
+- Modify: `FabricationStation.toc`, `Core/Bus.lua` (1a-owned: add the two phase-2 `ns.Msg` constants), `tests/helpers/wow_stubs.lua` (1a-owned: phase-2 default fakes, below)
 - Test: `tests/customers/customers_spec.lua`
 
 **Interfaces:**
-- Consumes: `install_wow_stubs(overrides)`, `load_files(ns, paths)` (1a); `ns.FS:Now()`, `ns.FS.db.global`.
+- Consumes (1a): `install_wow_stubs(overrides) -> W` (deep-merges `overrides`; `W.now` drives `GetServerTime`; `W.boot()` runs `OnInitialize` then `OnEnable` on the addon and every enabled module; `W.messages`, `W.printed`, `W.fire`, `W.advance`), `load_addon(ns, lastFile) -> ns`, `load_files(ns, paths) -> ns`, `read_toc(path)`; `ns.FS:Now()`, `ns.FS:CharKey()` (`UnitName("player") .. "-" .. GetNormalizedRealmName()`), `ns.FS:Wrap`, `ns.FS.db.global`, `ns.Msg`.
 - Produces:
-  - `tests/helpers/phase2.lua` returns `P2` with `P2.boot(stubOverrides) -> ns, wow` (installs stubs merged with `P2.GLOBALS`, loads every `Core/*.lua` entry of `FabricationStation.toc` in TOC order, runs `ns.FS:OnInitialize()` if `ns.FS.db` is nil, stubs `ns.FS.Now` to return `1000` and `ns.FS.CharKey` to return `"Me-Silvermoon"`), `P2.load(ns, paths)`, `P2.fake_module(ns, name, methods) -> module`, `P2.raw_order(overrides) -> CraftingOrderInfo`, `P2.merge(a, b) -> table`. `P2.GLOBALS` contains the verified enum values above, `SOUNDKIT = {RAID_WARNING = 8959}`, `GetNormalizedRealmName = function() return "Silvermoon" end`, `date = os.date`, and a recording `hooksecurefunc`. If 1a's harness already provides a boot helper, `P2.boot` wraps it instead of duplicating it.
+  - `Core/Bus.lua` additions: `ns.Msg.ORDER_FULFILLED = "FS_ORDER_FULFILLED"`, `ns.Msg.PERSONAL_ORDER_ARRIVED = "FS_PERSONAL_ORDER_ARRIVED"`.
+  - `tests/helpers/wow_stubs.lua` additions to the default fakes, so 1a's whole-addon load test (`tests/integration/load_all_spec.lua`) keeps booting with phase-2 files in the TOC: `hooksecurefunc([tbl,] name, fn)` (wraps `tbl[name]` or `_G[name]` so `fn` runs after the original with the same arguments, appends `{tbl, name, fn}` to `W.hooks`, and errors like the real one when the target is not a function); `C_CraftingOrders` functions `GetCrafterOrders, GetClaimedOrder, GetPersonalOrdersInfo, GetOrderClaimInfo, ClaimOrder, FulfillOrder, GetCraftingOrderTime`; `C_TradeSkillUI.CraftRecipe`, `C_TradeSkillUI.GetItemCraftedQualityByItemInfo`; `C_DateAndTime.GetSecondsUntilWeeklyReset`; mail globals `GetInboxInvoiceInfo, GetInboxHeaderInfo, TakeInboxMoney, AutoLootMailItem`; `PlaySound`, `SOUNDKIT = {RAID_WARNING = 8959}`; `ScrollUtil.AddAcquiredFrameCallback/AddReleasedFrameCallback`. All return 1a's "safe empties".
+  - `tests/helpers/phase2.lua` returns `P2`, a thin wrapper over 1a's harness (it adds no loader of its own):
+    - `P2.boot(stubOverrides) -> ns, W`: sets `_G.FabricationStationDB = nil`; `W = install_wow_stubs(P2.merge(P2.GLOBALS, stubOverrides or {}))`; `W.now = 1000`; `ns = load_addon({}, "Data/GameData_Manual.lua")` (Core, `ns.Msg`, `ns.DBDefaults`, GameData runtime and 1a data files only); `load_files(ns, {"UI/Util.lua"})` (for `ns.UI.FormatMoney/FormatAge`). It does **not** boot, so tests can add fakes first.
+    - `P2.fake_module(ns, name, methods) -> module`: `ns.FS:NewModule(name, "AceEvent-3.0")` with `methods` copied on. Used for 1a/1b modules (`Scanner`, `Prices`, `Recipes`, `MainWindow`, `Dashboard`) and for phase-2 modules a test does not load.
+    - `P2.load(ns, paths)`: `load_files(ns, paths)`, then on its first call per `P2.boot` runs `W.boot()` (1a: `InitDB`, `ApplyModuleSettings`, every module's `OnInitialize`/`OnEnable`).
+    - `P2.raw_order(overrides) -> CraftingOrderInfo`, `P2.merge(a, b) -> table` (deep merge, `b` wins).
+  - `P2.GLOBALS` holds only test values that differ from 1a's defaults: the verified `Enum.CraftingOrderType/CraftingOrderReagentsType/CraftingOrderReagentSource/CraftingOrderResult` values above (deep-merged into 1a's `Enum`), `UnitName = function() return "Me" end` and `GetNormalizedRealmName = function() return "Silvermoon" end` (so `ns.FS:CharKey()` is `"Me-Silvermoon"`), and `date = os.date`.
   - `P2.raw_order` defaults: `{orderID=777, itemID=211111, spellID=4444, skillLineAbilityID=55, orderType=2, orderState=2, expirationTime=8600, claimEndTime=0, minQuality=0, tipAmount=500000, consortiumCut=50000, isRecraft=false, isFulfillable=true, reagentState=0, customerName="Bob", customerNotes="", reagents={}, npcOrderRewards={}, npcCraftingOrderSetID=0, npcTreasureID=0}`.
   - `Customers:NormalizeName(name) -> nameRealm|nil`, `Customers:Get(nameRealm) -> CustomerRecord|nil`, `Customers:RecordOrder(nameRealm, row) -> CustomerRecord`, `Customers:OnOrderFulfilled(event, fulfilled)`.
 
@@ -100,6 +111,11 @@ describe("Customers store", function()
     assert.equal("Bob-Silvermoon", C:NormalizeName("Bob"))
     assert.equal("Bob-Area52", C:NormalizeName("Bob-Area52"))
     assert.is_nil(C:NormalizeName(nil)); assert.is_nil(C:NormalizeName(""))
+  end)
+  it("adds the phase-2 bus names", function()
+    assert.equal("FS_ORDER_FULFILLED", ns.Msg.ORDER_FULFILLED)
+    assert.equal("FS_PERSONAL_ORDER_ARRIVED", ns.Msg.PERSONAL_ORDER_ARRIVED)
+    assert.equal("Me-Silvermoon", ns.FS:CharKey()); assert.equal(1000, ns.FS:Now())
   end)
   it("records a fulfilled order once and totals tips", function()
     spy.on(C, "SendMessage")
@@ -127,17 +143,17 @@ Expected: FAIL (`tests.helpers.phase2` / `Modules/Customers.lua` not found)
 
 - [ ] **Step 3: Implement the helper and the `Customers` module (`Modules/Customers.lua`)**
 
-`Customers` stores records in `ns.FS.db.global.customers` (create the table lazily). `RecordOrder` keeps orders unique by `orderID`, sets `firstSeen` the first time and updates `lastSeen` each time. `OnOrderFulfilled` ignores `orderType == "npc"` and a nil `customer`. `OnEnable` registers `FS_ORDER_FULFILLED` through `ns.FS:SafeCall("Customers", ...)`. Add the TOC line and the luacheck globals.
+Add the two `ns.Msg` constants to `Core/Bus.lua` and the default fakes listed under Interfaces to `tests/helpers/wow_stubs.lua`. `Customers` stores records in `ns.FS.db.global.customers` (1a default; still guard with `or {}`). `NormalizeName` appends the realm part of `ns.FS:CharKey()` to a bare name, so it uses 1a's realm normalization and fallback. `RecordOrder` keeps orders unique by `orderID`, sets `firstSeen` the first time and updates `lastSeen` each time. `OnOrderFulfilled` ignores `orderType == "npc"` and a nil `customer`. `OnEnable` registers `ns.Msg.ORDER_FULFILLED` with `ns.FS:Wrap("Customers", ...)`. Changes send `ns.Msg.CUSTOMERS_CHANGED`. Add `Modules\Customers.lua` to the TOC after `Modules\SelfCheck.lua`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `busted tests/customers/customers_spec.lua && luacheck .`
-Expected: PASS, `0 warnings / 0 errors`
+Run: `busted tests/customers/customers_spec.lua && busted && luacheck .`
+Expected: PASS (including 1a's `tests/helpers/wow_stubs_spec.lua` and `tests/integration/load_all_spec.lua`), `0 warnings / 0 errors`
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/helpers/phase2.lua tests/customers/customers_spec.lua Modules/Customers.lua FabricationStation.toc .luacheckrc
+git add tests/helpers/phase2.lua tests/helpers/wow_stubs.lua Core/Bus.lua tests/customers/customers_spec.lua Modules/Customers.lua FabricationStation.toc
 git commit -m "feat: add Customers record store and phase-2 test helpers"
 ```
 
@@ -212,12 +228,12 @@ git commit -m "feat: add customer tags, notes, alt linking, search and export"
 
 **Files:**
 - Create: `Data/OrderRewards.lua`, `Modules/Orders.lua`
-- Modify: `FabricationStation.toc`, `.luacheckrc` (`C_CraftingOrders`, `C_CurrencyInfo`, `Enum`)
+- Modify: `FabricationStation.toc` (`Data\OrderRewards.lua` after `Data\GameData_Manual.lua`; `Modules\Orders.lua` after `Modules\Customers.lua`). `.luacheckrc` needs no change (1a already lists `C_CraftingOrders`, `C_CurrencyInfo`, `Enum`; `Data/` is linted as pure `lua51` and `Data/OrderRewards.lua` uses only `ns`).
 - Test: `tests/orders/normalize_spec.lua`
 
 **Interfaces:**
-- Consumes: `Customers:NormalizeName` (Task 1); `Prices:Get(itemID) -> {value, source, ageDays}`; `C_CraftingOrders.GetCraftingOrderTime()`; `C_CurrencyInfo.GetCurrencyInfo(id).name`.
-- Produces: `ns.GameData.OrderRewards` (shape listed under Contract additions; start it with empty `items`/`currencies` and a comment explaining how to fill it from an in-game `/dump C_CraftingOrders.GetCrafterOrders()[n].npcOrderRewards`), `Orders.ORDER_TYPES = {[0]="public",[1]="guild",[2]="personal",[3]="npc"}`, `Orders.REAGENT_STATES = {[0]="all",[1]="some",[2]="none"}`, `Orders:Settings() -> table` (fills defaults into `db.global.settings.orders`), `Orders:Normalize(orderInfo) -> OrderInput`, `Orders:ValueRewards(rewards) -> total, valued, unpriced`.
+- Consumes: `Customers:NormalizeName` (Task 1); 1a `Prices:Get(itemID) -> {value = copper|nil, source, ageDays}` (never `value = 0` for unknown); 1a `ns.GameData.Define/Get`, 1a GameData table `"MoxieCurrency"` (`[skillLineID] = currencyID`); `C_CraftingOrders.GetCraftingOrderTime()`; `C_CurrencyInfo.GetCurrencyInfo(id).name`.
+- Produces: GameData table `"OrderRewards"` (shape and build rule under Contract additions; `Data/OrderRewards.lua` is `local ADDON_NAME, ns = ...` then `ns.GameData.Define("OrderRewards", 70575, { items = {}, currencies = {} })` with a comment explaining how to fill it from an in-game `/dump C_CraftingOrders.GetCrafterOrders()[n].npcOrderRewards`), `Orders.ORDER_TYPES = {[0]="public",[1]="guild",[2]="personal",[3]="npc"}`, `Orders.REAGENT_STATES = {[0]="all",[1]="some",[2]="none"}`, `Orders:Settings() -> table` (fills defaults into `db.global.settings.orders`), `Orders:Normalize(orderInfo) -> OrderInput`, `Orders:ValueRewards(rewards) -> total, valued, unpriced`.
 - `Orders:Settings()` defaults: `{lowTipMargin = 100000, expiringSoonSeconds = 3600, knowledgePointValue = 500000, moxieValue = 20000, moxieNamePattern = "Moxie", rewardOverrides = {}, claimMinScore = 0, claimBlockingRisks = {noMatsLowTip=true, unreachableQuality=true, noConcentration=true, expiringSoon=true, blockedCustomer=true}, filters = {hideRisks = {}, orderTypes = {public=true, guild=true, personal=true, npc=true}, minScore = nil, hideUnscored = false}}`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -232,13 +248,14 @@ describe("Orders:Normalize / ValueRewards", function()
     prices = { [210000] = 30000 }
     P2.fake_module(ns, "Prices", { Get = function(_, id) return { value = prices[id], source = prices[id] and "auction" } end })
     P2.load(ns, {"Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua"})
-    ns.GameData.OrderRewards = { items = { [99001] = {kind="knowledge", points=1} }, currencies = { [3256] = {kind="moxie"} } }
+    ns.GameData.Define("OrderRewards", 70575, { items = { [99001] = {kind="knowledge", points=1} }, currencies = { [3256] = {kind="moxie"} } })
     O = ns.FS:GetModule("Orders")
   end)
   it("normalizes a raw order", function()
     local i = O:Normalize(P2.raw_order({ orderType=3, reagentState=2,
       reagents = { {reagentInfo={reagent={itemID=100}, quantity=3, dataSlotIndex=1}, slotIndex=1, source=1, isBasicReagent=true},
-                   {reagentInfo={itemID=101, quantity=2, dataSlotIndex=2}, slotIndex=2, source=1, isBasicReagent=true},
+                   {reagentInfo={reagent={itemID=101}, quantity=2, dataSlotIndex=2}, slotIndex=2, source=1, isBasicReagent=true},
+                   {reagentInfo={reagent={currencyID=3008}, quantity=5, dataSlotIndex=4}, slotIndex=4, source=1, isBasicReagent=true},
                    {reagentInfo={reagent={itemID=200}, quantity=1, dataSlotIndex=3}, slotIndex=3, source=2, isBasicReagent=true} },
       npcOrderRewards = { {itemLink="|cff0070dd|Hitem:12345::::|h[X]|h|r", count=2}, {currencyType=3056, count=10} } }))
     assert.equal("npc", i.orderType); assert.equal("none", i.reagentState); assert.equal(4444, i.recipeID)
@@ -262,6 +279,11 @@ describe("Orders:Normalize / ValueRewards", function()
     local total, _, unpriced = O:ValueRewards({ {currencyID=4000,count=3}, {itemID=88888,count=1} })
     assert.equal(130000, total); assert.is_false(unpriced)
   end)
+  it("treats 1a's MoxieCurrency ids as Moxie", function()
+    ns.GameData.Define("MoxieCurrency", 70575, { [2871] = 3300 })
+    local total, valued = O:ValueRewards({ {currencyID=3300,count=2} })
+    assert.equal(40000, total); assert.equal("moxie", valued[1].kind)
+  end)
 end)
 ```
 
@@ -273,16 +295,17 @@ Expected: FAIL (`Modules/Orders.lua` not found)
 - [ ] **Step 3: Implement `Data/OrderRewards.lua` and `Orders:Settings/Normalize/ValueRewards` in `Modules/Orders.lua`**
 
 `Normalize`:
-- `provided` sums customer-source (`1`) reagents. Take the itemID from `reagentInfo.reagent.itemID` (Midnight shape), falling back to `reagentInfo.itemID`.
+- `provided` sums customer-source (`1`) reagents. The itemID is `reagentInfo.reagent.itemID` (1a's verified Midnight `CraftingReagentInfo` shape, `{reagent = {itemID?, currencyID?}, dataSlotIndex, quantity}`); entries with only a `currencyID` are skipped.
 - `expiresAt = ns.FS:Now() + (expirationTime - C_CraftingOrders.GetCraftingOrderTime())`.
 - The reward itemID comes from `itemLink:match("item:(%d+)")`.
 
 `ValueRewards` checks these sources in order, per unit, and uses the first that gives a value:
 1. `rewardOverrides["item:<id>"|"currency:<id>"]`
-2. `ns.GameData.OrderRewards`: `knowledge` → `points × knowledgePointValue`; `moxie` → `moxieValue`
-3. for items, `Prices:Get(itemID).value` (kind `"reagent"`)
-4. for currencies, a name containing `moxieNamePattern` (kind `"moxie"`)
-5. otherwise kind `"unknown"`, `value = nil`, `unpriced = true`, and a count is added to `db.global.ordersUnknownRewards[key]` with `lastSeen = Now()`.
+2. `ns.GameData.Get("OrderRewards")`: `knowledge` → `points × knowledgePointValue`; `moxie` → `moxieValue`
+3. for currencies, an id that is a value in 1a's `ns.GameData.Get("MoxieCurrency")` (kind `"moxie"`, `moxieValue`)
+4. for items, `Prices:Get(itemID).value` when non-nil (kind `"reagent"`)
+5. for currencies, a name containing `moxieNamePattern` (kind `"moxie"`)
+6. otherwise kind `"unknown"`, `value = nil`, `unpriced = true`, and a count is added to `db.global.ordersUnknownRewards[key]` with `lastSeen = Now()`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -292,7 +315,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Data/OrderRewards.lua Modules/Orders.lua tests/orders/normalize_spec.lua FabricationStation.toc .luacheckrc
+git add Data/OrderRewards.lua Modules/Orders.lua tests/orders/normalize_spec.lua FabricationStation.toc
 git commit -m "feat: normalize crafting orders and value patron rewards"
 ```
 
@@ -303,7 +326,7 @@ git commit -m "feat: normalize crafting orders and value patron rewards"
 - Test: `tests/orders/score_spec.lua`
 
 **Interfaces:**
-- Consumes: `Recipes:Evaluate(recipeID, charKey, opts) -> RecipeResult`; `Recipes:GetRanked(filter)`; `Scanner:GetSchematic(recipeID).skillLineID`; `Scanner:ProjectConcentration(charKey, skillLineID, atTime)`; `Customers:IsBlocked`; Task 3 `Normalize`, `ValueRewards`, `Settings`.
+- Consumes: 1b `Recipes:Evaluate(recipeID, charKey, opts) -> RecipeResult` with `opts = {targetQuality?, useConcentration?, providedReagents = {[itemID]=qty}?}` (`ownedReagentsFree` left nil so 1a's `settings.costing.ownedReagentsFree` applies). Fields used: `expectedQuality`, `allocation = { {slotIndex, itemID, quantity} }`, `reagentCost` (copper; already excludes `providedReagents`), `concentrationCost` (points spent up front), `expectedConcentrationCost` (points after Ingenuity refunds; the unit of 1b's `goldPerConcentration`), `flags = {noPrice, stalePrice, staleData, unknownRecipe, estimated}`. `ingenuityValue` is concentration points, not copper, and is not used. 1b's `flags.noPrice` is also set when only an *output* price is missing, which does not matter for an order (the customer receives the item), so Orders computes its own `noPrice` below. 1b `Recipes:GetRanked(filter)`; 1a `Scanner:GetSchematic(recipeID).skillLineID`; 1a `Scanner:ProjectConcentration(charKey, skillLineID, atTime) -> value, max` (nil without a snapshot); 1a `Prices:Get`; `Customers:IsBlocked`; Task 3 `Normalize`, `ValueRewards`, `Settings`.
 - Produces: `Orders.RISKS = {"noMatsLowTip","unreachableQuality","noConcentration","expiringSoon","blockedCustomer"}` (in this order; a view's `risks` list follows the same order); `Orders.RISK_LABELS = {noMatsLowTip="No mats, low tip", unreachableQuality="Can't reach min quality", noConcentration="Not enough concentration", expiringSoon="Expiring soon", blockedCustomer="Blocked customer"}`; `Orders:BuildContext(charKey) -> ctx = {charKey, now, bestGPC, concentrationFor = fn(recipeID) -> number|nil}`; `Orders:ScoreInput(input, ctx) -> OrderView`; `Orders:Score(orderInfo) -> OrderView` (contract; `= ScoreInput(Normalize(orderInfo), BuildContext(ns.FS:CharKey()))`); `Orders:IsHidden(view, filters) -> bool`; `Orders:Filter(views, filters) -> views` (visible only, sorted by score descending, nil scores last); `Orders:GetBestClaimable(views, claim) -> view|nil, reason` with `claim = {claimsRemaining = n, hasClaimed = bool}` and `reason` one of `"alreadyClaimed"`, `"none"`.
 - `bestGPC` = `Recipes:GetRanked({charKey=charKey, usesConcentration=true, sortBy="goldPerConcentration"})[1].goldPerConcentration`, floored at 0, or 0 when there are no results.
 
@@ -320,12 +343,21 @@ if target and (r.expectedQuality or 0) < target then
   r, usedConc = Recipes:Evaluate(input.recipeID, ctx.charKey, opts), true
 end
 local concCost = usedConc and (r.concentrationCost or 0) or 0
+local concCharge = usedConc and (r.expectedConcentrationCost or concCost) or 0   -- same unit as bestGPC
 local net = commission + rewardsValue - (r.reagentCost or 0)
-local scorable = not (r.flags.noPrice or r.flags.unknownRecipe)
-local score = scorable and (net - math.floor(concCost * ctx.bestGPC)) or nil
+-- order-specific noPrice: a reagent the crafter pays for has no price (output price is irrelevant)
+local noPrice = r.reagentCost == nil
+for _, a in ipairs(r.allocation or {}) do
+  if a.quantity - (input.provided[a.itemID] or 0) > 0 and Prices:Get(a.itemID).value == nil then noPrice = true end
+end
+local scorable = not (noPrice or r.flags.unknownRecipe)
+local score = scorable and (net - math.floor(concCharge * ctx.bestGPC)) or nil
+-- view.flags = {noPrice = noPrice, unknownRecipe = r.flags.unknownRecipe, unpricedReward = unpriced,
+--               estimated = r.flags.estimated, stalePrice = r.flags.stalePrice}
 -- risks:
 --  noMatsLowTip       reagentState == "none" and commission - reagentCost < settings.lowTipMargin
---  unreachableQuality target and r.expectedQuality < target
+--  unreachableQuality target and (r.expectedQuality or 0) < target   (1b does not define the result for an
+--                     unreachable targetQuality; treat a nil expectedQuality as unreached, never error)
 --  noConcentration    usedConc and not unreachable and ctx.concentrationFor(recipeID) ~= nil and concCost > that value
 --  expiringSoon       input.expiresAt - ctx.now < settings.expiringSoonSeconds
 --  blockedCustomer    input.customer and Customers:IsBlocked(input.customer)
@@ -344,10 +376,10 @@ describe("Orders scoring", function()
   before_each(function()
     ns = P2.boot()
     ev = { plain = {expectedQuality=3, reagentCost=200000, concentrationCost=0, flags={}},
-           conc  = {expectedQuality=4, reagentCost=200000, concentrationCost=50, flags={}} }
+           conc  = {expectedQuality=4, reagentCost=200000, concentrationCost=50, expectedConcentrationCost=50, flags={}} }
     P2.fake_module(ns, "Recipes", { Evaluate = function(_, _, _, o) return o.useConcentration and ev.conc or ev.plain end })
     P2.fake_module(ns, "Customers", { IsBlocked = function(_, n) return n == "Bad-Silvermoon" end, NormalizeName = function(_, n) return n end })
-    P2.fake_module(ns, "Prices", { Get = function() return {} end })
+    P2.fake_module(ns, "Prices", { Get = function(_, id) return { value = id == 100 and 1000 or nil } end })
     P2.load(ns, {"Data/OrderRewards.lua", "Modules/Orders.lua"}); O = ns.FS:GetModule("Orders")
   end)
   it("scores commission minus reagent cost", function()
@@ -371,9 +403,15 @@ describe("Orders scoring", function()
     assert.same({"noMatsLowTip","expiringSoon","blockedCustomer"}, v.risks)
     assert.same({}, O:ScoreInput(input({reagentState="none", tipAmount=300000, consortiumCut=30000}), ctx()).risks)
   end)
-  it("leaves score nil when a price is missing", function()
-    ev.plain.flags = {noPrice=true}
+  it("leaves score nil when a paid reagent has no price", function()
+    ev.plain.allocation = { {slotIndex=1, itemID=100, quantity=2}, {slotIndex=2, itemID=200, quantity=3} }
     local v = O:ScoreInput(input(), ctx()); assert.is_nil(v.score); assert.is_true(v.flags.noPrice)
+    assert.equal(250000, O:ScoreInput(input({provided={[200]=3}}), ctx()).score)   -- the customer provides the unpriced one
+  end)
+  it("still scores when only 1b's output price is missing, and passes estimated through", function()
+    ev.plain.flags = {noPrice=true, estimated=true}
+    local v = O:ScoreInput(input(), ctx())
+    assert.equal(250000, v.score); assert.is_false(v.flags.noPrice); assert.is_true(v.flags.estimated)
   end)
   it("filters and picks the best claimable order", function()
     local A = {orderID=1, orderType="personal", score=300000, risks={"expiringSoon"}}
@@ -413,13 +451,13 @@ git commit -m "feat: score crafting orders with risk flags, filters and best-cla
 ### Task 5: Order board capture, snapshot, live updates, Claim Best Order, fulfilment, personal counts
 
 **Files:**
-- Modify: `Modules/Orders.lua`, `.luacheckrc` (`ProfessionsFrame`, `EventUtil`, `hooksecurefunc`, `C_TradeSkillUI`)
+- Modify: `Modules/Orders.lua` (`.luacheckrc` needs no change: 1a already lists `ProfessionsFrame`, `hooksecurefunc`, `C_TradeSkillUI`, `C_CraftingOrders`)
 - Test: `tests/orders/board_spec.lua`, `tests/orders/claim_click_only_spec.lua`
 
 **Interfaces:**
-- Consumes: Task 4 scoring; `ns.FS:Debounce(key, seconds, fn)`; `ns.FS:SafeCall`; `C_CraftingOrders.GetCrafterOrders/GetClaimedOrder/GetOrderClaimInfo/ClaimOrder/GetPersonalOrdersInfo`; `C_TradeSkillUI.GetChildProfessionInfo().profession`; `C_TradeSkillUI.GetItemCraftedQualityByItemInfo(link)`.
+- Consumes: Task 4 scoring; 1a `ns.FS:Debounce(key, seconds, fn)` (trailing, not error-isolated), `ns.FS:Wrap(moduleName, fn)`, `ns.FS:LogError(source, errText)`, `ns.Msg`; 1a `read_toc` (test only); `C_CraftingOrders.GetCrafterOrders/GetClaimedOrder/GetOrderClaimInfo/ClaimOrder/GetPersonalOrdersInfo`; `C_TradeSkillUI.GetChildProfessionInfo().profession`; `C_TradeSkillUI.GetItemCraftedQualityByItemInfo(link)`.
 - Produces:
-  - `Orders:OnBoardShown(orderTypeEnum, orders)` replaces that type's views in the live set and in `db.global.ordersSnapshot`, sets `snapshot.time = Now()` and `snapshot.charKey`, and sends `FS_ORDERS_CHANGED`.
+  - `Orders:OnBoardShown(orderTypeEnum, orders)` replaces that type's views in the live set and in `db.global.ordersSnapshot`, sets `snapshot.time = Now()` and `snapshot.charKey`, and sends `ns.Msg.ORDERS_CHANGED`.
   - `Orders:GetSnapshot() -> {time, charKey, orders}` (contract; leaves out views with `expiresAt < Now()`).
   - `Orders:GetLiveViews() -> {OrderView}` (current board only; empty after the Professions frame closes).
   - `Orders:GetView(orderID) -> OrderView|nil` (live first, then snapshot).
@@ -427,26 +465,26 @@ git commit -m "feat: score crafting orders with risk flags, filters and best-cla
   - `Orders:OnCustomerNameUpdated(event, name, orderID)`, `Orders:OnRewardsUpdated(event, rewards, orderID)`.
   - `Orders:GetClaimedOrder() -> OrderInput|nil`.
   - `Orders:ClaimBest() -> view|nil, reason`: calls `ClaimOrder` at most once. Only `OrdersSidePanel`'s `OnClick` may call it.
-  - `Orders:OnFulfillClicked(orderID, note, profession)` (post-hook on `C_CraftingOrders.FulfillOrder`), `Orders:OnFulfillResponse(event, result, orderID)`: sends `FS_ORDER_FULFILLED` and removes the order from the snapshot.
-  - `Orders:UpdatePersonalCounts(infos) -> arrivals` with `{ {profession, professionName, count, delta} }`; sends `FS_PERSONAL_ORDER_ARRIVED(professionName, count, delta)` for each arrival.
+  - `Orders:OnFulfillClicked(orderID, note, profession)` (post-hook on `C_CraftingOrders.FulfillOrder`), `Orders:OnFulfillResponse(event, result, orderID)`: sends `ns.Msg.ORDER_FULFILLED` and removes the order from the snapshot.
+  - `Orders:UpdatePersonalCounts(infos) -> arrivals` with `{ {profession, professionName, count, delta} }`; sends `ns.Msg.PERSONAL_ORDER_ARRIVED(professionName, count, delta)` for each arrival.
   - `Orders:InstallBoardHook() -> bool`.
-- `OnEnable` registers, each through `SafeCall("Orders")`:
+- `OnEnable` registers, each handler wrapped with `ns.FS:Wrap("Orders", ...)`:
   - game events: `CRAFTINGORDERS_UPDATE_CUSTOMER_NAME`, `CRAFTINGORDERS_UPDATE_REWARDS`, `CRAFTINGORDERS_FULFILL_ORDER_RESPONSE`, `CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS`, and `CRAFTINGORDERS_UPDATE_ORDER_COUNT` (Personal type only; both count events call `UpdatePersonalCounts(C_CraftingOrders.GetPersonalOrdersInfo())`)
-  - messages `FS_PRICES_CHANGED`, `FS_RECIPES_CHANGED` and `FS_CUSTOMERS_CHANGED`, each calling `ns.FS:Debounce("orders-rescore", 0.5, Rescore)`
+  - messages `ns.Msg.PRICES_CHANGED`, `ns.Msg.RECIPES_CHANGED` and `ns.Msg.CUSTOMERS_CHANGED`, each calling `ns.FS:Debounce("orders.rescore", 0.5, ns.FS:Wrap("Orders", function() self:Rescore() end))`
   - `hooksecurefunc(C_CraftingOrders, "FulfillOrder", ...)`
-  - `EventUtil.ContinueOnAddOnLoaded("Blizzard_Professions", InstallBoardHook)`
+  - `InstallBoardHook`: called now when `ProfessionsFrame` exists, else from the first `ADDON_LOADED` whose arg is `"Blizzard_Professions"` (then that event is unregistered)
 
-  `InstallBoardHook` post-hooks `ProfessionsFrame.OrdersPage` `ShowOrders` and calls `OnBoardShown(page.orderType, C_CraftingOrders.GetCrafterOrders())`. It returns false and prints one chat line if the target is missing. It also hooks `ProfessionsFrame` `OnHide` (via `HookScript`) to clear the live views.
+  `InstallBoardHook` post-hooks `ProfessionsFrame.OrdersPage` `ShowOrders` and calls `OnBoardShown(page.orderType, C_CraftingOrders.GetCrafterOrders())`. If the target is missing it returns false, calls `ns.FS:LogError("Orders", "hook target missing: ProfessionsFrame.OrdersPage.ShowOrders")` and prints one chat line; the rest of Orders keeps working. It also hooks `ProfessionsFrame` `OnHide` (via `HookScript`) to clear the live views.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```lua
 local P2 = require("tests.helpers.phase2")
 describe("Orders board", function()
-  local ns, O, wow, claimed, claimCalls
+  local ns, O, W, claimed, claimCalls
   before_each(function()
     claimed, claimCalls = nil, {}
-    ns, wow = P2.boot({
+    ns, W = P2.boot({
       C_CraftingOrders = { GetCraftingOrderTime = function() return 5000 end, GetClaimedOrder = function() return claimed end,
         GetOrderClaimInfo = function() return {claimsRemaining = 3} end, ClaimOrder = function(id, p) claimCalls[#claimCalls+1] = {id, p} end },
       C_TradeSkillUI = { GetChildProfessionInfo = function() return {profession = 7} end,
@@ -479,6 +517,11 @@ describe("Orders board", function()
     assert.spy(s).was.called_with(O, "Me-Silvermoon")
     assert.equal(1, #O:GetSnapshot().orders)
   end)
+  it("debounces rescoring on bus messages", function()
+    local s = spy.on(O, "Rescore")
+    ns.FS:SendMessage("FS_PRICES_CHANGED", 2); ns.FS:SendMessage("FS_CUSTOMERS_CHANGED", "Bob-Silvermoon")
+    W.advance(0.4); assert.spy(s).was_not.called(); W.advance(0.2); assert.spy(s).was.called(1)
+  end)
   it("claims the best order once and refuses while one is claimed", function()
     O:OnBoardShown(2, { P2.raw_order({orderID=10, tipAmount=900000}), P2.raw_order({orderID=11}) })
     assert.equal(10, O:ClaimBest().orderID); assert.same({{10, 7}}, claimCalls)
@@ -505,7 +548,7 @@ describe("Orders board", function()
 end)
 ```
 
-`tests/orders/claim_click_only_spec.lua`: parse `FabricationStation.toc` and read every listed `.lua` file. Then assert:
+`tests/orders/claim_click_only_spec.lua`: read every `.lua` file in 1a's `read_toc("FabricationStation.toc").files`. Then assert:
 - `C_CraftingOrders.ClaimOrder(` occurs in exactly one file, `Modules/Orders.lua`, inside `function Orders:ClaimBest`.
 - `:ClaimBest(` occurs outside `Modules/Orders.lua` only in `UI/OrdersPanel.lua`, on a line inside a `SetScript("OnClick"` block. Track the enclosing `SetScript("OnClick", function` … `end)` by line numbers.
 
@@ -532,7 +575,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Modules/Orders.lua tests/orders/board_spec.lua tests/orders/claim_click_only_spec.lua .luacheckrc
+git add Modules/Orders.lua tests/orders/board_spec.lua tests/orders/claim_click_only_spec.lua
 git commit -m "feat: capture order board, snapshot, claim best order, fulfilment and personal counts"
 ```
 
@@ -540,14 +583,14 @@ git commit -m "feat: capture order board, snapshot, claim best order, fulfilment
 
 **Files:**
 - Create: `Modules/Ledger.lua`
-- Modify: `FabricationStation.toc`, `.luacheckrc` (`C_DateAndTime`)
+- Modify: `FabricationStation.toc` (`Modules\Ledger.lua` after `Modules\Orders.lua`), `.luacheckrc` (`C_DateAndTime`)
 - Test: `tests/ledger/ledger_spec.lua`
 
 **Interfaces:**
-- Consumes: `ns.FS:Now()`, `ns.FS:CharKey()`; `C_DateAndTime.GetSecondsUntilWeeklyReset()`.
+- Consumes: `ns.FS:Now()`, `ns.FS:CharKey()`, `ns.Msg.LEDGER_CHANGED`; 1a default `db.global.ledger = { entries = {} }`; `C_DateAndTime.GetSecondsUntilWeeklyReset()`.
 - Produces:
-  - `Ledger:Settings()` with defaults `{benchmarkMinSamples = 3, keepDays = 365}`.
-  - `Ledger:Add(entry)` (contract; fills `time = Now()` and `charKey = CharKey()` when missing; rejects a `type` outside `craft|sale|commission` or a non-integer `amount` with `error`; sends `FS_LEDGER_CHANGED`).
+  - `Ledger:Settings()` with defaults `{benchmarkMinSamples = 3, keepDays = 365}` in `db.global.settings.ledger`.
+  - `Ledger:Add(entry)` (contract; fills `time = Now()` and `charKey = CharKey()` when missing; rejects a `type` outside `craft|sale|commission` or a non-integer `amount` with `error`; sends `ns.Msg.LEDGER_CHANGED`).
   - `Ledger:Query(filter) -> {LedgerEntry}` (contract; `filter = {type?, since?, before?, recipeID?, charKey?, customer?}`; newest first).
   - `Ledger:Prune(now)`.
   - `Ledger:WeekStart(now) -> number`.
@@ -607,7 +650,7 @@ Expected: FAIL (`Modules/Ledger.lua` not found)
 
 - [ ] **Step 3: Implement the `Ledger` functions listed under Interfaces in `Modules/Ledger.lua`**
 
-The store is `db.global.ledger = {entries = {}, costBasis = {}, nameIndex = {}}`, created lazily. `OnEnable` calls `Prune(Now())`.
+The store is `db.global.ledger = {entries = {}, costBasis = {}, nameIndex = {}}`: `entries` comes from 1a's defaults, `costBasis` and `nameIndex` are created lazily (guard `entries` with `or {}` too). `OnEnable` calls `Prune(Now())`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -628,7 +671,7 @@ git commit -m "feat: add Ledger store with weekly, per-recipe profit and tip ben
 - Test: `tests/ledger/capture_spec.lua`
 
 **Interfaces:**
-- Consumes: `Scanner:GetSchematic(recipeID)` (`reagentSlots = { {slotIndex, required, quantity, reagents = {itemID,...}, kind} }`); `Prices:Get`; `Orders:GetClaimedOrder() -> OrderInput|nil` (Task 5); `FS_ORDER_FULFILLED` / `FulfilledOrder` (Task 5).
+- Consumes: 1a `Scanner:GetSchematic(recipeID)` (`reagentSlots = { {slotIndex, required, quantity, reagents = {itemID,...} (lowest quality rank first), kind, dataSlotIndex, dataSlotType, automatic, currencyID?} }`; currency-only slots set `currencyID` and leave it out of `reagents`); 1a `Prices:Get`; `Enum.TradeskillSlotDataType.ModifiedReagent` (= 2, in 1a's stubs); `Orders:GetClaimedOrder() -> OrderInput|nil` (Task 5); `ns.Msg.ORDER_FULFILLED` / `FulfilledOrder` (Task 5). `craftingReagents` has 1a's verified shape `{ {reagent = {itemID?, currencyID?}, dataSlotIndex, quantity} }` and covers only `ModifiedReagent` slots, whether Blizzard's UI or 1b's `Queue:CraftNext` (via `Scanner:ToCraftingReagentInfo`) made the call; the post-hook sees both.
 - Produces:
   - `Ledger:OnCraftRecipe(recipeID, numCasts, craftingReagents, recipeLevel, orderID, applyConcentration)` (post-hook on `C_TradeSkillUI.CraftRecipe`).
   - `Ledger:OnCraftResult(event, data)` (`TRADE_SKILL_ITEM_CRAFTED_RESULT`).
@@ -638,33 +681,37 @@ git commit -m "feat: add Ledger store with weekly, per-recipe profit and tip ben
   - `Ledger.ItemNameFromLink(link) -> string|nil`.
   - `Ledger:ResolveItemName(name) -> itemID|nil, ambiguous`.
 - `CostOfCraft` rules:
-  - A reagent's itemID is `r.reagent and r.reagent.itemID or r.itemID`; currency reagents cost 0.
-  - For each schematic slot, use the `craftingReagents` entries whose itemID is in `slot.reagents`. If there are none, a required slot uses `slot.reagents[1] × slot.quantity` and marks the cost `estimated`.
+  - A reagent's itemID is `r.reagent.itemID`; entries with only `r.reagent.currencyID` cost 0. Slots with `currencyID` and empty `reagents` are skipped.
+  - For each schematic slot, use the `craftingReagents` entries whose `dataSlotIndex == slot.dataSlotIndex`. If there are none and the slot is required:
+    - a slot whose `dataSlotType ~= Enum.TradeskillSlotDataType.ModifiedReagent` is a fixed reagent that Blizzard never passes, so it costs exactly `slot.reagents[1] × slot.quantity` (not estimated);
+    - a `ModifiedReagent` slot with no entry uses `slot.reagents[1] × slot.quantity` and marks the cost `estimated`.
+    Optional and finishing slots with no entry add nothing.
   - The paid quantity per item is `max(0, used - provided[itemID])`.
   - Returned reagents are subtracted at their price.
   - Any used item without a price makes the cost `incomplete`, and the cost then sums only the priced items.
-- The craft entry is `{type="craft", amount=-cost, itemID=data.itemID, quantity=data.quantity, quality=data.craftingQuality, recipeID, ref=orderID, incomplete?}`. A non-order craft that is not incomplete also adds to `costBasis[itemID] = {totalCost += cost, totalQty += quantity, recipeID}` and sets `nameIndex[ItemNameFromLink(data.hyperlink)] = {itemID, ambiguous}`, where `ambiguous` becomes true once a second itemID has been seen for that name.
+- The craft entry is `{type="craft", amount=-cost, itemID=data.itemID, quantity=data.quantity, quality=data.craftingQuality, recipeID, ref=orderID, operationID=data.operationID, incomplete?}`. A non-order craft that is not incomplete also adds to `costBasis[itemID] = {totalCost += cost, totalQty += quantity, recipeID}` and sets `nameIndex[ItemNameFromLink(data.hyperlink)] = {itemID, ambiguous}`, where `ambiguous` becomes true once a second itemID has been seen for that name.
+- Multicraft (same rule as 1b's Queue Task 12): a result whose `operationID` equals the last recorded craft's `operationID` is an extra from the same cast. It adds its `quantity` to that craft entry (and to `costBasis.totalQty` when that entry fed the cost basis), records no new cost and does not consume a cast.
 - `ItemNameFromLink` strips `|A...|a` atlas markup and trims spaces from the text inside `[...]`.
 - The commission entry is `{type="commission", amount=commission, tip, recipeID, itemID, quality, customer, orderType, ref=orderID, rewardsValue, cost = Σ -amount of craft entries with ref == orderID, or nil when none}`.
 - Sale entries:
   - From the invoice: `invoiceType == "seller"` gives `{type="sale", source="invoice", itemName, itemID, ambiguous, quantity=count or 1, amount=bid-consignment, buyer=playerName, deposit, recipeID=costBasis.recipeID, cost=floor(totalCost/totalQty*quantity+0.5) or nil}`.
   - Subject fallback, used only when the invoice is nil: the subject matches a pattern built from `AUCTION_SOLD_MAIL_SUBJECT`, or the literal `"Auction successful: %s"` when that global is missing. It produces `{source="subject", itemName=<capture>, quantity=1, amount=header money}`.
   - Dedupe signature: `itemName|bid or money|count|playerName|floor(daysLeft*1440)`, kept for the session. Header money of 0 is skipped.
-- `OnEnable` sets up, each through `SafeCall("Ledger")`:
+- `OnEnable` sets up, each body wrapped with `ns.FS:Wrap("Ledger", …)`; the two global hooks are installed once per session (guard `self.hooked`, as 1a's Prices does, because `hooksecurefunc` cannot be undone and a module can be disabled and re-enabled), and each hook body returns early while `not self:IsEnabled()`:
   - `hooksecurefunc(C_TradeSkillUI, "CraftRecipe", …)`
   - `hooksecurefunc("TakeInboxMoney", …)` and `hooksecurefunc("AutoLootMailItem", …)`
   - the event `TRADE_SKILL_ITEM_CRAFTED_RESULT`
-  - the message `FS_ORDER_FULFILLED`
+  - the message `ns.Msg.ORDER_FULFILLED`
 
 - [ ] **Step 1: Write the failing tests**
 
 ```lua
 local P2 = require("tests.helpers.phase2")
 describe("Ledger capture", function()
-  local ns, L, inv, hdr, claimed
+  local ns, L, inv, hdr, claimed, op
   local LINK = "|cff1eff00|Hitem:211111::|h[Potion of Foo |A:Professions-ChatIcon-Quality-Tier3:17:15::1|a]|h|r"
   before_each(function()
-    inv, hdr, claimed = {}, {}, nil
+    inv, hdr, claimed, op = {}, {}, nil, 0
     ns = P2.boot({ GetInboxInvoiceInfo = function(i) return unpack(inv[i] or {}, 1, 12) end,
                    GetInboxHeaderInfo = function(i) return unpack(hdr[i] or {}, 1, 12) end,
                    AUCTION_SOLD_MAIL_SUBJECT = "Auction successful: %s",
