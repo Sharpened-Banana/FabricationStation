@@ -21,8 +21,8 @@ local ADDON_NAME, ns = ...
 -- (Recipes.DEFAULTS.applyWritesBlizzardSlots) until the in-game taint check has passed; the panel says so.
 --
 -- Display rules (same as the tabs): a nil profit is "no price" (never 0g); noPrice with a profit shows the profit and
--- "some prices missing"; estimated results say "estimate"; the price age is shown; money goes through
--- ns.UI.FormatMoney.
+-- "some prices missing"; estimated results say "estimate"; a target quality the reagents cannot reach (the result
+-- crafts a lower one) says "quality unreachable"; the price age is shown; money goes through ns.UI.FormatMoney.
 --
 -- Craft Next is a protected action: the only reference to it is inside the button's OnClick handler (the structural
 -- check in tests/queue/craft_spec.lua enforces that).
@@ -111,6 +111,7 @@ local function flags_text(r)
   if flags.stalePrice then parts[#parts + 1] = "stale price" end
   if flags.staleData then parts[#parts + 1] = "stale data" end
   if flags.estimated then parts[#parts + 1] = "estimate" end
+  if flags.unreachableTarget then parts[#parts + 1] = "quality unreachable" end
   if flags.unknownRecipe then parts[#parts + 1] = "unknown recipe" end
   return table.concat(parts, ", ")
 end

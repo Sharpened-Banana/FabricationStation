@@ -15,10 +15,12 @@ local ADDON_NAME, ns = ...
 -- line. OnDisable unregisters the callback and hides every label (also those of rows the ScrollBox has pooled, so a
 -- reused row never shows a stale label).
 --
--- Display rules (same as the tabs, in the compact form a row has room for): a nil profit is "?" (never 0g); a profit
--- with some prices missing (flags.noPrice) is shown with a trailing "?"; amounts under 1g are shown in silver, under
--- 1s in copper. Gold is rounded down, so a profit is never overstated. ns.UI.FormatMoney is the full-width form for
--- tooltips and panels; a row label is too narrow for it.
+-- Display rules (same as the tabs, in the compact form a row has room for): a nil, NaN or infinite profit is "?"
+-- (never 0g); a profit with some prices missing (flags.noPrice) is shown with a trailing "?"; an estimated one
+-- (flags.estimated) with a leading "~"; amounts under 1g are shown in silver, under 1s in copper. Gold is rounded
+-- down, so a profit is never overstated. A recipe the character does not know (flags.unknownRecipe: Blizzard's list
+-- can show unlearned recipes) gets no label. ns.UI.FormatMoney is the full-width form for tooltips and panels; a row
+-- label is too narrow for it.
 local Labels = ns.FS:NewModule("RecipeListLabels", "AceEvent-3.0")
 
 local M = {}
@@ -50,11 +52,14 @@ local function amount_text(abs)
   return ("%dc"):format(abs)
 end
 
--- RecipeResult -> label text, colour key ("green" | "red" | "grey"). A nil (or NaN) profit is "?" / grey; a profit
--- of exactly 0 is "0g" / grey; a profit with a price missing keeps its sign colour and gets a trailing "?".
+-- RecipeResult -> label text, colour key ("green" | "red" | "grey"). A nil, NaN or infinite profit is "?" / grey; a
+-- profit of exactly 0 is "0g" / grey; a profit with a price missing keeps its sign colour and gets a trailing "?";
+-- an estimated profit gets a leading "~".
 function M.LabelText(result)
   local profit = type(result) == "table" and result.profit or nil
-  if type(profit) ~= "number" or profit ~= profit then return "?", "grey" end
+  if type(profit) ~= "number" or profit ~= profit or profit == math.huge or profit == -math.huge then
+    return "?", "grey"
+  end
   local text, color
   local abs = math.floor(math.abs(profit))
   if abs == 0 then
@@ -64,7 +69,9 @@ function M.LabelText(result)
   else
     text, color = "-" .. amount_text(abs), "red"
   end
-  if type(result.flags) == "table" and result.flags.noPrice then text = text .. "?" end
+  local flags = type(result.flags) == "table" and result.flags or {}
+  if flags.noPrice then text = text .. "?" end
+  if flags.estimated then text = "~" .. text end
   return text, color
 end
 
@@ -96,7 +103,8 @@ local function recipe_id_of(elementData)
   return type(info) == "table" and info.recipeID or nil
 end
 
--- Labels `row` for its element, or hides its label when it holds no recipe or the recipe has no result yet.
+-- Labels `row` for its element, or hides its label when it holds no recipe, the recipe has no result yet or the
+-- character does not know it.
 local function label_row(row, elementData)
   local recipeID = recipe_id_of(elementData)
   local result
@@ -104,7 +112,7 @@ local function label_row(row, elementData)
     local Recipes = ns.FS:GetModule("Recipes", true)
     result = Recipes and Recipes:Evaluate(recipeID, ns.FS:CharKey(), {})
   end
-  if not result then
+  if not result or (type(result.flags) == "table" and result.flags.unknownRecipe) then
     hide_label(row)
     return
   end

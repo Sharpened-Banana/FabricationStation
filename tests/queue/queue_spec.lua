@@ -285,6 +285,17 @@ describe("Queue", function()
     end)
   end)
 
+  describe("entry results", function()
+    it("returns the evaluation the cost comes from, nil for an unknown entry", function()
+      local id = Q:Add({ recipeID = 9001, quantity = 3, charKey = "Alt-Realm", targetQuality = 2 })
+      local r = Q:GetEntryResult(id)
+      assert.equals(900, r.reagentCost)
+      local last = world.evaluated[#world.evaluated]
+      assert.same({ "Alt-Realm", 2 }, { last.charKey, last.opts.targetQuality })
+      assert.is_nil(Q:GetEntryResult(12345))
+    end)
+  end)
+
   describe("costs", function()
     it("is nil for an unknown entry or an uncached recipe", function()
       assert.is_nil(Q:GetEntryCost(999))

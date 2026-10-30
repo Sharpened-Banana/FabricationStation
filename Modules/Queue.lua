@@ -335,14 +335,21 @@ function Queue:GetEntryMissing(id)
   return e and missing_total({ e }) or {}
 end
 
+-- The RecipeResult one craft of the entry is costed with (market prices, the entry's options), or nil for an
+-- unknown id or a recipe that cannot be evaluated. Its flags and priceAgeDays describe GetEntryCost. Read-only.
+-- Second return: the entry (a copy).
+function Queue:GetEntryResult(id)
+  local e = find_entry(id)
+  if not e then return nil end
+  return recipes():Evaluate(e.recipeID, e.charKey, {
+    targetQuality = e.targetQuality, useConcentration = e.useConcentration, providedReagents = e.providedReagents,
+  }), e
+end
+
 -- Copper to craft the entry: the per-craft reagent cost times the quantity. Nil when it is unknown
 -- (no price, or the recipe cannot be evaluated), never 0 for those.
 function Queue:GetEntryCost(id)
-  local e = find_entry(id)
-  if not e then return nil end
-  local result = recipes():Evaluate(e.recipeID, e.charKey, {
-    targetQuality = e.targetQuality, useConcentration = e.useConcentration, providedReagents = e.providedReagents,
-  })
+  local result, e = self:GetEntryResult(id)
   if not result or result.reagentCost == nil then return nil end
   return result.reagentCost * e.quantity
 end

@@ -6,7 +6,8 @@ local _, ns = ...
 -- in view exist as frames, so hundreds of recipes stay cheap. Own frames only; handlers run isolated.
 --
 -- Display rules (same as the Dashboard): a nil profit is "no price" (never 0g); noPrice with a profit is
--- shown with a "some prices missing" marker; estimated results say "estimate"; prices carry their age.
+-- shown with a "some prices missing" marker; estimated results say "estimate"; a result that cannot reach its
+-- target quality says "quality unreachable"; prices carry their age.
 local RecipesTab = ns.FS:NewModule("RecipesTab", "AceEvent-3.0")
 RecipesTab.coreModule = true
 
@@ -84,6 +85,7 @@ local function flags_text(result)
   if flags.stalePrice then parts[#parts + 1] = "stale price" end
   if flags.staleData then parts[#parts + 1] = "stale data" end
   if flags.estimated then parts[#parts + 1] = "estimate" end
+  if flags.unreachableTarget then parts[#parts + 1] = "quality unreachable" end
   if flags.unknownRecipe then parts[#parts + 1] = "unknown recipe" end
   return table.concat(parts, ", ")
 end

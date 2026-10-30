@@ -7,7 +7,8 @@ local _, ns = ...
 -- only the rows in view exist as frames. Own frames only; handlers run isolated.
 --
 -- Display rules (same as the Dashboard and Recipes tabs): an unknown cost is "no price" (never 0g); money
--- goes through ns.UI.FormatMoney. While the saved data is from a newer version every control that would
+-- goes through ns.UI.FormatMoney; an estimated cost starts with "~" and every cost carries its price age (red
+-- when stale); an entry whose target quality cannot be reached says "[quality unreachable]". While the saved data is from a newer version every control that would
 -- change the queue says it is read-only instead.
 --
 -- Craft Next is a protected action: the only reference to it is inside the button's OnClick handler (the
@@ -31,7 +32,7 @@ local RESTOCK_LIST_TOP = RESTOCK_EDITOR_TOP + BAR_ROW
 local RESTOCK_HEIGHT = RESTOCK_LIST_TOP + RESTOCK_ROW * RESTOCK_VISIBLE + 6
 local DEFAULT_VIEW_HEIGHT = 400   -- before a scroll frame has a size
 local ELLIPSIS, TIMES, EM_DASH = "\226\128\166", "\195\151", "\226\128\148"
-local DIM = "|cff9d9d9d"
+local DIM, WARN, BAD = "|cff9d9d9d", "|cffffd100", "|cffff4040"
 local TONES = { good = { 0.25, 1, 0.25 }, bad = { 1, 0.25, 0.25 }, warn = { 1, 0.82, 0 }, plain = { 1, 1, 1 } }
 local READ_ONLY = "Saved data is from a newer version of FabricationStation; the queue is read-only."
 local DAY, HOUR, MINUTE = 86400, 3600, 60
@@ -44,7 +45,7 @@ local COLUMNS = {
   { key = "quantity", label = "Qty", width = 84 },
   { key = "quality", label = "Quality", width = 48 },
   { key = "concentration", label = "Conc.", width = 40 },
-  { key = "cost", label = "Cost", width = 104, right = true },
+  { key = "cost", label = "Cost", width = 128, right = true },
   { key = "remove", label = "", width = 24 },
 }
 
@@ -105,18 +106,23 @@ local function missing_text(missing)
 end
 
 -- entries = Queue:GetEntries output (kept in order), costs = { [id] = copper|nil }, missing = { [id] =
--- { [itemID] = qty } }, readyAt = { [id] = serverSeconds|nil }, now = server seconds. A nil cost stays nil
--- (shown as "no price"); readyText is empty once a recipe is ready.
-function Tab.BuildRows(entries, costs, missing, readyAt, now)
+-- { [itemID] = qty } }, readyAt = { [id] = serverSeconds|nil }, now = server seconds, results|nil = { [id] =
+-- Queue:GetEntryResult } (the evaluation behind the cost: estimate, price age, stale and unreachable markers).
+-- A nil cost stays nil (shown as "no price"); readyText is empty once a recipe is ready.
+function Tab.BuildRows(entries, costs, missing, readyAt, now, results)
   local rows = {}
   for i, e in ipairs(entries) do
     local ready = readyAt[e.id]
+    local r = results and results[e.id]
+    local flags = type(r) == "table" and type(r.flags) == "table" and r.flags or {}
     rows[i] = {
       id = e.id, name = recipe_name(e.recipeID), charKey = e.charKey, quantity = e.quantity,
       targetQuality = e.targetQuality, concentration = e.useConcentration and "on" or "off",
       missingText = missing_text(missing[e.id]), cost = costs[e.id],
       readyText = (type(ready) == "number" and ready > now) and ("ready in " .. Tab.FormatDuration(ready - now)) or "",
       isRestock = e.isRestock == true,
+      estimated = flags.estimated == true, stale = flags.stalePrice == true, unreachable = flags.unreachableTarget == true,
+      priceAge = type(r) == "table" and r.priceAgeDays or nil,
     }
   end
   return rows
@@ -126,10 +132,18 @@ end
 function Tab.CellTexts(row)
   local name = row.name
   if row.isRestock then name = name .. "  " .. color(DIM, "[restock]") end
+  if row.unreachable then name = name .. "  " .. color(WARN, "[quality unreachable]") end
+  local cost = color(DIM, "no price")
+  if row.cost ~= nil then
+    cost = (row.estimated and "~" or "") .. ns.UI.FormatMoney(row.cost)
+    if row.priceAge ~= nil then
+      cost = cost .. " " .. color(row.stale and BAD or DIM, ns.UI.FormatAge(row.priceAge * DAY))
+    end
+  end
   return {
     name = name, character = short_name(row.charKey), quantity = tostring(row.quantity),
     quality = row.targetQuality ~= nil and ("Q" .. row.targetQuality) or "--", concentration = row.concentration,
-    cost = row.cost ~= nil and ns.UI.FormatMoney(row.cost) or color(DIM, "no price"),
+    cost = cost,
   }
 end
 
@@ -447,13 +461,14 @@ local function refresh()
   if not view then return end
   local queue = module("Queue")
   local entries = queue and queue:GetEntries() or {}
-  local costs, missing, readyAt = {}, {}, {}
+  local costs, missing, readyAt, results = {}, {}, {}, {}
   for _, e in ipairs(entries) do
     costs[e.id] = queue:GetEntryCost(e.id)
+    results[e.id] = queue:GetEntryResult(e.id)
     missing[e.id] = queue:GetEntryMissing(e.id)
     readyAt[e.id] = queue:GetCooldownReadyAt(e)
   end
-  list_set_rows(view.queue, Tab.BuildRows(entries, costs, missing, readyAt, ns.FS:Now()))
+  list_set_rows(view.queue, Tab.BuildRows(entries, costs, missing, readyAt, ns.FS:Now(), results))
   if not queue then
     view.empty:SetText(color(DIM, "The queue is not available."))
     view.empty:Show()

@@ -56,8 +56,9 @@ describe("Recipes tab", function()
       assert.is_truthy(Tab.CellTexts(row).profit:find(ns.UI.FormatMoney(12345), 1, true))
     end)
     it("joins every flag in the fixed order", function()
-      local flags = { noPrice = true, stalePrice = true, staleData = true, estimated = true, unknownRecipe = true }
-      assert.equals("no price, stale price, stale data, estimate, unknown recipe",
+      local flags = { noPrice = true, stalePrice = true, staleData = true, estimated = true, unreachableTarget = true,
+        unknownRecipe = true }
+      assert.equals("no price, stale price, stale data, estimate, quality unreachable, unknown recipe",
         Tab.BuildRows({ result(9001, nil, { flags = flags }) })[1].flagsText)
       assert.equals("", Tab.BuildRows({ result(9001, 5) })[1].flagsText)
       assert.equals("", Tab.BuildRows({ { recipeID = 9001, charKey = "A-B", profit = 5 } })[1].flagsText)
