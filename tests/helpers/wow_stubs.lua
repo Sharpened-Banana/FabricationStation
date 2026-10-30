@@ -6,6 +6,9 @@
 --   * AceDB does no logout stripping of default values and has no "*" / "**" wildcard defaults.
 --   * Frame Show/Hide do not fire OnShow/OnHide.
 --   * frame:RegisterEvent is a no-op (use W.fire to drive AceEvent handlers).
+--   * Each W.advance(seconds) is one frame: a zero-delay timer (C_Timer.After(0, ...)) scheduled
+--     while advance is running callbacks waits for the next W.advance, as it waits for the next
+--     frame in the client. Timers with a positive delay that fall due within the advance still run.
 --   local W = install_wow_stubs(overrides)
 -- Every call rebuilds all fakes from scratch. `overrides` is deep-merged into the default globals
 -- (plain tables merge key by key, anything else replaces). Returns the handle `W`.
@@ -104,6 +107,7 @@ local function install(overrides)
   -- Clock and C_Timer
   ---------------------------------------------------------------------------
   local timers, timerSeq = {}, 0
+  local advancing, advanceSeq = false, 0
 
   local function schedule(seconds, fn, handle)
     timerSeq = timerSeq + 1
@@ -111,6 +115,8 @@ local function install(overrides)
     handle.due = W.now + (seconds or 0)
     handle.seq = timerSeq
     handle.fn = fn
+    -- A zero-delay timer created during this advance belongs to the next frame.
+    handle.heldFor = (advancing and (seconds or 0) <= 0) and advanceSeq or nil
     timers[#timers + 1] = handle
     return handle
   end
@@ -138,10 +144,12 @@ local function install(overrides)
 
   function W.advance(seconds)
     local target = W.now + (seconds or 0)
+    advanceSeq = advanceSeq + 1
+    advancing = true
     while true do
       local nextTimer
       for _, t in ipairs(timers) do
-        if t.due <= target and (not nextTimer or t.due < nextTimer.due
+        if t.due <= target and t.heldFor ~= advanceSeq and (not nextTimer or t.due < nextTimer.due
           or (t.due == nextTimer.due and t.seq < nextTimer.seq)) then
           nextTimer = t
         end
@@ -163,6 +171,7 @@ local function install(overrides)
         if nextTimer.afterOnly then nextTimer.fn() else nextTimer.fn(nextTimer) end
       end
     end
+    advancing = false
     W.now = target
   end
 
@@ -617,8 +626,10 @@ local function install(overrides)
       ProfessionsSpecPerkState = { Unearned = 0, Earned = 1, Pending = 2 },
     },
     LibStub = LibStub,
-    time = function() return math.floor(W.now) end,
-    GetServerTime = function() return math.floor(W.now) end,
+    -- W.now is returned as-is (fractional after a sub-second advance) so tests can compare stored
+    -- timestamps with W.now directly; the client returns whole seconds.
+    time = function() return W.now end,
+    GetServerTime = function() return W.now end,
     GetBuildInfo = function() return "12.1.5", "70575", "Oct 23 2026", 120105 end,
     UnitName = function() return "Thrall" end,
     UnitClass = function() return "Mage", "MAGE", 8 end,
