@@ -13,5 +13,6 @@ stds.wow = {
 }
 files["Math/"] = { std = "lua51" }
 files["Data/"] = { std = "lua51" }
+files["Modules/CraftingData.lua"] = { std = "lua51" }
 files["tools/"] = { std = "lua51" }
 files["tests/"] = { std = "lua51+busted+wow", ignore = { "11", "12", "14" } }  -- tests install and mutate fake globals
