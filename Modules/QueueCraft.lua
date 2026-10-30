@@ -42,15 +42,16 @@ local function prices() return ns.FS:GetModule("Prices") end
 -- Shopping list
 ---------------------------------------------------------------------------
 
--- [itemID] = rank index of the item in its schematic slot, for the queued recipes' slots that offer
--- two or more reagents.
+-- [itemID] = rank index of the item in its schematic slot, for the queued recipes' quality slots: basic slots
+-- that offer two or more reagents (quality ranks). Other slots (sparks, optional reagents) list different items,
+-- not ranks of one, so they get no tier.
 local function reagent_tiers(entries)
   local tiers = {}
   for _, e in ipairs(entries) do
     local schematic = scanner():GetSchematic(e.recipeID)
     for _, slot in ipairs(schematic and schematic.reagentSlots or {}) do
-      local reagents = slot.reagents or {}
-      if #reagents >= 2 then
+      local reagents = type(slot.reagents) == "table" and slot.reagents or {}
+      if slot.kind == "basic" and #reagents >= 2 then
         for i, itemID in ipairs(reagents) do
           if tiers[itemID] == nil then tiers[itemID] = i end
         end

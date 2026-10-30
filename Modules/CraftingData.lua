@@ -151,8 +151,9 @@ end
 -- Basic slots with reagents become slots (currency-only and empty slots are left out); a slot's weight is
 -- its first reagent's ReagentWeight and its items are ranked in the schematic's order. Required optional and
 -- finishing slots with reagents (sparks) become slots too: weight 0 (fixed: the optimiser takes the cheapest
--- usable item, which then is in the allocation, the cost, missing reagents and CraftRecipe's reagents) and
--- noResourcefulness = true (resourcefulness saves basic reagents only). Their items' stats are not applied.
+-- usable item, which then is in the allocation, the cost, missing reagents and CraftRecipe's reagents),
+-- noResourcefulness = true (resourcefulness saves basic reagents only) and singleItem = true (one item fills the
+-- whole quantity: the game rejects mixed items in a modifying slot). Their items' stats are not applied.
 -- missingWeights = true when a basic slot offers two or more ranks but GameData has no weight for it (the
 -- ranks then add no skill: the result is an estimate).
 -- optionals: with optionalItemIDs (a list, possibly empty), every item of every other optional and finishing
@@ -180,7 +181,7 @@ function CraftingData.BuildInput(gd, args)
       local weight = basic and CraftingData.ReagentWeight(gd, reagents[1]) or 0
       if basic and #reagents >= 2 and weight <= 0 then missingWeights = true end
       slots[#slots + 1] = { slotIndex = slot.slotIndex, quantity = slot.quantity or 0, weight = weight, items = items,
-        noResourcefulness = (not basic) or nil }
+        noResourcefulness = (not basic) or nil, singleItem = (not basic) or nil }
     elseif args.optionalItemIDs and (slot.kind == "optional" or slot.kind == "finishing") then
       for _, itemID in ipairs(reagents) do
         if not seen[itemID] then

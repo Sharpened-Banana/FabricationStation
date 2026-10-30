@@ -124,6 +124,33 @@ describe("Math.Optimizer", function()
     local per = O.CheapestByQuality(input(500, { slot(1, 10, 48, {100, 300}) }))
     assert.is_nil(per[1].missingPrice); assert.is_nil(per[2].missingPrice)
   end)
+  -- Phase 2 Task 0 (N3): the game rejects mixed items in a modifying (spark) slot.
+  describe("single-item slots (MathSlot.singleItem)", function()
+    local function spark(quantity, prices)
+      local s = slot(4, quantity, 0, prices); s.singleItem = true
+      return s
+    end
+    it("never mixes items: the cheapest single item fills the whole quantity", function()
+      local s = spark(2, {5000, 4000}); s.items[1].owned = 1
+      local mixed = slot(4, 2, 0, {5000, 4000}); mixed.items[1].owned = 1
+      assert.same({ [1] = 1, [2] = 1 }, O.Compositions(mixed)[0].counts)    -- without the flag: one owned + one bought
+      local c = O.Compositions(s)
+      assert.equals(5000, c[0].cost); assert.same({ [1] = 2 }, c[0].counts)
+      local per = O.CheapestByQuality(input(700, { spark(2, {5000, 4000}) }))
+      assert.same({ { slotIndex = 4, itemID = 4002, quantity = 2 } }, per[2].allocation)
+      assert.equals(8000, per[2].reagentCost)
+    end)
+    it("honours provided reagents with a single item", function()
+      local s = spark(2, {5000, 4000}); s.items[2].provided = 2
+      assert.same({ [2] = 2 }, O.Compositions(s)[0].counts)
+    end)
+    it("falls back to one item when no item is priced", function()
+      local s = spark(3, {false, false}); s.items[2].owned = 1
+      local per, missing = O.CheapestByQuality(input(700, { s }))
+      assert.is_true(missing)
+      assert.same({ { slotIndex = 4, itemID = 4002, quantity = 3 } }, per[2].allocation)
+    end)
+  end)
   it("single-item weighted slot counts toward the denominator only", function()
     -- Units: 20 of 30 can come from slot 1; slot 2 (single item, weight 48) gives none but is in the denominator,
     -- so +100 skill needs 11 units (6 of rank 2), not 8 (4 of rank 2) as it would without slot 2.

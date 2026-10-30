@@ -358,6 +358,15 @@ describe("Queue craft actions", function()
       assert.is_true((Q:ExportShoppingList()))
       assert.same({ searchString = "Spark", isExact = true, quantity = 2 }, api.terms[#api.terms])
     end)
+    it("gives no Auctionator tier to a spark slot offering two or more items", function()
+      world.schematics[9001].reagentSlots[4].reagents = { 7101, 7102 }
+      world.prices[7102] = { value = 9000, source = "auction", ageDays = 1 }
+      world.haveAll("Main-Realm"); world.items["Main-Realm"][7101], world.items["Main-Realm"][7102] = nil, nil
+      world.names[7101] = "Spark"
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      assert.is_true((Q:ExportShoppingList()))
+      assert.same({ searchString = "Spark", isExact = true, quantity = 1 }, api.terms[#api.terms])
+    end)
   end)
 
   -- Phase 2 Task 0 (N2): with queueUseWarband off, the plan must not rely on warband reagents Craft Next won't count.

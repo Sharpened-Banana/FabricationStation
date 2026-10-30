@@ -95,10 +95,10 @@ describe("CraftingData.BuildInput", function()
       local input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = prices, owned = { [7101] = 1 } })
       assert.equals(4, #input.slots)
       local s = input.slots[4]
-      assert.same({ 4, 1, 0, true }, { s.slotIndex, s.quantity, s.weight, s.noResourcefulness })
+      assert.same({ 4, 1, 0, true, true }, { s.slotIndex, s.quantity, s.weight, s.noResourcefulness, s.singleItem })
       assert.same({ { itemID = 7101, rank = 1, price = 5000, owned = 1, provided = 0 },
                     { itemID = 7102, rank = 2, price = 4000, owned = 0, provided = 0 } }, s.items)
-      assert.is_nil(input.slots[1].noResourcefulness)
+      assert.is_nil(input.slots[1].noResourcefulness); assert.is_nil(input.slots[1].singleItem)
       assert.is_false(input.missingWeights)
     end)
     it("is costed, allocated and kept out of resourcefulness by EvaluateCraft", function()
@@ -106,6 +106,15 @@ describe("CraftingData.BuildInput", function()
       local r = ns.Math.Profit.EvaluateCraft(CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = prices }))
       assert.equals(8800, r.reagentCost); assert.equals(116010, r.profit); assert.equals(360, r.resourcefulnessValue)
       assert.same({ slotIndex = 4, itemID = 7102, quantity = 1 }, r.allocation[#r.allocation])
+    end)
+    it("is filled with one item even when the slot takes two or more (no mixed sparks)", function()
+      schematic.reagentSlots[4].quantity = 2
+      local prices = world.priceValues(); prices[7101], prices[7102] = 5000, 4000
+      local r = ns.Math.Profit.EvaluateCraft(CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = prices,
+        owned = { [7101] = 1 } }))
+      local rows = {}
+      for _, row in ipairs(r.allocation) do if row.slotIndex == 4 then rows[#rows + 1] = row end end
+      assert.same({ { slotIndex = 4, itemID = 7101, quantity = 2 } }, rows)
     end)
     it("is not offered as an optional candidate", function()
       local input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = world.priceValues(), optionalItemIDs = {} })

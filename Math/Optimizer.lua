@@ -62,6 +62,27 @@ local function enumerate(list, quantity, visit)
   fill(1, quantity)
 end
 
+-- enumerate for a single-item slot (MathSlot.singleItem: a modifying slot, where the game rejects mixed items):
+-- each item alone fills the whole quantity. An item another item's provided reagents rule out is skipped; when
+-- provided reagents of several items leave no single-item fill, the mixed fills of enumerate are used.
+local function enumerateSingle(list, quantity, visit)
+  local n, any = #list, false
+  for i = 1, n do
+    local allowed = true
+    for j, e in ipairs(list) do
+      if j ~= i and (e.item.provided or 0) > 0 then allowed = false end
+    end
+    if allowed then
+      local counts = {}
+      for j = 1, n do counts[j] = 0 end
+      counts[i] = quantity
+      any = true
+      visit(counts)
+    end
+  end
+  if not any then enumerate(list, quantity, visit) end
+end
+
 -- Copper cost and units of one composition; cost nil when it buys an item that has no price.
 local function costAndUnits(list, counts)
   local cost, units = 0, 0
@@ -88,12 +109,14 @@ end
 -- { [units] = { cost, counts = {[rank] = n} } }: the cheapest composition per unit count.
 -- units = sum(2 * RankFactor(rank) * n) before weighting; cost = sum(max(0, n - owned - provided) * price).
 -- An item with no price is usable only up to owned + provided. A slot with one item or weight 0 gets a single
--- composition (its cheapest) at 0 units. {} when nothing is usable.
+-- composition (its cheapest) at 0 units. A singleItem slot is filled with one item only (see enumerateSingle).
+-- {} when nothing is usable.
 function Optimizer.Compositions(slot)
   local out = {}
   local list = rankedItems(slot)
   local fixed = isFixed(slot)
-  enumerate(list, slot.quantity or 0, function(counts)
+  local fill = slot.singleItem and enumerateSingle or enumerate
+  fill(list, slot.quantity or 0, function(counts)
     local cost, units = costAndUnits(list, counts)
     if cost == nil then return end
     cost = Math.Round(cost)
@@ -105,14 +128,25 @@ function Optimizer.Compositions(slot)
 end
 
 -- Fill for a slot with no usable composition (every option buys an unpriced item): provided and owned
--- reagents first (top rank down), the rest at the lowest rank. Its cost is unknown (nil).
+-- reagents first (top rank down), the rest at the lowest rank; a singleItem slot takes the whole quantity of
+-- the item most held (ties: the lowest rank). Its cost is unknown (nil).
 local function fallbackComposition(slot)
   local list = rankedItems(slot)
   local counts, left = {}, slot.quantity or 0
-  for i = #list, 1, -1 do
-    local have = math.max(0, (list[i].item.owned or 0) + (list[i].item.provided or 0))
-    counts[i] = math.min(have, left)
-    left = left - counts[i]
+  local function have(i) return math.max(0, (list[i].item.owned or 0) + (list[i].item.provided or 0)) end
+  if slot.singleItem then
+    local pick = 1
+    for i = 1, #list do
+      counts[i] = 0
+      if have(i) > have(pick) then pick = i end
+    end
+    if list[1] then counts[pick] = left end
+    left = 0
+  else
+    for i = #list, 1, -1 do
+      counts[i] = math.min(have(i), left)
+      left = left - counts[i]
+    end
   end
   if list[1] then counts[1] = counts[1] + left end
   local units = 0
