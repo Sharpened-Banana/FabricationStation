@@ -249,7 +249,8 @@ end
 -- General options
 ---------------------------------------------------------------------------
 
--- One line describing the generated game data. "Not generated" is checked first: the checked-in
+-- One line describing the generated game data, shown in Settings > General and (through
+-- Diagnostics:GameDataStatusLine) Settings > Diagnostics. "Not generated" is checked first: the checked-in
 -- generated tables carry no build while GameData_Manual is stamped, so Build() can equal the
 -- client build while the generated tables are still missing.
 function FS:GameDataStatusText()

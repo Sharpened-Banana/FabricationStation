@@ -287,18 +287,9 @@ ns.FS:RegisterSlash("capture", slash_capture, "save the selected recipe as a tes
 -- Options
 ---------------------------------------------------------------------------
 
+-- The same line as Settings > General: Core's GameDataStatusText is the one source of the wording.
 function Diagnostics:GameDataStatusLine()
-  local clientBuild = client_info().build
-  local gameData = ns.GameData
-  local status = gameData and gameData.Status(clientBuild)
-  if not status or status.missing or not status.build then
-    return "GameData: not generated — quality math will be approximate"
-  end
-  if status.outdated then
-    return ("GameData: built for %s, client is %s — run tools/gamedata after patches")
-      :format(tostring(status.build), tostring(clientBuild))
-  end
-  return ("GameData: build %s (client %s)"):format(tostring(status.build), tostring(clientBuild))
+  return ns.FS:GameDataStatusText()
 end
 
 local function stamp(entry)
@@ -336,8 +327,10 @@ local function build_options()
   return {
     type = "group", name = "Diagnostics", order = 95,
     args = {
-      -- A string, not a function: the data files and the client build are fixed for the session.
-      gamedata = { type = "description", order = 1, fontSize = "medium", name = D:GameDataStatusLine() },
+      gamedata = {
+        type = "description", order = 1, fontSize = "medium",
+        name = function() return D:GameDataStatusLine() end,
+      },
       newerDB = {
         type = "description", order = 2, fontSize = "medium",
         name = "Saved data is from a newer version of FabricationStation, so nothing is saved this session. "

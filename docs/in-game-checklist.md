@@ -102,9 +102,10 @@ General, Prices, Modules and Diagnostics.
       no overflow past the border. Check at a small and a large size, and that the size survives `/reload`.
     - The Settings tab shows the options tree inside the main window, not a separate Blizzard options window.
       (It is also registered in Blizzard's AddOns settings panel; that is a second copy, not the tab.)
-    - GameData status is not in the window chrome. It appears in two places in the Settings tab, and
-      before real data is generated both must say "not generated" (exact strings in check 15):
-      Settings > General (second line, after the minimap checkbox), and Settings > Diagnostics (first line).
+    - GameData status is not in the window chrome. It appears in two places in the Settings tab, with the
+      same text in both, and before real data is generated it must say `GameData not generated` (all
+      strings in check 15): Settings > General (second line, after the minimap checkbox), and
+      Settings > Diagnostics (first line).
 
 ### Diagnostics and scanner state
 
@@ -131,23 +132,19 @@ General, Prices, Modules and Diagnostics.
     `lua tools/gamedata/generate.lua --build <version.build> --cache tools/gamedata/cache/<version.build> --out Data`,
     then `busted && luacheck .`. Then bump the build number in `Data/GameData_Manual.lua` to match (for
     `12.1.5.70575` the number is `70575`) and fill its Moxie currency IDs (check 6) against the printed candidates.
-    `/reload` and read the two status lines in the Settings tab.
-    Before generating (the shipped placeholder data), expect:
-    - Settings > General: `GameData not generated`
-    - Settings > Diagnostics: `GameData: not generated — quality math will be approximate`
+    `/reload` and read the status line in the Settings tab. Settings > General (second line) and
+    Settings > Diagnostics (first line) show the same text; a difference between the two is a failure.
+    Before generating (the shipped placeholder data), expect: `GameData not generated`.
 
     After generating and bumping, with the client on that build, expect:
-    - Settings > General: `GameData: build 70575, up to date` (your build number)
-    - Settings > Diagnostics: `GameData: build 70575 (client 70575)`
+    `GameData: build 70575, up to date` (your build number).
 
     Failure forms and what they mean:
-    - General `GameData tables are from different builds: MoxieCurrency` (or another table name): that table's
-      build differs from the rest; most often `GameData_Manual.lua` was not bumped. Diagnostics does not show
-      this case, so it can still look healthy.
-    - General `GameData is outdated: data build <n>, game build <m>` and Diagnostics
-      `GameData: built for <n>, client is <m> — run tools/gamedata after patches`: the data is for another
-      client build than the one running.
-    - General still `GameData not generated`: some generated table still has no build.
+    - `GameData tables are from different builds: MoxieCurrency` (or another table name): that table's
+      build differs from the rest; most often `GameData_Manual.lua` was not bumped.
+    - `GameData is outdated: data build <n>, game build <m>`: the data is for another client build than the
+      one running.
+    - Still `GameData not generated`: some generated table still has no build.
 
     Note the README's open items: the wago.tools URL and CurvePoint header style are unverified.
 

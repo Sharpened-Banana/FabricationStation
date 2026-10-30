@@ -53,8 +53,8 @@ describe("Diagnostics", function()
     local m = D:GetMismatches(); assert.equals(200, #m); assert.equals(W.now, m[1].time); assert.equals(70575, m[1].build)
   end)
   it("shows GameData status in the diagnostics options", function()
-    local s = ns.FS:GetOptionsTable().args.diagnostics.args.gamedata.name; assert.is_string(s)
-    assert.matches("^GameData:", type(s) == "function" and s() or s)
+    local s = ns.FS:GetOptionsTable().args.diagnostics.args.gamedata.name
+    assert.matches("^GameData", type(s) == "function" and s() or s)
   end)
 
   -- Additional coverage beyond the brief's list.
@@ -233,22 +233,39 @@ describe("Diagnostics", function()
     end)
     it("hides the newer-database warning normally", function() assert.is_true(args().newerDB.hidden()) end)
     it("reports GameData not generated for the checked-in files", function()
-      assert.equals("GameData: not generated — quality math will be approximate", text("gamedata"))
+      assert.equals("GameData not generated", text("gamedata"))
     end)
     it("reports outdated GameData with both builds", function()
       ns.GameData.Status = function() return { build = 70000, missing = false, outdated = true, mismatched = {} } end
-      assert.equals("GameData: built for 70000, client is 70575 — run tools/gamedata after patches", D:GameDataStatusLine())
+      assert.equals("GameData is outdated: data build 70000, game build 70575", D:GameDataStatusLine())
+    end)
+    it("reports tables from different builds", function()
+      ns.GameData.Status = function() return { build = 70575, missing = false, outdated = false, mismatched = { "A", "B" } } end
+      assert.equals("GameData tables are from different builds: A, B", text("gamedata"))
     end)
     it("reports current GameData", function()
       ns.GameData.Status = function() return { build = 70575, missing = false, outdated = false, mismatched = {} } end
-      assert.equals("GameData: build 70575 (client 70575)", D:GameDataStatusLine())
+      assert.equals("GameData: build 70575, up to date", D:GameDataStatusLine())
     end)
     it("checks missing before outdated", function()
       ns.GameData.Status = function() return { build = 1, missing = true, outdated = true, mismatched = {} } end
-      assert.equals("GameData: not generated — quality math will be approximate", D:GameDataStatusLine())
+      assert.equals("GameData not generated", D:GameDataStatusLine())
     end)
     it("survives a missing GameData runtime", function()
-      ns.GameData = nil; assert.equals("GameData: not generated — quality math will be approximate", D:GameDataStatusLine())
+      ns.GameData = nil; assert.equals("GameData not generated", D:GameDataStatusLine())
+    end)
+    it("shows exactly the General tab's line in every state", function()
+      local general = ns.FS:GetOptionsTable().args.general.args.gamedata
+      local states = {
+        { build = 1, missing = true, outdated = false, mismatched = {} },
+        { build = 70000, missing = false, outdated = true, mismatched = {} },
+        { build = 70575, missing = false, outdated = false, mismatched = { "MoxieCurrency" } },
+        { build = 70575, missing = false, outdated = false, mismatched = {} },
+      }
+      for _, st in ipairs(states) do
+        ns.GameData.Status = function() return st end
+        assert.equals(general.name(), text("gamedata")); assert.equals(ns.FS:GameDataStatusText(), D:GameDataStatusLine())
+      end
     end)
     it("lists the count and the last 10 errors, newest first", function()
       for i = 1, 12 do ns.FS:LogError("Src", "e" .. i) end
