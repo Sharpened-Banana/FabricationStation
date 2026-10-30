@@ -12,3 +12,6 @@ install_wow_stubs = require("wow_stubs")
 
 -- 1b crafting world (see crafting_world.lua).
 make_world = require("crafting_world")
+
+-- Fake Blizzard_Professions frames (see professions_frame.lua).
+fake_professions_frame = require("professions_frame")

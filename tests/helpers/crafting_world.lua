@@ -45,12 +45,16 @@
 --   recordAuctionatorTerms()  wraps the stub Auctionator v1 and returns { terms, lists }: terms are
 --               copies of the ConvertToSearchString terms, lists are { caller, name, searchStrings }
 --               of CreateShoppingList calls. Call it again after replacing the Auctionator global.
+-- Blizzard_Professions (Task 16): make_world first removes the globals a previous fake_professions_frame installed.
+-- opts.professions = fake_professions_frame opts builds those frames before the addon boots (so modules enable with
+-- Blizzard_Professions already loaded; `loaded` defaults to true) and stores the handle as world.form.
 -- C_TradeSkillUI.GetProfessionInfoByRecipeID answers { professionID = schematic.skillLineID } for world
 -- recipes. These game fakes are installed unless opts.stubs supplies the same function.
 -- Later tasks extend this helper with the fakes their specs use.
 
 local install = require("wow_stubs")
 local load = require("load")
+local professions_frame = require("professions_frame")
 
 local SKILL_LINE = 2906
 local CRAFTING_DATA_ID = 2588
@@ -220,6 +224,7 @@ local function make_world(opts)
     debugprofilestop = function() return os.clock() * 1000 end,
   }
   deep_merge(overrides, opts.stubs or {})
+  professions_frame.reset()
   local W = install(overrides)
 
   local ns = load.load_addon({}, opts.last)
@@ -238,10 +243,17 @@ local function make_world(opts)
   end
   define_game_data(ns, itemCraftingData)
 
+  local form
+  if opts.professions then
+    local frameOpts = deep_copy(opts.professions)
+    if frameOpts.loaded == nil then frameOpts.loaded = true end
+    form = professions_frame(frameOpts)
+  end
+
   W.boot()
 
   local g = ns.FS.db.global
-  local world = { counts = {}, prices = prices, live = {}, items = {} }
+  local world = { counts = {}, prices = prices, live = {}, items = {}, form = form }
   world.schematics = g.schematics
   for id, s in pairs(schematics) do world.schematics[id] = s end
   world.chars = g.characters

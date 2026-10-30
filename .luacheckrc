@@ -8,6 +8,7 @@ stds.wow = {
     "C_ProfSpecs", "C_Traits", "C_Container", "C_Bank", "C_AddOns", "C_Timer", "Enum", "CreateFrame", "UIParent", "GameTooltip",
     "GetServerTime", "GetBuildInfo", "GetMoney", "GetMoneyString", "UnitName", "UnitClass", "GetRealmName",
     "GetNormalizedRealmName", "GetProfessions", "GetProfessionInfo", "GetInventoryItemLink", "ProfessionsFrame",
+    "ProfessionsRecipeSchematicFormMixin", "Professions",
     "ButtonFrameTemplate_HidePortrait", "ButtonFrameTemplate_HideButtonBar", "hooksecurefunc", "EventRegistry",
     "debugstack", "debugprofilestop", "geterrorhandler", "date", "time", "wipe", "tinsert", "tremove", "strsplit", "strtrim" },
 }

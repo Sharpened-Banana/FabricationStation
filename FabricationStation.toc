@@ -39,3 +39,4 @@ UI\Tabs\Recipes.lua
 UI\Tabs\Queue.lua
 UI\Tabs\Settings.lua
 UI\Launcher.lua
+UI\ProfessionPanel.lua
