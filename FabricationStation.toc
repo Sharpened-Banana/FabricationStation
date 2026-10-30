@@ -20,6 +20,7 @@ Data\GameData_Difficulty.lua
 Data\GameData_Spec.lua
 Data\GameData_Manual.lua
 Math\Quality.lua
+Math\Concentration.lua
 Modules\Scanner.lua
 Modules\Prices.lua
 Modules\Diagnostics.lua
