@@ -1,7 +1,7 @@
 local ADDON_NAME, ns = ...
 
 -- Scanner: every game-state snapshot (characters, professions, known recipes, schematics,
--- specialization, concentration, Moxie, cooldowns, profession tools).
+-- specialization, concentration, Moxie, cooldowns, profession tools, bag/bank/warband item counts).
 -- Professions are keyed by the child (expansion) skill line, e.g. Midnight Blacksmithing, never the
 -- base profession. Nothing is written while the saved data is from a newer version (ns.FS.dbIsNewer).
 local Scanner = ns.FS:NewModule("Scanner", "AceEvent-3.0")
@@ -339,6 +339,51 @@ local function snapshot_tools(p, child, now)
 end
 
 ---------------------------------------------------------------------------
+-- Item counts
+---------------------------------------------------------------------------
+
+-- Container index ranges (Enum.BagIndex). There is no reagent bank index on 12.x, so
+-- reagentBank stays 0 and exists only for the contract's shape.
+local function bag_range(first, last)
+  local B = Enum.BagIndex
+  return B[first], B[last]
+end
+
+-- { [itemID] = total stack count } over the containers first..last (BagIndex names).
+local function count_containers(first, last)
+  local counts = {}
+  local from, to = bag_range(first, last)
+  for bag = from, to do
+    for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+      local info = C_Container.GetContainerItemInfo(bag, slot)
+      local itemID = info and info.itemID
+      if itemID then counts[itemID] = (counts[itemID] or 0) + (info.stackCount or 1) end
+    end
+  end
+  return counts
+end
+
+-- Rewrites one field (bags | bank) of the character's item entries from `counts`, for every item
+-- seen before or now. An entry whose bags, bank and reagentBank are all 0 is deleted.
+local function write_item_field(c, field, counts)
+  local ids, seen = {}, {}
+  for itemID in pairs(c.items) do ids[#ids + 1] = itemID; seen[itemID] = true end
+  for itemID in pairs(counts) do
+    if not seen[itemID] then ids[#ids + 1] = itemID end
+  end
+  for _, itemID in ipairs(ids) do
+    local entry = c.items[itemID] or { bags = 0, bank = 0, reagentBank = 0 }
+    entry[field] = counts[itemID] or 0
+    entry.bags, entry.bank, entry.reagentBank = entry.bags or 0, entry.bank or 0, entry.reagentBank or 0
+    if entry.bags == 0 and entry.bank == 0 and entry.reagentBank == 0 then
+      c.items[itemID] = nil
+    else
+      c.items[itemID] = entry
+    end
+  end
+end
+
+---------------------------------------------------------------------------
 -- Public API
 ---------------------------------------------------------------------------
 
@@ -577,6 +622,60 @@ function Scanner:RefreshCurrencies(currencyType)
   if concentration then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "concentration") end
 end
 
+-- Snapshots the carried bags (backpack through reagent bag); sends FS_DATA_CHANGED "items".
+function Scanner:ScanBags()
+  if not writable() then return false end
+  local charKey = ns.FS:CharKey()
+  local c = ensure_character(charKey)
+  write_item_field(c, "bags", count_containers("Backpack", "ReagentBag"))
+  c.itemsTime.bags = ns.FS:Now()
+  self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "items")
+  return true
+end
+
+-- Snapshots the character bank tabs; only while the bank is open. Sends "items".
+function Scanner:ScanBank()
+  if not writable() or not self.bankOpen then return false end
+  local charKey = ns.FS:CharKey()
+  local c = ensure_character(charKey)
+  write_item_field(c, "bank", count_containers("CharacterBankTab_1", "CharacterBankTab_6"))
+  c.itemsTime.bank = ns.FS:Now()
+  self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "items")
+  return true
+end
+
+-- Snapshots the warband bank into the account-wide table; only while the bank is open and the
+-- warband bank can be viewed. Sends "warband".
+function Scanner:ScanWarband()
+  if not writable() or not self.bankOpen or not C_Bank.CanViewBank(Enum.BankType.Account) then return false end
+  global().warband = { items = count_containers("AccountBankTab_1", "AccountBankTab_5"), time = ns.FS:Now() }
+  self:SendMessage(ns.Msg.DATA_CHANGED, ns.FS:CharKey(), "warband")
+  return true
+end
+
+-- Counts of one item: charKey's own bags/bank/reagentBank (nil = every character summed) plus the
+-- warband count once. total is the sum of the four fields; an unknown item is all zeros.
+function Scanner:GetItemCount(itemID, charKey)
+  local out = { bags = 0, bank = 0, reagentBank = 0, warband = 0, total = 0 }
+  local g = global()
+  if not g then return out end
+  local function add(c)
+    local entry = c and c.items and c.items[itemID]
+    if not entry then return end
+    out.bags = out.bags + (entry.bags or 0)
+    out.bank = out.bank + (entry.bank or 0)
+    out.reagentBank = out.reagentBank + (entry.reagentBank or 0)
+  end
+  if charKey then
+    add(g.characters[charKey])
+  else
+    for _, c in pairs(g.characters) do add(c) end
+  end
+  out.warband = g.warband and g.warband.items and g.warband.items[itemID] or 0
+  out.total = out.bags + out.bank + out.reagentBank + out.warband
+  return out
+end
+
 ---------------------------------------------------------------------------
 -- Lifecycle
 ---------------------------------------------------------------------------
@@ -616,6 +715,23 @@ function Scanner:OnEnable()
   self:RegisterEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", function()
     ns.FS:Debounce("scanner.cooldowns", SCAN_DEBOUNCE, scanCooldowns)
   end)
+  self.bankOpen = false
+  local scanBags = ns.FS:Wrap("Scanner", function() self:ScanBags() end)
+  local scanBank = ns.FS:Wrap("Scanner", function() self:ScanBank(); self:ScanWarband() end)
+  local scanWarband = ns.FS:Wrap("Scanner", function() self:ScanWarband() end)
+  self:RegisterEvent("BAG_UPDATE_DELAYED", function() ns.FS:Debounce("scanner.bags", SCAN_DEBOUNCE, scanBags) end)
+  self:RegisterEvent("BANKFRAME_OPENED", function()
+    self.bankOpen = true
+    ns.FS:Debounce("scanner.bank", SCAN_DEBOUNCE, scanBank)
+  end)
+  self:RegisterEvent("BANKFRAME_CLOSED", function() self.bankOpen = false end)
+  for _, event in ipairs({ "PLAYERBANKSLOTS_CHANGED", "BANK_TABS_CHANGED" }) do
+    self:RegisterEvent(event, function() ns.FS:Debounce("scanner.bank", SCAN_DEBOUNCE, scanBank) end)
+  end
+  self:RegisterEvent("PLAYER_ACCOUNT_BANK_TAB_SLOTS_CHANGED", function()
+    ns.FS:Debounce("scanner.warband", SCAN_DEBOUNCE, scanWarband)
+  end)
+
   self:RegisterEvent("CURRENCY_DISPLAY_UPDATE", ns.FS:Wrap("Scanner", function(_, currencyType)
     self:RefreshCurrencies(currencyType)
   end))
