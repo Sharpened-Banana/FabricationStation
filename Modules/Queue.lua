@@ -87,13 +87,16 @@ local function profit_of(result)
 end
 
 -- The restock entry for itemID topped up to target, or nil when nothing needs crafting. `real` is the
--- stored entries (crafts already queued count towards the target).
+-- stored entries (crafts already queued count towards the target). A crafter whose result cannot reach the
+-- item's quality (flags.unreachableTarget) is skipped: it would craft a lower quality, the count of this item
+-- would never rise and the entry would stay forever. With no crafter reaching it there is no entry.
 local function restock_entry(itemID, target, real)
   local found = recipes():FindRecipesForItem(itemID)[1]
   if not found then return nil end
   local crafter, best, bestResult
   for _, charKey in ipairs(recipes():WhoCanCraft(found.recipeID)) do
     local result = recipes():Evaluate(found.recipeID, charKey, { targetQuality = found.quality })
+    if result and type(result.flags) == "table" and result.flags.unreachableTarget then result = nil end
     local profit = profit_of(result)
     -- The first crafter with a result starts the comparison; a later one must beat it. Profit nil loses to any number.
     if result and (crafter == nil or (profit ~= nil and (best == nil or profit > best))) then

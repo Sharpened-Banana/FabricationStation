@@ -288,6 +288,18 @@ describe("Queue craft actions", function()
     end)
   end)
 
+  describe("restock of a quality nobody reaches, real evaluation", function()
+    it("crafts nothing: no restock entry, so Craft Next never loops on the lower quality", function()
+      ns, W, world = make_world({ last = "Modules/QueueCraft.lua" })
+      Q = ns.FS:GetModule("Queue")
+      for _, k in ipairs({ "Main-Realm", "Alt-Realm" }) do world.chars[k].professions[2906].skill = 100 end
+      world.openProfession(2906); world.haveAll("Main-Realm")
+      Q:SetRestock(5002, 5)
+      assert.same({}, Q:GetEntries())
+      assert.equals("empty", Q:CraftNext().status); assert.equals(0, #world.crafts)
+    end)
+  end)
+
   describe("held reagents, real evaluation", function()
     before_each(function()
       ns, W, world = make_world({ last = "Modules/QueueCraft.lua", calibrate = { ["Main-Realm"] = { 9001 } } })

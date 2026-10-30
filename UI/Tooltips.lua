@@ -6,9 +6,11 @@ local ADDON_NAME, ns = ...
 -- providers (holdings, guild crafters) through the same call. Switched on and off by 1a's module toggle.
 --
 -- Built-in providers (registered first):
---   "craftCost" -> { "Craft cost", "<money> (<character>)" } for the cheapest way to craft the item (every recipe
---                  and quality that produces it, every character who knows the recipe). Ties go to a cost that is
---                  not an estimate, then to the earlier character. "no price" when nothing has a cost, never 0g.
+--   "craftCost" -> { "Craft cost", "<money> (<character>[, estimate][, <age> old])" } for the cheapest way to craft
+--                  the item (every recipe and quality that produces it, every character who knows the recipe). Ties go
+--                  to a cost that is not an estimate, then to the earlier character. A result that cannot reach the
+--                  item's quality (flags.unreachableTarget: it would craft a lower one) is never a candidate. "no
+--                  price" when nothing has a cost, never 0g; "quality not reachable" when every result falls short.
 --   "crafters"  -> { "Crafters", "Main, Alt" }, cheapest first, characters without a cost last.
 -- Both are gated by the "tooltipCraftCost" setting and nothing else is. Their analysis is cached per item until a
 -- recipe, price or data change (FS_RECIPES_CHANGED, FS_PRICES_CHANGED, FS_DATA_CHANGED); providers registered by other modules run on every tooltip, so their lines never go stale.
@@ -19,6 +21,7 @@ local ADDON_NAME, ns = ...
 local Tooltips = ns.FS:NewModule("Tooltips", "AceEvent-3.0")
 
 local SOURCE = "Tooltips"
+local SECONDS_PER_DAY = 86400
 
 local providers = {}   -- ordered list of { id, fn, failed }
 local byID = {}        -- [id] = entry
@@ -95,12 +98,14 @@ local function better(a, b)
   return false
 end
 
--- { cheapest = candidate|nil, crafters = { charKey ordered cheapest first } } for itemID, or nil when nobody
--- crafts it. Candidates are { cost, estimated, charKey }.
+-- { cheapest = candidate|nil, crafters = { charKey ordered cheapest first }, unreachable = bool } for itemID, or nil
+-- when nobody crafts it. Candidates are { cost, estimated, priceAge, charKey }. unreachable: some result exists and
+-- every one of them falls short of its target quality.
 local function analyse(itemID)
   local R = recipes()
   if not R then return nil end
   local best, order, seen = {}, {}, {}   -- best[charKey] = cheapest candidate of that character
+  local anyResult, anyReachable = false, false
   for _, e in ipairs(R:FindRecipesForItem(itemID)) do
     for _, charKey in ipairs(R:WhoCanCraft(e.recipeID)) do
       if not seen[charKey] then
@@ -108,10 +113,13 @@ local function analyse(itemID)
         order[#order + 1] = charKey
       end
       local result = R:Evaluate(e.recipeID, charKey, { targetQuality = e.quality })
-      local cost = type(result) == "table" and result.reagentCost or nil
+      local flags = type(result) == "table" and type(result.flags) == "table" and result.flags or {}
+      local reachable = type(result) == "table" and not flags.unreachableTarget
+      if type(result) == "table" then anyResult = true end
+      if reachable then anyReachable = true end
+      local cost = reachable and result.reagentCost or nil
       if type(cost) == "number" and cost == cost then
-        local flags = result.flags
-        local candidate = { cost = cost, estimated = type(flags) == "table" and flags.estimated and true or false,
+        local candidate = { cost = cost, estimated = flags.estimated and true or false, priceAge = result.priceAgeDays,
           charKey = charKey }
         if better(candidate, best[charKey]) then best[charKey] = candidate end
       end
@@ -128,7 +136,7 @@ local function analyse(itemID)
     end
     return a < b
   end)
-  return { cheapest = best[order[1]], crafters = order }
+  return { cheapest = best[order[1]], crafters = order, unreachable = anyResult and not anyReachable }
 end
 
 local function enabled_setting()
@@ -149,10 +157,14 @@ local function craft_cost_lines(itemID)
   if not enabled_setting() then return {} end
   local a = analysis(itemID)
   if not a then return {} end
-  if a.cheapest then
-    local text = ns.UI.FormatMoney(a.cheapest.cost) .. " (" .. short_name(a.cheapest.charKey) .. ")"
-    return { { "Craft cost", text } }
+  local c = a.cheapest
+  if c then
+    local notes = { short_name(c.charKey) }
+    if c.estimated then notes[#notes + 1] = "estimate" end
+    if type(c.priceAge) == "number" then notes[#notes + 1] = ns.UI.FormatAge(c.priceAge * SECONDS_PER_DAY) .. " old" end
+    return { { "Craft cost", ns.UI.FormatMoney(c.cost) .. " (" .. table.concat(notes, ", ") .. ")" } }
   end
+  if a.unreachable then return { { "Craft cost", "quality not reachable" } } end
   return { { "Craft cost", "no price" } }
 end
 

@@ -10,7 +10,10 @@ describe("Tooltips", function()
     T = ns.FS:GetModule("Tooltips")
   end
 
-  local function cost_line(copper, who) return { "Craft cost", ns.UI.FormatMoney(copper) .. " (" .. who .. ")" } end
+  -- note: what follows the character name ("1d old", "estimate, 2d old"); the real evaluation's prices are 1 day old.
+  local function cost_line(copper, who, note)
+    return { "Craft cost", ns.UI.FormatMoney(copper) .. " (" .. who .. (note and (", " .. note) or "") .. ")" }
+  end
 
   local function fake_tooltip()
     local tip = { lines = {} }
@@ -36,7 +39,7 @@ describe("Tooltips", function()
 
   describe("CollectLines", function()
     it("craft cost and crafters lines", function()
-      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main, Alt" } }, T:CollectLines(5002))
+      assert.same({ cost_line(4800, "Main", "1d old"), { "Crafters", "Main, Alt" } }, T:CollectLines(5002))
     end)
 
     it("no lines for items nobody crafts", function() assert.same({}, T:CollectLines(424242)) end)
@@ -44,7 +47,7 @@ describe("Tooltips", function()
     it("isolates a failing provider", function()
       T:RegisterLineProvider("bad", function() error("boom") end)
       T:RegisterLineProvider("ok", function() return { { "x", "y" } } end)
-      local want = { cost_line(4800, "Main"), { "Crafters", "Main, Alt" }, { "x", "y" } }
+      local want = { cost_line(4800, "Main", "1d old"), { "Crafters", "Main, Alt" }, { "x", "y" } }
       assert.same(want, T:CollectLines(5002)); assert.same(want, T:CollectLines(5002))
       assert.equals("Tooltips:bad", ns.FS.db.global.diagnostics.errors[1].source)
       assert.equals(1, #ns.FS.db.global.diagnostics.errors)  -- disabled for the session: not run (or logged) again
@@ -89,7 +92,7 @@ describe("Tooltips", function()
 
     it("skips characters whose profession was dropped", function()
       world.chars["Alt-Realm"].professions[2906].dropped = true
-      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main" } }, T:CollectLines(5002))
+      assert.same({ cost_line(4800, "Main", "1d old"), { "Crafters", "Main" } }, T:CollectLines(5002))
     end)
 
     it("breaks ties between crafters by character key, whatever recipe is seen first", function()
@@ -109,6 +112,30 @@ describe("Tooltips", function()
       world.fakeEvaluate(9001, { reagentCost = 900, flags = {} })
       world.fakeEvaluate(9002, { reagentCost = 400, flags = {} })
       assert.same({ cost_line(400, "Alt"), { "Crafters", "Alt, Main" } }, T:CollectLines(5002))
+    end)
+
+    it("says when the cheapest cost is an estimate, and how old its prices are", function()
+      world.fakeEvaluate(9001, function(charKey)
+        return { reagentCost = charKey == "Alt-Realm" and 100 or 500, priceAgeDays = 2, flags = { estimated = charKey == "Alt-Realm" } }
+      end)
+      assert.same(cost_line(100, "Alt", "estimate, 2d old"), T:CollectLines(5002)[1])
+    end)
+
+    it("skips a crafter who cannot reach the item's quality, however cheap", function()
+      world.fakeEvaluate(9001, function(charKey)
+        if charKey == "Alt-Realm" then return { reagentCost = 100, flags = { unreachableTarget = true } } end
+        return { reagentCost = 500, flags = {} }
+      end)
+      assert.same({ cost_line(500, "Main"), { "Crafters", "Main, Alt" } }, T:CollectLines(5002))
+    end)
+
+    it("says the quality cannot be reached when no crafter reaches it, and never shows a lower quality's cost", function()
+      boot({ calibrate = {} })
+      for _, k in ipairs({ "Main-Realm", "Alt-Realm" }) do world.chars[k].professions[2906].skill = 100 end
+      assert.is_true(ns.FS:GetModule("Recipes"):Evaluate(9001, "Main-Realm", { targetQuality = 2 }).flags.unreachableTarget)
+      assert.same({ { "Craft cost", "quality not reachable" }, { "Crafters", "Alt, Main" } }, T:CollectLines(5002))
+      assert.equals("Craft cost", T:CollectLines(5001)[1][1])
+      assert.is_truthy(T:CollectLines(5001)[1][2]:find(ns.UI.FormatMoney(3000), 1, true))
     end)
 
     it("replaces a provider with the same id in place", function()
@@ -137,7 +164,7 @@ describe("Tooltips", function()
         return { { "only-left" }, { nil, "x" }, { 5, 6 }, { "obj", {} }, { "num", 7 }, { "ok", "yes" } }
       end)
       T:RegisterLineProvider("after", function() return { { "after", "1" } } end)
-      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main, Alt" }, { "only-left", "" }, { "num", "7" },
+      assert.same({ cost_line(4800, "Main", "1d old"), { "Crafters", "Main, Alt" }, { "only-left", "" }, { "num", "7" },
         { "ok", "yes" }, { "after", "1" } }, T:CollectLines(5002))
     end)
 
@@ -169,11 +196,11 @@ describe("Tooltips", function()
     end)
 
     it("clears the cache on FS_DATA_CHANGED", function()
-      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main, Alt" } }, T:CollectLines(5002))
+      assert.same({ cost_line(4800, "Main", "1d old"), { "Crafters", "Main, Alt" } }, T:CollectLines(5002))
       world.chars["Alt-Realm"].professions[2906].dropped = true
-      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main, Alt" } }, T:CollectLines(5002))  -- still cached
+      assert.same({ cost_line(4800, "Main", "1d old"), { "Crafters", "Main, Alt" } }, T:CollectLines(5002))  -- still cached
       T:SendMessage(ns.Msg.DATA_CHANGED, "Alt-Realm", "professions")
-      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main" } }, T:CollectLines(5002))
+      assert.same({ cost_line(4800, "Main", "1d old"), { "Crafters", "Main" } }, T:CollectLines(5002))
     end)
 
     it("clears the cache when the module is enabled again", function()
@@ -181,7 +208,7 @@ describe("Tooltips", function()
       ns.FS:SetModuleEnabled("Tooltips", false)
       world.chars["Alt-Realm"].professions[2906].dropped = true  -- no message: only OnEnable can notice
       ns.FS:SetModuleEnabled("Tooltips", true)
-      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main" } }, T:CollectLines(5002))
+      assert.same({ cost_line(4800, "Main", "1d old"), { "Crafters", "Main" } }, T:CollectLines(5002))
     end)
 
     it("registered_provider_not_cached", function()
@@ -206,7 +233,7 @@ describe("Tooltips", function()
       set_crafting("tooltipCraftCost", false)
       assert.same({ { "Extra", "line" } }, T:CollectLines(5002))
       set_crafting("tooltipCraftCost", true)
-      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main, Alt" }, { "Extra", "line" } }, T:CollectLines(5002))
+      assert.same({ cost_line(4800, "Main", "1d old"), { "Crafters", "Main, Alt" }, { "Extra", "line" } }, T:CollectLines(5002))
     end)
   end)
 
@@ -225,7 +252,7 @@ describe("Tooltips", function()
     it("adds the lines with AddDoubleLine", function()
       local tip = fake_tooltip()
       post_call().fn(tip, { id = 5002 })
-      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main, Alt" } }, tip.lines)
+      assert.same({ cost_line(4800, "Main", "1d old"), { "Crafters", "Main, Alt" } }, tip.lines)
     end)
 
     it("adds nothing when data.id is not a number", function()
@@ -260,7 +287,7 @@ describe("Tooltips", function()
       local tip = fake_tooltip()
       post_call().fn(tip, { id = 5002 })
       assert.is_true(T:IsEnabled())
-      assert.same({ cost_line(4800, "Main"), { "Crafters", "Main, Alt" }, { "only-left", "" }, { "after", "1" } },
+      assert.same({ cost_line(4800, "Main", "1d old"), { "Crafters", "Main, Alt" }, { "only-left", "" }, { "after", "1" } },
         tip.lines)
     end)
 

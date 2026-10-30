@@ -246,6 +246,22 @@ describe("Queue", function()
       world.fakeEvaluate(9001, { allocation = {}, reagentCost = 1, expectedYield = 1, flags = {}, profit = 5 })
       assert.equals("Alt-Realm", Q:GetEntries()[1].charKey)
     end)
+    it("skips a crafter who cannot reach the target quality, however profitable", function()
+      world.fakeEvaluate(9001, function(charKey)
+        if charKey == "Alt-Realm" then
+          return { allocation = {}, reagentCost = 1, expectedYield = 1, profit = 900, flags = { unreachableTarget = true } }
+        end
+        return { allocation = {}, reagentCost = 1, expectedYield = 1, profit = 100, flags = {} }
+      end)
+      world.counts[5002] = 0; Q:SetRestock(5002, 1)
+      assert.equals("Main-Realm", Q:GetEntries()[1].charKey)
+    end)
+    it("lists nothing when no crafter can reach the quality, so a lower quality is never crafted forever", function()
+      world.fakeEvaluate(9001, { allocation = {}, reagentCost = 1, expectedYield = 1, profit = 9, flags = { unreachableTarget = true } })
+      world.counts[5002] = 0; Q:SetRestock(5002, 5)
+      assert.same({}, Q:GetEntries())
+      assert.same({}, Q:GetEntryMissing("restock:5002")); assert.is_nil(Q:GetEntryCost("restock:5002"))
+    end)
     it("falls back to the first crafter when no profit is known", function()
       world.fakeEvaluate(9001, { allocation = {}, expectedYield = 1, flags = { noPrice = true } })
       world.counts[5002] = 0; Q:SetRestock(5002, 1)
