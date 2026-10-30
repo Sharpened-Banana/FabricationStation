@@ -360,6 +360,44 @@ describe("Queue craft actions", function()
     end)
   end)
 
+  -- Phase 2 Task 0 (N2): with queueUseWarband off, the plan must not rely on warband reagents Craft Next won't count.
+  describe("warband reagents with queueUseWarband off, real evaluation", function()
+    before_each(function()
+      ns, W, world = make_world({ last = "Modules/QueueCraft.lua", calibrate = { ["Main-Realm"] = { 9001 } } })
+      Q = ns.FS:GetModule("Queue")
+      api = world.recordAuctionatorTerms()
+      local bags = world.items["Main-Realm"]
+      for itemID, n in pairs({ [1001] = 10, [1002] = 7, [2001] = 5, [2002] = 5, [3001] = 2 }) do
+        bags[itemID] = { bags = n, bank = 0, reagentBank = 0 }
+      end
+      world.warband[1002] = 10                      -- enough top-rank ore for a plan that uses only it
+      ns.FS.db.global.settings.crafting = { queueUseWarband = false }
+      world.openProfession(2906)
+    end)
+    it("Craft Next plans with the character's own reagents and crafts", function()
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", targetQuality = 2 })
+      local r = Q:CraftNext()
+      assert.same({}, r.missing or {})
+      assert.equals("crafted", r.status)
+      for _, info in ipairs(world.crafts[1][3]) do
+        if info.reagent.itemID == 1002 then assert.is_true(info.quantity <= 7) end
+      end
+    end)
+    it("the missing reagents and the shopping list do not plan on the warband", function()
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", targetQuality = 2 })
+      assert.same({}, Q:GetMissingReagents(nil))
+      assert.same({ false, "empty" }, { Q:ExportShoppingList() })
+    end)
+    it("still plans on the warband when queueUseWarband is on", function()
+      ns.FS.db.global.settings.crafting = { queueUseWarband = true }
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", targetQuality = 2 })
+      assert.equals("crafted", Q:CraftNext().status)
+      local used = 0
+      for _, info in ipairs(world.crafts[1][3]) do if info.reagent.itemID == 1002 then used = info.quantity end end
+      assert.equals(10, used)                       -- the free warband ore covers the whole slot
+    end)
+  end)
+
   describe("Craft Next results", function()
     before_each(function() world.openProfession(2906) end)
     it("does not decrement restock entries", function()

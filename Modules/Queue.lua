@@ -259,15 +259,23 @@ end
 -- Reagents and costs
 ---------------------------------------------------------------------------
 
--- What one craft of the entry needs: { [itemID] = qty } from the evaluated allocation, less what the
--- customer provides. Nil when the recipe cannot be evaluated (schematic not cached). Evaluated with owned
--- reagents free, as Craft Next does, so the allocation uses held reagents first and the shopping list does
--- not buy a rank the character already holds an alternative for.
-local function per_craft(entry)
-  local result = recipes():Evaluate(entry.recipeID, entry.charKey, {
+-- The Recipes:Evaluate opts the queue plans one craft of `entry` with (Craft Next, missing reagents, the
+-- shopping list): owned reagents free, so held reagents are used first, and the warband's counted as owned only
+-- when settings.crafting.queueUseWarband is on (what Craft Next and the missing reagents count as held).
+function Queue:CraftEvaluateOpts(entry)
+  return {
     targetQuality = entry.targetQuality, useConcentration = entry.useConcentration,
     providedReagents = entry.providedReagents, ownedReagentsFree = true,
-  })
+    excludeWarband = not recipes():GetSetting("queueUseWarband"),
+  }
+end
+
+-- What one craft of the entry needs: { [itemID] = qty } from the evaluated allocation, less what the
+-- customer provides. Nil when the recipe cannot be evaluated (schematic not cached). Evaluated as Craft Next
+-- does (Queue:CraftEvaluateOpts), so the allocation uses held reagents first and the shopping list does not buy
+-- a rank the character already holds an alternative for.
+local function per_craft(entry)
+  local result = recipes():Evaluate(entry.recipeID, entry.charKey, Queue:CraftEvaluateOpts(entry))
   if not result then return nil end
   local need = {}
   for _, a in ipairs(result.allocation or {}) do

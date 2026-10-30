@@ -356,17 +356,21 @@ local function full_opts(opts)
   end
   local ownedFree = opts.ownedReagentsFree
   if ownedFree == nil then ownedFree = Recipes:IsOwnedReagentsFree() end
+  ownedFree = ownedFree and true or false
   return {
     targetQuality = opts.targetQuality,
     useConcentration = opts.useConcentration and true or false,
     providedReagents = provided,
-    ownedReagentsFree = ownedFree and true or false,
+    ownedReagentsFree = ownedFree,
+    -- Only owned counts read it: without owned reagents free it is always false (one cache entry).
+    excludeWarband = ownedFree and opts.excludeWarband and true or false,
   }
 end
 
-local function owned_count(itemID, charKey)
+local function owned_count(itemID, charKey, excludeWarband)
   local c = scanner():GetItemCount(itemID, charKey) or {}
-  return (c.bags or 0) + (c.bank or 0) + (c.reagentBank or 0) + (c.warband or 0)
+  local warband = excludeWarband and 0 or (c.warband or 0)
+  return (c.bags or 0) + (c.bank or 0) + (c.reagentBank or 0) + warband
 end
 
 -- RecipeInput and the PriceResults behind it for recipeID on charKey (schematic nil = fetch it). nil without
@@ -383,7 +387,7 @@ local function build(recipeID, charKey, o, optionalItemIDs, schematic)
     if itemID == nil or results[itemID] then return end
     results[itemID] = P:Get(itemID) or {}
     values[itemID] = results[itemID].value
-    if reagent and owned then owned[itemID] = owned_count(itemID, charKey) end
+    if reagent and owned then owned[itemID] = owned_count(itemID, charKey, o.excludeWarband) end
   end
   for _, slot in ipairs(schematic.reagentSlots or {}) do
     for _, itemID in ipairs(type(slot.reagents) == "table" and slot.reagents or {}) do price(itemID, true) end
@@ -456,7 +460,8 @@ end
 
 -- RecipeResult (contract) for recipeID crafted by charKey (nil = current character); nil when the recipe's
 -- schematic is not cached. opts = { targetQuality, useConcentration, providedReagents = {[itemID] = n},
--- ownedReagentsFree (nil = 1a's settings.costing.ownedReagentsFree) }. Results are cached per recipe,
+-- ownedReagentsFree (nil = 1a's settings.costing.ownedReagentsFree), excludeWarband (owned counts leave out the
+-- warband: the queue's evaluations while settings.crafting.queueUseWarband is off) }. Results are cached per recipe,
 -- character and opts (defaults filled) while Prices:GetVersion(), GetDataStamp(charKey), the schematic
 -- (the cached table and its build and time: schematics are shared by every character) and the day
 -- (floor(Now() / 86400), so time-based flags and price ages move) are unchanged; treat them as read-only.

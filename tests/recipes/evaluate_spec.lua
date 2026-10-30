@@ -79,6 +79,15 @@ describe("Recipes:Evaluate", function()
       world.warband[1001] = 10
       assert.equals(2000, R:Evaluate(9001, "Main-Realm", { targetQuality = 1, ownedReagentsFree = true }).reagentCost)
     end)
+    it("leaves the warband out of owned counts with opts.excludeWarband", function()
+      world.warband[1001] = 10
+      world.items["Main-Realm"][1001] = { bags = 4, bank = 0, reagentBank = 0 }
+      local r = R:Evaluate(9001, "Main-Realm", { targetQuality = 1, ownedReagentsFree = true, excludeWarband = true })
+      assert.equals(2600, r.reagentCost)                        -- 6 × 1001 bought: only the bags count
+      -- without owned reagents free it changes nothing (and shares the cache entry)
+      local plain = R:Evaluate(9001, "Main-Realm", { targetQuality = 1 })
+      assert.equals(plain, R:Evaluate(9001, "Main-Realm", { targetQuality = 1, excludeWarband = true }))
+    end)
     it("reports the oldest price age among the prices used", function()
       world.prices[1002].ageDays = 2; world.prices[5002].ageDays = 3     -- 1002 is in the q2 plan
       world.prices[1001].ageDays = 30; world.prices[1001].source = "vendor"

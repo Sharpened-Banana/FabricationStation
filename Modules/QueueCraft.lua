@@ -136,12 +136,10 @@ end
 -- character lacks for it ({ [itemID] = qty }; bags, bank and reagent bank, plus the warband when
 -- queueUseWarband; reagents a crafting order provides are not needed). The evaluation costs owned
 -- reagents at zero, so the allocation uses what the character holds first (a held rank that prices have
--- made dearer is still crafted with rather than reported missing).
+-- made dearer is still crafted with rather than reported missing); it counts the same holdings as `have`
+-- below (Queue:CraftEvaluateOpts: no warband while queueUseWarband is off).
 local function one_craft(entry)
-  local result = recipes():Evaluate(entry.recipeID, entry.charKey, {
-    targetQuality = entry.targetQuality, useConcentration = entry.useConcentration,
-    providedReagents = entry.providedReagents, ownedReagentsFree = true,
-  })
+  local result = recipes():Evaluate(entry.recipeID, entry.charKey, Queue:CraftEvaluateOpts(entry))
   if not result then return nil, {} end
   local need = {}
   for _, a in ipairs(result.allocation or {}) do
