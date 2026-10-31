@@ -52,6 +52,9 @@ UI\Tabs\Queue.lua
 UI\Tabs\Orders.lua
 UI\Tabs\Customers.lua
 UI\Tabs\Ledger.lua
+UI\Widgets\ExpandGrid.lua
+UI\Tabs\CharactersView.lua
+UI\Tabs\PlannerView.lua
 UI\Tabs\Settings.lua
 UI\Launcher.lua
 UI\ProfessionPanel.lua
