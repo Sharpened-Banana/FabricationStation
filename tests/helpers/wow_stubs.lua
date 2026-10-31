@@ -359,6 +359,19 @@ local function install(overrides)
 
   function W.fire(event, ...) dispatch(eventRegs, event, ...) end
 
+  -- What obj has registered right now: { events = { name... }, messages = { name... } }, each sorted.
+  function W.registrations(obj)
+    local function names(regs)
+      local out = {}
+      for name, bucket in pairs(regs) do
+        if bucket[obj] ~= nil then out[#out + 1] = name end
+      end
+      table.sort(out)
+      return out
+    end
+    return { events = names(eventRegs), messages = names(messageRegs) }
+  end
+
   -- AceConsole
   local AceConsole = {}
   function AceConsole.Embed(_, target)

@@ -142,6 +142,18 @@ describe("wow stubs", function()
       W.boot(); A:SendMessage("FS_X"); M:Disable(); A:SendMessage("FS_X")
       assert.equals(1, n); assert.equals(2, #W.messages)
     end)
+    -- [phase 3 Task 16] inspection for the integration specs (no leaked registrations after a disable).
+    it("lists an object's registered events and messages, sorted", function()
+      local M = A:NewModule("M", "AceEvent-3.0"); local h = function() end
+      M:RegisterEvent("Y", h); M:RegisterEvent("X", h); M:RegisterMessage("FS_B", h); M:RegisterMessage("FS_A", h)
+      A:RegisterEvent("Z", h)
+      assert.same({ events = { "X", "Y" }, messages = { "FS_A", "FS_B" } }, W.registrations(M))
+      M:UnregisterEvent("X"); M:UnregisterAllMessages()
+      assert.same({ events = { "Y" }, messages = {} }, W.registrations(M))
+      W.boot(); M:Disable()
+      assert.same({ events = {}, messages = {} }, W.registrations(M))
+      assert.same({ events = { "Z" }, messages = {} }, W.registrations(A))
+    end)
   end)
 
   describe("AceAddon", function()

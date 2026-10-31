@@ -47,6 +47,20 @@ describe("FabricationStation.toc", function()
     assert.is_true(at["UI/AltsTooltips.lua"] < at["UI/AltsDashboard.lua"])
     assert.equal(#toc.files, at["UI/AltsDashboard.lua"])
   end)
+  -- Phase 3 (Task 16, preflight row 3): the phase-3 data files after Data/OrderRewards.lua and before Math, the
+  -- phase-3 modules after Modules/Ledger.lua in dependency order, all before the UI.
+  it("loads the phase-3 data files and modules in order", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    local chain = { "Data/GameData_Manual.lua", "Data/OrderRewards.lua", "Data/GameData_Knowledge.lua",
+      "Data/GameData_RecipeSources.lua", "Math/Quality.lua", "Modules/Ledger.lua", "Modules/PlanCalc.lua",
+      "Modules/Alts.lua", "Modules/AltsCollector.lua", "Modules/Planner.lua", "Modules/PlannerSpec.lua",
+      "UI/Util.lua" }
+    for i = 2, #chain do
+      assert.is_truthy(at[chain[i - 1]], chain[i - 1]); assert.is_truthy(at[chain[i]], chain[i])
+      assert.is_true(at[chain[i - 1]] < at[chain[i]], chain[i - 1] .. " before " .. chain[i])
+    end
+  end)
   -- Phase 3 (Tasks 12-14): the shared view helpers before the view files, the view files before the tabs that use
   -- them, all before the Settings tab.
   it("loads the phase-3 grid, view helpers, views and tabs in order", function()
