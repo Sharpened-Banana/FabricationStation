@@ -1110,6 +1110,9 @@ function Orders:OnEnable()
     self.hooked = true
   end
   attach_if_ready(self)
+  -- Turned back on: the board cells (hidden while Orders is off) and the Orders tab's "Orders off" notice follow now,
+  -- not at the next board visit.
+  self:SendMessage(ns.Msg.ORDERS_CHANGED)
 end
 
 -- Hooks stay installed (their bodies return early); the live board, pending fulfilments and a claim in flight are

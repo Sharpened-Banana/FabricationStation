@@ -375,11 +375,10 @@ local function schedule_recompute()
   end))
 end
 
--- ns.Msg.ORDER_FULFILLED(fulfilled): the order is done, so its queued crafts can never be made for it again. Every
--- stored entry with that orderID is removed (one FS_QUEUE_CHANGED); nothing is written while the saved data is
--- read-only. Craft Next would otherwise keep sending CraftRecipe for an order that no longer exists.
-local function on_order_fulfilled(_, fulfilled)
-  local orderID = type(fulfilled) == "table" and fulfilled.orderID or nil
+-- Removes every stored entry with this orderID (one FS_QUEUE_CHANGED); nothing is written while the saved data is
+-- read-only, and nothing is sent when no entry belongs to the order. Craft Next would otherwise keep sending
+-- CraftRecipe for an order that no longer exists. Both triggers below call it, so whichever comes second finds nothing.
+local function remove_order_entries(orderID)
   if orderID == nil then return end
   local q = store()
   if not q then return end
@@ -392,15 +391,30 @@ local function on_order_fulfilled(_, fulfilled)
   changed(Queue)
 end
 
+-- ns.Msg.ORDER_FULFILLED(fulfilled): sent by Orders for a fulfilment it saw clicked.
+local function on_order_fulfilled(_, fulfilled)
+  remove_order_entries(type(fulfilled) == "table" and fulfilled.orderID or nil)
+end
+
+-- CRAFTINGORDERS_FULFILL_ORDER_RESPONSE(result, orderID): Blizzard's own answer, so the entries go even when the
+-- Orders module is off or never saw the click. Any result but Ok leaves the order (and its entries) alone.
+local function on_fulfill_response(_, result, orderID)
+  local results = Enum and Enum.CraftingOrderResult
+  if result ~= (type(results) == "table" and results.Ok or 0) then return end
+  remove_order_entries(orderID)
+end
+
 function Queue:OnEnable()
   local handler = ns.FS:Wrap("Queue:Recompute", schedule_recompute)
   self:RegisterMessage(ns.Msg.RECIPES_CHANGED, handler)
   self:RegisterMessage(ns.Msg.DATA_CHANGED, handler)
   -- A source name, not the module's: Queue is a core module and an error here must not turn it off.
   self:RegisterMessage(ns.Msg.ORDER_FULFILLED, ns.FS:Wrap("Queue:OrderFulfilled", on_order_fulfilled))
+  self:RegisterEvent("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", ns.FS:Wrap("Queue:OrderFulfilled", on_fulfill_response))
 end
 
 function Queue:OnDisable()
   self:UnregisterAllMessages()
+  self:UnregisterAllEvents()
   ns.FS:CancelDebounce(DEBOUNCE_KEY)
 end

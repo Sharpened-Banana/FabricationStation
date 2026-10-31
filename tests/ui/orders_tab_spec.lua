@@ -345,6 +345,21 @@ describe("Orders tab frames", function()
     assert.equal("", v.status:GetText())
   end)
 
+  it("clears the Orders off notice when Orders is turned back on, without waiting for the next board visit", function()
+    snapshot({ view() })
+    local v = open()
+    ns.FS:SetModuleEnabled("Orders", false)
+    reg.orders.refresh(container)
+    assert.is_truthy(v.status:GetText():find("Orders off", 1, true))
+    W.advance(1)   -- the refresh Orders' turning off asked for
+    refreshed = {}
+    ns.FS:SetModuleEnabled("Orders", true)   -- Orders announces FS_ORDERS_CHANGED; MainWindow then refreshes the tab
+    W.advance(1)
+    assert.same({ "orders" }, refreshed)
+    reg.orders.refresh(container)
+    assert.equal("", v.status:GetText())
+  end)
+
   it("asks once for an uncached item and refreshes when its data arrives", function()
     local asked = {}
     _G.C_Item.RequestLoadItemDataByID = function(id) asked[#asked + 1] = id end

@@ -16,6 +16,10 @@ describe("Orders board", function()
     P2.fake_module(ns, "Prices", { Get = function() return {} end })
     P2.fake_module(ns, "Scanner", { GetSchematic = function() return {skillLineID = 2900} end, ProjectConcentration = function() return 500, 1000 end })
     P2.load(ns, {"Data/OrderRewards.lua", "Modules/Orders.lua"}); O = ns.FS:GetModule("Orders")
+    -- Enabling Orders announces FS_ORDERS_CHANGED (tested below); the specs count the messages their own calls send.
+    for i = #W.messages, 1, -1 do
+      if W.messages[i][1] == "FS_ORDERS_CHANGED" then table.remove(W.messages, i) end
+    end
   end)
   it("replaces only the shown order type in the snapshot", function()
     O:OnBoardShown(0, { P2.raw_order({orderID=1, orderType=0}), P2.raw_order({orderID=2, orderType=0}) })
@@ -126,6 +130,12 @@ describe("Orders board", function()
     assert.is_nil(O:GetView(1).customer)   -- NPC orders have no customer
   end)
 
+  it("announces FS_ORDERS_CHANGED when turned back on, so the board cells and the tab notice follow at once", function()
+    O:Disable()
+    local before = #messages("FS_ORDERS_CHANGED")
+    O:Enable()
+    assert.equal(before + 1, #messages("FS_ORDERS_CHANGED"))
+  end)
   it("sends FS_ORDERS_CHANGED for a board capture and lists live views by orderID", function()
     O:OnBoardShown(2, { P2.raw_order({orderID=12}), P2.raw_order({orderID=11}) })
     assert.equal(1, #messages("FS_ORDERS_CHANGED"))
