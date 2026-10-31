@@ -127,7 +127,9 @@ describe("Customers tab models", function()
     assert.same({ "Al-Silvermoon" }, group.blockedBy)
     local row = T.ListModel({ group })[1]
     assert.same({ "blocked", "Al-Silvermoon" }, { row.tagsText, row.blockedVia })
-    assert.equal("blocked (alt)", T.CellTexts(row, 1000).tags)   -- "blocked (via Al-Silvermoon)" does not fit
+    assert.equal("blocked (via Al)", T.CellTexts(row, 1000).tags)   -- the main's realm is left out
+    assert.equal("blocked (alt)", T.CellTexts({ nameRealm = "Bob-Silvermoon", orders = 1, tagsText = "blocked",
+      blockedVia = "Someone-Area52" }, 1000).tags)   -- "blocked (via Someone-Area52)" does not fit
     assert.equal("blocked (via Al-X)", T.CellTexts({ nameRealm = "B", orders = 1, tagsText = "blocked", blockedVia = "Al-X" }, 1000).tags)
     assert.equal("VIP, blocked (alt)", T.CellTexts({ nameRealm = "B", orders = 1, tagsText = "VIP, blocked", blockedVia = "Long-Silvermoon" }, 1000).tags)
     -- Blocked by its own tag: no "via".
@@ -155,8 +157,22 @@ describe("Customers tab frames", function()
     local base = _G.CreateFrame
     _G.CreateFrame = function(...)
       local f = base(...)
-      local text, checked, focus, enabled = "", false, false, true
+      local text, checked, focus, enabled, shown = "", false, false, true, true
       f.highlighted = 0
+      -- Show and Hide run OnShow / OnHide when the state changes, as in the client; mouseOver drives IsMouseOver.
+      function f:Show()
+        if shown then return end
+        shown = true
+        local s = self:GetScript("OnShow"); if s then s(self) end
+      end
+      function f:Hide()
+        if not shown then return end
+        shown = false
+        local s = self:GetScript("OnHide"); if s then s(self) end
+      end
+      function f:IsShown() return shown end
+      function f:IsVisible() return shown end
+      function f:IsMouseOver() return self.mouseOver == true end
       function f:SetText(t) text = t; local s = self:GetScript("OnTextChanged"); if s then s(self, false) end end
       function f:GetText() return text end
       function f:Type(t) text = t; local s = self:GetScript("OnTextChanged"); if s then s(self, true) end end
@@ -316,6 +332,67 @@ describe("Customers tab frames", function()
     assert.is_nil(C:Get("Alt3-Silvermoon").linkedTo)
   end)
 
+  describe("pick menu", function()
+    local v, d, tab
+    before_each(function()
+      for i = 1, 3 do
+        local alt = ("Alt%d-Silvermoon"):format(i)
+        C:RecordOrder(alt, order(10 + i, 300 + i, 1))
+        C:Link(alt, "Bob-Silvermoon")
+      end
+      v = open(516)
+      d = v.detail
+      tab = ns.FS:GetModule("CustomersTab")
+      click(row_for(v, "Bob-Silvermoon"))
+      click(d.groupMore)
+    end)
+
+    it("is named, closes with Escape, and listens for clicks only while shown", function()
+      local found = false
+      for _, name in ipairs(UISpecialFrames) do if name == v.menu.frame:GetName() then found = true end end
+      assert.is_true(found)
+      assert.is_true(tab:IsEventRegistered("GLOBAL_MOUSE_DOWN"))
+      v.menu.frame:Hide()
+      assert.is_false(tab:IsEventRegistered("GLOBAL_MOUSE_DOWN"))
+    end)
+
+    it("closes on a click outside it and its chip, not on one over them", function()
+      v.menu.frame.mouseOver = true
+      W.fire("GLOBAL_MOUSE_DOWN", "LeftButton")
+      assert.is_true(v.menu.frame:IsShown())
+      v.menu.frame.mouseOver = false; d.groupMore.mouseOver = true
+      W.fire("GLOBAL_MOUSE_DOWN", "LeftButton")
+      assert.is_true(v.menu.frame:IsShown())
+      d.groupMore.mouseOver = false
+      W.fire("GLOBAL_MOUSE_DOWN", "LeftButton")
+      assert.is_false(v.menu.frame:IsShown())
+      assert.is_false(tab:IsEventRegistered("GLOBAL_MOUSE_DOWN"))
+    end)
+
+    it("stays open through a refresh of the same character and shows the chip's current list", function()
+      reg.customers.refresh(container)   -- e.g. after item data arrived
+      assert.is_true(v.menu.frame:IsShown())
+      C:Link("Alt4-Silvermoon", "Bob-Silvermoon")
+      W.advance(1)
+      assert.is_true(v.menu.frame:IsShown())
+      assert.same({ "Alt2-Silvermoon", "Alt3-Silvermoon", "Alt4-Silvermoon" },
+        { v.menu.buttons[1].value, v.menu.buttons[2].value, v.menu.buttons[3].value })
+      assert.is_true(v.menu.buttons[3]:IsShown())
+    end)
+
+    it("closes when its chip is gone or another character is selected", function()
+      C:Unlink("Alt2-Silvermoon"); C:Unlink("Alt3-Silvermoon")
+      W.advance(1)
+      assert.is_false(d.groupMore:IsShown()); assert.is_false(v.menu.frame:IsShown())
+      C:Link("Alt2-Silvermoon", "Bob-Silvermoon"); C:Link("Alt3-Silvermoon", "Bob-Silvermoon")
+      W.advance(1)
+      click(d.groupMore)
+      assert.is_true(v.menu.frame:IsShown())
+      click(d.group[1])
+      assert.is_false(v.menu.frame:IsShown())
+    end)
+  end)
+
   it("reaches every custom tag: the menu of hidden tags removes the one picked and says so", function()
     for i = 1, 8 do C:SetTag("Bob-Silvermoon", "tag-number-" .. i, true) end
     local v = open(516)
@@ -355,7 +432,7 @@ describe("Customers tab frames", function()
     local v = open()
     local d = v.detail
     local r = row_for(v, "Bob-Silvermoon")
-    assert.equal("blocked (alt)", r.cells.tags:GetText())
+    assert.equal("blocked (via Alt)", r.cells.tags:GetText())
     r:GetScript("OnEnter")(r)
     assert.is_truthy(table.concat(tooltip.lines, "\n"):find("Blocked because Alt-Silvermoon is blocked", 1, true))
     click(r)
@@ -414,7 +491,7 @@ describe("Customers tab frames", function()
       { h.cells.date:GetText(), h.cells.item:GetText(), h.cells.quality:GetText(), h.cells.tip:GetText() })
     assert.equal("pays well", d.notes:GetText())
     assert.is_true(d.vip:GetChecked()); assert.is_false(d.blocked:GetChecked())
-    assert.equal(1, d.chipsShown); assert.equal("friend", d.chips[1].tag)
+    assert.equal(1, d.chipsShown); assert.equal("friend", d.chips[1].value)
     assert.equal("", d.linkEdit:GetText()); assert.is_false(d.unlink:IsEnabled())
     assert.is_truthy(row_for(v, "Bob-Silvermoon").selected)
   end)
@@ -472,7 +549,7 @@ describe("Customers tab frames", function()
     d.tagEdit:Type("vip"); d.tagEdit:GetScript("OnEnterPressed")(d.tagEdit)
     assert.is_true(C:Get("Bob-Silvermoon").tags.VIP); assert.equal(1, d.chipsShown)
     d.tagEdit:Type("VIP"); click(d.tagAdd)   -- already there: nothing to change, the field still clears
-    assert.equal("", d.tagEdit:GetText()); assert.is_nil(v.status:GetText():find("read-only", 1, true))
+    assert.equal("", d.tagEdit:GetText()); assert.is_nil(v.status:GetText():lower():find("read-only", 1, true))
     click(d.chips[1])
     assert.is_nil(C:Get("Bob-Silvermoon").tags["big spender"])
     assert.equal(0, d.chipsShown)
@@ -488,12 +565,12 @@ describe("Customers tab frames", function()
     assert.equal(1, v.list.shown)   -- Cat now shows under Bob
     assert.equal("Cat-Silvermoon (alt of Bob-Silvermoon)", d.title:GetText())
     assert.equal("Bob-Silvermoon", d.linkEdit:GetText()); assert.is_true(d.unlink:IsEnabled())
-    assert.same({ 1, "Bob-Silvermoon" }, { d.groupShown, d.group[1].name })
+    assert.same({ 1, "Bob-Silvermoon" }, { d.groupShown, d.group[1].value })
     -- A group chip selects that character.
     click(d.group[1])
     assert.equal("Bob-Silvermoon", d.title:GetText())
     assert.equal(2, d.history.shown)
-    assert.same({ 1, "Cat-Silvermoon" }, { d.groupShown, d.group[1].name })
+    assert.same({ 1, "Cat-Silvermoon" }, { d.groupShown, d.group[1].value })
     click(d.group[1])
     click(d.unlink)
     assert.is_nil(C:Get("Cat-Silvermoon").linkedTo)
@@ -520,29 +597,46 @@ describe("Customers tab frames", function()
     ns.FS.dbIsNewer = true
     click(d.vip)
     assert.is_nil(C:Get("Bob-Silvermoon").tags.VIP)
-    assert.is_truthy(v.status:GetText():find("read-only", 1, true))
+    assert.is_truthy(v.status:GetText():lower():find("read-only", 1, true))
     d.notes:SetFocus(); d.notes:Type("x"); d.notes:ClearFocus()
     assert.equal("", C:Get("Bob-Silvermoon").notes)
     assert.equal("", d.notes:GetText())   -- the stored note is back in the box
     d.linkEdit:Type("Cat"); click(d.link)
     assert.is_nil(C:Get("Bob-Silvermoon").linkedTo)
-    assert.is_truthy(v.status:GetText():find("read-only", 1, true))
+    assert.is_truthy(v.status:GetText():lower():find("read-only", 1, true))
     -- The controls are disabled and the notice stays up.
     for _, w in ipairs({ d.vip, d.blocked, d.notes, d.tagEdit, d.tagAdd, d.linkEdit, d.link, d.unlink }) do
       assert.is_false(w:IsEnabled())
     end
     W.now = W.now + 60
     reg.customers.refresh(container)
-    assert.is_truthy(v.status:GetText():find("read-only", 1, true))
+    assert.is_truthy(v.status:GetText():lower():find("read-only", 1, true))
     ns.FS.dbIsNewer = nil
     reg.customers.refresh(container)
     assert.is_true(d.vip:IsEnabled()); assert.is_true(d.notes:IsEnabled()); assert.is_false(d.unlink:IsEnabled())
   end)
 
-  it("shows the read-only notice from the first refresh", function()
+  it("starts the read-only notice with Read-only, from the first refresh, with the full text in a tooltip", function()
     ns.FS.dbIsNewer = true
-    local v = open()
-    assert.is_truthy(v.status:GetText():find("read-only", 1, true))
+    local v = open(516)
+    local plain = v.status:GetText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    assert.equal("Read-only", plain:sub(1, 9))
+    v.statusArea:GetScript("OnEnter")(v.statusArea)
+    assert.equal(v.status:GetText(), tooltip.lines[1])
+    assert.is_truthy(tooltip.lines[1]:find("newer addon version", 1, true))
+  end)
+
+  it("disables the tag chips and their +N while read-only, but not the group's +N", function()
+    for i = 1, 8 do C:SetTag("Bob-Silvermoon", "tag-number-" .. i, true) end
+    for i = 1, 3 do C:Link(("Alt%d-Silvermoon"):format(i), "Bob-Silvermoon") end
+    local v = open(516)
+    local d = v.detail
+    click(row_for(v, "Bob-Silvermoon"))
+    assert.is_true(d.chips[1]:IsEnabled()); assert.is_true(d.chipsMore:IsEnabled())
+    ns.FS.dbIsNewer = true
+    reg.customers.refresh(container)
+    assert.is_false(d.chips[1]:IsEnabled()); assert.is_false(d.chipsMore:IsEnabled())
+    assert.is_true(d.groupMore:IsShown()); assert.is_true(d.groupMore:IsEnabled())
   end)
 
   it("exports the visible customers and their alts into a read-only, pre-selected box", function()

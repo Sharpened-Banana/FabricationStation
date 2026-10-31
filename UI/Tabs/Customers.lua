@@ -44,14 +44,14 @@ local HISTORY_PAD, MORE_WIDTH, MENU_WIDTH, MENU_ROW, MENU_PER_COLUMN = 2, 34, 17
 local TAGS_FIT_CHARS = 21   -- about what the 130 px Tags cell shows in GameFontHighlightSmall
 local MAX_SEARCH, MAX_NOTE, MAX_TAG, MAX_NAME = 40, 500, 24, 48
 local DEFAULT_VIEW_HEIGHT = 200   -- before a scroll frame has a size
-local DIALOG_NAME = "FabricationStationCustomersExport"
+local DIALOG_NAME, MENU_NAME = "FabricationStationCustomersExport", "FabricationStationCustomersPick"
 local DIM, WARN, GOOD, BAD = "|cff9d9d9d", "|cffffd100", "|cff40ff40", "|cffff4040"
 local TONES = { good = GOOD, warn = WARN, bad = BAD }
 local WHITE, GREY, GOLD, RED = { 1, 1, 1 }, { 0.62, 0.62, 0.62 }, { 1, 0.82, 0 }, { 1, 0.25, 0.25 }
 local SELECTED_TINT = { 0.25, 0.5, 1, 0.3 }
 
 local READ_ONLY = "Saved data is from a newer version of the addon (read-only); nothing was changed"
-local READ_ONLY_NOTICE = "Saved data is from a newer version of the addon: read-only, nothing can be changed"
+local READ_ONLY_NOTICE = "Read-only: saved data is from a newer addon version"   -- fits the ~218 px status at 516 px
 local LINK_ERRORS = {
   empty = "Type the main character's name first",
   self = "A character cannot be its own alt",
@@ -303,10 +303,14 @@ function Tab.HistoryLayout(width)
 end
 
 -- The Tags cell text: "blocked" reads "blocked (via Name-Realm)" when the group is blocked through another
--- character, or "blocked (alt)" when that would not fit.
+-- character ("-Realm" left out when it is the main's realm), or "blocked (alt)" when that would not fit.
 local function tags_cell(row)
   local text = row.tagsText or ""
   if not row.blockedVia then return text end
+  local via = tostring(row.blockedVia)
+  local name, realm = via:match("^(.-)%-([^%-]+)$")
+  local mainRealm = type(row.nameRealm) == "string" and row.nameRealm:match("%-([^%-]+)$") or nil
+  if name and name ~= "" and realm == mainRealm then via = name end
   local function with(suffix)
     local parts = {}
     for part in (text .. ", "):gmatch("(.-), ") do
@@ -314,7 +318,7 @@ local function tags_cell(row)
     end
     return table.concat(parts, ", ")
   end
-  local full = with("(via " .. row.blockedVia .. ")")
+  local full = with("(via " .. via .. ")")
   if #full <= TAGS_FIT_CHARS then return full end
   return with("(alt)")
 end
@@ -789,8 +793,17 @@ local function hide_menu()
   if view and view.menu then view.menu.frame:Hide() end
 end
 
+-- A mouse press anywhere but on the menu or the chip that opened it closes the menu.
+local on_global_mouse_down = ns.FS:Wrap(REFRESH_SOURCE, function()
+  local menu = view and view.menu
+  if not (menu and menu.frame:IsShown()) then return end
+  if menu.frame:IsMouseOver() or (menu.owner and menu.owner:IsMouseOver()) then return end
+  menu.frame:Hide()
+end)
+
 local function create_menu()
-  local f = CreateFrame("Frame", nil, view.container, "BackdropTemplate")
+  -- Named and listed in UISpecialFrames, so Escape closes it.
+  local f = CreateFrame("Frame", MENU_NAME, view.container, "BackdropTemplate")
   f:SetFrameStrata("DIALOG")
   f:SetToplevel(true)
   f:SetClampedToScreen(true)
@@ -802,7 +815,15 @@ local function create_menu()
   end
   local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
+  -- GLOBAL_MOUSE_DOWN is only listened to while the menu is shown.
+  f:SetScript("OnShow", function() CustomersTab:RegisterEvent("GLOBAL_MOUSE_DOWN", on_global_mouse_down) end)
+  f:SetScript("OnHide", function() CustomersTab:UnregisterEvent("GLOBAL_MOUSE_DOWN") end)
   f:Hide()
+  local registered = false
+  for _, name in ipairs(UISpecialFrames) do
+    if name == MENU_NAME then registered = true; break end
+  end
+  if not registered then tinsert(UISpecialFrames, MENU_NAME) end
   return { frame = f, title = title, buttons = {} }
 end
 
@@ -822,17 +843,8 @@ local function menu_button(menu, index)
   return button
 end
 
--- Opens the menu below `owner` with one button per value, MENU_PER_COLUMN to a column; opening it again from the
--- same owner closes it.
-local function open_menu(owner, title, values, onPick)
-  view.menu = view.menu or create_menu()
-  local menu = view.menu
-  if menu.frame:IsShown() and menu.owner == owner then
-    menu.frame:Hide()
-    return
-  end
-  menu.owner, menu.onPick = owner, onPick
-  menu.title:SetText(title)
+-- Fills the menu with one button per value, MENU_PER_COLUMN to a column, below its owner.
+local function fill_menu(menu, values)
   for i, value in ipairs(values) do
     local button = menu_button(menu, i)
     local column, line = math.floor((i - 1) / MENU_PER_COLUMN), (i - 1) % MENU_PER_COLUMN
@@ -846,8 +858,36 @@ local function open_menu(owner, title, values, onPick)
   local columns = math.max(1, math.ceil(#values / MENU_PER_COLUMN))
   menu.frame:SetSize(16 + columns * MENU_WIDTH + (columns - 1) * GAP, 30 + math.min(#values, MENU_PER_COLUMN) * MENU_ROW)
   menu.frame:ClearAllPoints()
-  menu.frame:SetPoint("TOPLEFT", owner, "BOTTOMLEFT", 0, -2)
+  menu.frame:SetPoint("TOPLEFT", menu.owner, "BOTTOMLEFT", 0, -2)
+end
+
+-- Opens the menu below `owner` (a "+N" chip) for the selected character; opening it again from the same owner
+-- closes it.
+local function open_menu(owner, title, values, onPick)
+  view.menu = view.menu or create_menu()
+  local menu = view.menu
+  if menu.frame:IsShown() and menu.owner == owner then
+    menu.frame:Hide()
+    return
+  end
+  menu.owner, menu.onPick, menu.selection = owner, onPick, selected
+  menu.title:SetText(title)
+  fill_menu(menu, values)
   menu.frame:Show()
+end
+
+-- After the detail pane was redrawn: the open menu closes when the selection changed or its chip is gone (hidden,
+-- disabled, nothing left to pick); otherwise it shows the chip's current hidden list.
+local function sync_menu()
+  local menu = view and view.menu
+  if not (menu and menu.frame:IsShown()) then return end
+  local owner = menu.owner
+  if menu.selection ~= selected or not owner or not owner:IsShown() or not owner:IsEnabled()
+    or #(owner.hidden or {}) == 0 then
+    menu.frame:Hide()
+    return
+  end
+  fill_menu(menu, owner.hidden)
 end
 
 local function chip_width(chip, width)
@@ -951,7 +991,6 @@ end
 
 local function refresh_detail()
   local d = view.detail
-  hide_menu()
   local C = module("Customers")
   local record = C and selected and C:Get(selected) or nil
   if not record then
@@ -959,6 +998,7 @@ local function refresh_detail()
     d.noteOwner, d.detailFor = nil, nil
     d.body:Hide()
     d.hint:Show()
+    hide_menu()
     return
   end
   d.body:Show()
@@ -1006,7 +1046,7 @@ local function refresh_detail()
       if r and type(r.tags) == "table" and r.tags.blocked then via = name; break end
     end
   end
-  d.blockedHint.name = via
+  d.blockedHint.value = via
   if via then
     d.blockedHint.text:SetText(color(DIM, "Group blocked via " .. via))
     d.blockedHint:Show()
@@ -1022,10 +1062,13 @@ local function refresh_detail()
   end
   for i, tag in ipairs(custom) do
     local chip = chip_at(d, "chips", d.right, i, function(self) remove_tag(self.value) end, tag_chip_tooltip)
-    chip.value, chip.tag, chip.label = tag, tag, tag .. " x"
+    chip.value, chip.label = tag, tag .. " x"
     chip:SetText(chip.label)
   end
   d.chipsShown = flow_chips(d.right, d.chips, #custom, RIGHT_WIDTH, 2, 0, d.chipsTop, d.chipsMore)
+  -- Removing a tag is an edit: the tag chips and their "+N" are off while read-only (the group's "+N" only navigates).
+  for _, chip in ipairs(d.chips) do set_enabled(chip, not readOnly) end
+  set_enabled(d.chipsMore, not readOnly)
 
   -- The other characters of the group; a click selects one.
   local others = {}
@@ -1035,7 +1078,7 @@ local function refresh_detail()
   for i, name in ipairs(others) do
     local chip = chip_at(d, "group", d.groupBar, i, function(self) select_customer(self.value) end,
       group_chip_tooltip)
-    chip.value, chip.name, chip.label = name, name, name == root and (name .. " (main)") or name
+    chip.value, chip.label = name, name == root and (name .. " (main)") or name
     chip:SetText(chip.label)
   end
   d.groupLabel:SetText(#others > 0 and "Group:" or color(DIM, "No linked characters"))
@@ -1043,6 +1086,7 @@ local function refresh_detail()
   local groupWidth = (layout and layout.left or 0) - GROUP_LABEL_WIDTH
   if groupWidth <= 0 then groupWidth = 200 end
   d.groupShown = flow_chips(d.groupBar, d.group, #others, groupWidth, 1, GROUP_LABEL_WIDTH, 0, d.groupMore)
+  sync_menu()
 end
 
 ---------------------------------------------------------------------------
@@ -1263,11 +1307,11 @@ local function build_detail(container)
   hint.text:SetAllPoints(hint)
   hint.text:SetJustifyH("LEFT")
   hint.text:SetWordWrap(false)
-  hint:SetScript("OnClick", ns.FS:Wrap(SOURCE, function(self) if self.name then select_customer(self.name) end end))
+  hint:SetScript("OnClick", ns.FS:Wrap(SOURCE, function(self) if self.value then select_customer(self.value) end end))
   hint:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
-    if not self.name then return end
-    show_lines(self, { { text = ("Blocked because %s is blocked"):format(self.name), color = RED },
-      { text = "Click to show " .. self.name, color = GREY } })
+    if not self.value then return end
+    show_lines(self, { { text = ("Blocked because %s is blocked"):format(self.value), color = RED },
+      { text = "Click to show " .. self.value, color = GREY } })
   end))
   hint:SetScript("OnLeave", hide_tooltip)
   hint:Hide()
@@ -1380,6 +1424,17 @@ local function build(container)
   created.status:SetPoint("RIGHT", created.exportButton, "LEFT", -8, 0)
   created.status:SetJustifyH("RIGHT")
   created.status:SetWordWrap(false)
+  -- The status line may be cut; its own mouse area shows the full text.
+  created.statusArea = CreateFrame("Frame", nil, bar)
+  created.statusArea:SetPoint("LEFT", created.search, "RIGHT", 8, 0)
+  created.statusArea:SetPoint("RIGHT", created.exportButton, "LEFT", -8, 0)
+  created.statusArea:SetHeight(20)
+  created.statusArea:EnableMouse(true)
+  created.statusArea:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
+    local text = created.status:GetText()
+    if type(text) == "string" and text ~= "" then show_lines(self, { { text = text } }) end
+  end))
+  created.statusArea:SetScript("OnLeave", hide_tooltip)
 
   local headersTop = BAR_HEIGHT + 2
   created.headerBar, created.headers = create_headers(container, headersTop)
