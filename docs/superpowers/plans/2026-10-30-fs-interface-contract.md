@@ -99,7 +99,7 @@ Lazy keys added by 1b (no migration): `settings.crafting` (overrides of `Recipes
 ```lua
 customers = { [nameRealm] = CustomerRecord },                     -- 1a default {}
 ledger = { entries = { LedgerEntry },                             -- entries: 1a default
-           costBasis = { [itemID] = { totalCost, totalQty, recipeID } },  -- crafts for no order, complete costs only
+           costBasis = { [itemID] = { totalCost, totalQty, recipeID, estimatedQty? } },  -- crafts for no order, complete costs only; estimatedQty: qty from estimated crafts (a sale priced from it is estimated)
            nameIndex = { [itemName] = { itemID, ambiguous } } },  -- item name of a link -> last itemID crafted under it
 ordersSnapshot = { time, charKey, orders = { [orderID] = OrderView } },   -- 1a default { orders = {} }
 ordersState = { [charKey] = { personalCounts = { [profession] = n } } },

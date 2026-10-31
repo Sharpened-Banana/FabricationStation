@@ -63,6 +63,21 @@ describe("Ledger capture", function()
     L:OnTakeMoney(1)
     local s = L:Query({type="sale"})[1]
     assert.same({950000, 5, 75000, 4444, 211111, "invoice"}, {s.amount, s.quantity, s.cost, s.recipeID, s.itemID, s.source})
+    assert.is_nil(s.estimated); assert.is_nil(L:Weekly(1000, 1)[1].estimated)
+  end)
+  it("marks a sale costed from estimated crafts as estimated", function()
+    L:OnCraftRecipe(4444, 1, {}, nil, nil, false)   -- the quality slot has no entry: its cost is estimated
+    L:OnCraftResult("TRADE_SKILL_ITEM_CRAFTED_RESULT", {itemID=211111, quantity=2, craftingQuality=3, hyperlink=LINK, operationID=50})
+    L:OnCraftResult("TRADE_SKILL_ITEM_CRAFTED_RESULT", {itemID=211111, quantity=1, craftingQuality=3, hyperlink=LINK, operationID=50})
+    assert.is_true(L:Query({type="craft"})[1].estimated)
+    local row = ns.FS.db.global.ledger.costBasis[211111]
+    assert.same({3, 3}, {row.totalQty, row.estimatedQty})                 -- the multicraft extra is estimated too
+    inv[1] = {"seller", "Potion of Foo", "Buyer", 1000000, 0, 20000, 50000, 0, 0, 0, 1, false}
+    hdr[1] = {nil, nil, "Auction House", "x", 970000, 0, 29.5, 0}
+    L:OnTakeMoney(1)
+    local s = L:Query({type="sale"})[1]
+    assert.is_true(s.estimated); assert.is_number(s.cost)
+    assert.equal(1, L:Weekly(1000, 1)[1].estimated)
   end)
   it("ignores a second take of the same mail", function()
     inv[1] = {"seller", "Potion of Foo", "Buyer", 1000000, 0, 20000, 50000, 0, 0, 0, 5, false}

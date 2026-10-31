@@ -535,7 +535,9 @@ function Ledger:OnUntrackedCraft(orderID)
   if orderID ~= nil then untrackedOrders[orderID] = true end
 end
 
-local function add_cost_basis(itemID, cost, quantity, recipeID)
+-- costBasis[itemID] = { totalCost, totalQty, recipeID, estimatedQty? }: estimatedQty is the part of totalQty that came
+-- from crafts with an estimated cost (nil while none); a sale priced from a row with estimatedQty > 0 is estimated.
+local function add_cost_basis(itemID, cost, quantity, recipeID, estimated)
   local basis = store_for_write("costBasis")
   if not basis then return false end
   local row = basis[itemID]
@@ -546,6 +548,7 @@ local function add_cost_basis(itemID, cost, quantity, recipeID)
   row.totalCost = row.totalCost + cost
   row.totalQty = row.totalQty + quantity
   row.recipeID = recipeID
+  if estimated then row.estimatedQty = number_or(row.estimatedQty, 0) + quantity end
   return true
 end
 
@@ -565,7 +568,10 @@ local function add_extra(self, quantity)
   if lastCraft.fedBasis then
     local basis = store_view("costBasis")
     local row = basis and basis[lastCraft.itemID]
-    if type(row) == "table" and type(row.totalQty) == "number" then row.totalQty = row.totalQty + quantity end
+    if type(row) == "table" and type(row.totalQty) == "number" then
+      row.totalQty = row.totalQty + quantity
+      if entry.estimated then row.estimatedQty = number_or(row.estimatedQty, 0) + quantity end
+    end
   end
   self:SendMessage(ns.Msg.LEDGER_CHANGED)
 end
@@ -602,7 +608,7 @@ function Ledger:OnCraftResult(_, data)
   local quantity = data.quantity
   if craft.orderID == nil and not incomplete and type(data.itemID) == "number"
     and type(quantity) == "number" and quantity > 0 then
-    fedBasis = add_cost_basis(data.itemID, cost, quantity, craft.recipeID)
+    fedBasis = add_cost_basis(data.itemID, cost, quantity, craft.recipeID, estimated)
     index_name(Ledger.ItemNameFromLink(data.hyperlink), data.itemID)
   end
   lastCraft = operationID ~= nil
@@ -701,6 +707,7 @@ function Ledger:OnTakeMoney(index)
     sale.recipeID = row.recipeID
     if not ambiguous and type(row.totalCost) == "number" and type(row.totalQty) == "number" and row.totalQty > 0 then
       sale.cost = to_copper(row.totalCost / row.totalQty * sale.quantity)
+      if sale.cost ~= nil and number_or(row.estimatedQty, 0) > 0 then sale.estimated = true end
     end
   end
   sale.type, sale.itemID, sale.ambiguous = "sale", itemID, ambiguous or nil
