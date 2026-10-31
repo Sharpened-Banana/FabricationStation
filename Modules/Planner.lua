@@ -89,10 +89,12 @@ end
 -- { { charKey, skillLineID, name, summary = KnowledgeSummary, states = { SourceState } } }: one row per visible
 -- (not hidden) character and listed profession (Alts' rule: Knowledge variant lines, or lines with a concentration or
 -- spec snapshot; dropped and older-expansion records are left out). Sorted by weekly points left (status "ok" only)
--- desc, then the rest, then charKey, then skillLineID. now defaults to the server time. {} while Alts is off.
+-- desc, then the rest, then charKey, then skillLineID. now defaults to the server time.
+-- Second return: status "ok", or "off" (with {}) while Alts is missing or turned off. Like every Planner getter it
+-- ignores Planner's own enabled state: the Planner tab checks Planner:IsEnabled() itself.
 function Planner:GetKnowledgeChecklist(now)
   local A = alts()
-  if not A then return {} end
+  if not A then return {}, "off" end
   now = is_finite(now) and now or ns.FS:Now()
   local rows = {}
   for _, alt in ipairs(A:GetOverview()) do
@@ -113,7 +115,7 @@ function Planner:GetKnowledgeChecklist(now)
     if a.charKey ~= b.charKey then return a.charKey < b.charKey end
     return a.skillLineID < b.skillLineID
   end)
-  return rows
+  return rows, "ok"
 end
 
 ---------------------------------------------------------------------------
@@ -138,7 +140,7 @@ local function spell_name(recipeID)
   if ok and type(name) == "string" and name ~= "" and accessible(name) then return name end
 end
 
--- The character's own non-dropped record for the line, or nil.
+-- The character's own non-dropped record for the line, or nil (also for an unknown character).
 local function own_record(charKey, skillLineID)
   local S = scanner()
   local p = S and type(charKey) == "string" and S:GetProfession(charKey, skillLineID)
@@ -147,7 +149,7 @@ end
 
 local function is_hidden(A, charKey)
   local h = A:Settings().hidden
-  return type(h) == "table" and h[charKey] == true
+  return charKey ~= nil and type(h) == "table" and h[charKey] == true
 end
 
 -- { { recipeID, name, source = { kind, itemID|nil, text|nil } } } for the recipes of a profession line the character
@@ -155,18 +157,29 @@ end
 -- recipes. kind comes from RecipeSources ("auto" | "item" | "unknown"; "unknown" when it has no entry or another
 -- value), itemID from it for kind "item" when a number; text is the catalog's source text when not empty (the game's
 -- own words, so the live text wins for display). name: the catalog's, else C_Spell.GetSpellName, else "Recipe <id>".
--- Sorted by name (ignoring case), then recipeID. {} for a hidden or unknown character, a line the character does not
--- have (or only a dropped record of), or while Alts is off.
+-- Sorted by name (ignoring case), then recipeID.
+-- Second return, a status the view shows instead of an empty list (design rule 6), decided in this order:
+--   "off"          Alts is missing or turned off ({}).
+--   "hidden"       the character is hidden ({}).
+--   "noProfession" no record, or only a dropped one, for the character and line; also an unknown character ({}).
+--   "noData"       nothing lists the line's recipes (no number key in the catalog or RecipeSources), or the record
+--                  was never filled by a recipe scan: 1a writes a ProfessionRecord's `time` only in
+--                  Scanner:ScanProfession, so a record without a numeric `time` (made by a spec snapshot) has an
+--                  unknown recipe list ({}).
+--   "ok"           the rows; {} then means nothing is missing.
+-- Like every Planner getter it ignores Planner's own enabled state: the Planner tab checks Planner:IsEnabled() itself.
 function Planner:GetMissingRecipes(charKey, skillLineID)
   local A = alts()
-  if not A then return {} end
+  if not A then return {}, "off" end
+  if is_hidden(A, charKey) then return {}, "hidden" end
   local record = own_record(charKey, skillLineID)
-  if not record or is_hidden(A, charKey) then return {} end
-  local known = type(record.recipes) == "table" and record.recipes or {}
+  if not record then return {}, "noProfession" end
   local catalog, generated = A:GetRecipeCatalog(skillLineID), generated_sources(skillLineID)
-  local ids = {}
-  for id in pairs(catalog) do if type(id) == "number" then ids[id] = true end end
-  for id in pairs(generated) do if type(id) == "number" then ids[id] = true end end
+  local ids, any = {}, false
+  for id in pairs(catalog) do if type(id) == "number" then ids[id] = true; any = true end end
+  for id in pairs(generated) do if type(id) == "number" then ids[id] = true; any = true end end
+  if not any or not is_finite(record.time) then return {}, "noData" end
+  local known = type(record.recipes) == "table" and record.recipes or {}
 
   local out = {}
   for id in pairs(ids) do
@@ -186,7 +199,7 @@ function Planner:GetMissingRecipes(charKey, skillLineID)
     if lower[a] ~= lower[b] then return lower[a] < lower[b] end
     return a.recipeID < b.recipeID
   end)
-  return out
+  return out, "ok"
 end
 
 ---------------------------------------------------------------------------

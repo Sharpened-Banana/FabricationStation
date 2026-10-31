@@ -69,6 +69,7 @@ function P3.characters()
       professions = {
         [2907] = {
           name = "Midnight Blacksmithing", skill = 85, maxSkill = 100, recipes = { [1001] = true },
+          time = NOW - 60,   -- [phase 3 Task 9] a recipe scan ran (1a: only ScanProfession writes a record's time)
           concentration = { currencyID = 3256, value = 400, max = 1000, time = NOW, perCycle = 1, cycleSeconds = 360 },
           moxie = { currencyID = 3300, value = 120, time = NOW },
           cooldowns = { [1001] = { readyAt = NOW + 7200, charges = 0, maxCharges = 1, time = NOW } },

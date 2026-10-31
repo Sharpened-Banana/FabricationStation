@@ -128,10 +128,25 @@ describe("Planner knowledge checklist", function()
     assert.same({ "Midnight Blacksmithing", "Midnight Herbalism" }, names(rows))
   end)
 
-  it("is empty while Alts is turned off", function()
+  it("says \"ok\" with its rows", function()
+    local ns = env()
+    local rows, status = planner(ns):GetKnowledgeChecklist(NOW)
+    assert.same({ 2, "ok" }, { #rows, status })
+    alts(ns):SetHidden("Aria-Silvermoon", true); alts(ns):SetHidden("Bren-Silvermoon", true)
+    assert.same({ {}, "ok" }, { planner(ns):GetKnowledgeChecklist(NOW) })   -- nobody visible is still "ok"
+  end)
+
+  it("is empty with status \"off\" while Alts is turned off", function()
     local ns = env()
     alts(ns):Disable()
-    assert.same({}, planner(ns):GetKnowledgeChecklist(NOW))
+    assert.same({ {}, "off" }, { planner(ns):GetKnowledgeChecklist(NOW) })
+  end)
+
+  it("ignores Planner's own enabled state (the tab checks Planner:IsEnabled())", function()
+    local ns = env()
+    planner(ns):Disable()
+    assert.equal("ok", select(2, planner(ns):GetKnowledgeChecklist(NOW)))
+    assert.equal("ok", select(2, planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907)))
   end)
 end)
 
@@ -144,6 +159,7 @@ describe("Planner missing recipes", function()
     assert.same({ "Axe", "Blade", "Mace" }, { m[1].name, m[2].name, m[3].name })
     assert.same({ kind = "unknown", text = "Vendor: Smith" }, m[1].source)     -- live text wins
     assert.same({ kind = "item", itemID = 555 }, m[3].source)
+    assert.equal("ok", select(2, planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907)))
   end)
 
   it("gives each row its recipeID; a catalog-only recipe has kind unknown and its source text", function()
@@ -157,6 +173,73 @@ describe("Planner missing recipes", function()
   it("missing recipes without any data", function()
     local ns = env()
     assert.same({}, planner(ns):GetMissingRecipes("Bren-Silvermoon", 2912))
+    assert.equal("noData", select(2, planner(ns):GetMissingRecipes("Bren-Silvermoon", 2912)))
+  end)
+
+  describe("status", function()
+    local function status(ns, charKey, sl) return select(2, planner(ns):GetMissingRecipes(charKey, sl)) end
+
+    it("\"ok\" with an empty list when the character knows every listed recipe", function()
+      local ns = env()
+      local known = char(ns, "Aria-Silvermoon").professions[2907].recipes
+      for _, id in ipairs({ 102, 103, 104 }) do known[id] = true end
+      assert.same({ {}, "ok" }, { planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907) })
+    end)
+
+    it("\"ok\" when only one of the catalog and RecipeSources lists the line", function()
+      local ns = env({ sources = false })
+      assert.equal("ok", status(ns, "Aria-Silvermoon", 2907))
+      local ns2 = env()
+      ns2.FS.db.global.recipeCatalog[2907] = nil
+      assert.same({ { "Mace", "Recipe 103" }, "ok" }, { names(planner(ns2):GetMissingRecipes("Aria-Silvermoon", 2907)),
+        status(ns2, "Aria-Silvermoon", 2907) })
+    end)
+
+    it("\"off\" while Alts is turned off", function()
+      local ns = env()
+      alts(ns):Disable()
+      assert.same({ {}, "off" }, { planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907) })
+    end)
+
+    it("\"hidden\" for a hidden character, checked before its record", function()
+      local ns = env()
+      alts(ns):SetHidden("Aria-Silvermoon", true)
+      assert.same({ {}, "hidden" }, { planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907) })
+      assert.equal("hidden", status(ns, "Aria-Silvermoon", 2912))           -- no such record: still "hidden"
+      alts(ns):SetHidden("Gone-Silvermoon", true)
+      assert.equal("hidden", status(ns, "Gone-Silvermoon", 2907))          -- no saved character at all
+    end)
+
+    it("\"noProfession\" without a record, with only a dropped one, or for an unknown character", function()
+      local ns = env()
+      assert.same({ {}, "noProfession" }, { planner(ns):GetMissingRecipes("Aria-Silvermoon", 2912) })
+      assert.equal("noProfession", status(ns, "Nobody-Silvermoon", 2907))
+      assert.equal("noProfession", status(ns, nil, 2907))
+      char(ns, "Aria-Silvermoon").professions[2907].dropped = true
+      assert.equal("noProfession", status(ns, "Aria-Silvermoon", 2907))
+    end)
+
+    it("\"noData\" when neither the catalog nor RecipeSources has a recipe for the line", function()
+      local ns = env({ sources = false })
+      ns.FS.db.global.recipeCatalog[2907] = nil
+      assert.same({ {}, "noData" }, { planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907) })
+      ns.FS.db.global.recipeCatalog[2907] = { broken = { name = "x" } }   -- no number key
+      ns.GameData.Define("RecipeSources", 70575, { bySkillLine = { [2907] = {} } })
+      assert.equal("noData", status(ns, "Aria-Silvermoon", 2907))
+    end)
+
+    it("\"noData\" when the record was never filled by a recipe scan (no numeric time)", function()
+      -- 1a writes ProfessionRecord.time only in Scanner:ScanProfession; a spec snapshot alone makes a record
+      -- without it, whose empty recipe list says nothing about what the character knows.
+      local ns = env()
+      local p = char(ns, "Aria-Silvermoon").professions[2907]
+      p.time = nil
+      assert.same({ {}, "noData" }, { planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907) })
+      p.time = "soon"
+      assert.equal("noData", status(ns, "Aria-Silvermoon", 2907))
+      p.time = NOW
+      assert.equal("ok", status(ns, "Aria-Silvermoon", 2907))
+    end)
   end)
 
   it("works with RecipeSources undefined or empty (the checked-in --empty table)", function()
@@ -255,13 +338,14 @@ describe("Planner missing recipes", function()
       names(planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907)))
   end)
 
-  it("reads only: neither the catalog nor the character record changes", function()
+  it("reads only: db.global is unchanged once the lazily created settings exist", function()
     local ns = env()
+    alts(ns):Settings(); planner(ns):Settings()   -- the only writes: each module's settings table, on first use
     local before = ns.Util.DeepCopy(ns.FS.db.global)
     planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907)
+    planner(ns):GetMissingRecipes("Bren-Silvermoon", 2912)
     planner(ns):GetKnowledgeChecklist(NOW)
-    assert.same(before.recipeCatalog, ns.FS.db.global.recipeCatalog)
-    assert.same(before.characters, ns.FS.db.global.characters)
+    assert.same(before, ns.FS.db.global)
   end)
 
   it("is empty while Alts is turned off", function()
