@@ -122,7 +122,8 @@ end
 
 -- Adds a craft. entry = { recipeID, quantity (>= 1), charKey (default: current), targetQuality?,
 -- useConcentration?, orderID?, providedReagents? = { [itemID] = qty } }. Returns the new id, or nil
--- for an invalid entry or while the saved data is read-only.
+-- for an invalid entry or while the saved data is read-only. An entry with an orderID belongs to that crafting
+-- order: Craft Next crafts it only while the order is claimed, and FS_ORDER_FULFILLED removes it.
 function Queue:Add(entry)
   if type(entry) ~= "table" or type(entry.recipeID) ~= "number" then return nil end
   local quantity = positive_int(entry.quantity)
@@ -374,10 +375,29 @@ local function schedule_recompute()
   end))
 end
 
+-- ns.Msg.ORDER_FULFILLED(fulfilled): the order is done, so its queued crafts can never be made for it again. Every
+-- stored entry with that orderID is removed (one FS_QUEUE_CHANGED); nothing is written while the saved data is
+-- read-only. Craft Next would otherwise keep sending CraftRecipe for an order that no longer exists.
+local function on_order_fulfilled(_, fulfilled)
+  local orderID = type(fulfilled) == "table" and fulfilled.orderID or nil
+  if orderID == nil then return end
+  local q = store()
+  if not q then return end
+  local kept, removed = {}, false
+  for _, e in ipairs(q.entries) do
+    if type(e) == "table" and e.orderID == orderID then removed = true else kept[#kept + 1] = e end
+  end
+  if not removed then return end
+  q.entries = kept
+  changed(Queue)
+end
+
 function Queue:OnEnable()
   local handler = ns.FS:Wrap("Queue:Recompute", schedule_recompute)
   self:RegisterMessage(ns.Msg.RECIPES_CHANGED, handler)
   self:RegisterMessage(ns.Msg.DATA_CHANGED, handler)
+  -- A source name, not the module's: Queue is a core module and an error here must not turn it off.
+  self:RegisterMessage(ns.Msg.ORDER_FULFILLED, ns.FS:Wrap("Queue:OrderFulfilled", on_order_fulfilled))
 end
 
 function Queue:OnDisable()

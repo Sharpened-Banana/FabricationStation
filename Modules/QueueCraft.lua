@@ -245,6 +245,14 @@ local function entry_exists(id)
   return nil
 end
 
+-- True when this character has claimed the crafting order `orderID` (the only order CraftRecipe may name: an
+-- unclaimed or fulfilled one makes the cast fail and would leave Craft Next "busy").
+local function order_claimed(orderID)
+  local api = C_CraftingOrders
+  local claimed = api and type(api.GetClaimedOrder) == "function" and api.GetClaimedOrder() or nil
+  return type(claimed) == "table" and claimed.orderID == orderID
+end
+
 local function clear_pending()
   pending = nil
   ns.FS:CancelDebounce(PENDING_KEY)
@@ -268,11 +276,12 @@ local function complete_pending()
 end
 
 -- Crafts one of the first queue entry that can be crafted now: not on cooldown, on the current
--- character, its profession window open, nothing missing for one craft. Returns a CraftNextResult:
--- { status = "crafted"|"busy"|"open"|"missing"|"cooldown"|"empty", entryID?, charKey?, skillLineID?,
--- missing?, readyAt? }. "busy" while the craft it started last has not finished (see `pending`).
--- With nothing craftable it reports the first blocker in queue order ("open" for another character
--- or a closed/other profession window, "missing"), "cooldown" with the earliest readyAt when every
+-- character, its profession window open, its crafting order (if any) claimed, nothing missing for one craft.
+-- Returns a CraftNextResult: { status = "crafted"|"busy"|"open"|"order"|"missing"|"cooldown"|"empty", entryID?,
+-- charKey?, skillLineID?, missing?, readyAt?, orderID? }. "busy" while the craft it started last has not finished
+-- (see `pending`). With nothing craftable it reports the first blocker in queue order ("open" for another
+-- character or a closed/other profession window, "order" for an order entry whose order this character has not
+-- claimed (C_CraftingOrders.GetClaimedOrder), "missing"), "cooldown" with the earliest readyAt when every
 -- entry waits, "empty" without entries.
 -- A protected action: call it only from an OnClick handler.
 function Queue:CraftNext()
@@ -296,6 +305,8 @@ function Queue:CraftNext()
       local blocked
       if e.charKey ~= me or not scanner():IsProfessionOpen(profession_of(e.recipeID, schematic)) then
         blocked = { status = "open", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID }
+      elseif e.orderID ~= nil and not order_claimed(e.orderID) then
+        blocked = { status = "order", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID, orderID = e.orderID }
       else
         local result, missing = one_craft(e)
         if result and next(missing) == nil then

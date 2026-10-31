@@ -120,7 +120,7 @@ function Tab.BuildRows(entries, costs, missing, readyAt, now, results)
       targetQuality = e.targetQuality, concentration = e.useConcentration and "on" or "off",
       missingText = missing_text(missing[e.id]), cost = costs[e.id],
       readyText = (type(ready) == "number" and ready > now) and ("ready in " .. Tab.FormatDuration(ready - now)) or "",
-      isRestock = e.isRestock == true,
+      isRestock = e.isRestock == true, orderID = e.orderID,
       estimated = flags.estimated == true, stale = flags.stalePrice == true, unreachable = flags.unreachableTarget == true,
       priceAge = type(r) == "table" and r.priceAgeDays or nil,
     }
@@ -132,6 +132,7 @@ end
 function Tab.CellTexts(row)
   local name = row.name
   if row.isRestock then name = name .. "  " .. color(DIM, "[restock]") end
+  if row.orderID ~= nil then name = name .. "  " .. color(DIM, "[order]") end
   if row.unreachable then name = name .. "  " .. color(WARN, "[quality unreachable]") end
   local cost = color(DIM, "no price")
   if row.cost ~= nil then
@@ -155,6 +156,9 @@ function Tab.StatusText(result, professionName, charName, now)
     return result.recipeName and ("Crafting " .. result.recipeName .. ELLIPSIS) or ("Crafting" .. ELLIPSIS)
   elseif s == "open" then
     return "Open " .. (professionName or "the profession") .. " on " .. (charName or "that character")
+  elseif s == "order" then
+    return "Start (claim) the order first: "
+      .. (result.recipeName or (result.orderID ~= nil and ("order #" .. tostring(result.orderID)) or "the order"))
   elseif s == "missing" then
     return "Missing reagents " .. EM_DASH .. " see Shopping List"
   elseif s == "cooldown" then
@@ -168,6 +172,12 @@ function Tab.StatusText(result, professionName, charName, now)
     return "The queue gave no answer"
   end
   return "Unknown result: " .. tostring(s)
+end
+
+-- The tooltip lines of a row, or nil when it has none: an entry of a crafting order names the order.
+function Tab.RowTooltip(row)
+  if type(row) ~= "table" or row.orderID == nil then return nil end
+  return { "Crafting order #" .. tostring(row.orderID) }
 end
 
 local function count_items(n)
@@ -428,6 +438,19 @@ local function create_queue_row(list)
     local d = row.data
     if d and not d.isRestock then edit_queue(function(queue) queue:Remove(d.id) end) end
   end))
+  -- Hover only (no clicks or wheel taken from the buttons and the scroll frame): an order entry names its order.
+  row:SetMouseMotionEnabled(true)
+  row:SetScript("OnEnter", ns.FS:Wrap("QueueTab:Tooltip", function(self)
+    local lines = Tab.RowTooltip(self.data)
+    if not lines or type(GameTooltip) ~= "table" then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(lines[1])
+    for i = 2, #lines do GameTooltip:AddLine(lines[i], 1, 1, 1, true) end
+    GameTooltip:Show()
+  end))
+  row:SetScript("OnLeave", function()
+    if type(GameTooltip) == "table" then GameTooltip:Hide() end
+  end)
   return row
 end
 
