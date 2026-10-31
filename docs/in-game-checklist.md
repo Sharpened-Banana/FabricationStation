@@ -463,14 +463,18 @@ Run P3-1 to P3-6 in one session.
 P3-1. **Character 1: knowledge and spec.** On character 1, open each of its professions once (wait 2 s after each
     opens) and open the Specializations page once. Then finish one weekly knowledge source you have not done this
     week (the trainer's weekly quest, or a weekly treasure). Wait a few seconds and open `/fs tab characters`.
-    Expected: character 1 is listed first, marked `•`, in its class colour; its KP count went down by that source's
-    points compared with before; the `(+N)` in its Spec cell (`spent/max (+unspent)`) equals the unspent points in
-    Blizzard's specialization UI.
+    Expected: character 1 is listed first, marked `•`, in its class colour. Note: below about 1320 px window width
+    the grid shows only the FIRST profession's cells (the lower skill-line ID); a second profession appears as a
+    `+1` badge on the profession cell. If the source you finished belongs to the profession shown, its KP cell went
+    down by that source's points; either way the header's "Knowledge left" sum went down, and hovering the row lists
+    every profession's knowledge, spec and concentration. The `(+N)` in a profession's Spec value
+    (`spent/max (+unspent)`, in the cell or the row tooltip) equals the unspent points in Blizzard's specialization UI.
 P3-2. **Character 2.** Log in character 2 (different professions), open each of its professions once, then log back
-    to character 1 and open `/fs tab characters`. Expected: character 2's row shows its professions, knowledge and
-    concentration, and its Age is the time since you logged in on it (the addon records a login, not a logout, so
-    after 30 minutes played on character 2 its Age reads at least `30m`); character 1 reads `online`. Planner >
-    Knowledge has rows for both characters' Midnight professions.
+    to character 1 and open `/fs tab characters`. Expected: character 2's row shows its first profession's cells
+    (hover the row for all professions' knowledge, spec and concentration, or widen the window to about 1320 px to
+    see the second slot), and its Age is the time since you logged in on it (the addon records a login, not a
+    logout, so after 30 minutes played on character 2 its Age reads at least `30m`); character 1 reads `online`.
+    Planner > Knowledge has rows for both characters' Midnight professions.
 P3-3. **Addon off.** Disable FabricationStation in the AddOns list and `/reload`. Expected: Blizzard's Professions
     frame (recipe list, Specializations page, crafting orders) and item tooltips look and work exactly as without
     the addon, and no item tooltip has holdings lines (design rule 2). Enable it again and `/reload`.
