@@ -716,10 +716,26 @@ local function parse_sold_subject(subject)
   return clean_name(text), 1
 end
 
+-- A client API or hook target the Ledger needs but does not find is logged once per name per session (Diagnostics lists
+-- it as source "Ledger"); the Ledger keeps working without whatever depends on it.
+local loggedMissing = {}   -- [name] = true
+local function log_missing(name, effect)
+  if loggedMissing[name] then return end
+  loggedMissing[name] = true
+  ns.FS:LogError("Ledger", name .. " not found in this client; " .. effect)
+end
+
 -- Post-hook on TakeInboxMoney(index) and AutoLootMailItem(index): records an AH sale ("sale" entry) from the mail's
 -- seller invoice, or, without an invoice, from its "Auction successful" subject. Mail with no money left (already
 -- taken, or none) and mail already recorded this session (same signature) are skipped.
 function Ledger:OnTakeMoney(index)
+  -- A missing mail API must not raise inside the hook: that would turn the whole Ledger off.
+  if type(GetInboxHeaderInfo) ~= "function" then
+    return log_missing("GetInboxHeaderInfo", "auction sales are not recorded from mail")
+  end
+  if type(GetInboxInvoiceInfo) ~= "function" then
+    return log_missing("GetInboxInvoiceInfo", "auction sales are not recorded from mail")
+  end
   local _, _, _, subject, money, _, daysLeft = GetInboxHeaderInfo(index)
   if type(money) ~= "number" or money <= 0 then return end
   local invoiceType, itemName, playerName, bid, _, deposit, consignment, _, _, _, count = GetInboxInvoiceInfo(index)
@@ -775,11 +791,21 @@ function Ledger:OnEnable()
       if self:IsEnabled() then fn(...) end
     end)
   end
-  local function hook(tbl, name, fn)  -- optional targets: skipped when the client does not have them
-    if type(tbl) == "table" and type(tbl[name]) == "function" then hooksecurefunc(tbl, name, body(fn)) end
+  -- Targets the client does not have are skipped and logged once each (a renamed API would otherwise leave the
+  -- Ledger recording nothing with no sign of why).
+  local function hook(tbl, name, fn)
+    if type(tbl) == "table" and type(tbl[name]) == "function" then
+      hooksecurefunc(tbl, name, body(fn))
+    else
+      log_missing(name, "that action is not recorded")
+    end
   end
   local function hook_global(name, fn)
-    if type(_G[name]) == "function" then hooksecurefunc(name, body(fn)) end
+    if type(_G[name]) == "function" then
+      hooksecurefunc(name, body(fn))
+    else
+      log_missing(name, "that action is not recorded")
+    end
   end
   wrap(function()
     -- A post-hook only: FabricationStation calls CraftRecipe nowhere but Queue:CraftNext (tests/queue/craft_spec.lua

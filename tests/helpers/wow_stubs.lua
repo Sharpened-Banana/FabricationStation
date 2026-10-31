@@ -729,6 +729,8 @@ local function install(overrides)
       GetItemReagentQualityByItemInfo = retNil, IsNPCCrafting = retFalse, GetRecipeCooldown = retNil,
       GetFilteredRecipeIDs = emptyList, IsTradeSkillReady = retFalse, IsTradeSkillLinked = retFalse,
       IsTradeSkillGuild = retFalse, CraftRecipe = noop, GetItemCraftedQualityByItemInfo = retNil,
+      -- the other craft entry points the Ledger post-hooks (it logs a missing target once)
+      RecraftRecipe = noop, RecraftRecipeForOrder = noop, CraftEnchant = noop, CraftSalvage = noop,
     },
     C_CraftingOrders = {
       ClaimOrder = retNil, FulfillOrder = retNil, GetClaimedOrder = retNil, GetCrafterOrders = emptyList,

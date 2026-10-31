@@ -531,8 +531,9 @@ describe("click-only crafting", function()
     return refs
   end
   local LEDGER_POSTHOOK = '^%s*hook%(C_TradeSkillUI, "CraftRecipe", function%(%.%.%.%) self:OnCraftRecipe%(%.%.%.%) end%)%s*$'
-  local LEDGER_HOOK_HELPER =
-    '^%s*if type%(tbl%) == "table" and type%(tbl%[name%]%) == "function" then hooksecurefunc%(tbl, name, body%(fn%)%) end%s*$'
+  -- The helper's body: a guard line, then the hooksecurefunc-only line (an else branch only logs a missing target).
+  local LEDGER_HOOK_GUARD = '^%s*if type%(tbl%) == "table" and type%(tbl%[name%]%) == "function" then%s*$'
+  local LEDGER_HOOK_HELPER = '^%s*hooksecurefunc%(tbl, name, body%(fn%)%)%s*$'
 
   it("matches CraftRecipe references as whole tokens", function()
     for _, line in ipairs({ "C_TradeSkillUI.CraftRecipe(1, 1)", "local craft = C_TradeSkillUI.CraftRecipe",
@@ -567,7 +568,8 @@ describe("click-only crafting", function()
       if line:match(LEDGER_HOOK_HELPER) then helperLine = i end
     end
     assert.equals(1, defs); assert.same({}, others)
-    assert.equals(defLine + 1, helperLine)   -- the helper's body is the hooksecurefunc-only line
+    assert.equals(defLine + 2, helperLine)   -- the helper's body is the hooksecurefunc-only line, under its guard
+    assert.truthy(code_lines("Modules/Ledger.lua")[defLine + 1]:match(LEDGER_HOOK_GUARD))
   end)
 
   it("calls CraftRecipe only inside Queue:CraftNext", function()

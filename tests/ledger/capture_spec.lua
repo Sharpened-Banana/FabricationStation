@@ -285,6 +285,36 @@ describe("Ledger capture", function()
     end)
   end)
 
+  describe("missing hook targets", function()
+    local function logged(names)
+      local out = {}
+      for _, e in ipairs(ns.FS.db.global.diagnostics.errors) do
+        if e.source == "Ledger" then
+          for _, name in ipairs(names) do if e.err:find(name, 1, true) then out[name] = (out[name] or 0) + 1 end end
+        end
+      end
+      return out
+    end
+    it("logs each target the client lacks once, and hooks the rest", function()
+      -- a fresh world where 12.x renamed TakeInboxMoney, AutoLootMailItem and CraftRecipe
+      local fresh, fw = P2.boot({ AUCTION_SOLD_MAIL_SUBJECT = "Auction successful: %s",
+        C_TradeSkillUI = { CraftRecipe = P2.NIL, RecraftRecipe = noop, RecraftRecipeForOrder = noop, CraftEnchant = noop } })
+      _G.TakeInboxMoney, _G.AutoLootMailItem = nil, nil
+      P2.fake_module(fresh, "Prices", { Get = function() return {} end })
+      P2.fake_module(fresh, "Scanner", { GetSchematic = function() return nil end })
+      P2.fake_module(fresh, "Orders", { GetClaimedOrder = function() return nil end })
+      P2.load(fresh, {"Modules/Ledger.lua"})
+      ns, W = fresh, fw
+      assert.same({ TakeInboxMoney = 1, AutoLootMailItem = 1, CraftRecipe = 1 },
+        logged({ "TakeInboxMoney", "AutoLootMailItem", "CraftRecipe", "RecraftRecipe", "CraftEnchant" }))
+      local ledger = fresh.FS:GetModule("Ledger")
+      ledger:Disable(); ledger:Enable()
+      assert.same({ TakeInboxMoney = 1, AutoLootMailItem = 1, CraftRecipe = 1 },
+        logged({ "TakeInboxMoney", "AutoLootMailItem", "CraftRecipe", "RecraftRecipe", "CraftEnchant" }))
+      assert.is_true(ledger:IsEnabled())
+    end)
+  end)
+
   describe("mail", function()
     it("reads the stack size from the subject and resolves its item", function()
       craft(nil)
@@ -300,6 +330,35 @@ describe("Ledger capture", function()
       hdr[2] = {nil, nil, "Auction House", "x", 0, 0, 29, 0}
       hdr[3] = {nil, nil, "Someone", "Hello", 50000, 0, 29, 0}
       L:OnTakeMoney(1); L:OnTakeMoney(2); L:OnTakeMoney(3); L:OnTakeMoney(4)
+      assert.equal(0, #L:Query({}))
+    end)
+    it("a missing GetInboxHeaderInfo records nothing, raises nothing and is logged once", function()
+      _G.GetInboxHeaderInfo = nil
+      local errors = ns.FS.db.global.diagnostics.errors
+      local before = #errors
+      assert.has_no.errors(function() L:OnTakeMoney(1); L:OnTakeMoney(2) end)
+      assert.equal(0, #L:Query({}))
+      assert.equal(before + 1, #errors)
+      assert.equal("Ledger", errors[#errors].source)
+      assert.truthy(errors[#errors].err:find("GetInboxHeaderInfo", 1, true))
+    end)
+    it("a missing GetInboxInvoiceInfo records nothing, raises nothing and is logged once", function()
+      _G.GetInboxInvoiceInfo = nil
+      hdr[1] = {nil, nil, "Auction House", "Auction successful: Potion of Foo", 900000, 0, 29, 0}
+      local errors = ns.FS.db.global.diagnostics.errors
+      local before = #errors
+      assert.has_no.errors(function() L:OnTakeMoney(1); L:OnTakeMoney(1) end)
+      assert.equal(0, #L:Query({}))
+      assert.equal(before + 1, #errors)
+      assert.equal("Ledger", errors[#errors].source)
+      assert.truthy(errors[#errors].err:find("GetInboxInvoiceInfo", 1, true))
+    end)
+    it("a missing mail API does not turn the Ledger off when the hook runs", function()
+      _G.GetInboxInvoiceInfo = nil
+      hdr[1] = {nil, nil, "Auction House", "Auction successful: Potion of Foo", 900000, 0, 29, 0}
+      TakeInboxMoney(1)
+      assert.is_true(L:IsEnabled())
+      assert.is_nil(ns.FS.failedModules.Ledger)
       assert.equal(0, #L:Query({}))
     end)
     it("hooks TakeInboxMoney and AutoLootMailItem once and ignores them while off", function()
