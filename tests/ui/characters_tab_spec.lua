@@ -390,6 +390,14 @@ describe("Characters tab", function()
       assert.same({ "characters" }, refreshed)
     end)
 
+    it("refreshes after the Scanner announces a Moxie change (FS_DATA_CHANGED \"moxie\")", function()
+      A:SendMessage("FS_DATA_CHANGED", "Aria-Silvermoon", "moxie")   -- Alts relays it as FS_ALTS_CHANGED after 0.5 s
+      W.advance(0.9)
+      assert.same({}, refreshed)
+      W.advance(0.2)
+      assert.same({ "characters" }, refreshed)
+    end)
+
     it("ticks once a minute while refreshed, so ages and times to full move on", function()
       open()
       W.advance(59)

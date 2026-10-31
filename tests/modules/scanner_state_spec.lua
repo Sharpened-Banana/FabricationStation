@@ -109,12 +109,13 @@ describe("Scanner profession state", function()
     W.advance(60); W.fire("CURRENCY_DISPLAY_UPDATE", 1234)
     assert.equals(before, #W.messages); assert.equals(c, Scanner:GetProfession(K, 2871).concentration)
   end)
-  it("updates Moxie from CURRENCY_DISPLAY_UPDATE with kind professions", function()
+  it("updates Moxie from CURRENCY_DISPLAY_UPDATE with kind moxie, not professions", function()
     ns.GameData.Define("MoxieCurrency", 70575, { [2871] = 3300 }); scan(); _G.ProfessionsFrame = nil
     C_CurrencyInfo.GetCurrencyInfo = function(id) if id == 3300 then return { quantity = 50 } end end
     W.advance(10); W.fire("CURRENCY_DISPLAY_UPDATE", 3300)
     assert.same({ currencyID = 3300, value = 50, time = W.now }, Scanner:GetProfession(K, 2871).moxie)
-    assert.same({ "FS_DATA_CHANGED", K, "professions" }, W.messages[#W.messages]); assert.equals(0, count("concentration"))
+    assert.same({ "FS_DATA_CHANGED", K, "moxie" }, W.messages[#W.messages]); assert.equals(0, count("concentration"))
+    assert.equals(0, count("professions"))
   end)
   it("refreshes every known profession's concentration on login", function()
     W = install_wow_stubs(fixture())
@@ -201,7 +202,7 @@ describe("Scanner profession state", function()
     local info = { quantity = 500, maxQuantity = 1000, rechargingCycleDurationMS = 360000, rechargingAmountPerCycle = 1 }
     C_CurrencyInfo.GetCurrencyInfo = function(id) if id == 3256 then return info end; if id == 3300 then return { quantity = 43 } end end
     W.fire("CURRENCY_DISPLAY_UPDATE")
-    assert.equals(1, count("professions")); assert.equals(0, count("concentration"))  -- Moxie 42 -> 43 only
+    assert.equals(1, count("moxie")); assert.equals(0, count("professions")); assert.equals(0, count("concentration"))  -- Moxie 42 -> 43 only
     for _, change in ipairs({ { "quantity", 510 }, { "maxQuantity", 1100 }, { "rechargingAmountPerCycle", 2 }, { "rechargingCycleDurationMS", 300000 } }) do
       local n = count("concentration"); info[change[1]] = change[2]
       W.fire("CURRENCY_DISPLAY_UPDATE", 3256); assert.equals(n + 1, count("concentration"), change[1])

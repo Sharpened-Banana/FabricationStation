@@ -148,11 +148,11 @@ end
 
 -- FS_DATA_CHANGED(charKey, kind): owned counts only change results while owned reagents are free, so
 -- "items" (that character) and "warband" (account-wide: every character) bump stamps only then;
--- "concentration" (the amount the character has) and "cooldowns" never do: Evaluate reads neither. Every other kind
+-- "concentration" (the amount the character has), "moxie" and "cooldowns" never do: Evaluate reads none of them. Every other kind
 -- bumps the character's stamp. Item stamps always move, for results computed with
 -- opts.ownedReagentsFree = true while the setting is off. "recipes" also marks the item index dirty.
 local function on_data_changed(_, charKey, kind)
-  if kind == "concentration" or kind == "cooldowns" then return end
+  if kind == "concentration" or kind == "cooldowns" or kind == "moxie" then return end
   if kind == "items" then
     if charKey == nil then return end
     itemStamps[charKey] = (itemStamps[charKey] or 0) + 1

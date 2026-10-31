@@ -630,6 +630,18 @@ describe("recipe scan", function()
       assert.equals(before, R:Evaluate(9001, "Main-Realm", {}))
     end)
 
+    it("does not recalibrate or re-evaluate after a Moxie change", function()
+      world.openLine = 2906
+      R:StartScan("Main-Realm"); finish_scan()
+      local first, before = calibrated[9001], R:Evaluate(9001, "Main-Realm", {})
+      ns.FS:GetModule("Scanner"):SendMessage("FS_DATA_CHANGED", "Main-Realm", "moxie")
+      W.advance(2)
+      assert.is_false(R:IsScanning())
+      finish_scan()
+      assert.equals(first, calibrated[9001])
+      assert.equals(before, R:Evaluate(9001, "Main-Realm", {}))
+    end)
+
     -- Phase 2 Task 0 (N1): calibrations must not go stale after a skill or tool change arriving as "recipes".
     describe("after a skill or tool change", function()
       local skill

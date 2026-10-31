@@ -647,7 +647,7 @@ function Scanner:ScanCooldowns()
 end
 
 -- Refreshes this character's concentration and Moxie snapshots that track currencyType (nil = all),
--- with no profession window needed. Snapshots always take the new time; "professions" (Moxie) and
+-- with no profession window needed. Snapshots always take the new time; "moxie" and
 -- "concentration" are sent once each, and only when a value, max or recharge rate actually changed.
 function Scanner:RefreshCurrencies(currencyType)
   if not writable() then return end
@@ -675,7 +675,7 @@ function Scanner:RefreshCurrencies(currencyType)
       end
     end)
   end
-  if moxie then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "professions") end
+  if moxie then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "moxie") end
   if concentration then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "concentration") end
 end
 

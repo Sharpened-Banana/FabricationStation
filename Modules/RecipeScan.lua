@@ -300,12 +300,12 @@ local function on_update()
   ns.FS:SafeCall("Recipes:Scan", function() Recipes:_ScanStep(Recipes:GetSetting("scanBudgetMs")) end)
 end
 
--- Owned counts only change results while owned reagents are free; the concentration amount and cooldowns never do.
+-- Owned counts only change results while owned reagents are free; the concentration amount, Moxie and cooldowns never do.
 -- A "spec" or "professions" change can move the live numbers of recipes already calibrated: those are
 -- calibrated again. A recipe learned since ("recipes") is not in `calibrated` yet, so it is calibrated anyway; a
 -- skill, skillModifier or tools change (also only "recipes") is caught by calibrate_open_professions.
 local function on_data_changed(_, charKey, kind)
-  if kind == "concentration" or kind == "cooldowns" then return end
+  if kind == "concentration" or kind == "cooldowns" or kind == "moxie" then return end
   if (kind == "items" or kind == "warband") and not Recipes:IsOwnedReagentsFree() then return end
   if (kind == "spec" or kind == "professions") and (charKey == nil or charKey == ns.FS:CharKey()) then
     forget_calibrated()
