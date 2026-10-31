@@ -498,11 +498,11 @@ P3-6. **Spec advice hitch check.** On a character with many learned recipes (a h
 P3-7. **Characters tab.** `/fs tab characters`. Expected: every saved character is listed, the logged-in one first
     with `•`, names in class colours; the header sums read sensibly, and hovering the header shows its tooltip (the
     status line under it stays empty until you search or hide a character; hovering it then shows the whole text).
-    Click a row: its detail opens under it with spec, knowledge, concentration
-    (`full at <weekday HH:MM>`, your local time; report it if a pool below max reads `fill time unknown (no
-    regeneration data)` here or `?` after the value in the grid: the game then gave no regeneration rate) and cooldown
-    recipe names; the text is not cut off and the `Hide character` button sits below it. Click the row again: the detail closes. The mouse wheel scrolls, and
-    hovering a row shows a tooltip with every value. An em dash `—` and `·` show as characters, not boxes.
+    Click a row: its detail opens under it with spec, knowledge, concentration (`full at <weekday HH:MM>`, your
+    local time; report it if a pool below max reads `fill time unknown (no regeneration data)` here or `?` after the
+    value in the grid: the game then gave no regeneration rate) and cooldown recipe names; the text is not cut off
+    and the `Hide character` button sits below it. Click the row again: the detail closes. The mouse wheel scrolls,
+    and hovering a row shows a tooltip with every value. An em dash `—` and `·` show as characters, not boxes.
 P3-8. **Minimum width.** Drag the main window to its smallest width on the Characters tab and on each Planner section.
     Expected: lower-priority columns disappear (the Character column keeps a readable width, no text overlaps), a
     `+1` shows on the profession cell of a character with two professions, the open detail re-wraps, the section
@@ -578,7 +578,8 @@ P3-20. **Dashboard widget.** Expected: the Dashboard shows "Knowledge left this 
     flags are read 2 s after the last quest or currency event, then the widget redraws 0.5 s later), and hiding a
     character on the Characters tab removes its line. Hovering it lists every line plus `Click to open the Planner`;
     a left click opens the Planner. At the smallest window a cut line still shows its `<n> KP` count. With Alts or
-    Planner turned off, the widget says `Alts is turned off` / `Planner is turned off` when the Dashboard is shown again.
+    Planner turned off, the widget says `Alts is turned off` / `Planner is turned off` when the Dashboard is shown
+    again.
 P3-21. **Planner from chat.** `/dump FS:GetModule("Planner"):GetKnowledgeChecklist()`. Expected: one row per character
     and Midnight profession (no older-expansion lines, no hidden characters), each `summary.weeklyLeft` equal to the
     Characters tab's knowledge for that profession. After the Recipes scan has finished (a few seconds after login),
