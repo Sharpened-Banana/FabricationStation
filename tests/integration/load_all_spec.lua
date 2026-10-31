@@ -9,7 +9,7 @@ describe("whole addon", function()
       -- phase 3
       "Alts", "AltsTooltips", "Planner", "CharactersTab", "PlannerTab", "AltsWidgets",
       -- phase 4
-      "Guild", "GuildTab", "ChatScan", "ChatToasts" }) do
+      "Guild", "GuildTab", "ChatScan", "ChatToasts", "Onboarding" }) do
       assert.is_true(ns.FS:GetModule(name):IsEnabled(), name)
     end
     assert.same({}, ns.FS.db.global.diagnostics.errors)
@@ -39,6 +39,18 @@ describe("whole addon", function()
     W.fire("PLAYER_ENTERING_WORLD")
     W.advance(15)
     assert.is_true(ns.FS:GetModule("Planner"):IsEnabled())
+    assert.same({}, ns.FS.failedModules)
+    assert.same({}, ns.FS.db.global.diagnostics.errors)
+  end)
+  it("opens the setup guide five seconds after the first loading screen on a fresh install, without errors", function()
+    local wizard = ns.UI.OnboardingWizard
+    assert.is_false(wizard:IsShown())
+    W.fire("PLAYER_ENTERING_WORLD", true, false)
+    W.advance(4); assert.is_false(wizard:IsShown())
+    W.advance(2); assert.is_true(wizard:IsShown())
+    for i = 1, 7 do wizard:ShowStep(i) end
+    wizard:Close()
+    assert.is_false(ns.FS:GetModule("Onboarding"):ShouldShow())
     assert.same({}, ns.FS.failedModules)
     assert.same({}, ns.FS.db.global.diagnostics.errors)
   end)

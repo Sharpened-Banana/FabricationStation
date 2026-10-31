@@ -872,6 +872,38 @@ P4-22. **Non-English clients (Task 11).** On a non-English client the channel ba
 client prints in P4-20 so the words or ids can be added. Also check that a name with a realm suffix and one without
 both reach the game's ignore list: ignore a player with `/ignore Name`, have them post a request, no toast appears.
 
+P4-23. **Setup guide, first run (Task 12).** Quit the game, delete
+`WTF/Account/<account>/SavedVariables/FabricationStation.lua`, log in and wait about five seconds: the "FabricationStation
+setup" window opens in the middle of the screen. It must have a title in the title bar (the title is set through
+`SetTitle`, else `TitleText`, else `TitleContainer.TitleText`; report if the bar is empty), a Skip button at the bottom
+left, Back / Next at the bottom right and "Step n of 7" at the bottom centre, none overlapping the inset's border or each
+other. Step through all seven steps: no text may run outside its box or over the next control (welcome, Auctionator,
+scan, optional features, prices, guild and chat, done). Escape and the X button must close it and count as Skip: it does
+not come back at the next `/reload`. Then `/fs setup` reopens it, and closing that reopened guide again does not
+change anything. The window must be draggable and must not hide behind the profession window.
+
+P4-24. **Setup guide, Auctionator step (Task 12).** Run the guide three times: with Auctionator not installed
+(rename its folder), installed but disabled in the AddOns list, and enabled. Each must show its own status line and text
+("not installed", "installed but turned off", "connected"); "Check again" reads the state again after a `/reload`. With
+Auctionator loaded but its API missing (an old version) the status must say the price API is not available. Also check
+that a character without any Auctionator scan still shows "connected" (the guide only checks the API, not the data).
+
+P4-25. **Setup guide, scan step (Task 12).** On a character with two professions, one never opened this session: the
+scan step must list the character as "(this character)" with both professions, the unopened one as "open this
+profession window now" (it has no record yet; it comes from `GetProfessions()` / `GetProfessionInfo()`, the 7th return
+being the base skill line). Open that profession's window and press "Check again": it reads "scanned". Other characters
+list only their current-expansion lines (Midnight), not older expansions' lines, and show "log in to this character and
+open it" for a line without recipes. Cooking is listed when the character has it; fishing and archaeology never.
+Characters with a long name and realm must fit the row (one line, no wrapping).
+
+P4-26. **Setup guide, choices (Task 12).** On the optional-features step switch off one feature (for example Ledger) and
+press Next: its tab disappears from the main window at once and `/fs settings` > Modules shows it off. On the guild and
+chat step switch sharing off and press Next: a guild HELLO with no characters goes out (check the guildmate side with
+`/fs guild` or their Guild tab) and `/fs settings` > Guild shows "Share my recipes with my guild" off. Cycle "What to
+share" to "Recipes only" and finish: the Guild options show the same. Turn Chat scanning off: no toast appears for a
+Trade request afterwards. "Open price settings" must open the main window on the Settings tab with the Prices group
+selected (not the first group); the guide stays open next to it.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

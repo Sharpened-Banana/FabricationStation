@@ -69,4 +69,39 @@ describe("Social.Util", function()
     _G.GetGuildInfo = function() return "", "Member", 0, nil end
     assert.is_nil(Util.GuildKey())
   end)
+
+  describe("CurrentLines", function()
+    local function rec(profs) return { professions = profs } end
+    before_each(function()
+      ns.GameData = { Get = function(name)
+        if name == "Knowledge" then return { variants = { [2906] = { base = 171 }, [2907] = { base = 164 } } } end
+      end }
+    end)
+
+    it("lists Knowledge.variants lines and snapshot lines, sorted, and skips dropped and older records", function()
+      local lines = Util.CurrentLines(rec({
+        [2907] = { recipes = {} },                                   -- a Midnight variant line
+        [2906] = { recipes = {}, dropped = true },                   -- dropped: never counts
+        [2800] = { recipes = { [1] = true } },                       -- older expansion, no snapshot
+        [2801] = { recipes = {}, concentration = { value = 1 } },    -- unknown to Knowledge, has a snapshot
+      }))
+      assert.are.same({ 2801, 2907 }, lines)
+    end)
+
+    it("does not list a snapshot line whose base profession a variant line already covers", function()
+      local lines = Util.CurrentLines(rec({
+        [2907] = { recipes = {} },                                                         -- Blacksmithing (base 164)
+        [2800] = { recipes = {}, concentration = {}, parentSkillLineID = 164 },
+      }))
+      assert.are.same({ 2907 }, lines)
+    end)
+
+    it("caps the list and answers an empty list for a missing record", function()
+      local profs = {}
+      for i = 1, 9 do profs[3000 + i] = { concentration = {} } end
+      assert.are.equal(6, #Util.CurrentLines(rec(profs), 6))
+      assert.are.equal(9, #Util.CurrentLines(rec(profs)))
+      assert.are.same({}, Util.CurrentLines(nil))
+    end)
+  end)
 end)

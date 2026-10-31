@@ -63,6 +63,40 @@ function Util.GuildKey()
   return name .. "-" .. realm:gsub(" ", "")
 end
 
+-- The character's current-expansion profession lines (skill line IDs of its non-dropped records), sorted, at most `cap`
+-- of them when cap is a number (preflight row 12). Alts' rule (Modules/Alts.lua listed_lines): dropped records never
+-- count; a line in Knowledge.variants is listed; a line with a concentration or spec snapshot is listed unless a listed
+-- variant line has the same base profession; without Knowledge data every line with a snapshot is listed. Older-
+-- expansion lines are left out. Shared by Guild (what is sent) and Onboarding (what the wizard asks to open).
+function Util.CurrentLines(record, cap)
+  local profs = type(record) == "table" and type(record.professions) == "table" and record.professions or {}
+  local GD = ns.GameData
+  local k = GD and type(GD.Get) == "function" and GD.Get("Knowledge") or nil
+  local v = type(k) == "table" and type(k.variants) == "table" and k.variants or nil
+  local out, parents, candidates = {}, {}, {}
+  for line, p in pairs(profs) do
+    if type(line) == "number" and type(p) == "table" and not p.dropped then
+      if v and v[line] ~= nil then
+        out[#out + 1] = line
+        local parent = p.parentSkillLineID
+        if parent == nil and type(v[line]) == "table" then parent = v[line].base end
+        if parent ~= nil then parents[parent] = true end
+      elseif type(p.concentration) == "table" or type(p.spec) == "table" then
+        candidates[#candidates + 1] = line
+      end
+    end
+  end
+  for _, line in ipairs(candidates) do
+    local parent = profs[line].parentSkillLineID
+    if not (parent ~= nil and parents[parent]) then out[#out + 1] = line end
+  end
+  table.sort(out)
+  if type(cap) == "number" then
+    while #out > cap do table.remove(out) end
+  end
+  return out
+end
+
 -- Text that came from a peer (character, owner and guild names, version strings) made safe for tooltips and font
 -- strings: values that passed Protocol.Validate can still hold "|c", "|T" or "|H" sequences, and a doubled pipe
 -- prints as one literal pipe. A non-string becomes "".

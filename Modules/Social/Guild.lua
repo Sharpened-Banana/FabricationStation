@@ -331,39 +331,10 @@ end
 -- Own profiles
 ---------------------------------------------------------------------------
 
-local function variants()
-  local GD = ns.GameData
-  local k = GD and type(GD.Get) == "function" and GD.Get("Knowledge") or nil
-  return type(k) == "table" and type(k.variants) == "table" and k.variants or nil
-end
-
--- The character's current-expansion profession lines, sorted, at most LIMITS.MAX_LINES (preflight row 12). Alts'
--- rule (Modules/Alts.lua listed_lines): dropped records never count; a line in Knowledge.variants is listed; a line
--- with a concentration or spec snapshot is listed unless a listed variant line has the same base profession; without
--- Knowledge data every line with a snapshot is listed. Older-expansion lines are not shared.
+-- The character's current-expansion profession lines, sorted, at most LIMITS.MAX_LINES (preflight row 12): the shared
+-- rule in Social.Util.CurrentLines (Alts' rule; dropped records never count; older-expansion lines are not shared).
 local function current_lines(record)
-  local profs = type(record) == "table" and type(record.professions) == "table" and record.professions or {}
-  local v, out, parents, candidates = variants(), {}, {}, {}
-  for line, p in pairs(profs) do
-    if type(line) == "number" and type(p) == "table" and not p.dropped then
-      if v and v[line] ~= nil then
-        out[#out + 1] = line
-        local parent = p.parentSkillLineID
-        if parent == nil and type(v[line]) == "table" then parent = v[line].base end
-        if parent ~= nil then parents[parent] = true end
-      elseif type(p.concentration) == "table" or type(p.spec) == "table" then
-        candidates[#candidates + 1] = line
-      end
-    end
-  end
-  for _, line in ipairs(candidates) do
-    local parent = profs[line].parentSkillLineID
-    if not (parent ~= nil and parents[parent]) then out[#out + 1] = line end
-  end
-  table.sort(out)
-  local cap = ns.Social.Protocol.LIMITS.MAX_LINES
-  while #out > cap do table.remove(out) end
-  return out
+  return Util.CurrentLines(record, ns.Social.Protocol.LIMITS.MAX_LINES)
 end
 
 local function int_in(v, lo, hi)

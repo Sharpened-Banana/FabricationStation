@@ -1,0 +1,551 @@
+local _, ns = ...
+
+-- OnboardingWizard: the window of the first-run setup guide (the logic and the "when to show" rule are in
+-- Modules/Onboarding.lua). One own frame (BasicFrameTemplateWithInset, in UISpecialFrames so Escape closes it) with
+-- seven steps: welcome, Auctionator, scan, optional modules, prices, guild and chat, done. Back / Next / Skip sit
+-- along the bottom. Own frames and Blizzard templates only: no AceGUI, no dropdowns (checkboxes and a cycle button).
+--
+-- Closing the window in any way (X, Escape, Skip) counts as Skip: it is recorded once, while the guide is still due
+-- (reopening a finished guide with /fs setup and closing it changes nothing). Finish records a completed guide.
+-- Onboarding:OnDisable closes it with Close(true), which records nothing.
+--
+-- The choices are kept in a table that starts from the live state each time the guide opens. The module choices are
+-- applied when the user leaves the modules step with Next, the social choices when they leave the social step; a Skip
+-- applies nothing. The Auctionator and scan steps read their status each time they are shown, and a "Check again"
+-- button reads it again.
+--
+-- Layout: every heading and label is one line (no word wrap) in a fixed width; the explanations wrap deliberately in
+-- fixed boxes sized for their text. The scan list is a plain ScrollFrame of pooled one-line rows.
+local Wizard = {}
+ns.UI = ns.UI or {}
+ns.UI.OnboardingWizard = Wizard
+
+local L = setmetatable({}, { __index = function(_, key) return ns.L[key] end })
+
+local FRAME_NAME = "FabricationStationSetupWizard"
+local SOURCE = "OnboardingWizard"
+local TOOLTIP_SOURCE = "OnboardingWizard:Tooltip"
+
+Wizard.WIDTH, Wizard.HEIGHT = 500, 440
+local PAD = 16
+local CONTENT_WIDTH = Wizard.WIDTH - 2 * PAD          -- 468
+local BUTTON_HEIGHT = 22
+local ROW_HEIGHT = 16
+local MODULE_ROW = 46
+local GOLD, GREEN, ORANGE, GRAY = "|cffffd100", "|cff40ff40", "|cffffa000", "|cff909090"
+
+-- The modules the "modules" step lists, in display order, with their label and description. Guild's sharing details
+-- and ChatScan are on the social step.
+local function module_rows()
+  return {
+    { name = "Orders", label = L["Orders"], text = L["Public and personal crafting orders: see which ones are worth taking."] },
+    { name = "Customers", label = L["Customers"], text = L["Remember the people you craft for, with notes and a block list."] },
+    { name = "Ledger", label = L["Ledger"], text = L["Track what your orders and crafts earn."] },
+    { name = "Alts", label = L["Alts"], text = L["Watch all your crafters: concentration, cooldowns and moxie."] },
+    { name = "Planner", label = L["Planner"], text = L["Plan which crafter makes what, and when concentration is full."] },
+    { name = "Guild", label = L["Guild crafter directory"], text = L["See which guildmates can craft what. Sharing is set on the Guild and chat step."] },
+  }
+end
+
+local view            -- the built frame and controls, created on first use
+local choices         -- the pending choices of the open guide
+local current = 1
+local active = false  -- the guide is open and has not been finished or skipped
+
+local function onboarding() return ns.FS:GetModule("Onboarding", true) end
+
+local function steps()
+  local module = onboarding()
+  return module and module:GetSteps() or {}
+end
+
+---------------------------------------------------------------------------
+-- Pure helpers
+---------------------------------------------------------------------------
+
+-- "missing" (not installed), "disabled" (installed, not loaded), "noapi" (loaded without a usable price API) or "ok",
+-- from Onboarding:CheckAuctionator().
+function Wizard.AuctionatorState(status)
+  if type(status) ~= "table" or not status.installed then return "missing" end
+  if not status.loaded then return "disabled" end
+  if not status.apiOK then return "noapi" end
+  return "ok"
+end
+
+-- Display rows for a ScanStatus() list: { { text, kind = "header"|"ok"|"open"|"wait"|"empty", indent } }.
+-- Every row says its state in words; the colour only backs it up.
+function Wizard.ScanRows(status)
+  local rows = {}
+  local formatAge = ns.UI and ns.UI.FormatAge
+  for _, entry in ipairs(type(status) == "table" and status or {}) do
+    local header = entry.charKey
+    if entry.isCurrent then header = header .. " (" .. L["this character"] .. ")" end
+    if entry.time and formatAge then
+      header = header .. " - " .. L["last scan %s ago"]:format(formatAge(math.max(0, ns.FS:Now() - entry.time)))
+    end
+    rows[#rows + 1] = { text = header, kind = "header" }
+    for _, p in ipairs(entry.professions) do
+      local kind, state
+      if p.scanned then
+        kind, state = "ok", L["scanned"]
+      elseif p.needsOpen then
+        kind, state = "open", L["open this profession window now"]
+      else
+        kind, state = "wait", L["log in to this character and open it"]
+      end
+      rows[#rows + 1] = { text = p.name .. " - " .. state, kind = kind, indent = true }
+    end
+    if #entry.professions == 0 then
+      rows[#rows + 1] = { text = L["no profession found yet"], kind = "empty", indent = true }
+    end
+  end
+  return rows
+end
+
+local ROW_COLOR = { header = GOLD, ok = GREEN, open = ORANGE, wait = GRAY, empty = GRAY }
+
+---------------------------------------------------------------------------
+-- Choices
+---------------------------------------------------------------------------
+
+local function guild_settings()
+  local guild = ns.FS:GetModule("Guild", true)
+  if guild and type(guild.Settings) == "function" then return guild:Settings() end
+  return {}
+end
+
+-- The state the live addon is in right now: what the checkboxes start from.
+local function initial_choices()
+  local module = onboarding()
+  local settings = guild_settings()
+  local out = { modules = {}, share = settings.share ~= false, shareLevel = settings.shareLevel,
+    chatScan = ns.FS:IsModuleEnabled("ChatScan") }
+  if out.shareLevel ~= "quality" and out.shareLevel ~= "recipes" then out.shareLevel = "quality" end
+  for _, name in ipairs(module and module.OPTIONAL_MODULES or {}) do
+    out.modules[name] = ns.FS:IsModuleEnabled(name)
+  end
+  return out
+end
+
+function Wizard:GetChoices() return choices end
+
+local function guild_chosen()
+  return choices ~= nil and choices.modules.Guild ~= false
+end
+
+---------------------------------------------------------------------------
+-- Widgets
+---------------------------------------------------------------------------
+
+local function wrapped(fn) return ns.FS:Wrap(SOURCE, fn) end
+
+-- A text line at (x, y) below the top left of parent. wrap = a fixed box that wraps; otherwise one line, cut at width.
+local function label(parent, template, x, y, width, height, wrap)
+  local fs = parent:CreateFontString(nil, "OVERLAY", template)
+  fs:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -y)
+  fs:SetWidth(width)
+  fs:SetHeight(height)
+  fs:SetJustifyH("LEFT")
+  fs:SetJustifyV("TOP")
+  fs:SetWordWrap(wrap and true or false)
+  if not wrap then fs:SetMaxLines(1) end
+  return fs
+end
+
+local function attach_tooltip(frame, title, body)
+  frame:SetScript("OnEnter", ns.FS:Wrap(TOOLTIP_SOURCE, function(self)
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(title, 1, 1, 1)
+    if body then GameTooltip:AddLine(body, 0.8, 0.8, 0.8, true) end
+    GameTooltip:Show()
+  end))
+  frame:SetScript("OnLeave", ns.FS:Wrap(TOOLTIP_SOURCE, function()
+    if GameTooltip then GameTooltip:Hide() end
+  end))
+end
+
+local function button(parent, text, width, onClick)
+  local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  b:SetSize(width, BUTTON_HEIGHT)
+  b:SetText(text)
+  b:SetScript("OnClick", wrapped(onClick))
+  return b
+end
+
+-- A checkbox with its label to the right; the whole label is clickable. toggle() flips the pending choice and returns
+-- the new value (the box shows our value, not the client's own toggle, so the two never disagree).
+local function check(parent, x, y, text, width, toggle)
+  local b = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+  b:SetSize(24, 24)
+  b:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -y)
+  b:SetHitRectInsets(0, -width, 0, 0)
+  b.text = label(parent, "GameFontNormal", x + 28, y + 5, width, 14, false)
+  b.text:SetText(text)
+  b:SetScript("OnClick", wrapped(function(self) self:SetChecked(toggle() and true or false) end))
+  return b
+end
+
+---------------------------------------------------------------------------
+-- Steps: each builder makes the step's frame and returns its controls; each refresher fills them from the live state
+---------------------------------------------------------------------------
+
+local builders, refreshers = {}, {}
+
+local function heading(frame) return label(frame, "GameFontNormalLarge", 0, 0, CONTENT_WIDTH, 22, false) end
+
+function builders.welcome(frame)
+  local c = { heading = heading(frame) }
+  c.body = label(frame, "GameFontHighlight", 0, 32, CONTENT_WIDTH, 70, true)
+  c.body:SetText(L["FabricationStation helps you pick profitable crafts, spend concentration well and keep track of all your crafters. This short guide sets up the essentials. Everything in it can be changed later in /fs settings."])
+  c.more = label(frame, "GameFontHighlight", 0, 112, CONTENT_WIDTH, 50, true)
+  c.more:SetText(L["You can close this window at any time. It does not come back by itself, and /fs setup opens it again."])
+  return c
+end
+
+local function auctionator_text(state)
+  if state == "missing" then
+    return L["Auctionator is not installed"],
+      L["FabricationStation reads item prices from Auctionator. Without it only the prices you type in yourself are used, so profit stays empty for most items. Install Auctionator from CurseForge or Wago, then type /reload."]
+  elseif state == "disabled" then
+    return L["Auctionator is installed but turned off"],
+      L["Turn Auctionator on in the AddOns list on the character select screen, then log in again. Until then only the prices you type in yourself are used."]
+  elseif state == "noapi" then
+    return L["Auctionator is running, but its price API is not available"],
+      L["Auctionator is loaded but did not offer its price API. Update Auctionator to the latest version, then type /reload."]
+  end
+  return L["Auctionator is connected"],
+    L["Prices come from your latest Auctionator scan. Scan the auction house once so profit can be calculated."]
+end
+local AUCTIONATOR_TONE = { missing = ORANGE, disabled = ORANGE, noapi = ORANGE, ok = GREEN }
+
+function builders.auctionator(frame)
+  local c = { heading = heading(frame) }
+  c.status = label(frame, "GameFontNormal", 0, 32, CONTENT_WIDTH, 16, false)
+  c.body = label(frame, "GameFontHighlight", 0, 58, CONTENT_WIDTH, 90, true)
+  c.again = button(frame, L["Check again"], 110, function() Wizard:ShowStep(current) end)
+  c.again:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -160)
+  return c
+end
+
+function refreshers.auctionator(c)
+  local module = onboarding()
+  local state = Wizard.AuctionatorState(module and module:CheckAuctionator())
+  local status, body = auctionator_text(state)
+  c.state = state
+  c.status:SetText(AUCTIONATOR_TONE[state] .. status .. "|r")
+  c.body:SetText(body)
+end
+
+function builders.scan(frame)
+  local c = { heading = heading(frame), rows = {}, rowCount = 0 }
+  c.body = label(frame, "GameFontHighlight", 0, 28, CONTENT_WIDTH, 46, true)
+  c.body:SetText(L["Log in to each crafter and open each profession window once. FabricationStation reads recipes, skill and specialization from that window."])
+  c.scroll = CreateFrame("ScrollFrame", nil, frame)
+  c.scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -80)
+  c.scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 32)
+  c.child = CreateFrame("Frame", nil, c.scroll)
+  c.child:SetSize(CONTENT_WIDTH, ROW_HEIGHT)
+  c.scroll:SetScrollChild(c.child)
+  c.scroll:EnableMouseWheel(true)
+  c.scroll:SetScript("OnMouseWheel", wrapped(function(scroll, delta)
+    local range = scroll:GetVerticalScrollRange() or 0
+    local position = scroll:GetVerticalScroll() or 0
+    scroll:SetVerticalScroll(math.max(0, math.min(range, position - delta * ROW_HEIGHT * 3)))
+  end))
+  c.again = button(frame, L["Check again"], 110, function() Wizard:ShowStep(current) end)
+  c.again:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
+  return c
+end
+
+function refreshers.scan(c)
+  local module = onboarding()
+  local rows = Wizard.ScanRows(module and module:ScanStatus() or {})
+  for i, row in ipairs(rows) do
+    local fs = c.rows[i]
+    if not fs then
+      fs = c.child:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      fs:SetJustifyH("LEFT")
+      fs:SetWordWrap(false)
+      fs:SetMaxLines(1)
+      c.rows[i] = fs
+    end
+    local indent = row.indent and 14 or 0
+    fs:ClearAllPoints()
+    fs:SetPoint("TOPLEFT", c.child, "TOPLEFT", indent, -(i - 1) * ROW_HEIGHT)
+    fs:SetWidth(CONTENT_WIDTH - indent)
+    fs:SetHeight(ROW_HEIGHT)
+    fs:SetText(ROW_COLOR[row.kind] .. row.text .. "|r")
+    fs:Show()
+  end
+  for i = #rows + 1, #c.rows do c.rows[i]:Hide() end
+  c.rowCount = #rows
+  c.child:SetHeight(math.max(ROW_HEIGHT, #rows * ROW_HEIGHT))
+  c.scroll:SetVerticalScroll(0)
+end
+
+function builders.modules(frame)
+  local c = { heading = heading(frame), checks = {} }
+  c.body = label(frame, "GameFontHighlight", 0, 28, CONTENT_WIDTH, 32, true)
+  c.body:SetText(L["Turn off what you will not use. Each one can be switched back on in /fs settings."])
+  for i, row in ipairs(module_rows()) do
+    local y = 64 + (i - 1) * MODULE_ROW
+    local b = check(frame, 0, y, row.label, CONTENT_WIDTH - 32, function()
+      choices.modules[row.name] = not choices.modules[row.name]
+      return choices.modules[row.name]
+    end)
+    local description = label(frame, "GameFontHighlightSmall", 28, y + 22, CONTENT_WIDTH - 32, 24, true)
+    description:SetMaxLines(2)
+    description:SetText(row.text)
+    c.checks[row.name] = b
+  end
+  return c
+end
+
+function refreshers.modules(c)
+  for name, b in pairs(c.checks) do b:SetChecked(choices.modules[name] and true or false) end
+end
+
+function builders.prices(frame)
+  local c = { heading = heading(frame) }
+  c.body = label(frame, "GameFontHighlight", 0, 32, CONTENT_WIDTH, 70, true)
+  c.body:SetText(L["Profit needs prices. Open the price settings to check where prices come from and how old a price may get before it counts as stale."])
+  c.openButton = button(frame, L["Open price settings"], 170, function()
+    local module = onboarding()
+    if module then module:OpenPriceSettings() end
+  end)
+  c.openButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -112)
+  c.note = label(frame, "GameFontHighlightSmall", 0, 144, CONTENT_WIDTH, 40, true)
+  c.note:SetText(L["The settings open in the main window. This guide stays open; move it aside if it is in the way."])
+  return c
+end
+
+local function level_button_text()
+  local level = choices and choices.shareLevel == "recipes" and L["Recipes only"] or L["Recipes and expected quality"]
+  return L["What to share: %s"]:format(level)
+end
+
+function builders.social(frame)
+  local c = { heading = heading(frame) }
+  c.body = label(frame, "GameFontHighlight", 0, 28, CONTENT_WIDTH, 48, true)
+  c.body:SetText(L["Guild sharing lets guildmates who run FabricationStation see which recipes your characters can craft. Only recipes, skill levels and expected quality are shared, never gold, items or prices."])
+  c.shareCheck = check(frame, 0, 84, L["Share my recipes with my guild"], CONTENT_WIDTH - 32, function()
+    choices.share = not choices.share
+    return choices.share
+  end)
+  c.levelButton = button(frame, "", 300, function(self)
+    choices.shareLevel = choices.shareLevel == "quality" and "recipes" or "quality"
+    self:SetText(level_button_text())
+  end)
+  c.levelButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 28, -114)
+  attach_tooltip(c.levelButton, L["What to share"],
+    L["Expected quality is what your character would craft with and without concentration."])
+  c.guildOff = label(frame, "GameFontDisableSmall", 28, 142, CONTENT_WIDTH - 28, 14, false)
+  c.guildOff:SetText(L["Guild sharing is off because the Guild feature is turned off on the previous step."])
+  c.chatBody = label(frame, "GameFontHighlight", 0, 172, CONTENT_WIDTH, 62, true)
+  c.chatBody:SetText(L["Chat scanning watches Trade, Services and guild chat for someone asking for something you can craft, and shows a small toast. It never sends a message for you: you click Whisper yourself."])
+  c.chatScanCheck = check(frame, 0, 240, L["Scan chat for crafting requests"], CONTENT_WIDTH - 32, function()
+    choices.chatScan = not choices.chatScan
+    return choices.chatScan
+  end)
+  return c
+end
+
+function refreshers.social(c)
+  local on = guild_chosen()
+  c.shareCheck:SetChecked(choices.share and true or false)
+  c.levelButton:SetText(level_button_text())
+  c.chatScanCheck:SetChecked(choices.chatScan and true or false)
+  if on then
+    c.shareCheck:Enable(); c.levelButton:Enable(); c.guildOff:Hide()
+  else
+    c.shareCheck:Disable(); c.levelButton:Disable(); c.guildOff:Show()
+  end
+end
+
+function builders.done(frame)
+  local c = { heading = heading(frame) }
+  c.body = label(frame, "GameFontHighlight", 0, 32, CONTENT_WIDTH, 50, true)
+  c.body:SetText(L["Type /fs to open FabricationStation. /fs setup reopens this guide."])
+  c.note = label(frame, "GameFontHighlight", 0, 90, CONTENT_WIDTH, 50, true)
+  c.note:SetText(L["The saved data is from a newer version of FabricationStation, so your choices were not saved."])
+  return c
+end
+
+function refreshers.done(c)
+  if ns.FS.dbIsNewer then c.note:Show() else c.note:Hide() end
+end
+
+---------------------------------------------------------------------------
+-- The frame
+---------------------------------------------------------------------------
+
+local function set_title(frame, text)
+  if frame.SetTitle then
+    frame:SetTitle(text)
+  elseif frame.TitleText then
+    frame.TitleText:SetText(text)
+  elseif frame.TitleContainer and frame.TitleContainer.TitleText then
+    frame.TitleContainer.TitleText:SetText(text)
+  end
+end
+
+local on_hidden   -- forward
+
+local function ensure_view()
+  if view then return view end
+  local frame = CreateFrame("Frame", FRAME_NAME, UIParent, "BasicFrameTemplateWithInset")
+  frame:SetSize(Wizard.WIDTH, Wizard.HEIGHT)
+  frame:SetPoint("CENTER", UIParent, "CENTER", 0, 40)
+  frame:SetFrameStrata("DIALOG")
+  frame:SetClampedToScreen(true)
+  frame:SetMovable(true)
+  frame:EnableMouse(true)
+  frame:RegisterForDrag("LeftButton")
+  set_title(frame, L["FabricationStation setup"])
+  frame:Hide()
+
+  local content = CreateFrame("Frame", nil, frame)
+  content:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -36)
+  content:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, 40)
+
+  local v = { frame = frame, content = content, steps = {} }
+  v.skip = button(frame, L["Skip"], 80, function() Wizard:Close() end)
+  v.skip:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", PAD - 2, 10)
+  v.next = button(frame, L["Next"], 90, function() Wizard:Next() end)
+  v.next:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -(PAD - 2), 10)
+  v.back = button(frame, L["Back"], 80, function() Wizard:Back() end)
+  v.back:SetPoint("RIGHT", v.next, "LEFT", -6, 0)
+  v.stepLabel = label(frame, "GameFontDisableSmall", 0, 0, 120, 14, false)
+  v.stepLabel:ClearAllPoints()
+  v.stepLabel:SetPoint("BOTTOM", frame, "BOTTOM", 0, 15)
+  v.stepLabel:SetJustifyH("CENTER")
+  v.stepFrames = {}
+
+  for _, step in ipairs(steps()) do
+    local stepFrame = CreateFrame("Frame", nil, content)
+    stepFrame:SetAllPoints(content)
+    stepFrame:Hide()
+    local c = builders[step.id](stepFrame)
+    c.frame = stepFrame
+    v.steps[step.id] = c
+    v.stepFrames[step.id] = stepFrame
+  end
+  v.moduleChecks = v.steps.modules and v.steps.modules.checks or {}
+  v.shareCheck = v.steps.social and v.steps.social.shareCheck
+  v.levelButton = v.steps.social and v.steps.social.levelButton
+  v.chatScanCheck = v.steps.social and v.steps.social.chatScanCheck
+
+  frame:HookScript("OnDragStart", function(self) self:StartMoving() end)
+  frame:HookScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+  frame:HookScript("OnHide", wrapped(function() on_hidden() end))
+
+  local registered = false
+  for _, name in ipairs(UISpecialFrames) do
+    if name == FRAME_NAME then registered = true; break end
+  end
+  if not registered then table.insert(UISpecialFrames, FRAME_NAME) end
+
+  view = v
+  return v
+end
+
+---------------------------------------------------------------------------
+-- Public API
+---------------------------------------------------------------------------
+
+-- The built frame and its controls (tests and tooling): { frame, back, next, skip, stepLabel, steps = { [id] = {...} },
+-- moduleChecks, shareCheck, levelButton, chatScanCheck }.
+function Wizard:GetControls() return ensure_view() end
+
+function Wizard:IsShown() return view ~= nil and view.frame:IsShown() and true or false end
+
+function Wizard:GetStep() return current end
+
+-- Shows step `index` (clamped to the steps that exist) and reads its status again.
+function Wizard:ShowStep(index)
+  local v = ensure_view()
+  local list = steps()
+  if #list == 0 then return end
+  index = math.max(1, math.min(#list, math.floor(tonumber(index) or 1)))
+  choices = choices or initial_choices()
+  current = index
+  local step = list[index]
+  for id, stepFrame in pairs(v.stepFrames) do
+    if id == step.id then stepFrame:Show() else stepFrame:Hide() end
+  end
+  local c = v.steps[step.id]
+  if c.heading then c.heading:SetText(GOLD .. step.title .. "|r") end
+  if refreshers[step.id] then refreshers[step.id](c) end
+  v.stepLabel:SetText(L["Step %d of %d"]:format(index, #list))
+  if index > 1 then v.back:Show() else v.back:Hide() end
+  if index == #list then
+    v.next:SetText(L["Finish"])
+    v.skip:Hide()
+  else
+    v.next:SetText(L["Next"])
+    v.skip:Show()
+  end
+end
+
+function Wizard:Back()
+  if current > 1 then self:ShowStep(current - 1) end
+end
+
+-- Leaves the current step forward: the modules and social steps apply their choices first; the last step finishes.
+function Wizard:Next()
+  local list = steps()
+  local step = list[current]
+  local module = onboarding()
+  if not (step and module and choices) then return end
+  if step.id == "modules" then
+    module:ApplyModuleChoices(choices.modules)
+  elseif step.id == "social" then
+    local social = { chatScan = choices.chatScan }
+    if guild_chosen() then social.share, social.shareLevel = choices.share, choices.shareLevel end
+    module:ApplySocialChoices(social)
+  end
+  if current >= #list then
+    self:Finish()
+  else
+    self:ShowStep(current + 1)
+  end
+end
+
+-- Records a completed guide and closes the window.
+function Wizard:Finish()
+  local module = onboarding()
+  active = false
+  if module then module:Complete(false) end
+  if view then view.frame:Hide() end
+end
+
+-- The window was hidden (by Close, the X button or Escape): a guide that is still due counts as skipped.
+function on_hidden()
+  if not active then return end
+  active = false
+  local module = onboarding()
+  if module and module:ShouldShow() then module:Complete(true) end
+end
+
+-- Opens the guide at the first step with the choices read from the live state. Already open: just raised.
+function Wizard:Open()
+  local v = ensure_view()
+  if v.frame:IsShown() and active then
+    v.frame:Raise()
+    return
+  end
+  choices = initial_choices()
+  active = true
+  v.frame:Show()
+  self:ShowStep(1)
+end
+
+-- Hides the window; that counts as Skip while the guide is due. silent = true hides it without recording anything.
+function Wizard:Close(silent)
+  if silent then active = false end
+  if view then
+    view.frame:Hide()
+    on_hidden()   -- OnHide runs it in the client; this covers a frame whose hide script did not fire
+  end
+end

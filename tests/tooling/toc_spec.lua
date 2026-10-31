@@ -66,6 +66,19 @@ describe("FabricationStation.toc", function()
     assert.is_true(at["Modules/Social/ChatScan.lua"] < at["UI/Util.lua"])
     assert.is_true(at["UI/AltsDashboard.lua"] < at["UI/ChatToast.lua"])
   end)
+  -- Phase 4 Task 12 (preflight row 33): the setup guide module after the chat scanner, its window after the toasts
+  -- (so after UI/AltsDashboard.lua).
+  it("loads the onboarding module after ChatScan and its wizard after the chat toasts", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    for _, f in ipairs({ "Modules/Onboarding.lua", "UI/OnboardingWizard.lua" }) do assert.is_truthy(at[f], f) end
+    assert.is_true(at["Modules/Social/Util.lua"] < at["Modules/Onboarding.lua"])
+    assert.is_true(at["Modules/Social/ChatScan.lua"] < at["Modules/Onboarding.lua"])
+    assert.is_true(at["Modules/Onboarding.lua"] < at["UI/Util.lua"])
+    assert.is_true(at["UI/AltsDashboard.lua"] < at["UI/ChatToast.lua"])
+    assert.is_true(at["UI/ChatToast.lua"] < at["UI/OnboardingWizard.lua"])
+    assert.equal(#toc.files, at["UI/OnboardingWizard.lua"])
+  end)
   -- Phase 3 (Task 16, preflight row 3): the phase-3 data files after Data/OrderRewards.lua and before Math, the
   -- phase-3 modules after Modules/Ledger.lua in dependency order, all before the UI.
   it("loads the phase-3 data files and modules in order", function()
