@@ -555,6 +555,21 @@ describe("click-only crafting", function()
     assert.equals(1, posthooks); assert.equals(1, helpers)
   end)
 
+  it("binds that post-hook's `hook` to the guarded local helper and nothing else", function()
+    local defs, others, defLine, helperLine = 0, {}, nil, nil
+    for i, line in ipairs(code_lines("Modules/Ledger.lua")) do
+      if line:match("^%s*local function hook%(tbl, name, fn%)%s*$") then
+        defs, defLine = defs + 1, i
+      elseif line:match("%f[%w_]hook%s*=[^=]") or line:match("function%s+hook%f[^%w_]")
+        or line:match("local%s+hook%f[^%w_]") or line:match("[,%s]hook%s*,[^)]*=") then
+        others[#others + 1] = i .. ": " .. line
+      end
+      if line:match(LEDGER_HOOK_HELPER) then helperLine = i end
+    end
+    assert.equals(1, defs); assert.same({}, others)
+    assert.equals(defLine + 1, helperLine)   -- the helper's body is the hooksecurefunc-only line
+  end)
+
   it("calls CraftRecipe only inside Queue:CraftNext", function()
     local hits = {}
     for _, path in ipairs(lua_files()) do

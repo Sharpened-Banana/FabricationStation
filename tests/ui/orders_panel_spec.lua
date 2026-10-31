@@ -198,6 +198,20 @@ describe("OrdersPanel on the crafting orders page", function()
 
   after_each(function() fake_professions_frame.reset() end)
 
+  it("fake frame: records state-changing calls on Blizzard's order objects, not hooks, reads or the test's own", function()
+    boot()
+    local f = function() end
+    form.browseFrame:HookScript("OnShow", f)
+    form.orderView:GetFrameLevel(); form.orderScrollBox:ForEachFrame(f); form.frame:IsShown()
+    form.raw(form.orderView):Hide()
+    assert.same({}, form.assignedFields)
+    form.browseFrame:SetScript("OnShow", f)
+    form.orderScrollBox:Hide(); form.orderView:SetParent(UIParent); form.ordersPage:SetPoint("CENTER")
+    form.frame:EnableMouse(false); form.orderList:SetAlpha(0)
+    assert.same({ "BrowseFrame:SetScript", "OrderScrollBox:Hide", "OrderView:SetParent", "OrdersPage:SetPoint",
+      "ProfessionsFrame:EnableMouse", "OrderList:SetAlpha" }, form.assignedFields)
+  end)
+
   describe("row cells (OrdersRowAddons)", function()
     it("puts profit, score and risk cells on the order rows without writing Blizzard fields", function()
       boot()
@@ -389,9 +403,9 @@ describe("OrdersPanel on the crafting orders page", function()
       W.fire("GET_ITEM_INFO_RECEIVED", 211111, true); W.fire("GET_ITEM_INFO_RECEIVED", 211112, true)
       W.advance(0)
       assert.equal("all", c.fit)
-      box:Hide(); box:GetScript("OnHide")(box)
+      form.raw(box):Hide(); box:GetScript("OnHide")(box)
       assert.same({ false, false }, listening())
-      box:Show(); box:GetScript("OnShow")(box)
+      form.raw(box):Show(); box:GetScript("OnShow")(box)
       assert.same({ true, true }, listening())
       W.fire("ITEM_DATA_LOAD_RESULT", 211111, true)   -- a pass is pending
       ns.FS:SetModuleEnabled("OrdersRowAddons", false)
@@ -617,7 +631,7 @@ describe("OrdersPanel on the crafting orders page", function()
       ns.FS:SetModuleEnabled("OrderViewWarning", true)
       assert.is_true(v.frame:IsShown()); assert.equal("Blocked customer: Bad-Silvermoon", v.text:GetText())
       ns.FS:SetModuleEnabled("OrderViewWarning", false)
-      form.orderView:Hide()   -- back to the list
+      form.raw(form.orderView):Hide()   -- back to the list (Blizzard hides its view)
       ns.FS:SetModuleEnabled("OrderViewWarning", true)
       assert.is_false(v.frame:IsShown())
       C:SetTag("Bad-Silvermoon", "VIP", true)   -- a refresh does not bring back an order no longer open

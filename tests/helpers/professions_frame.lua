@@ -15,6 +15,10 @@
 -- Every Blizzard object (ProfessionsFrame, CraftingPage, SchematicForm, RecipeList, ScrollBox, the transaction and its
 -- per-slot allocations) is an empty proxy: reads go to the fake, and every assignment is recorded in
 -- form.assignedFields as "<Object>.<key>" (addon code must never write fields on Blizzard frames) before it lands.
+-- ProfessionsFrame and the crafting-orders objects (OrdersPage, BrowseFrame, OrderList, its ScrollBox, OrderView) also
+-- record a call of a state-changing method (form.MUTATING_METHODS: SetScript, SetParent, Hide, Show, SetPoint, ...) as
+-- "<Object>:<method>" before it runs, since addon code may only read them, hook them (HookScript, RegisterCallback)
+-- and anchor its own frames to them. The form's own drivers (show, hide, showBrowse, hideBrowse) go around it.
 --
 -- form fields (the recording handle; not a Blizzard object):
 --   frame, craftingPage, schematicForm, transaction, recipeScrollBox (nil with withoutScrollBox)
@@ -69,6 +73,8 @@
 --                         elementData). The row is listed for ForEachFrame.
 --   releaseOrderRow(row)  runs the OnReleasedFrame callbacks as fn(owner, row, elementData) and unlists the row
 --   showBrowse() / hideBrowse()  set BrowseFrame's shown state and run its OnShow / OnHide script chain
+--   raw(proxy)            the fake behind a read-only Blizzard proxy (calls on it are not recorded): for a test that
+--                         plays Blizzard, e.g. form.raw(form.orderView):Hide()
 --
 -- Specs get a clean slate from make_world, which removes these globals before installing the stubs.
 
@@ -124,6 +130,37 @@ local function fake_professions_frame(opts)
       end,
     })
   end
+
+  -- A recorded proxy whose state-changing methods are recorded too, as "<name>:<method>", then run on the target.
+  -- form.raw(proxy) is the target, for a test that plays Blizzard (e.g. Blizzard hiding its own order view).
+  local targets = setmetatable({}, { __mode = "k" })
+  function form.raw(proxy) return targets[proxy] or proxy end
+  local function read_only(name, target)
+    local proxy
+    proxy = setmetatable({}, {
+      __index = function(_, key)
+        if form.MUTATING_METHODS[key] then
+          return function(_, ...)
+            form.assignedFields[#form.assignedFields + 1] = name .. ":" .. key
+            return target[key](target, ...)
+          end
+        end
+        return target[key]
+      end,
+      __newindex = function(_, key, value)
+        form.assignedFields[#form.assignedFields + 1] = name .. "." .. tostring(key)
+        target[key] = value
+      end,
+    })
+    targets[proxy] = target
+    return proxy
+  end
+  form.MUTATING_METHODS = {
+    SetScript = true, SetParent = true, Hide = true, Show = true, SetShown = true, SetPoint = true,
+    ClearAllPoints = true, SetAllPoints = true, SetAlpha = true, SetFrameLevel = true, SetFrameStrata = true,
+    SetSize = true, SetWidth = true, SetHeight = true, EnableMouse = true, EnableMouseWheel = true,
+    SetMouseMotionEnabled = true, SetClipsChildren = true,
+  }
 
   -- Transaction and its per-slot allocations.
   local allocations = {}
@@ -214,13 +251,14 @@ local function fake_professions_frame(opts)
         for _, entry in ipairs(orderRows) do fn(entry.row, entry.elementData) end
       end
       function box.GetFrameLevel() return 5 end
-      form.orderScrollBox = recorded("OrderScrollBox", box)
+      form.orderScrollBox = read_only("OrderScrollBox", box)
       rawset(orderList, "ScrollBox", form.orderScrollBox)
     end
     rawset(orderList, "HeaderContainer", CreateFrame("Frame", nil, orderList))
-    form.orderList = recorded("OrderList", orderList)
+    form.orderList = read_only("OrderList", orderList)
     rawset(browse, "OrderList", form.orderList)
-    form.browseFrame = recorded("BrowseFrame", browse)
+    form.browseFrame = read_only("BrowseFrame", browse)
+    form.browseTarget = browse
     rawset(ordersPage, "BrowseFrame", form.browseFrame)
   end
   if not opts.withoutOrderView then
@@ -230,14 +268,14 @@ local function fake_professions_frame(opts)
       rawset(orderView, "order", order)
     end)
     rawset(orderView, "GetFrameLevel", function() return 4 end)
-    form.orderView = recorded("OrderView", orderView)
+    form.orderView = read_only("OrderView", orderView)
     rawset(ordersPage, "OrderView", form.orderView)
   end
-  form.ordersPage = recorded("OrdersPage", ordersPage)
+  form.ordersPage = read_only("OrdersPage", ordersPage)
   rawset(frame, "OrdersPage", form.ordersPage)
   form.craftingPage = recorded("CraftingPage", page)
   rawset(frame, "CraftingPage", form.craftingPage)
-  form.frame = recorded("ProfessionsFrame", frame)
+  form.frame = read_only("ProfessionsFrame", frame)
 
   _G.ProfessionsFrame = form.frame
   _G.ProfessionsRecipeSchematicFormMixin = { Event = { AllocationsModified = ALLOCATIONS_MODIFIED } }
@@ -254,12 +292,12 @@ local function fake_professions_frame(opts)
   end
 
   function form.show()
-    form.frame:Show()
+    frame:Show()
     local script = form.frame:GetScript("OnShow")
     if script then script(form.frame) end
   end
   function form.hide()
-    form.frame:Hide()
+    frame:Hide()
     local script = form.frame:GetScript("OnHide")
     if script then script(form.frame) end
   end
@@ -384,12 +422,12 @@ local function fake_professions_frame(opts)
     end
   end
   function form.showBrowse()
-    form.browseFrame:Show()
+    form.browseTarget:Show()
     local script = form.browseFrame:GetScript("OnShow")
     if script then script(form.browseFrame) end
   end
   function form.hideBrowse()
-    form.browseFrame:Hide()
+    form.browseTarget:Hide()
     local script = form.browseFrame:GetScript("OnHide")
     if script then script(form.browseFrame) end
   end

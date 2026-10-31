@@ -355,7 +355,7 @@ describe("ProfessionPanel attach", function()
 
   it("shows and hides with ProfessionsFrame", function()
     local _, W = make_world({ last = "UI/ProfessionPanel.lua" }); local form = fake_professions_frame()
-    form.frame:Hide()
+    form.raw(form.frame):Hide()
     W.fire("ADDON_LOADED", "Blizzard_Professions")
     local frame = _G.FabricationStationProfessionPanel
     assert.is_false(frame:IsShown())
