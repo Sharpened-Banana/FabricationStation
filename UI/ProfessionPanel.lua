@@ -200,8 +200,8 @@ local function concentration_text(r, liveResult, atMax)
 end
 
 -- The game's CraftingOperationInfo for Blizzard's current allocation as a live header (the shape BuildModel takes
--- for liveResult, with source = "game"), or nil when the info lacks the quality fields or is for a recipe without
--- qualities. skill = baseSkill + bonusSkill,
+-- for liveResult, with source = "game"), or nil when the info lacks the quality fields, is for a recipe without
+-- qualities, or reports a quality below the known maxQuality without a next threshold above lowerSkillThreshold. skill = baseSkill + bonusSkill,
 -- difficulty = baseDifficulty + bonusDifficulty, lowerThreshold = lowerSkillThreshold, nextThreshold =
 -- upperSkillTreshold (the game's spelling) below maxQuality (nil at max quality), the concentration cost the game
 -- asks for the next quality.
@@ -214,7 +214,11 @@ function M.GameHeader(info, maxQuality, applyingConcentration)
   local quality = info.craftingQuality
   local lower = type(info.lowerSkillThreshold) == "number" and info.lowerSkillThreshold or 0
   local upper = info.upperSkillTreshold
-  local atMax = (type(maxQuality) == "number" and quality >= maxQuality) or type(upper) ~= "number" or upper <= lower
+  local validUpper = type(upper) == "number" and upper > lower
+  -- Below a known max quality the game must name the next threshold; without one the header would claim max quality
+  -- (full bar, no concentration needed), so Math answers instead.
+  if type(maxQuality) == "number" and quality < maxQuality and not validUpper then return nil end
+  local atMax = (type(maxQuality) == "number" and quality >= maxQuality) or not validUpper
   local difficulty
   if type(info.baseDifficulty) == "number" then difficulty = info.baseDifficulty + (info.bonusDifficulty or 0) end
   return {

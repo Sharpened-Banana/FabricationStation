@@ -138,6 +138,15 @@ describe("H1-4 GameHeader", function()
     assert.is_nil(M.GameHeader({ craftingQuality = 0, baseSkill = 1, isQualityCraft = false }, 1))
     assert.is_nil(M.GameHeader(nil, 2))
   end)
+  it("falls back to Math when the game reports a quality below max without a valid next threshold", function()
+    assert.is_nil(M.GameHeader({ craftingQuality = 1, baseSkill = 500, lowerSkillThreshold = 0,
+      upperSkillTreshold = 0 }, 2))
+    assert.is_nil(M.GameHeader({ craftingQuality = 2, baseSkill = 500, lowerSkillThreshold = 300 }, 5))
+    assert.is_nil(M.GameHeader({ craftingQuality = 2, baseSkill = 500, lowerSkillThreshold = 300,
+      upperSkillTreshold = 300 }, 5))
+    assert.equals(2, M.GameHeader({ craftingQuality = 2, baseSkill = 780, lowerSkillThreshold = 700,
+      upperSkillTreshold = 0 }, 2).expectedQuality)
+  end)
 end)
 
 describe("H1-4 Fix A: equal-weight fallback for ranked slots", function()
@@ -153,6 +162,18 @@ describe("H1-4 Fix A: equal-weight fallback for ranked slots", function()
     local r = ns.FS:GetModule("Recipes"):Evaluate(9001, "Main-Realm", {})
     assert.is_true(r.flags.estimated)
     assert.is_table(r.perQuality[1]); assert.is_table(r.perQuality[2])
+  end)
+
+  it("with partial GameData uses the mean of the known basic-slot weights for the missing ones", function()
+    local ns, _, world = make_world({ last = "Modules/Recipes.lua", calibrate = { ["Main-Realm"] = { 9001 } } })
+    -- Only slot 2 (2001/2002, weight 32) and a third weighted basic slot (weight 16) are known.
+    ns.GameData.Define("ReagentQuality", 70575, { [2001] = { rank = 1, categoryID = 2 }, [2002] = { rank = 2, categoryID = 2 },
+      [3001] = { rank = 1, categoryID = 3 } })
+    ns.GameData.Define("ReagentCategories", 70575, { [2] = { matQualityWeight = 32 }, [3] = { matQualityWeight = 16 } })
+    local calib = ns.FS.db.global.recipeCalib["Main-Realm"][9001]
+    local input = ns.CraftingData.BuildInput(ns.GameData, { schematic = world.schematics[9001], calib = calib, prices = {} })
+    assert.same({ 24, 32, 16 }, { input.slots[1].weight, input.slots[2].weight, input.slots[3].weight })
+    assert.is_true(input.missingWeights)
   end)
 end)
 
@@ -217,6 +238,20 @@ describe("H1-4 Fix C: calibrated quality thresholds", function()
     local input = ns.CraftingData.BuildInput(ns.GameData, { schematic = s, calib = c, prices = {} })
     assert.same({ 0.2, 0.5, 0.8, 1.0 }, input.thresholdFractions)
     assert.is_true(input.thresholdsEstimated)
+  end)
+
+  it("ignores calibrated fractions that would not ascend with the GameData or default ones", function()
+    local ns = calibrated(true)
+    local CD = ns.CraftingData
+    -- Calibrated tier 2 = 0.9 between default tiers 0.2 and 0.8 -> not ascending: the defaults (nil) stand.
+    assert.same({ nil, false }, { CD.MergeThresholds({ [2] = 0.9 }, nil, 5) })
+    -- Calibrated tier 1 = 0.6 above GameData's tier 2 = 0.5 -> GameData's list stands.
+    assert.same({ { 0.25, 0.5 }, false }, { CD.MergeThresholds({ [1] = 0.6 }, { 0.25, 0.5 }, 3) })
+    -- Out of (0, 1].
+    assert.same({ nil, false }, { CD.MergeThresholds({ [1] = 1.5 }, nil, 2) })
+    assert.same({ nil, false }, { CD.MergeThresholds({ [1] = 0 }, nil, 2) })
+    -- A consistent partial calibration still merges.
+    assert.same({ { 0.2, 0.45, 0.8, 1.0 }, true }, { CD.MergeThresholds({ [2] = 0.45 }, nil, 5) })
   end)
 
   it("stores nothing new while the saved data is from a newer version", function()

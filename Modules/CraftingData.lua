@@ -66,7 +66,8 @@ end
 -- Thresholds for tiers 2..maxQuality as ascending fractions, from the calibration's measured fractions
 -- (calibrated = { [tier index] = fraction }, possibly partial), else GameData's `fractions`, else Math's defaults.
 -- Returns fractions|nil, estimated: nil when nothing was measured and GameData has none (Math's defaults then stand
--- in); estimated = true when the defaults filled a tier the calibration did not measure.
+-- in); estimated = true when the defaults filled a tier the calibration did not measure. A merged list that is not
+-- strictly ascending within (0, 1] drops the calibration: GameData's `fractions` (nil = defaults) are returned.
 function CraftingData.MergeThresholds(calibrated, fractions, maxQuality)
   if type(maxQuality) ~= "number" or maxQuality < 2 then return fractions, false end
   local any = false
@@ -88,6 +89,9 @@ function CraftingData.MergeThresholds(calibrated, fractions, maxQuality)
       end
     end
     if type(f) ~= "number" then return fractions, false end
+    -- Strictly ascending within (0, 1], or the calibration does not fit the recipe's tiers: it is ignored and
+    -- GameData's (or, when nil, the default) list stands.
+    if f <= 0 or f > 1 or (i > 1 and f <= out[i - 1]) then return fractions, false end
     out[i] = f
   end
   return out, estimated
@@ -185,7 +189,8 @@ end
 -- noResourcefulness = true (resourcefulness saves basic reagents only) and singleItem = true (one item fills the
 -- whole quantity: the game rejects mixed items in a modifying slot). Their items' stats are not applied.
 -- missingWeights = true when a basic slot offers two or more ranks but GameData has no weight for it: such a slot
--- gets weight 1 (equal weights), and the result is an estimate.
+-- gets the mean of the recipe's known positive basic-slot weights (1 when none is known), and the result is an
+-- estimate.
 -- thresholdFractions: the calibration's measured fractions (calib.thresholdFractions, by tier index) first, then
 -- GameData's, then Math's defaults (see MergeThresholds); thresholdsEstimated = true when defaults filled a tier.
 -- optionals: with optionalItemIDs (a list, possibly empty), every item of every other optional and finishing
@@ -199,6 +204,17 @@ function CraftingData.BuildInput(gd, args)
   local maxQuality = type(schematic.maxQuality) == "number" and schematic.maxQuality or nil
   local craftingDataID = calib and calib.craftingDataID or CraftingData.CraftingDataIDFor(gd, schematic)
 
+  -- The recipe's known basic-slot weights: their mean stands in for a ranked slot GameData has no weight for.
+  local weightSum, weightCount = 0, 0
+  for _, slot in ipairs(schematic.reagentSlots or EMPTY) do
+    local reagents = type(slot.reagents) == "table" and slot.reagents or EMPTY
+    if slot.kind == "basic" and #reagents > 0 and CraftingData.IsAllocated(slot) then
+      local w = CraftingData.ReagentWeight(gd, reagents[1])
+      if w > 0 then weightSum, weightCount = weightSum + w, weightCount + 1 end
+    end
+  end
+  local fallbackWeight = weightCount > 0 and weightSum / weightCount or 1
+
   local slots, optionals, seen = {}, {}, {}
   local missingWeights = false
   for _, slot in ipairs(schematic.reagentSlots or EMPTY) do
@@ -211,11 +227,12 @@ function CraftingData.BuildInput(gd, args)
           provided = provided[itemID] or 0 }
       end
       local weight = basic and CraftingData.ReagentWeight(gd, reagents[1]) or 0
-      -- No GameData weight for a ranked slot: equal weights (1) stand in, so the measured reagent skill still
-      -- counts. Only ranked slots: weighting a single-rank slot would dilute the skill the ranks add.
+      -- No GameData weight for a ranked slot: the mean of the recipe's known basic-slot weights (1 when none is
+      -- known) stands in, so the measured reagent skill still counts. Only ranked slots: weighting a single-rank slot
+      -- would dilute the skill the ranks add.
       if basic and #reagents >= 2 and weight <= 0 then
         missingWeights = true
-        weight = 1
+        weight = fallbackWeight
       end
       slots[#slots + 1] = { slotIndex = slot.slotIndex, quantity = slot.quantity or 0, weight = weight, items = items,
         noResourcefulness = (not basic) or nil, singleItem = (not basic) or nil }

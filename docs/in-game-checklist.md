@@ -198,7 +198,7 @@ Settings > Crafting; module toggles are in Settings > Modules.
     Expected: a list named `FabricationStation` with each missing reagent at the right rank (tier) and quantity
     (the term fields used are `searchString`, `isExact`, `quantity`, `tier`). Repeat right after `/reload` with an
     item whose name the client has not cached: the status line says `Loading item names… the list will appear in
-    Auctionator's Shopping tab (reopen the AH if it's open)` (or `Shopping list updated (N items); loading M item
+    Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear` (or `Shopping list updated (N items); loading M item
     names…`), and moments later, without a second press, `Shopping list updated (N items)`.
 1b-5. **Warband reagents.** With Settings > Crafting > queueUseWarband on and some reagents only in the warband
     bank (not in bags, bank or reagent bank), queue one craft and press Craft Next at the crafting station.
