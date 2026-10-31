@@ -161,12 +161,12 @@ local function customer_text(row)
   return row.customer or (row.type == "npc" and "Patron" or nil)
 end
 
--- Coloured like the board's cells: green for a gain, red for a loss, plain when it shows as "0g" (OrdersPanel.Sign).
+-- Coloured like the board's cells: green for a gain, red for a loss, grey when it shows as "0g" (OrdersPanel.Sign).
 local function sign_color(copper, text)
   local sign = panel().Sign(copper)
   if sign > 0 then return color(GOOD, text) end
   if sign < 0 then return color(BAD, text) end
-  return text
+  return color(DIM, text)
 end
 
 local function has_risk(row, name)
@@ -219,7 +219,7 @@ function Tab.CellTexts(row, model)
     type = TYPE_LABELS[row.type] or (row.type ~= nil and tostring(row.type) or "--"),
     item = item_name(row),
     customer = customer_text(row) or "--",
-    tip = P.CompactMoney(row.tip) or "--",
+    tip = P.CompactMoney(row.tip) or color(DIM, "?"),   -- unknown money in a compact cell: "?" (board, Ledger tab)
     net = net,
     score = score,
     risk = model.riskCount > 0 and color(BAD, "!" .. model.riskCount) or "",

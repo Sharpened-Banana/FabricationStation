@@ -71,7 +71,7 @@ describe("Orders tab models", function()
     local cells = T.CellTexts(row({ orderID = 1, orderType = "public", risks = {}, flags = { noPrice = true } }))
     assert.is_truthy(cells.net:find("no price", 1, true)); assert.is_falsy(cells.net:find("0", 1, true))
     assert.is_truthy(cells.score:find("no price", 1, true))
-    assert.equal("--", cells.tip)
+    assert.equal("|cff9d9d9d?|r", cells.tip)                -- unknown money in a compact cell is "?", as on the board
     local missing = T.CellTexts(row({ orderID = 1, orderType = "public", net = 250000, score = 250000, risks = {},
       flags = { noPrice = true } }))
     assert.is_truthy(missing.net:find("+25g?", 1, true))
@@ -108,9 +108,9 @@ describe("Orders tab models", function()
     assert.equal("item:6", T.CellTexts(row({ orderID = 1, itemID = 6, recipeID = 1, risks = {} })).item)
   end)
 
-  it("colours a sub-copper gain plain, like the board", function()
+  it("greys a sub-copper gain shown as 0g, like the board and the Ledger tab", function()
     local cells = T.CellTexts(row({ orderID = 1, net = 0.4, score = 0.4, risks = {} }))
-    assert.equal("0g", cells.net); assert.equal("0g", cells.score)
+    assert.equal("|cff9d9d9d0g|r", cells.net); assert.equal("|cff9d9d9d0g|r", cells.score)
     assert.equal("|cffff4040-1c|r", T.CellTexts(row({ orderID = 1, net = -0.4, risks = {} })).net)
   end)
 

@@ -145,7 +145,7 @@ describe("Customers tab models", function()
     assert.same({ "Bob-Silvermoon (+1)", "3", "1,234g", "2h", "VIP" },
       { cells.name, cells.orders, cells.tips, cells.lastSeen, cells.tags })
     local unknown = T.CellTexts({ nameRealm = "X-Y", orders = 1, tagsText = "" }, 1000)
-    assert.same({ "no price", "never" }, { unknown.tips, unknown.lastSeen })
+    assert.same({ "|cff9d9d9d?|r", "never" }, { unknown.tips, unknown.lastSeen })   -- a tip is not a price: "?"
   end)
 end)
 

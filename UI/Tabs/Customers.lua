@@ -116,10 +116,11 @@ local function clean(text, limit)
   return strtrim(cut_characters(strtrim(text), limit))
 end
 
+-- Tips are money, not prices: unknown is "?" (grey in a compact cell), as on the board and in the Ledger tab.
 local function money_text(copper, compact)
-  if not is_money(copper) then return "no price" end
+  if not is_money(copper) then return compact and color(DIM, "?") or "?" end
   local panel = ns.UI.OrdersPanel
-  if compact and panel and panel.CompactMoney then return panel.CompactMoney(copper) or "no price" end
+  if compact and panel and panel.CompactMoney then return panel.CompactMoney(copper) or color(DIM, "?") end
   return ns.UI.FormatMoney(copper)
 end
 

@@ -79,7 +79,8 @@ local function repair(record, nameRealm, now)
 end
 
 -- Adds one fulfilled order to the customer's record (creating it the first time): orders are unique by
--- orderID, firstSeen is set once, lastSeen moves forward, tipsTotal adds the order's tip. Returns the record.
+-- orderID, firstSeen is set once, lastSeen moves forward, tipsTotal adds the order's tip (an unknown tip is kept
+-- as nil and adds nothing). Returns the record.
 -- An order already recorded changes nothing and sends nothing. While the saved data is read-only nothing is
 -- written and the result is the saved record, or nil.
 -- row = { time, orderID, itemID, recipeID, quality, tip, commission, orderType }
@@ -104,12 +105,13 @@ function Customers:RecordOrder(nameRealm, row)
     end
   end
 
-  local tip = number_or(row.tip, 0)
+  -- Unknown money is never 0: a tip that is not a number stays nil and adds nothing to tipsTotal.
+  local tip = type(row.tip) == "number" and row.tip or nil
   record.orders[#record.orders + 1] = {
     time = when, orderID = row.orderID, itemID = row.itemID, recipeID = row.recipeID, quality = row.quality,
     tip = tip, commission = row.commission, orderType = row.orderType,
   }
-  record.tipsTotal = record.tipsTotal + tip
+  if tip then record.tipsTotal = record.tipsTotal + tip end
   if when > record.lastSeen then record.lastSeen = when end
   self:SendMessage(ns.Msg.CUSTOMERS_CHANGED, nameRealm)
   return record
