@@ -2,6 +2,7 @@
 ## Title: FabricationStation
 ## Notes: All-in-one crafting: profit, quality, concentration, queue, orders and alts.
 ## Author: lonezebra
+## X-License: MIT
 ## Version: @project-version@
 ## SavedVariables: FabricationStationDB
 ## OptionalDeps: Auctionator

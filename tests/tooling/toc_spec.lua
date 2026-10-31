@@ -3,6 +3,10 @@ describe("FabricationStation.toc", function()
   it("pins the retail Interface number", function() assert.equals("120105", toc.meta.Interface) end)
   it("declares the SavedVariables", function() assert.equals("FabricationStationDB", toc.meta.SavedVariables) end)
   it("soft-depends on Auctionator", function() assert.equals("Auctionator", toc.meta.OptionalDeps) end)
+  it("declares the MIT licence and the packager version token", function()
+    assert.equals("MIT", toc.meta["X-License"])
+    assert.equals("@project-version@", toc.meta.Version)
+  end)
   it("loads embeds.xml first", function() assert.equals("embeds.xml", toc.files[1]) end)
   -- Phase 4 Task 2: the locale files come right after the libraries and before the first Core file, so every
   -- later file (in game) finds the real ns.L.
