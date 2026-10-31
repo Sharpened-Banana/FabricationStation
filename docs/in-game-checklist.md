@@ -1,9 +1,10 @@
-# FabricationStation phases 1a and 1b: in-game verification checklist
+# FabricationStation phases 1a, 1b and 2: in-game verification checklist
 
 Phase 1a is verified against stubs only. These checks need the real WoW client (retail, Midnight 12.1.5)
 and cannot be run in CI. Work through them in order. Checks 1-9 are the original plan checks; checks 10-15 come
 from code reviews and each name the exact thing to look for. Phase 1b (crafting) has its own section,
-[Phase 1b](#phase-1b-crafting), numbered 1b-1 to 1b-15; run it after the phase 1a checks.
+[Phase 1b](#phase-1b-crafting), numbered 1b-1 to 1b-15; run it after the phase 1a checks. Phase 2 (crafting orders, customers, ledger) has
+[Phase 2](#phase-2-orders-customers-ledger), numbered P2-1 onwards; run it last.
 
 The Settings tab is the "Settings" tab in the main window (`/fs settings`). Its left-hand tree has the groups
 General, Prices, Modules and Diagnostics.
@@ -257,6 +258,11 @@ H1-4. **Panel quality with empty GameData.** Select a quality recipe and fill ev
     Blizzard's quality meter, and the concentration line matches Blizzard's concentration cost. The per-quality rows
     under `Cheapest reagents per quality (estimate)` list every reachable quality (two or more rows for a recipe
     whose top quality is reachable), not only Q1.
+H1-4b. **Panel quality fallback.** Select a quality recipe and fill its quality slots so that Blizzard's quality meter
+    shows a quality below the recipe's maximum with no next threshold shown (for example a recipe whose next quality
+    needs more skill than any reagent mix gives). Expected: the panel's first line is `Quality: Q<n>` **without**
+    `(game)`: when the game reports a quality below max and no next threshold, the header uses the addon's own math.
+    Report the line and Blizzard's meter side by side.
 H1-5. **Held reagents count.** Log in with the rank-2 (or top-rank) reagents of a recipe split between your bags and
     the bank, without opening the bank this session. Queue one craft at the crafting station. Expected: the Queue tab
     shows nothing missing and Craft Next starts the craft with the reagents you hold. Then open the bank, deposit some
@@ -277,6 +283,159 @@ H1-6. **Row labels and long names.** Scroll a recipe list with long names, craft
 H1-8. **Capture file.** Run `/fs capture` (or `/fabstation capture`) on a selected recipe. Expected: the chat line names
     `WTF/Account/<account>/SavedVariables/FabricationStation.lua`; after `/reload` that file contains the capture
     (see check 5 for finding the account folder).
+
+## Phase 2 (orders, customers, ledger)
+
+Run these after the phase 1a/1b checks, on a character with a Midnight profession that gets crafting orders, at a
+crafting-orders table. Set `/console taintLog 1` before you start and `/console taintLog 0` at the end; `taint.log`
+is in `_retail_/Logs/`. The addon object for `/dump`s is `FS = LibStub("AceAddon-3.0"):GetAddon("FabricationStation")`
+(run `/run FS = LibStub("AceAddon-3.0"):GetAddon("FabricationStation")` once per session). The Orders, Customers
+and Ledger tabs are in the main window (`/fs`); Settings > Orders & Ledger holds the phase-2 options.
+
+### Acceptance run (plan Task 13 Step 5, spec §7)
+
+Run P2-1 to P2-8 in one session, with the taint log on.
+
+P2-1. **Cells on every tab.** Open the crafting-orders page and visit Public (drill into a bucket), Guild, Personal
+    and Patron. Expected: each flat order list shows the addon's profit, score and risk cells on its rows, and the
+    side panel (`FabricationStation`, right of the Professions frame) shows the filters, claims remaining and a best
+    order. The public bucket list (before drilling in) shows no cells.
+P2-2. **Claim Best Order.** On Public or Patron, press Claim Best Order once. Expected: it claims the top order that
+    has no flagged risk (the one the panel's `Best:` line named), with that one click; the result line says
+    `Claimed — open it from the order list`; while an order is claimed the button is disabled and the panel reads
+    `Best: you already have a claimed order`.
+P2-3. **Craft and fulfil.** Craft the claimed order and fulfil it. Expected: the Customers tab lists the customer
+    (patron orders have none), `/dump FabricationStationDB.global.ledger.entries` ends with a `craft` entry (negative
+    amount, `ref` = the orderID) and a `commission` entry (`ref` = the orderID, `cost` = what the craft cost), and the
+    Dashboard's "Gold this week" goes up by the commission minus the craft cost.
+P2-4. **AH sale mail.** Sell a crafted item on the AH, then take the "Auction successful" mail's money (Open All, or
+    click it). Expected: exactly one `sale` entry for it (`/dump` the last entries), with `recipeID` and `cost` when
+    you crafted that item for no order before.
+P2-5. **Personal order alert.** Have a friend (or a second account) place a personal order for you. Expected: the
+    raid-warning sound plays once and a toast reads `New personal crafting order: <profession> (<n> waiting)`, then
+    fades after about 8 s (Settings > Orders & Ledger > Alerts).
+P2-6. **Snapshot on an alt.** `/reload` onto an alt that never opened the orders page. Expected: the Orders tab shows
+    the board the first character saw, with `Orders seen <age> ago on <first character>` in its header; expired orders
+    are gone.
+P2-7. **Addon off.** Disable FabricationStation in the AddOns list and `/reload`. Expected: Blizzard's crafting-orders
+    UI looks and works exactly as without the addon (lists, tabs, claiming, crafting and fulfilling an order).
+P2-8. **Taint log.** After P2-1 to P2-7, search `taint.log` for `FabricationStation`. Expected: no lines.
+
+### Not verified from source
+
+P2-9. **Patron reward IDs.** On the Patron tab, for each order `n` run
+    `/dump C_CraftingOrders.GetCrafterOrders()[n].npcOrderRewards`. Report every reward: an `itemLink` (its
+    `item:<itemID>` and the item's name, e.g. a knowledge notebook and how many points it gives) or a
+    `currencyType` (the currency ID and name, e.g. Moxie). These go into `Data/OrderRewards.lua` (`items` as
+    `{ kind = "knowledge", points = N }`, `currencies` as `{ kind = "moxie" }`). Also
+    `/dump FabricationStationDB.global.ordersUnknownRewards`: the rewards the addon could not value.
+P2-10. **Quality scales.** For an order with a minimum quality, compare
+    `/dump C_CraftingOrders.GetCrafterOrders()[n].minQuality` with the quality Blizzard's order view shows (and the
+    addon's `Q<n>` in the Orders tab tooltip / the queue's target). Expected: the same tier number as the recipe's
+    quality (1..max) that the addon's `expectedQuality` uses. If `minQuality` is on another scale (for example 0-based,
+    or the 5-tier scale on a 2-tier recipe), report both numbers: Orders:Normalize must then map it.
+P2-11. **Sound key.** `/dump SOUNDKIT.RAID_WARNING`. Expected: a number (the alert's default sound). If nil, report
+    it, together with `/dump SOUNDKIT.READY_CHECK, SOUNDKIT.UI_PROFESSIONS_NEW_RECIPE_LEARNED`.
+P2-12. **Crafted quality of a claimed order.** With an order claimed and crafted (not yet fulfilled), run
+    `/dump C_CraftingOrders.GetClaimedOrder().outputItemHyperlink` and then
+    `/dump C_TradeSkillUI.GetItemCraftedQualityByItemInfo(C_CraftingOrders.GetClaimedOrder().outputItemHyperlink)`.
+    Expected: a link, then the quality you crafted. After fulfilling, the `commission` entry's `quality` and the
+    customer's order row show that quality. If the link is nil before fulfilment, report it (commissions then have no
+    quality and the tip benchmark falls back to all qualities).
+P2-13. **Customer-provided reagents in CraftRecipe.** Claim an order where the customer provided some reagents, then
+    craft it with Blizzard's Create button. Right after, run
+    `/dump FabricationStationDB.global.ledger.entries[#FabricationStationDB.global.ledger.entries]`. Expected: the
+    `craft` entry's `cost` covers only the reagents you paid for. To see what Blizzard passed, run before crafting
+    `/run hooksecurefunc(C_TradeSkillUI, "CraftRecipe", function(...) DevTools_Dump({...}) end)` (gone after
+    `/reload`). Report whether the dumped `craftingReagents` (3rd argument) list the customer-provided slots.
+P2-14. **Craft Next on an order with provided reagents (new in the final fix wave).** Add an order with
+    customer-provided reagents to the queue (`+` on its row, or the Orders tab) **before** claiming it, and press
+    Craft Next. Expected: the status line says `Start (claim) the order first: <recipe>` and nothing is cast; the
+    Queue tab marks the entry `[order]` (hover: `Crafting order #<id>`). Claim it and press Craft Next again.
+    Expected: the craft starts for the order. If the game rejects the cast (an error about reagents, or the craft
+    does not start), report it with the P2-13 dump: Craft Next passes the full allocation, provided slots included
+    (Blizzard's own UI leaves them out), and would then have to leave the provided slots out for order entries.
+    Finally fulfil the order. Expected: its queue entry disappears at once (and with it its reagents from the
+    Shopping List).
+
+### Board capture and claiming
+
+P2-15. **Profession window reopen.** Open a profession window, close it, open it again (also open a different
+    profession in between). Run `/etrace` filtered to `TRADE_SKILL_SHOW` (or watch `/eventtrace`). Expected:
+    `TRADE_SKILL_SHOW` fires on every opening, including the reopen of the same profession (the reopen
+    recalibration relies on it).
+P2-16. **Guild orders and the public claim limit.** Note `/dump C_CraftingOrders.GetOrderClaimInfo(C_TradeSkillUI.GetChildProfessionInfo().profession)`,
+    claim and fulfil a guild order, then dump it again. Report whether `claimsRemaining` dropped (the addon treats
+    only public orders as using a claim).
+P2-17. **Snapshot count.** `/reload`, open the orders page, visit the Personal and Patron tabs, then run
+    `/run local n=0 for _ in pairs(FabricationStationDB.global.ordersSnapshot.orders) do n=n+1 end print(n)`.
+    Expected: the number of orders you saw on those tabs (plus any public orders you drilled into).
+P2-18. **Personal counts at login.** Log in with a personal order waiting. Run
+    `/dump FabricationStationDB.global.ordersState` right after login (before visiting a table). Expected: a
+    `personalCounts` entry for that profession, which shows `CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS` fired at
+    login. If it is missing until you open the table, report it.
+P2-19. **Secure hooks and taint.** With the taint log on, open the orders page, browse each tab, claim, craft and fulfil
+    an order (Orders hooks `OrdersPage:ShowOrders` and `C_CraftingOrders.FulfillOrder`). Expected: no
+    FabricationStation lines in `taint.log`, and no "action blocked" message.
+P2-20. **Bucket list and claim responses.** (a) On Public, the bucket list (one row per item) must show no cells and
+    `Best:` must name no public order; drill into a bucket: cells appear. That confirms `ShowBuckets` is the bucket-list
+    entry point. (b) After the bucket list is shown, `/dump #C_CraftingOrders.GetCrafterOrders()` must not list the
+    flat public orders of an earlier drill-in (report the count). (c) Claim an order with Claim Best Order and run
+    `/etrace` for `CRAFTINGORDERS_CLAIM_ORDER_RESPONSE`: report the two arguments; expected order `(result, orderID)`.
+P2-21. **Personal count event away from a table.** Stand away from any crafting table (for example in a city's
+    flight-master area) while a friend places a personal order. Expected: the sound and toast (P2-5) still come. If
+    they come only once you open a table, report it: the count event then only fires at the table.
+
+### Ledger capture
+
+P2-22. **Craft and sale entries.** (a) Craft one item for no order: the last ledger entry is a `craft` entry with a
+    negative `amount`. (b) Take several "Auction successful" mails with Open All: exactly one `sale` per mail, and
+    clicking an already emptied mail adds nothing. (c) Craft until a multicraft proc and report whether the extra items
+    came as a second `TRADE_SKILL_ITEM_CRAFTED_RESULT` with the same `operationID` (the craft entry's `quantity`
+    grows, no second entry) or inside the first result's `quantity`. (d) Report whether the invoice is still readable
+    inside the money post-hook: a sale from an invoice has `source = "invoice"` and a `buyer`; `source = "subject"`
+    means the invoice was gone. (e) Sell a stack of 5 and report the mail subject: expected
+    `Auction successful: <item> (5)` and a sale with `quantity = 5`.
+P2-23. **Cast stop vs last result.** Craft 5 of a recipe in one batch (Blizzard's Create All, or a quantity of 5).
+    With `/etrace` on `UPDATE_TRADESKILL_CAST_STOPPED` and `TRADE_SKILL_ITEM_CRAFTED_RESULT`, report whether
+    `UPDATE_TRADESKILL_CAST_STOPPED` fires before the last result. Expected: five `craft` entries either way.
+P2-24. **Interrupts.** (a) Start a 3-cast batch and move during cast 2: report whether cast 1's result arrives after
+    the interrupt, and check that the ledger has exactly one entry per finished cast. (b) Press Create twice quickly so
+    the second click fails ("Another action is in progress"): report whether `UNIT_SPELLCAST_INTERRUPTED` fired for it
+    (`/etrace`), and check the first craft is still recorded.
+
+### Board additions (row cells, side panel, order view warning)
+
+P2-25. **Cell layout and long names.** With the orders page open and the taint log on, scroll each tab's list. Expected:
+    the cells stay on their rows while scrolling. For an order whose item name is long, the cells give way to the
+    name: first the profit cell goes, then the whole strip; there is **no dark backing** behind anything, and our
+    cells never cover Blizzard's item name.
+P2-26. **Hover and placement.** Hover the `+` button and the risk cell. Expected: our tooltip shows, Blizzard's row
+    highlight still shows on the row, and Blizzard's own row tooltip still appears when you hover the rest of the row.
+    Open an order from a blocked or VIP customer (tag one in the Customers tab first): the warning line above the
+    order view does not overlap the view's title or tabs. Then switch tabs (Public → Personal → Public) and report
+    whether the cells come back at once (whether `ShowOrders`/`SetupTable` call `SetView` again, which would re-init the
+    rows).
+P2-27. **API names.** `/dump ScrollUtil.AddInitializedFrameCallback ~= nil, ScrollUtil.AddReleasedFrameCallback ~= nil`
+    (expected `true, true`), and with an order open in the detail view,
+    `/dump ProfessionsFrame.OrdersPage.OrderView.order and ProfessionsFrame.OrdersPage.OrderView.order.orderID`
+    (expected: the open order's ID; the warning reads `OrderView.order`).
+P2-28. **Unmeasurable rows and late item names.** Right after login (item names not cached), open a tab with many
+    orders. Expected: rows whose names arrive late are re-fitted within a moment (cells give way once the name shows);
+    a row the addon cannot measure keeps all its cells, and must not cover a name: report any row where it does.
+    Hide the Professions frame while the list is shown, then reopen it: cells come back, and no cells float on
+    screen while it is hidden (the ScrollBox's OnHide fires when an ancestor hides). Report whether the frame rate
+    drops while the list is open and item data keeps arriving (`ITEM_DATA_LOAD_RESULT` / `GET_ITEM_INFO_RECEIVED`
+    frequency, `/etrace`).
+
+### Customers tab
+
+P2-29. **Chips, input and the pick menu.** In the Customers tab, give a customer several tags of different lengths
+    (e.g. `VIP`, `pays well`, `WWWWWWWWWWWW`). Expected: each chip is as wide as its text (report if a chip's text is
+    cut or has a large gap: `GetStringWidth` vs `GetUnboundedStringWidth`). Type a tag with a `|` in it (e.g. `a|b`):
+    the box and the chip show `a|b` literally, never a broken colour code. With enough tags or alts for a `+N` chip,
+    open its pick menu on a customer near the bottom of the window: the menu stays inside the screen and closes on a
+    click elsewhere.
 
 ## Not done here
 
