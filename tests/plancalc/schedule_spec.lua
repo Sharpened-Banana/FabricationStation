@@ -59,6 +59,42 @@ describe("PlanCalc scheduler", function()
       assert.same({}, rows)
     end)
 
+    it("a pool with an unknown or non-positive max schedules nothing (concentration unknown)", function()
+      local b = r(2, 100, 99); b.charKey = "B"
+      local c = r(3, 100, 99); c.charKey = "C"
+      local rows = P.Schedule({ pool("A", 1000, nil, NOW), pool("B", 1000, 0, NOW), pool("C", 1000, -5, NOW) },
+        { r(1, 100, 99), b, c }, { maxCraftsPerRecipe = 10 })
+      assert.same({}, rows)
+    end)
+
+    it("a result of another character is never scheduled on this character's pool", function()
+      local b = r(1, 100, 99); b.charKey = "B"
+      local rows = P.Schedule({ pool("A", 1000, 1000, NOW) }, { b }, { maxCraftsPerRecipe = 10 })
+      assert.same({}, rows)
+    end)
+
+    it("ranks by gold per full concentration point spent (the ingenuity refund lowers what a point earns)", function()
+      -- x earns 80 per expected point but is charged 200 to expect 100: 80 * 100 / 200 = 40 per point spent;
+      -- y earns 50 per point with no refund. Greedy picks y first and y's rows sort first.
+      local x = r(1, 200, 80); x.expectedConcentrationCost = 100
+      local y = r(2, 100, 50)
+      local rows = P.Schedule({ pool("A", 300, 1000, NOW) }, { x, y }, { maxCraftsPerRecipe = 10 })
+      assert.equal(1, #rows)
+      assert.same({ 2, 3, 300, 15000 }, { rows[1].recipeID, rows[1].crafts, rows[1].concentrationUsed,
+        rows[1].expectedGain })
+      rows = P.Schedule({ pool("A", 1000, 1000, NOW) }, { x, y }, { maxCraftsPerRecipe = 2 })
+      assert.same({ 2, 1 }, { rows[1].recipeID, rows[2].recipeID })
+      assert.same({ 2, 400, 16000, 80 }, { rows[2].crafts, rows[2].concentrationUsed, rows[2].expectedGain,
+        rows[2].goldPerConcentration })                                  -- the row keeps the result's own gpc
+    end)
+
+    it("without an expected cost the rank is goldPerConcentration itself", function()
+      local x = r(1, 200, 60); x.expectedConcentrationCost = nil
+      local y = r(2, 100, 50); y.expectedConcentrationCost = 0
+      local rows = P.Schedule({ pool("A", 300, 1000, NOW) }, { y, x }, { maxCraftsPerRecipe = 1 })
+      assert.same({ 1, 2 }, { rows[1].recipeID, rows[2].recipeID })
+    end)
+
     it("a capped pool schedules from its full value", function()
       local rows = P.Schedule({ pool("A", 1000, 1000, NOW) }, { r(1, 250, 10) }, { maxCraftsPerRecipe = 10 })
       assert.same({ 4, 1000 }, { rows[1].crafts, rows[1].concentrationUsed })

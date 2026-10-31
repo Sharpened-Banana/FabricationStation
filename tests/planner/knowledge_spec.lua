@@ -173,6 +173,9 @@ describe("Planner missing recipes", function()
   it("missing recipes without any data", function()
     local ns = env()
     assert.same({}, planner(ns):GetMissingRecipes("Bren-Silvermoon", 2912))
+    -- Bren's Herbalism record was never recipe-scanned (no time): that is said before the empty catalog.
+    assert.equal("notScanned", select(2, planner(ns):GetMissingRecipes("Bren-Silvermoon", 2912)))
+    char(ns, "Bren-Silvermoon").professions[2912].time = NOW
     assert.equal("noData", select(2, planner(ns):GetMissingRecipes("Bren-Silvermoon", 2912)))
   end)
 
@@ -228,17 +231,34 @@ describe("Planner missing recipes", function()
       assert.equal("noData", status(ns, "Aria-Silvermoon", 2907))
     end)
 
-    it("\"noData\" when the record was never filled by a recipe scan (no numeric time)", function()
+    it("\"notScanned\" when the record was never filled by a recipe scan (no numeric time)", function()
       -- 1a writes ProfessionRecord.time only in Scanner:ScanProfession; a spec snapshot alone makes a record
       -- without it, whose empty recipe list says nothing about what the character knows.
       local ns = env()
       local p = char(ns, "Aria-Silvermoon").professions[2907]
       p.time = nil
-      assert.same({ {}, "noData" }, { planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907) })
+      assert.same({ {}, "notScanned" }, { planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907) })
       p.time = "soon"
-      assert.equal("noData", status(ns, "Aria-Silvermoon", 2907))
+      assert.equal("notScanned", status(ns, "Aria-Silvermoon", 2907))
       p.time = NOW
       assert.equal("ok", status(ns, "Aria-Silvermoon", 2907))
+    end)
+
+    it("\"notScanned\" is decided before \"noData\" (an unscanned record on a line nothing lists)", function()
+      local ns = env({ sources = false })
+      ns.FS.db.global.recipeCatalog[2907] = nil
+      char(ns, "Aria-Silvermoon").professions[2907].time = nil
+      assert.same({ {}, "notScanned" }, { planner(ns):GetMissingRecipes("Aria-Silvermoon", 2907) })
+    end)
+
+    it("\"hidden\" and \"noProfession\" still come before \"notScanned\"", function()
+      local ns = env()
+      local p = char(ns, "Aria-Silvermoon").professions[2907]
+      p.time = nil
+      p.dropped = true
+      assert.equal("noProfession", status(ns, "Aria-Silvermoon", 2907))
+      alts(ns):SetHidden("Aria-Silvermoon", true)
+      assert.equal("hidden", status(ns, "Aria-Silvermoon", 2907))
     end)
   end)
 

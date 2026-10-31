@@ -1,14 +1,17 @@
 local ADDON_NAME, ns = ...
 
 -- Planner: what to do next across every character, from saved data (design rule 1: no profession window needed).
--- This file holds the module object, its settings and options group, the weekly knowledge checklist and the missing
--- recipe finder. Later phase-3 tasks add the concentration schedule and cap warnings (this file) and spec advice
--- (Modules/PlannerSpec.lua, the same module object).
+-- This file holds the module object, its settings and options group, the weekly knowledge checklist, the missing
+-- recipe finder, the concentration schedule and the cap warnings (with their once-per-session chat announcement).
+-- A later phase-3 task adds spec advice (Modules/PlannerSpec.lua, the same module object).
 --
--- Everything here is a read: Alts supplies the visible characters, their listed professions and knowledge state;
--- the account-wide recipe catalog (Alts) and the generated RecipeSources table say which recipes exist; 1a's Scanner
--- says which ones a character knows. Nothing is cached (every call reads the current data), so Planner listens to no
--- message for now; views refresh on FS_ALTS_CHANGED / FS_RECIPES_CHANGED themselves (preflight row 17).
+-- Everything here is a read: Alts supplies the visible characters, their listed professions, knowledge state and
+-- concentration pools; the account-wide recipe catalog (Alts) and the generated RecipeSources table say which recipes
+-- exist; 1a's Scanner says which ones a character knows; 1b's Recipes ranks the concentration crafts. Nothing is
+-- cached (every call reads the current data: the schedule asks Recipes:GetRanked once per pool, which only filters
+-- the results of its last scan pass), so Planner listens to no message; views refresh on FS_ALTS_CHANGED /
+-- FS_RECIPES_CHANGED themselves (preflight row 17). The only event is the first PLAYER_ENTERING_WORLD, which starts
+-- the chat cap warning.
 --
 -- Settings: db.global.settings.planner = { capWarnHours, capWarnChat, maxCraftsPerRecipe, specTopRecipes, section? },
 -- created on first use through 1a's SettingsAccessor (a session-only copy while the saved data is from a newer
@@ -68,6 +71,12 @@ local function alts()
 end
 
 local function scanner() return ns.FS:GetModule("Scanner", true) end
+
+-- Recipes, or nil while it is missing or turned off (it is a core module, so only a failed load leaves it off).
+local function recipes()
+  local R = ns.FS:GetModule("Recipes", true)
+  if R and R:IsEnabled() then return R end
+end
 
 -- Midnight "secret values": a value the addon may not read. canaccessvalue is feature-tested (absent = readable).
 local function accessible(v)
@@ -162,10 +171,11 @@ end
 --   "off"          Alts is missing or turned off ({}).
 --   "hidden"       the character is hidden ({}).
 --   "noProfession" no record, or only a dropped one, for the character and line; also an unknown character ({}).
---   "noData"       nothing lists the line's recipes (no number key in the catalog or RecipeSources), or the record
---                  was never filled by a recipe scan: 1a writes a ProfessionRecord's `time` only in
---                  Scanner:ScanProfession, so a record without a numeric `time` (made by a spec snapshot) has an
---                  unknown recipe list ({}).
+--   "notScanned"   this character's record was never filled by a recipe scan: 1a writes a ProfessionRecord's `time`
+--                  only in Scanner:ScanProfession, so a record without a numeric `time` (made by a spec snapshot)
+--                  has an unknown recipe list ({}; the view says "open this profession on <character>").
+--   "noData"       nothing lists the line's recipes (no number key in the catalog or RecipeSources) ({}; the view
+--                  says "open this profession on any character").
 --   "ok"           the rows; {} then means nothing is missing.
 -- Like every Planner getter it ignores Planner's own enabled state: the Planner tab checks Planner:IsEnabled() itself.
 function Planner:GetMissingRecipes(charKey, skillLineID)
@@ -174,11 +184,12 @@ function Planner:GetMissingRecipes(charKey, skillLineID)
   if is_hidden(A, charKey) then return {}, "hidden" end
   local record = own_record(charKey, skillLineID)
   if not record then return {}, "noProfession" end
+  if not is_finite(record.time) then return {}, "notScanned" end
   local catalog, generated = A:GetRecipeCatalog(skillLineID), generated_sources(skillLineID)
   local ids, any = {}, false
   for id in pairs(catalog) do if type(id) == "number" then ids[id] = true; any = true end end
   for id in pairs(generated) do if type(id) == "number" then ids[id] = true; any = true end end
-  if not any or not is_finite(record.time) then return {}, "noData" end
+  if not any then return {}, "noData" end
   local known = type(record.recipes) == "table" and record.recipes or {}
 
   local out = {}
@@ -200,6 +211,101 @@ function Planner:GetMissingRecipes(charKey, skillLineID)
     return a.recipeID < b.recipeID
   end)
   return out, "ok"
+end
+
+---------------------------------------------------------------------------
+-- Concentration schedule and cap warnings
+---------------------------------------------------------------------------
+
+-- { ScheduleRow } (PlanCalc.Schedule): how to spend each visible character's projected concentration at `now` on the
+-- crafts that earn the most per point. Pools come from Alts:GetPools(now) (hidden characters, dropped and
+-- older-expansion records are already left out); a pool whose concentration is unknown (value/max nil) is skipped
+-- without asking Recipes. For every other pool Recipes:GetRanked({ charKey, skillLineID, usesConcentration = true,
+-- sortBy = "goldPerConcentration" }) gives that character's concentration results on that line (preflight row 24:
+-- the line comes from Recipes' own filter, never from Scanner:GetSchematic, which may fetch and write); each result
+-- is copied (Recipes' results are shared, read-only) and annotated with the pool's skillLineID. Unpriced results
+-- (flags.noPrice), unknown recipes and results without a positive cost or gold per point are never scheduled, so an
+-- unknown gold value is never shown as a number. opts.maxCraftsPerRecipe = Settings().maxCraftsPerRecipe (0 = none).
+-- Second return: "ok", or "off" (with {}) while Alts or Recipes is missing or turned off. now defaults to Now().
+function Planner:GetSchedule(now)
+  local A, R = alts(), recipes()
+  if not A or not R then return {}, "off" end
+  now = is_finite(now) and now or ns.FS:Now()
+  local pools, results = A:GetPools(now), {}
+  for _, pool in ipairs(pools) do
+    if is_finite(pool.value) and is_finite(pool.max) and pool.max > 0 then
+      local ranked = R:GetRanked({ charKey = pool.charKey, skillLineID = pool.skillLineID, usesConcentration = true,
+        sortBy = "goldPerConcentration" })
+      for _, r in ipairs(type(ranked) == "table" and ranked or {}) do
+        if type(r) == "table" and r.charKey == pool.charKey then
+          local copy = {}
+          for k, v in pairs(r) do copy[k] = v end
+          copy.skillLineID = pool.skillLineID
+          results[#results + 1] = copy
+        end
+      end
+    end
+  end
+  return ns.PlanCalc.Schedule(pools, results, { maxCraftsPerRecipe = self:Settings().maxCraftsPerRecipe }), "ok"
+end
+
+-- { Pool + status = "capped"|"soon" } (PlanCalc.CapWarnings): the visible characters' pools that are full at `now`
+-- or fill within Settings().capWarnHours; capped first, then soonest. Pools with unknown concentration are skipped.
+-- Second return: "ok", or "off" (with {}) while Alts is missing or turned off (Recipes is not needed).
+-- now defaults to Now().
+function Planner:GetCapWarnings(now)
+  local A = alts()
+  if not A then return {}, "off" end
+  now = is_finite(now) and now or ns.FS:Now()
+  return ns.PlanCalc.CapWarnings(A:GetPools(now), now, self:Settings().capWarnHours * 3600), "ok"
+end
+
+-- "2d 4h"-style text from the Characters view (Task 12) when it is loaded, else whole hours rounded to the nearest
+-- (never below "1h": a soon warning is never "0h").
+local function duration_text(seconds)
+  local view = ns.UI and ns.UI.CharactersView
+  if type(view) == "table" and type(view.FormatDuration) == "function" then return view.FormatDuration(seconds) end
+  return math.max(1, math.floor(seconds / 3600 + 0.5)) .. "h"
+end
+
+local function warning_text(A, w, now)
+  local head = w.charKey .. " " .. A:ProfessionName(w.skillLineID) .. ": concentration "
+  if w.status == "capped" then return head .. "is full" end
+  return head .. "full in " .. duration_text(w.fullAt - now)
+end
+
+local announced = false   -- per session (a /reload starts a new one)
+
+-- Prints one chat line per cap warning ("FabricationStation: <charKey> <Profession>: concentration is full" /
+-- "... concentration full in <duration>"), once per session: after the first run that could read the pools (Alts
+-- on), later calls print nothing, also when that run found no warning. Prints nothing while Settings().capWarnChat
+-- is off (that does not use up the session's announcement). Started from the first PLAYER_ENTERING_WORLD.
+function Planner:AnnounceCapWarnings(now)
+  if announced or not self:Settings().capWarnChat then return end
+  now = is_finite(now) and now or ns.FS:Now()
+  local warnings, status = self:GetCapWarnings(now)
+  if status ~= "ok" then return end
+  announced = true
+  local A = alts()
+  for _, w in ipairs(warnings) do print("FabricationStation: " .. warning_text(A, w, now)) end
+end
+
+local CAPWARN_KEY = "planner.capwarn"
+local CAPWARN_DELAY = 10   -- seconds after the first loading screen, so Scanner's login data is in place
+
+-- Registers the first PLAYER_ENTERING_WORLD only (no API calls at enable). Later loading screens fire it again, so
+-- the handler unregisters itself; the cancellable Debounce (not C_Timer.After, preflight row 26) lets OnDisable stop
+-- a pending announcement. Both the handler and the announcement run through ns.FS:Wrap("Planner", ...).
+function Planner:OnEnable()
+  self:RegisterEvent("PLAYER_ENTERING_WORLD", ns.FS:Wrap("Planner", function()
+    self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+    ns.FS:Debounce(CAPWARN_KEY, CAPWARN_DELAY, ns.FS:Wrap("Planner", function() self:AnnounceCapWarnings() end))
+  end))
+end
+
+function Planner:OnDisable()
+  ns.FS:CancelDebounce(CAPWARN_KEY)
+  self:UnregisterAllEvents()
 end
 
 ---------------------------------------------------------------------------

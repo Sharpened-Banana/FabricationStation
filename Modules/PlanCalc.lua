@@ -184,13 +184,27 @@ local function positive(x)
   return isNumber(x) and x > 0
 end
 
+-- The cost a result's goldPerConcentration is per point of: expectedConcentrationCost (after the ingenuity refund),
+-- else concentrationCost.
+local function expectedCostOf(r)
+  return positive(r.expectedConcentrationCost) and r.expectedConcentrationCost or r.concentrationCost
+end
+
+-- What one point of the pool earns when spent on r: goldPerConcentration is per EXPECTED point, but a craft is
+-- charged the full concentrationCost, so the gain per craft (gpc * expectedCost) is spread over the full cost.
+-- Without an expected cost this is goldPerConcentration itself.
+local function rateOf(r)
+  return r.goldPerConcentration * expectedCostOf(r) / r.concentrationCost
+end
+
 -- pools = { Pool }; results = { RecipeResult annotated with skillLineID }; opts = { maxCraftsPerRecipe|nil }
--- (nil = no per-recipe cap). Greedy per pool (charKey + skillLineID): best goldPerConcentration first, each recipe
--- crafted as often as the pool's current value and the cap allow. A pool with an unknown value (projection
--- unavailable) schedules nothing. Results need a positive concentrationCost and goldPerConcentration and no
--- noPrice/unknownRecipe flag. concentrationUsed charges the full concentrationCost per craft; expectedGain uses
--- expectedConcentrationCost (cost after the ingenuity refund, which goldPerConcentration is per point of;
--- falls back to concentrationCost). Rows: soonest-full pool first (no fullAt last), then best gold/concentration.
+-- (nil = no per-recipe cap). Greedy per pool (charKey + skillLineID): best gold per full concentration point spent
+-- first (rateOf), each recipe crafted as often as the pool's current value and the cap allow. A pool with an unknown
+-- value or a missing/non-positive max (concentration unknown, as in CapWarnings) schedules nothing. Results need a
+-- positive concentrationCost and goldPerConcentration and no noPrice/unknownRecipe flag. concentrationUsed charges
+-- the full concentrationCost per craft; expectedGain uses expectedConcentrationCost (cost after the ingenuity
+-- refund, which goldPerConcentration is per point of; falls back to concentrationCost). Rows: soonest-full pool
+-- first (no fullAt last), then best gold per point spent.
 function PlanCalc.Schedule(pools, results, opts)
   local maxCrafts = opts and positive(opts.maxCraftsPerRecipe) and math.floor(opts.maxCraftsPerRecipe) or math.huge
   local byPool = {}
@@ -200,27 +214,28 @@ function PlanCalc.Schedule(pools, results, opts)
         and r.charKey ~= nil and r.skillLineID ~= nil then
       local k = r.charKey .. ":" .. r.skillLineID
       byPool[k] = byPool[k] or {}
-      table.insert(byPool[k], r)
+      table.insert(byPool[k], { result = r, rate = rateOf(r) })
     end
   end
-  local rows, done = {}, {}
+  local rows, rates, done = {}, {}, {}
   for _, p in ipairs(pools or {}) do
     local key = p.charKey ~= nil and p.skillLineID ~= nil and (p.charKey .. ":" .. p.skillLineID)
-    if key and not done[key] and isNumber(p.value) then
+    if key and not done[key] and isNumber(p.value) and positive(p.max) then
       done[key] = true
       local list, left = byPool[key] or {}, p.value
       table.sort(list, function(a, b)
-        if a.goldPerConcentration ~= b.goldPerConcentration then return a.goldPerConcentration > b.goldPerConcentration end
-        return a.recipeID < b.recipeID
+        if a.rate ~= b.rate then return a.rate > b.rate end
+        return a.result.recipeID < b.result.recipeID
       end)
-      for _, r in ipairs(list) do
+      for _, entry in ipairs(list) do
+        local r = entry.result
         local n = math.min(math.floor(left / r.concentrationCost), maxCrafts)
         if n > 0 then
           local used = n * r.concentrationCost
-          local expectedCost = positive(r.expectedConcentrationCost) and r.expectedConcentrationCost or r.concentrationCost
-          rows[#rows + 1] = { charKey = p.charKey, skillLineID = p.skillLineID, recipeID = r.recipeID, crafts = n,
-            concentrationUsed = used, expectedGain = math.floor(n * r.goldPerConcentration * expectedCost),
+          local row = { charKey = p.charKey, skillLineID = p.skillLineID, recipeID = r.recipeID, crafts = n,
+            concentrationUsed = used, expectedGain = math.floor(n * r.goldPerConcentration * expectedCostOf(r)),
             goldPerConcentration = r.goldPerConcentration, fullAt = p.fullAt }
+          rows[#rows + 1], rates[row] = row, entry.rate
           left = left - used
         end
       end
@@ -229,7 +244,7 @@ function PlanCalc.Schedule(pools, results, opts)
   table.sort(rows, function(a, b)
     local fa, fb = a.fullAt or math.huge, b.fullAt or math.huge
     if fa ~= fb then return fa < fb end
-    if a.goldPerConcentration ~= b.goldPerConcentration then return a.goldPerConcentration > b.goldPerConcentration end
+    if rates[a] ~= rates[b] then return rates[a] > rates[b] end
     if a.charKey ~= b.charKey then return a.charKey < b.charKey end
     if a.skillLineID ~= b.skillLineID then return a.skillLineID < b.skillLineID end
     return a.recipeID < b.recipeID
