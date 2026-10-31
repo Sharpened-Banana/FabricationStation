@@ -9,7 +9,7 @@ local function point(region, i) return { region:GetPoint(i or 1) } end
 
 local function boot(overrides)
   local ns, W = P2.boot(overrides)
-  P2.load(ns, { "UI/Widgets/ExpandGrid.lua", "UI/Tabs/CharactersView.lua" })
+  P2.load(ns, { "UI/Widgets/ExpandGrid.lua", "UI/Tabs/ViewUtil.lua", "UI/Tabs/CharactersView.lua" })
   return ns, W
 end
 
@@ -231,23 +231,109 @@ describe("ExpandGrid.New", function()
     grid:SetRows({ { key = "Aria-Silvermoon", cells = { name = "Aria" } } })
     local r = grid.rowPool[1]
     local c = r.cells
+    local function placed(key) return r.slots[key] or c[key] end   -- a profession slot is a frame (label + badge)
     assert.equal(128, grid.layout.flex)
     assert.same({ "RIGHT", r, "RIGHT", -6, 0 }, point(c.age)); assert.equal(70, c.age:GetWidth())
     assert.same({ "RIGHT", c.age, "LEFT", -4, 0 }, point(c.kp1)); assert.equal(40, c.kp1:GetWidth())
     assert.same({ "RIGHT", c.kp1, "LEFT", -4, 0 }, point(c.conc1)); assert.equal(120, c.conc1:GetWidth())
-    assert.same({ "RIGHT", c.conc1, "LEFT", -4, 0 }, point(c.prof1)); assert.equal(130, c.prof1:GetWidth())
+    assert.same({ "RIGHT", c.conc1, "LEFT", -4, 0 }, point(r.slots.prof1)); assert.equal(130, r.slots.prof1:GetWidth())
     assert.same({ "LEFT", r, "LEFT", 6, 0 }, point(c.name, 1))
-    assert.same({ "RIGHT", c.prof1, "LEFT", -4, 0 }, point(c.name, 2))
+    assert.same({ "RIGHT", r.slots.prof1, "LEFT", -4, 0 }, point(c.name, 2))
     for _, key in ipairs({ "spec1", "moxie1", "cds1", "prof2", "conc2", "kp2", "spec2", "moxie2", "cds2", "gold" }) do
-      assert.is_false(c[key]:IsShown(), key)
+      assert.is_false(placed(key):IsShown(), key)
     end
     assert.is_true(c.age:IsShown())
     -- At the default window width (716 px) Spec 1 and Gold come back; slot 2 stays hidden.
     parent:SetSize(716, 200)
     parent:GetScript("OnSizeChanged")(parent, 716, 200)
     assert.is_true(c.spec1:IsShown()); assert.is_true(c.gold:IsShown())
-    assert.is_false(c.prof2:IsShown())
+    assert.is_false(placed("prof2"):IsShown())
     assert.same({ "RIGHT", c.gold, "LEFT", -4, 0 }, point(c.spec1))
     assert.equal("Aria", plain(c.name:GetText()))
+  end)
+  it("keeps the profession '+N' visible at 516 px: a right-anchored badge the long label ends before", function()
+    local V = ns.UI.CharactersView
+    local grid = G.New(parent, V.COLUMNS, { hideOrder = V.HIDE_ORDER })
+    local prof = { label = "Leatherworking", skill = "100/100", conc = "1/2", kp = "1", spec = "x", moxie = "1", cds = "x" }
+    local display = { charKey = "Bren-Silvermoon", name = "Bren", gold = "5s 0c", goldShort = "5s", age = "2h",
+      staleAge = false, profs = { prof, prof } }
+    local cells, badges = V.CellTexts(display, grid.layout)
+    assert.same({ prof1 = "+1" }, badges)
+    grid:SetRows({ { key = "Bren-Silvermoon", cells = cells, badges = badges } })
+    local r = grid.rowPool[1]
+    local slot, label, badge = r.slots.prof1, r.cells.prof1, r.badges.prof1
+    assert.equal("Leatherworking 100/100", label:GetText())
+    assert.same({ "+1", true }, { badge:GetText(), badge:IsShown() })
+    assert.same({ "RIGHT", slot, "RIGHT", 0, 0 }, point(badge))
+    assert.same({ "LEFT", slot, "LEFT", 0, 0 }, point(label, 1))
+    assert.same({ "RIGHT", badge, "LEFT", -2, 0 }, point(label, 2))
+    assert.equal(130, slot:GetWidth())
+    -- Wide enough for both slots: no badge, the label reaches the slot's right edge again.
+    parent:SetSize(1400, 200)
+    parent:GetScript("OnSizeChanged")(parent, 1400, 200)
+    cells, badges = V.CellTexts(display, grid.layout)
+    grid:SetRows({ { key = "Bren-Silvermoon", cells = cells, badges = badges } })
+    assert.equal("", r.badges.prof1:GetText())
+    assert.same({ "RIGHT", r.badges.prof1, "LEFT", 0, 0 }, point(r.cells.prof1, 2))
+  end)
+
+  it("sizes a detail for its wrapped text at the current width and relayouts it on a width change alone", function()
+    local real = CreateFrame
+    local clips = {}
+    _G.CreateFrame = function(...)
+      local f = real(...)
+      f.SetClipsChildren = function(self, on) clips[self] = on end
+      return f
+    end
+    local V = ns.UI.CharactersView
+    local line = V.KnowledgeBreakdown({ status = "unknown", darkmoon = "unknown" })
+    assert.is_true(#line > 85)
+    local grid = G.New(parent, COLS, { hideOrder = { "y" } })
+    local rowsWithDetail = {
+      { key = "a", cells = { name = "A" }, detail = line .. "\n" .. line,
+        detailHeight = function(_, width) return G.WrappedHeight({ line, line }, width) end },
+      { key = "b", cells = { name = "B" } },
+    }
+    parent:SetSize(1400, 200)
+    parent:GetScript("OnSizeChanged")(parent, 1400, 200)
+    grid:SetRows(rowsWithDetail)
+    grid:Toggle("a")
+    local d = grid.detailPool[1]
+    _G.CreateFrame = real
+    assert.is_true(clips[d])
+    assert.equal(2 * 14 + 4, d:GetHeight())                 -- one line each at 1400 px
+    -- 516 px: the hidden set does not change (Y still fits), the width does: two lines each.
+    parent:SetSize(516, 200)
+    parent:GetScript("OnSizeChanged")(parent, 516, 200)
+    assert.same({}, grid.layout.hidden)
+    assert.equal(4 * 14 + 4, d:GetHeight())
+    assert.same({ "TOPLEFT", grid.child, "TOPLEFT", 0, -(20 + 60) }, point(find_row(grid, "b"), 1))
+    assert.equal(line .. "\n" .. line, d.text:GetText())
+  end)
+
+  it("clears a reused detail frame before rendering another row's detail", function()
+    local grid = G.New(parent, COLS, {})
+    grid:SetDetailRenderer(function(frame, row) if row.key == "k2" then frame.text:SetText("only k2") end end)
+    grid:SetRows(rows(4, 2))   -- k2 and k4 have details
+    grid:Toggle("k2"); grid:Toggle("k4")
+    assert.equal(2, grid.shownDetails)
+    assert.equal("only k2", grid.detailPool[1].text:GetText())
+    grid:Toggle("k2")
+    assert.equal(1, grid.shownDetails)
+    assert.equal("k4", grid.detailPool[1].data.key)
+    assert.equal("", grid.detailPool[1].text:GetText())
+  end)
+
+  it("shows a header label's tooltip on hover (a narrow header may truncate)", function()
+    local V = ns.UI.CharactersView
+    local grid = G.New(parent, V.COLUMNS, { hideOrder = V.HIDE_ORDER })
+    local hit = grid.headerHits[4]   -- KP 1
+    hit:GetScript("OnEnter")(hit)
+    assert.same({ "Profession 1: Knowledge points left this week" }, tooltip.lines)
+    hit:GetScript("OnLeave")(hit)
+    assert.is_false(tooltip.shown)
+    assert.is_false(grid.headerHits[5]:IsShown())   -- Spec 1 is hidden at 516 px
+    grid.headerHits[1]:GetScript("OnEnter")(grid.headerHits[1])
+    assert.same({ "Character" }, tooltip.lines)
   end)
 end)

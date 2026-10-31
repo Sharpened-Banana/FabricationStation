@@ -9,23 +9,17 @@ local _, ns = ...
 -- when no gain is known at all the view says the spec effect data is missing instead of ranking (Task 11 carry).
 -- This file never calls Planner:GetSpecAdvice (computed on demand by the tab, preflight row 30).
 --
--- Modules are looked up at call time; durations use ns.UI.CharactersView.FormatDuration (preflight row 37).
+-- Modules are looked up at call time; durations use ns.UI.CharactersView.FormatDuration (preflight row 37). Shared
+-- helpers: ns.UI.ViewUtil (UI/Tabs/ViewUtil.lua).
 local PV = {}
 ns.UI = ns.UI or {}
 ns.UI.PlannerView = PV
 
-local EM_DASH = "\226\128\148"
-local DOT = " \194\183 "   -- " · "
+local U = ns.UI.ViewUtil
+local EM_DASH = U.EM_DASH
+local finite, whole, module = U.finite, U.whole, U.module
 local DEFAULT_CAP_WARN_HOURS = 24
 local DEFAULT_TOP_RECIPES = 20
-
-local function finite(v) return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge end
-local function whole(v) return tostring(math.floor(v)) end
-
-local function module(name)
-  local m = ns.FS:GetModule(name, true)
-  return m
-end
 
 local function enabled(name)
   local m = module(name)
@@ -46,24 +40,23 @@ local function planner_setting(key, default)
   return finite(v) and v or default
 end
 
--- Caps a list of lines at max lines in all: when some are left out, the last line is { "+K more", "" } (an
--- overflowing list always says so). max nil: no cap. fixed: lines before `items` that always stay (a total).
+-- Caps fixed lines (a total) + item lines at max lines in all, never more: when items are left out, the last line
+-- is { "+K more", "" } (K = items not shown; an overflowing list always says so). When only one line fits, that is
+-- the "+K more" line alone. max nil: no cap; max < 1: {}.
 local function capped(fixed, items, max, extra)
   local out = {}
-  for _, line in ipairs(fixed) do out[#out + 1] = line end
-  if not finite(max) then
+  local limit = finite(max) and math.floor(max) or math.huge
+  if limit < 1 then return out end
+  if #fixed + #items <= limit then
+    for _, line in ipairs(fixed) do out[#out + 1] = line end
     for _, line in ipairs(items) do out[#out + 1] = line end
     return out
   end
-  max = math.max(1, math.floor(max))
-  local room = max - #out
-  if #items <= room then
-    for _, line in ipairs(items) do out[#out + 1] = line end
-    return out
-  end
-  local keep = math.max(0, room - 1)
-  for i = 1, keep do out[#out + 1] = items[i] end
-  local more = { "+" .. (#items - keep) .. " more", "" }
+  local keepFixed = math.min(#fixed, limit - 1)
+  local keepItems = math.max(0, limit - 1 - keepFixed)
+  for i = 1, keepFixed do out[#out + 1] = fixed[i] end
+  for i = 1, keepItems do out[#out + 1] = items[i] end
+  local more = { "+" .. (#items - keepItems) .. " more", "" }
   for k, v in pairs(extra or {}) do more[k] = v end
   out[#out + 1] = more
   return out
@@ -120,7 +113,8 @@ end
 -- Checklist rows (Planner:GetKnowledgeChecklist) -> { { left, right } }: { "Total", "<sum> KP" } first, then one line
 -- per row with points left this week, in checklist order: "<n> KP" for an "ok" summary (rows with 0 left are left
 -- out), "? KP" for "noData"/"unknown". The total sums "ok" rows only: "N+? KP" when some row is not "ok", "? KP"
--- when none is; an outdated data build adds " · data build X (outdated)". {} without rows. At most max lines.
+-- when none is; an outdated data build makes it "<sum> KP (outdated)" with tooltip = "Knowledge data build X
+-- (outdated): ..." on that line (the only extra key). {} without rows. At most max lines (see capped).
 function PV.KnowledgeLines(rows, max)
   rows = type(rows) == "table" and rows or {}
   if #rows == 0 then return {} end
@@ -136,11 +130,13 @@ function PV.KnowledgeLines(rows, max)
       items[#items + 1] = { left, "? KP" }
     end
   end
-  local totalText = known and (whole(total) .. (unknown and "+?" or "")) or "?"
-  totalText = totalText .. " KP"
+  local totalLine = { "Total", (known and (whole(total) .. (unknown and "+?" or "")) or "?") .. " KP" }
   local note = view().CurrentDataNote()
-  if note then totalText = totalText .. DOT .. note end
-  return capped({ { "Total", totalText } }, items, max)
+  if note then
+    totalLine[2] = totalLine[2] .. " (outdated)"
+    totalLine.tooltip = "Knowledge " .. note .. ": the game has changed since, so counts may be wrong"
+  end
+  return capped({ totalLine }, items, max)
 end
 
 ---------------------------------------------------------------------------
@@ -261,16 +257,25 @@ local CATEGORY_COLUMNS = {
   { key = "darkmoon", label = "Darkmoon", long = "Darkmoon Faire", width = 56 },
   { key = "once", label = "One-time", long = "One-time", width = 50 },
 }
+local CATEGORY_TOOLTIPS = {
+  weeklyQuest = "Weekly quest: points earned/total", treatise = "Treatise (weekly): points earned/total",
+  treasure = "Treasures (weekly): points earned/total", drop = "Drops (weekly): points earned/total",
+  darkmoon = "Darkmoon Faire quest (monthly): points earned/total, or closed",
+  once = "One-time sources: points earned/total",
+}
 
 PV.KNOWLEDGE_COLUMNS = {
   { key = "character", label = "Character", flex = true },
   { key = "profession", label = "Profession", width = 100 },
 }
 for _, col in ipairs(CATEGORY_COLUMNS) do
-  PV.KNOWLEDGE_COLUMNS[#PV.KNOWLEDGE_COLUMNS + 1] = { key = col.key, label = col.label, width = col.width }
+  PV.KNOWLEDGE_COLUMNS[#PV.KNOWLEDGE_COLUMNS + 1] = { key = col.key, label = col.label, width = col.width,
+    tooltip = CATEGORY_TOOLTIPS[col.key] }
 end
-PV.KNOWLEDGE_COLUMNS[#PV.KNOWLEDGE_COLUMNS + 1] = { key = "firstCrafts", label = "First", width = 36, right = true }
-PV.KNOWLEDGE_COLUMNS[#PV.KNOWLEDGE_COLUMNS + 1] = { key = "left", label = "Left", width = 36, right = true }
+PV.KNOWLEDGE_COLUMNS[#PV.KNOWLEDGE_COLUMNS + 1] = { key = "firstCrafts", label = "First", width = 36, right = true,
+  tooltip = "First crafts pending (one-time points)" }
+PV.KNOWLEDGE_COLUMNS[#PV.KNOWLEDGE_COLUMNS + 1] = { key = "left", label = "Left", width = 36, right = true,
+  tooltip = "Knowledge points left this week" }
 
 -- Lowest priority first; the weekly categories (what "Left" counts) stay longest. At 516 px First crafts, One-time
 -- and Darkmoon are hidden and Character gets 156 px.

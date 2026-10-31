@@ -5,31 +5,25 @@ local _, ns = ...
 -- the row tooltip (every value, also those of hidden columns), the header sums and the GameData build marker.
 --
 -- Display rules (design rule 6): unknown values are shown, never 0 — concentration "—", knowledge "?", gold "--",
--- unknown data age "—" and stale; the logged-in character is "online" (1a writes lastSeen only at login, preflight
--- row 33). A knowledge count is shown only for a summary with status "ok".
+-- unknown data age "never" and stale; the logged-in character is "online" (1a writes lastSeen only at login,
+-- preflight row 33). A knowledge count is shown only for a summary with status "ok". Ages use ns.UI.FormatAge, as on
+-- every tab; FormatDuration is for durations (time to full, cooldowns) and is shared with the Planner view and the
+-- Planner chat line. Narrow cells use compact money; the tooltip has the full value.
 --
--- Modules are looked up at call time; FormatDuration is shared with the Planner view and the Planner chat line.
+-- Modules are looked up at call time. Shared helpers: ns.UI.ViewUtil (UI/Tabs/ViewUtil.lua).
 local V = {}
 ns.UI = ns.UI or {}
 ns.UI.CharactersView = V
 
-local EM_DASH = "\226\128\148"
-local DOT = " \194\183 "              -- " · "
+local U = ns.UI.ViewUtil
+local EM_DASH, DOT = U.EM_DASH, U.DOT
+local finite, whole, color, module = U.finite, U.whole, U.color, U.module
 local BULLET = "\226\128\162 "        -- "• " (the logged-in character)
 local RED, ORANGE, DIM = "|cffff4040", "|cffff8000", "|cff9d9d9d"
 local DEFAULT_CAP_WARN_HOURS = 24
 
 V.EMPTY_TEXT = "Open your professions on this character"
 V.OFF_TEXT = "Alts is turned off"
-
-local function finite(v) return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge end
-local function whole(v) return tostring(math.floor(v)) end
-local function color(code, text) return code .. text .. "|r" end
-
-local function module(name)
-  local m = ns.FS:GetModule(name, true)
-  return m
-end
 
 -- seconds -> "now" (<= 0), "<1m", "45m", "1h 0m", "2d 12h"; "—" for nil or a non-finite value.
 function V.FormatDuration(seconds)
@@ -105,9 +99,10 @@ local function spec_text(s)
 end
 
 -- "1 · 2h 0m" (the soonest pending), "2 · ready", "2 · 1 ready" (some ready, some pending), "1 · ?" (unknown); "—"
--- without cooldowns. A cooldown is ready when its readyAt has passed or it has a charge left.
+-- without cooldowns. A cooldown is ready when its readyAt has passed or it has a charge left. Second return: the
+-- time until the soonest pending one (FormatDuration), nil when none is pending.
 local function cooldown_text(cooldowns, now)
-  if type(cooldowns) ~= "table" or #cooldowns == 0 then return EM_DASH end
+  if type(cooldowns) ~= "table" or #cooldowns == 0 then return EM_DASH, nil end
   local ready, soonest = 0, nil
   for _, cd in ipairs(cooldowns) do
     if (finite(cd.readyAt) and cd.readyAt <= now) or (finite(cd.charges) and cd.charges > 0) then
@@ -117,21 +112,24 @@ local function cooldown_text(cooldowns, now)
     end
   end
   local n = #cooldowns
+  local nextIn = soonest and V.FormatDuration(soonest - now) or nil
   local state
   if ready == n then
     state = "ready"
   elseif ready > 0 then
     state = ready .. " ready"
-  elseif soonest then
-    state = V.FormatDuration(soonest - now)
+  elseif nextIn then
+    state = nextIn
   else
     state = "?"
   end
-  return n .. DOT .. state
+  return n .. DOT .. state, nextIn
 end
 
--- AltRow (Alts:GetAltRow) -> { charKey, name, class, isCurrent, hidden, gold, age, staleAge, older|nil,
--- profs = { { skillLineID, label, skill, conc, concUrgent, kp, spec, moxie, cds, knowledge } }, empty|nil }.
+-- AltRow (Alts:GetAltRow) -> { charKey, name, class, isCurrent, hidden, gold (full), goldShort (compact cell), age,
+-- staleAge, older|nil, profs = { { skillLineID, label, skill, conc, concUrgent, kp, spec, moxie, cds, cdsNext|nil,
+-- knowledge } }, empty|nil }. age: "online" for the logged-in character, else ns.UI.FormatAge(dataAgeSeconds)
+-- ("never" when unknown). cdsNext: the time until the soonest pending cooldown.
 -- concUrgent: full within Planner's capWarnHours (24 h without Planner). older: "Older expansions: N" (records the
 -- grid does not list). empty: the text to show when no listed profession exists.
 function V.Row(altRow, now)
@@ -143,7 +141,8 @@ function V.Row(altRow, now)
     charKey = altRow.charKey, name = altRow.name or tostring(altRow.charKey), class = altRow.class,
     isCurrent = current, hidden = altRow.hidden == true,
     gold = ns.UI.FormatMoney(altRow.gold),
-    age = current and "online" or V.FormatDuration(altRow.dataAgeSeconds),
+    goldShort = U.compactMoney(altRow.gold),
+    age = current and "online" or ns.UI.FormatAge(altRow.dataAgeSeconds),
     staleAge = not current and flags.stale == true,
     profs = {},
   }
@@ -154,6 +153,7 @@ function V.Row(altRow, now)
   for _, p in ipairs(type(altRow.professions) == "table" and altRow.professions or {}) do
     local c = p.concentration
     local toFull = type(c) == "table" and c.secondsToFull or nil
+    local cds, cdsNext = cooldown_text(p.cooldowns, now)
     row.profs[#row.profs + 1] = {
       skillLineID = p.skillLineID,
       label = p.name or ("Skill " .. tostring(p.skillLineID)),
@@ -163,7 +163,7 @@ function V.Row(altRow, now)
       kp = V.KnowledgeCell(p.knowledge),
       spec = spec_text(p.spec),
       moxie = finite(p.moxie) and whole(p.moxie) or EM_DASH,
-      cds = cooldown_text(p.cooldowns, now),
+      cds = cds, cdsNext = cdsNext,
       knowledge = p.knowledge,
     }
   end
@@ -180,18 +180,20 @@ end
 V.COLUMNS = { { key = "name", label = "Character", flex = true } }
 for slot = 1, 2 do
   for _, col in ipairs({
-    { key = "prof", label = "Profession", width = 130 },
-    { key = "conc", label = "Concentration", width = 120 },
-    { key = "kp", label = "KP", width = 40, right = true },
-    { key = "spec", label = "Spec", width = 80 },
+    { key = "prof", label = "Profession", width = 130, badge = true,
+      tooltip = "Profession and skill (+N: more professions, in the row tooltip)" },
+    { key = "conc", label = "Concentration", width = 120, tooltip = "Concentration now/max · time until full" },
+    { key = "kp", label = "KP", width = 40, right = true, tooltip = "Knowledge points left this week" },
+    { key = "spec", label = "Spec", width = 80, tooltip = "Specialization points spent/max (+unspent)" },
     { key = "moxie", label = "Moxie", width = 50, right = true },
-    { key = "cds", label = "Cooldowns", width = 80 },
+    { key = "cds", label = "Cooldowns", width = 80, tooltip = "Cooldowns · ready or time until the next" },
   }) do
-    V.COLUMNS[#V.COLUMNS + 1] = { key = col.key .. slot, label = col.label, width = col.width, right = col.right }
+    V.COLUMNS[#V.COLUMNS + 1] = { key = col.key .. slot, label = col.label, width = col.width, right = col.right,
+      badge = col.badge, tooltip = col.tooltip and ("Profession " .. slot .. ": " .. col.tooltip) or nil }
   end
 end
 V.COLUMNS[#V.COLUMNS + 1] = { key = "gold", label = "Gold", width = 100, right = true }
-V.COLUMNS[#V.COLUMNS + 1] = { key = "age", label = "Age", width = 70, right = true }
+V.COLUMNS[#V.COLUMNS + 1] = { key = "age", label = "Age", width = 70, right = true, tooltip = "Age of the saved data" }
 
 -- Lowest priority first: slot 2's extras, then slot 2 as a whole, slot 1's Moxie, Cooldowns and Spec, then Gold,
 -- then Age. The Character column keeps at least 120 px (128 px at the 516 px minimum: Profession 1, Concentration
@@ -226,20 +228,22 @@ local function name_text(row)
   return text
 end
 
--- Display row (V.Row) + column layout -> { [columnKey] = text } with colour codes: the class-coloured name ("• " for
--- the logged-in character), "<label> <skill>" per slot (with "+N" on the last visible slot when professions do not
--- fit), red concentration when urgent, orange age when stale. A row without professions shows its empty text in
--- the first slot.
+-- Display row (V.Row) + column layout -> cells, badges. cells = { [columnKey] = text } with colour codes: the
+-- class-coloured name ("• " for the logged-in character), "<label> <skill>" per slot, red concentration when
+-- urgent, compact gold, orange age when stale; a row without professions shows its empty text in the first slot.
+-- badges = { prof1|prof2 = "+N" } on the last visible slot when professions do not fit (a separate right-anchored
+-- font string, so truncating the label never hides it; ExpandGrid.SetBadge).
 function V.CellTexts(row, layout)
-  local t = { name = name_text(row), gold = row.gold, age = row.staleAge and color(ORANGE, row.age) or row.age }
+  local t = { name = name_text(row), gold = row.goldShort or row.gold,
+    age = row.staleAge and color(ORANGE, row.age) or row.age }
+  local badges = {}
   local slots = visible_slots(layout)
   local more = V.MoreCount(row, layout)
+  if slots > 0 and more > 0 then badges["prof" .. slots] = "+" .. more end
   for slot = 1, 2 do
     local p = row.profs[slot]
     if p then
-      local label = p.label .. " " .. p.skill
-      if slot == slots and more > 0 then label = label .. color(DIM, " +" .. more) end
-      t["prof" .. slot] = label
+      t["prof" .. slot] = p.label .. " " .. p.skill
       t["conc" .. slot] = p.concUrgent and color(RED, p.conc) or p.conc
       t["kp" .. slot], t["spec" .. slot] = p.kp, p.spec
       t["moxie" .. slot], t["cds" .. slot] = p.moxie, p.cds
@@ -248,28 +252,32 @@ function V.CellTexts(row, layout)
     end
   end
   if row.empty then t.prof1 = color(DIM, row.empty) end
-  return t
+  return t, badges
 end
 
--- Display row -> tooltip lines (strings): every value, so nothing a hidden or truncated column holds is lost.
-function V.TooltipLines(row)
+-- Display row, note (DataBuildNote; default CurrentDataNote()) -> tooltip lines (strings): every value, so nothing a
+-- hidden or truncated column holds is lost: the full gold, the outdated-data marker next to the knowledge count,
+-- the time until the next cooldown.
+function V.TooltipLines(row, note)
+  if note == nil then note = V.CurrentDataNote() end
   local lines = { tostring(row.charKey or row.name) }
   if row.hidden then lines[#lines + 1] = "Hidden (shown because \"Show hidden\" is ticked)" end
   lines[#lines + 1] = "Gold: " .. row.gold
   if row.isCurrent then
     lines[#lines + 1] = "Last seen: online"
-  elseif row.age == EM_DASH then
-    lines[#lines + 1] = "Last seen: unknown (stale)"
+  elseif row.age == "never" then
+    lines[#lines + 1] = "Last seen: never (stale)"
   else
     lines[#lines + 1] = "Last seen: " .. row.age .. " ago" .. (row.staleAge and " (stale)" or "")
   end
   for _, p in ipairs(row.profs) do
     lines[#lines + 1] = p.label .. " " .. p.skill
     lines[#lines + 1] = "  Concentration: " .. p.conc
-    lines[#lines + 1] = "  Knowledge left this week: " .. p.kp
+    lines[#lines + 1] = "  Knowledge left this week: " .. p.kp .. (note and (" (" .. note .. ")") or "")
     lines[#lines + 1] = "  Spec: " .. p.spec
     lines[#lines + 1] = "  Moxie: " .. p.moxie
-    lines[#lines + 1] = "  Cooldowns: " .. p.cds
+    local nextIn = p.cdsNext and p.cds:sub(-#p.cdsNext) ~= p.cdsNext and (", next in " .. p.cdsNext) or ""
+    lines[#lines + 1] = "  Cooldowns: " .. p.cds .. nextIn
   end
   if row.empty then lines[#lines + 1] = row.empty end
   if row.older then lines[#lines + 1] = row.older end
@@ -294,12 +302,9 @@ function V.DataBuildNote(status)
   return "data build " .. whole(status.build) .. " (outdated)"
 end
 
--- DataBuildNote for this session's game build (GetBuildInfo), or nil.
+-- DataBuildNote for this session's game build (Core's FS:GameDataStatus, the same status Settings shows), or nil.
 function V.CurrentDataNote()
-  local GD = ns.GameData
-  if type(GD) ~= "table" or type(GD.Status) ~= "function" then return nil end
-  local clientBuild = type(GetBuildInfo) == "function" and tonumber((select(2, GetBuildInfo()))) or nil
-  return V.DataBuildNote(GD.Status(clientBuild))
+  return V.DataBuildNote((ns.FS:GameDataStatus()))
 end
 
 -- { AltRow } (the rows the grid shows) -> { text, tooltip = { line } }:

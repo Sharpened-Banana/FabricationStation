@@ -260,10 +260,17 @@ end
 -- Diagnostics:GameDataStatusLine) Settings > Diagnostics. "Not generated" is checked first: the checked-in
 -- generated tables carry no build while GameData_Manual is stamped, so Build() can equal the
 -- client build while the generated tables are still missing.
-function FS:GameDataStatusText()
+-- GameData.Status for this session's game build (GetBuildInfo), and that build; nil status without the runtime.
+-- The one place that reads the client build for GameData (the status text below, the phase-3 knowledge marker).
+function FS:GameDataStatus()
   local gameData = ns.GameData
-  local clientBuild = tonumber((select(2, GetBuildInfo())))
-  local status = gameData and gameData.Status(clientBuild)
+  local clientBuild = type(GetBuildInfo) == "function" and tonumber((select(2, GetBuildInfo()))) or nil
+  local status = gameData and gameData.Status(clientBuild) or nil
+  return status, clientBuild
+end
+
+function FS:GameDataStatusText()
+  local status, clientBuild = self:GameDataStatus()
   if not status or status.missing then return "GameData not generated" end
   if status.outdated then
     return ("GameData is outdated: data build %s, game build %s"):format(tostring(status.build), tostring(clientBuild))

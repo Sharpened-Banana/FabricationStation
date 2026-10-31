@@ -1,19 +1,26 @@
 local _, ns = ...
 
 -- ExpandGrid: a table whose rows can open a detail area under them (the Characters and Planner tabs). Pure parts:
--- Layout (rows + expanded keys -> the list of row and detail entries) and ColumnLayout (width -> hidden columns and
--- the flexible column's width). The frame part (New) is a pooled virtual list in a plain ScrollFrame, as in the
--- Queue, Orders and Customers tabs (preflight row 19: the test stubs have no ScrollBox constructors): only the
--- entries in view are bound to pooled frames, rows and details from two pools.
+-- Layout (rows + expanded keys -> the list of row and detail entries), ColumnLayout (width -> hidden columns and the
+-- flexible column's width) and WrappedHeight (a detail's height for its text at a width). The frame part (New) is a
+-- pooled virtual list in a plain ScrollFrame, as in the Queue, Orders and Customers tabs (preflight row 19: the test
+-- stubs have no ScrollBox constructors): only the entries in view are bound to pooled frames, rows and details from
+-- two pools.
 --
--- Columns: { { key, label, width, flex = true|nil, right = true|nil } } left to right; one column may be flexible
--- (it takes the width the others leave). The columns before it are anchored from the left edge rightwards, the ones
--- after it from the right edge leftwards, and the flexible one between them (both edges). opts.hideOrder lists the
--- column keys (or groups of keys, hidden together) to hide, lowest priority first, while the flexible column would
--- get under opts.minFlex (120 px; phase-2 layout rule). The layout is applied again on every size change.
+-- Columns: { { key, label, width, flex = true|nil, right = true|nil, badge = true|nil, tooltip = text|nil } } left
+-- to right; one column may be flexible (it takes the width the others leave). The columns before it are anchored
+-- from the left edge rightwards, the ones after it from the right edge leftwards, and the flexible one between them
+-- (both edges). opts.hideOrder lists the column keys (or groups of keys, hidden together) to hide, lowest priority
+-- first, while the flexible column would get under opts.minFlex (120 px; phase-2 layout rule). The layout is applied
+-- again on every size change, and the entries are rebuilt whenever the width changes (a detail's height may depend
+-- on it).
+--
+-- A badge column's slot holds two font strings: frame.cells[key] (the label, truncated) and frame.badges[key] (a
+-- right-anchored count such as "+1", set with Grid.SetBadge): the label ends left of the badge, so the badge is never
+-- cut off. Header labels show col.tooltip (else the label) on hover, since a narrow header may truncate.
 --
 -- Everything a hidden or truncated cell held belongs in the row tooltip (grid:SetTooltip); the renderers get the
--- column layout as a third argument, so a row can show a "+N" for what its hidden columns hold.
+-- column layout as a third argument.
 --
 -- Handlers (click, hover, scroll, size) run through ns.FS:Wrap(opts.source or "ExpandGrid", ...).
 local Grid = {}
@@ -24,7 +31,10 @@ local DEFAULT_ROW_HEIGHT, HEADER_HEIGHT = 20, 18
 local PAD, GAP, MIN_FLEX = 6, 4, 120
 local DEFAULT_VIEW_HEIGHT = 400   -- before the scroll frame has a size
 local DETAIL_INDENT = 16
+local BADGE_GAP = 2
+local LINE_HEIGHT, CHAR_WIDTH, DETAIL_PADDING = 14, 6, 4   -- GameFontHighlightSmall, generous per character
 Grid.PAD, Grid.GAP, Grid.MIN_FLEX, Grid.HEADER_HEIGHT = PAD, GAP, MIN_FLEX, HEADER_HEIGHT
+Grid.DETAIL_INSET = PAD + DETAIL_INDENT + PAD   -- detail text width = row width - DETAIL_INSET
 
 local function positive(v)
   return type(v) == "number" and v == v and v > 0 and v ~= math.huge
@@ -34,22 +44,47 @@ end
 -- Pure layout
 ---------------------------------------------------------------------------
 
--- rows = { { key, detailHeight } }, expanded = { [key] = true }, rowHeight (default 20) ->
--- { { key, kind = "row"|"detail", height } }: one entry per row with a key, each followed by its detail entry when
--- the row is expanded and has a positive detailHeight.
-function Grid.Layout(rows, expanded, rowHeight)
+-- A row's detail height at a width: row.detailHeight, a number or fn(row, width) -> number; nil unless positive.
+local function detail_height(row, width)
+  local h = row.detailHeight
+  if type(h) == "function" then h = h(row, width) end
+  return positive(h) and h or nil
+end
+Grid.DetailHeight = detail_height
+
+-- rows = { { key, detailHeight } } (detailHeight a number or fn(row, width)), expanded = { [key] = true },
+-- rowHeight (default 20), width (passed to a detailHeight function) -> { { key, kind = "row"|"detail", height } }:
+-- one entry per row with a key, each followed by its detail entry when the row is expanded and its detail height is
+-- positive.
+function Grid.Layout(rows, expanded, rowHeight, width)
   expanded = type(expanded) == "table" and expanded or {}
   rowHeight = positive(rowHeight) and rowHeight or DEFAULT_ROW_HEIGHT
   local out = {}
   for _, row in ipairs(type(rows) == "table" and rows or {}) do
     if type(row) == "table" and row.key ~= nil then
       out[#out + 1] = { key = row.key, kind = "row", height = rowHeight }
-      if expanded[row.key] and positive(row.detailHeight) then
-        out[#out + 1] = { key = row.key, kind = "detail", height = row.detailHeight }
-      end
+      local h = expanded[row.key] and detail_height(row, width)
+      if h then out[#out + 1] = { key = row.key, kind = "detail", height = h } end
     end
   end
   return out
+end
+
+-- lines (strings, colour codes allowed), width = the grid's width, opts = { lineHeight = 14, charWidth = 6,
+-- inset = DETAIL_INSET, padding = 4 } -> the detail height that shows every line wrapped at that width (an estimate
+-- per character, on the generous side; an unknown width counts one line per string).
+function Grid.WrappedHeight(lines, width, opts)
+  opts = opts or {}
+  local lineHeight, charWidth = opts.lineHeight or LINE_HEIGHT, opts.charWidth or CHAR_WIDTH
+  local perLine
+  if positive(width) then perLine = math.max(1, math.floor((width - (opts.inset or Grid.DETAIL_INSET)) / charWidth)) end
+  local count = 0
+  for _, line in ipairs(type(lines) == "table" and lines or {}) do
+    local text = tostring(line):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+    local _, chars = text:gsub("[^\128-\191]", "")   -- UTF-8 characters
+    count = count + (perLine and math.max(1, math.ceil(chars / perLine)) or 1)
+  end
+  return count * lineHeight + (opts.padding or DETAIL_PADDING)
 end
 
 -- columns (as above), width = content width, opts = { hideOrder = { key | { key, ... } }, minFlex = 120, pad = 6,
@@ -123,6 +158,18 @@ function Grid.PlaceCells(parent, cells, columns, hidden, pad, gap)
   if right then flex:SetPoint("RIGHT", right, "LEFT", -gap, 0) else flex:SetPoint("RIGHT", parent, "RIGHT", -pad, 0) end
 end
 
+-- Sets a badge column's count on a row frame ("" or nil clears it); the label ends BADGE_GAP px left of a shown
+-- badge, at the slot's right edge without one.
+function Grid.SetBadge(frame, key, text)
+  local badge, label = frame.badges and frame.badges[key], frame.cells and frame.cells[key]
+  if not badge or not label then return end
+  text = text ~= nil and tostring(text) or ""
+  badge:SetText(text)
+  label:ClearAllPoints()
+  label:SetPoint("LEFT", frame.slots[key], "LEFT", 0, 0)
+  label:SetPoint("RIGHT", badge, "LEFT", text ~= "" and -BADGE_GAP or 0, 0)
+end
+
 ---------------------------------------------------------------------------
 -- Frames
 ---------------------------------------------------------------------------
@@ -136,12 +183,14 @@ local function layout_key(columns, hidden)
   return table.concat(keys, ",")
 end
 
+-- row.cells = { [columnKey] = text }, row.badges = { [badgeColumnKey] = text }.
 local function default_row_renderer(frame, row)
   local cells = type(row.cells) == "table" and row.cells or {}
   for key, cell in pairs(frame.cells) do
     local text = cells[key]
     cell:SetText(text ~= nil and tostring(text) or "")
   end
+  for key, text in pairs(type(row.badges) == "table" and row.badges or {}) do Grid.SetBadge(frame, key, text) end
 end
 
 local function default_detail_renderer(frame, row)
@@ -153,10 +202,8 @@ local function hide_tooltip()
 end
 
 -- lines: strings or { text, color = { r, g, b } }; the first is the title.
-local function show_tooltip(grid, owner)
-  if not grid.tooltipFn or not owner.data or type(GameTooltip) ~= "table" then return end
-  local lines = grid.tooltipFn(owner.data, grid.layout)
-  if type(lines) ~= "table" or #lines == 0 then return end
+local function show_lines(owner, lines)
+  if type(GameTooltip) ~= "table" or type(lines) ~= "table" or #lines == 0 then return end
   GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
   for i, line in ipairs(lines) do
     local text, c = line, nil
@@ -168,18 +215,43 @@ local function show_tooltip(grid, owner)
   GameTooltip:Show()
 end
 
+local function show_tooltip(grid, owner)
+  if not grid.tooltipFn or not owner.data then return end
+  show_lines(owner, grid.tooltipFn(owner.data, grid.layout))
+end
+
+-- A badge column's slot: a frame (placed like any cell) with the label left and the badge right.
+local function create_slot(row, col)
+  local slot = CreateFrame("Frame", nil, row)
+  slot:SetHeight(row:GetHeight())
+  local label = slot:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  label:SetJustifyH(col.right and "RIGHT" or "LEFT")
+  label:SetWordWrap(false)
+  local badge = slot:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  badge:SetJustifyH("RIGHT")
+  badge:SetWordWrap(false)
+  badge:SetPoint("RIGHT", slot, "RIGHT", 0, 0)
+  row.slots[col.key], row.cells[col.key], row.badges[col.key] = slot, label, badge
+  Grid.SetBadge(row, col.key, "")
+  return slot
+end
+
 local function create_row(grid)
   local row = CreateFrame("Button", nil, grid.child)
   row:SetHeight(grid.rowHeight)
   row.background = row:CreateTexture(nil, "BACKGROUND")
   row.background:SetAllPoints(row)
-  row.cells, row.placed = {}, {}
+  row.cells, row.placed, row.badges, row.slots = {}, {}, {}, {}
   for i, col in ipairs(grid.columns) do
-    local cell = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    cell:SetJustifyH(col.right and "RIGHT" or "LEFT")
-    cell:SetWordWrap(false)
-    row.cells[col.key] = cell
-    row.placed[i] = cell
+    if col.badge then
+      row.placed[i] = create_slot(row, col)
+    else
+      local cell = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      cell:SetJustifyH(col.right and "RIGHT" or "LEFT")
+      cell:SetWordWrap(false)
+      row.cells[col.key] = cell
+      row.placed[i] = cell
+    end
   end
   Grid.PlaceCells(row, row.placed, grid.columns, grid.layout.hidden)
   -- SetScript is deliberate: the row is our own frame.
@@ -193,6 +265,7 @@ end
 
 local function create_detail(grid)
   local detail = CreateFrame("Frame", nil, grid.child)
+  detail:SetClipsChildren(true)   -- a detail taller than its estimate never draws over the rows below
   detail.background = detail:CreateTexture(nil, "BACKGROUND")
   detail.background:SetAllPoints(detail)
   detail.background:SetColorTexture(1, 1, 1, 0.06)
@@ -200,6 +273,7 @@ local function create_detail(grid)
   detail.text:SetPoint("TOPLEFT", detail, "TOPLEFT", PAD + DETAIL_INDENT, -2)
   detail.text:SetPoint("TOPRIGHT", detail, "TOPRIGHT", -PAD, -2)
   detail.text:SetJustifyH("LEFT")
+  detail.text:SetWordWrap(true)
   return detail
 end
 
@@ -213,7 +287,7 @@ end
 local function bind_row(grid, frame, entry)
   local row = grid.byKey[entry.key]
   frame.data, frame.entry = row, entry
-  frame.expandable = positive(row.detailHeight)
+  frame.expandable = detail_height(row, grid.width) ~= nil
   frame.expanded = frame.expandable and grid.expanded[entry.key] == true
   place(grid, frame, entry)
   if frame.expanded then
@@ -222,6 +296,7 @@ local function bind_row(grid, frame, entry)
     frame.background:SetColorTexture(1, 1, 1, entry.rowIndex % 2 == 0 and 0.04 or 0)
   end
   for _, cell in pairs(frame.cells) do cell:SetText("") end
+  for key in pairs(frame.badges) do Grid.SetBadge(frame, key, "") end
   grid.rowRenderer(frame, row, grid.layout)
   frame:Show()
 end
@@ -230,6 +305,7 @@ local function bind_detail(grid, frame, entry)
   local row = grid.byKey[entry.key]
   frame.data, frame.entry = row, entry
   place(grid, frame, entry)
+  frame.text:SetText("")   -- a reused frame never keeps another row's text
   grid.detailRenderer(frame, row, grid.layout)
   frame:Show()
 end
@@ -238,6 +314,31 @@ local function on_mouse_wheel(grid, scroll, delta)
   local range = scroll:GetVerticalScrollRange() or 0
   local position = scroll:GetVerticalScroll() or 0
   scroll:SetVerticalScroll(math.max(0, math.min(range, position - delta * grid.rowHeight * 3)))
+end
+
+local function create_header(grid, frame)
+  local header = CreateFrame("Frame", nil, frame)
+  header:SetHeight(HEADER_HEIGHT)
+  header:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
+  header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
+  grid.header, grid.headers, grid.headerHits = header, {}, {}
+  for i, col in ipairs(grid.columns) do
+    local text = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    text:SetHeight(HEADER_HEIGHT)
+    text:SetJustifyH(col.right and "RIGHT" or "LEFT")
+    text:SetWordWrap(false)
+    text:SetText(col.label or "")
+    grid.headers[i] = text
+    -- A hover area over the label: font strings take no mouse input.
+    local hit = CreateFrame("Frame", nil, header)
+    hit:SetAllPoints(text)
+    hit:EnableMouse(true)
+    hit:SetScript("OnEnter", ns.FS:Wrap(grid.source, function(self)
+      show_lines(self, { col.tooltip or col.label or "" })
+    end))
+    hit:SetScript("OnLeave", hide_tooltip)
+    grid.headerHits[i] = hit
+  end
 end
 
 -- parent: the frame to fill (the grid's own frame is anchored to its edges; re-anchor grid.frame to place it).
@@ -256,20 +357,7 @@ function Grid.New(parent, columns, opts)
   frame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0)
   frame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", 0, 0)
   grid.frame = frame
-
-  local header = CreateFrame("Frame", nil, frame)
-  header:SetHeight(HEADER_HEIGHT)
-  header:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
-  header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
-  grid.header, grid.headers = header, {}
-  for i, col in ipairs(columns) do
-    local text = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    text:SetHeight(HEADER_HEIGHT)
-    text:SetJustifyH(col.right and "RIGHT" or "LEFT")
-    text:SetWordWrap(false)
-    text:SetText(col.label or "")
-    grid.headers[i] = text
-  end
+  create_header(grid, frame)
 
   local scroll = CreateFrame("ScrollFrame", nil, frame)
   scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -(HEADER_HEIGHT + 2))
@@ -302,23 +390,31 @@ function GridMethods:Width()
   return positive(w) and w or nil
 end
 
--- Lays the columns out for the current width (header and every pooled row) when the hidden set changed, then
--- rebinds the rows in view (a renderer may show a "+N" for hidden columns).
+-- Lays the columns out for the current width (header and every pooled row) when the hidden set changed, and rebuilds
+-- the entries whenever the width changed (detail heights may depend on it; the rows in view are bound again).
 function GridMethods:ApplyLayout()
   local width = self:Width()
   local layout = Grid.ColumnLayout(self.columns, width, { hideOrder = self.opts.hideOrder, minFlex = self.opts.minFlex })
   self.layout = layout
   if positive(width) then self.child:SetWidth(width) end
   local key = layout_key(self.columns, layout.hidden)
-  if key == self.layoutKey then return end
-  self.layoutKey = key
-  Grid.PlaceCells(self.header, self.headers, self.columns, layout.hidden)
-  for _, row in ipairs(self.rowPool) do Grid.PlaceCells(row, row.placed, self.columns, layout.hidden) end
-  self:Update()
+  local placed = key ~= self.layoutKey
+  if placed then
+    self.layoutKey = key
+    Grid.PlaceCells(self.header, self.headers, self.columns, layout.hidden)
+    for i, hit in ipairs(self.headerHits) do
+      if layout.hidden[self.columns[i].key] then hit:Hide() else hit:Show() end
+    end
+    for _, row in ipairs(self.rowPool) do Grid.PlaceCells(row, row.placed, self.columns, layout.hidden) end
+  end
+  if placed or width ~= self.width then
+    self.width = width
+    self:Refresh()
+  end
 end
 
--- rows = { { key, detailHeight|nil, ... } }: the rows to show, in order (keys unique). Expanded keys are kept, so a
--- refresh keeps open details open.
+-- rows = { { key, detailHeight|nil (number or fn(row, width)), ... } }: the rows to show, in order (keys unique).
+-- Expanded keys are kept, so a refresh keeps open details open.
 function GridMethods:SetRows(rows)
   self.rows, self.byKey = {}, {}
   for _, row in ipairs(type(rows) == "table" and rows or {}) do
@@ -334,7 +430,7 @@ end
 -- is left as it is.
 function GridMethods:Toggle(key)
   local row = key ~= nil and self.byKey[key] or nil
-  if not row or not positive(row.detailHeight) then return false end
+  if not row or not detail_height(row, self.width) then return false end
   self.expanded[key] = not self.expanded[key] or nil
   self:Refresh()
   return self:IsExpanded(key)
@@ -342,7 +438,7 @@ end
 
 function GridMethods:IsExpanded(key)
   local row = self.byKey[key]
-  return row ~= nil and positive(row.detailHeight) and self.expanded[key] == true
+  return row ~= nil and detail_height(row, self.width) ~= nil and self.expanded[key] == true
 end
 
 function GridMethods:SetRowRenderer(fn)
@@ -360,10 +456,10 @@ function GridMethods:SetTooltip(fn)
   self.tooltipFn = type(fn) == "function" and fn or nil
 end
 
--- Rebuilds the entries (Layout) and their offsets, sizes the scroll child, keeps the scroll position in range and
--- binds the rows in view.
+-- Rebuilds the entries (Layout, at the current width) and their offsets, sizes the scroll child, keeps the scroll
+-- position in range and binds the rows in view.
 function GridMethods:Refresh()
-  local entries = Grid.Layout(self.rows, self.expanded, self.rowHeight)
+  local entries = Grid.Layout(self.rows, self.expanded, self.rowHeight, self.width)
   local top, rowIndex = 0, 0
   for _, entry in ipairs(entries) do
     entry.top = top

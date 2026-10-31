@@ -1,7 +1,8 @@
 -- Characters and Planner view models (UI/Tabs/CharactersView.lua, UI/Tabs/PlannerView.lua): pure strings and flags
 -- over the Alts and Planner getters, on the phase-3 fixture (Aria, Bren, Cato on Silvermoon; Aria is logged in).
 local FILES = { "Modules/Alts.lua", "Modules/AltsCollector.lua", "Modules/Planner.lua", "Modules/PlannerSpec.lua",
-  "UI/Widgets/ExpandGrid.lua", "UI/Tabs/CharactersView.lua", "UI/Tabs/PlannerView.lua" }
+  "UI/Widgets/ExpandGrid.lua", "UI/Tabs/ViewUtil.lua", "UI/Tabs/CharactersView.lua", "UI/Tabs/PlannerView.lua",
+  "UI/OrdersPanel.lua" }   -- OrdersPanel: CompactMoney for the narrow Gold cell
 
 local EM = "\226\128\148"
 
@@ -35,18 +36,21 @@ describe("CharactersView", function()
     assert.same({ "Blacksmithing", "85/100", "2", "17/63 (+4)", "120", "1 · 2h 0m" },
       { p.label, p.skill, p.kp, p.spec, p.moxie, p.cds })
     assert.same({ "400/1000 · 2d 12h", false }, { p.conc, p.concUrgent })
-    assert.same({ "1234g 56s 78c", true, "Older expansions: 1", 1 }, { r.gold, r.isCurrent, r.older, #r.profs })
+    assert.same({ "1234g 56s 78c", "1,234g", true, "Older expansions: 1", 1 },
+      { r.gold, r.goldShort, r.isCurrent, r.older, #r.profs })
     assert.is_nil(r.empty)
   end)
 
+  -- Ruling (fix round 1): ages use ns.UI.FormatAge like every tab ("10d", "2h", "never"); FormatDuration is for
+  -- durations (time to full, cooldowns).
   it("Row for Bren and Cato", function()
     local b = V.Row(A:GetAltRow("Bren-Silvermoon", NOW), NOW)
-    assert.same({ "10d 0h", true, "1000/1000 · Full", true, "3", EM, EM },
+    assert.same({ "10d", true, "1000/1000 · Full", true, "3", EM, EM },
       { b.age, b.staleAge, b.profs[1].conc, b.profs[1].concUrgent, b.profs[1].kp, b.profs[1].spec, b.profs[1].moxie })
     assert.same({ EM, "5s 0c" }, { b.profs[1].cds, b.gold })
     local c = V.Row(A:GetAltRow("Cato-Silvermoon", NOW), NOW)
     assert.equal("Open your professions on this character", c.empty)
-    assert.same({ "2h 0m", false, 0 }, { c.age, c.staleAge, #c.profs })
+    assert.same({ "2h", false, 0 }, { c.age, c.staleAge, #c.profs })
   end)
 
   it("shows unknown concentration, data age and gold as dashes or '?', never 0", function()
@@ -56,7 +60,7 @@ describe("CharactersView", function()
     g["Bren-Silvermoon"].professions[2912].concentration.max = 0      -- unknown (preflight row 11)
     g["Bren-Silvermoon"].professions[2912].skill = nil
     local b = V.Row(A:GetAltRow("Bren-Silvermoon", NOW), NOW)
-    assert.same({ EM, true, "--", EM, false, "?" }, { b.age, b.staleAge, b.gold, b.profs[1].conc,
+    assert.same({ "never", true, "--", EM, false, "?" }, { b.age, b.staleAge, b.gold, b.profs[1].conc,
       b.profs[1].concUrgent, b.profs[1].skill })
   end)
 
@@ -115,21 +119,26 @@ describe("CharactersView", function()
 
   it("fills the cells, colours urgent concentration and stale age, and marks hidden professions with +N", function()
     local aria = V.Row(A:GetAltRow("Aria-Silvermoon", NOW), NOW)
-    local t = V.CellTexts(aria, V.Layout(1400))
+    local t, badges = V.CellTexts(aria, V.Layout(1400))
     assert.same({ "• Aria", "Blacksmithing 85/100", "400/1000 · 2d 12h", "2", "17/63 (+4)", "120", "1 · 2h 0m", "", "",
-      "1234g 56s 78c", "online" }, { plain(t.name), plain(t.prof1), t.conc1, t.kp1, t.spec1, t.moxie1, t.cds1,
+      "1,234g", "online" }, { plain(t.name), plain(t.prof1), t.conc1, t.kp1, t.spec1, t.moxie1, t.cds1,
       t.prof2, t.conc2, plain(t.gold), plain(t.age) })
+    assert.same({}, badges)
     local bren = V.Row(A:GetAltRow("Bren-Silvermoon", NOW), NOW)
     t = V.CellTexts(bren, V.Layout(516))
     assert.is_truthy(t.conc1:find("|cffff4040", 1, true))      -- full: red
     assert.is_truthy(t.age:find("|cffff8000", 1, true))        -- stale: orange
     assert.equal("Bren", plain(t.name))
-    -- A second profession while slot 2 is hidden: "+1" on slot 1; with three professions and both slots, "+1" on 2.
+    -- A second profession while slot 2 is hidden: "+1" badge on slot 1 (its own font string, ExpandGrid.SetBadge);
+    -- with three professions and both slots, "+1" on slot 2. The label itself never carries the count.
     bren.profs[2] = bren.profs[1]
-    assert.equal("Herbalism 50/100 +1", plain(V.CellTexts(bren, V.Layout(516)).prof1))
-    assert.equal("Herbalism 50/100", plain(V.CellTexts(bren, V.Layout(1400)).prof1))
+    local cells, b = V.CellTexts(bren, V.Layout(516))
+    assert.same({ "Herbalism 50/100", { prof1 = "+1" } }, { plain(cells.prof1), b })
+    cells, b = V.CellTexts(bren, V.Layout(1400))
+    assert.same({ "Herbalism 50/100", {} }, { plain(cells.prof1), b })
     bren.profs[3] = bren.profs[1]
-    assert.equal("Herbalism 50/100 +1", plain(V.CellTexts(bren, V.Layout(1400)).prof2))
+    cells, b = V.CellTexts(bren, V.Layout(1400))
+    assert.same({ "Herbalism 50/100", { prof2 = "+1" } }, { plain(cells.prof2), b })
     assert.same({ 1, 2 }, { V.MoreCount(bren, V.Layout(1400)), V.MoreCount(bren, V.Layout(516)) })
     local cato = V.Row(A:GetAltRow("Cato-Silvermoon", NOW), NOW)
     assert.equal("Open your professions on this character", plain(V.CellTexts(cato, V.Layout(516)).prof1))
@@ -151,7 +160,13 @@ describe("CharactersView", function()
       assert.is_truthy(all:find(want, 1, true), want)
     end
     all = plain(table.concat(V.TooltipLines(V.Row(A:GetAltRow("Bren-Silvermoon", NOW), NOW)), "\n"))
-    assert.is_truthy(all:find("Last seen: 10d 0h ago (stale)", 1, true))
+    assert.is_truthy(all:find("Last seen: 10d ago (stale)", 1, true))
+    assert.is_truthy(all:find("Gold: 5s 0c", 1, true))   -- the full value; the cell is compact
+    -- The soonest pending cooldown when some are ready.
+    local cds = ns.FS.db.global.characters["Aria-Silvermoon"].professions[2907].cooldowns
+    cds[1002] = { readyAt = NOW - 10, charges = 0, maxCharges = 0, time = NOW }
+    all = plain(table.concat(V.TooltipLines(V.Row(A:GetAltRow("Aria-Silvermoon", NOW), NOW)), "\n"))
+    assert.is_truthy(all:find("Cooldowns: 2 · 1 ready, next in 2h 0m", 1, true))
     all = plain(table.concat(V.TooltipLines(V.Row(A:GetAltRow("Cato-Silvermoon", NOW), NOW)), "\n"))
     assert.is_truthy(all:find("Open your professions on this character", 1, true))
   end)
@@ -188,6 +203,9 @@ describe("CharactersView", function()
     local h = V2.Header(A2:GetOverview())
     assert.equal("Characters: 3 · Gold: 1234g 61s 78c · Knowledge left: 5 KP · data build 70575 (outdated)", h.text)
     assert.is_truthy(table.concat(h.tooltip, "\n"):find("data build 70575 (outdated)", 1, true))
+    -- The row tooltip marks the knowledge count too.
+    local all = table.concat(V2.TooltipLines(V2.Row(A2:GetAltRow("Aria-Silvermoon", NOW), NOW)), "\n")
+    assert.is_truthy(all:find("Knowledge left this week: 2 (data build 70575 (outdated))", 1, true))
   end)
 
   it("says when Alts is turned off", function()
@@ -223,6 +241,9 @@ describe("PlannerView", function()
     l = PV.ConcentrationLines(A:GetPools(NOW), NOW, 2)
     assert.same({ { "Bren-Silvermoon Herbalism", "Full", urgent = true }, { "+2 more", "", urgent = false } }, l)
     assert.same({}, PV.ConcentrationLines({}, NOW, 6))
+    -- Never more than max lines: when only one fits, the "+K more" line alone; max < 1: nothing.
+    assert.same({ { "+3 more", "", urgent = false } }, PV.ConcentrationLines(A:GetPools(NOW), NOW, 1))
+    assert.same({}, PV.ConcentrationLines(A:GetPools(NOW), NOW, 0))
     assert.equal(3, #PV.ConcentrationLines(A:GetPools(NOW), NOW))   -- no max: every pool
   end)
 
@@ -245,13 +266,16 @@ describe("PlannerView", function()
     g["Aria-Silvermoon"].knowledgeWeekly.quests[93530] = nil
     l = PV.KnowledgeLines(PL:GetKnowledgeChecklist(NOW), 2)
     assert.same({ { "Total", "5 KP" }, { "+2 more", "" } }, l)
+    assert.same({ { "+2 more", "" } }, PV.KnowledgeLines(PL:GetKnowledgeChecklist(NOW), 1))
+    assert.same({}, PV.KnowledgeLines(PL:GetKnowledgeChecklist(NOW), 0))
     assert.same({}, PV.KnowledgeLines({}, 6))
   end)
 
   it("KnowledgeLines marks the total from an outdated data build", function()
     local ns2, _, PL2 = boot({ GetBuildInfo = function() return "12.2.0", "70700", "Nov 1 2026", 120200 end })
     local l = ns2.UI.PlannerView.KnowledgeLines(PL2:GetKnowledgeChecklist(NOW), 6)
-    assert.same({ "Total", "5 KP · data build 70575 (outdated)" }, l[1])
+    assert.same({ "Total", "5 KP (outdated)",
+      tooltip = "Knowledge data build 70575 (outdated): the game has changed since, so counts may be wrong" }, l[1])
   end)
 
   it("has one message per status", function()
