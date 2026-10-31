@@ -56,6 +56,7 @@ Modules\Social\GuildNative.lua
 Modules\Social\GuildDirectory.lua
 Modules\Social\GuildOptions.lua
 Modules\Social\ChatMatcher.lua
+Modules\Social\ChatScan.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua
@@ -82,3 +83,4 @@ UI\OrdersWidgets.lua
 UI\OrdersOptions.lua
 UI\AltsTooltips.lua
 UI\AltsDashboard.lua
+UI\ChatToast.lua

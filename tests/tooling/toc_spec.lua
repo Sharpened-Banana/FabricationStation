@@ -46,12 +46,25 @@ describe("FabricationStation.toc", function()
     assert.is_true(at["UI/OrdersOptions.lua"] < at["UI/AltsTooltips.lua"])
   end)
   -- Phase 3 Task 15: the Dashboard widget registrar last, after the tooltip registrar.
-  it("loads UI/AltsDashboard.lua last, after UI/AltsTooltips.lua", function()
+  it("loads UI/AltsDashboard.lua after UI/AltsTooltips.lua", function()
     local at = {}
     for i, f in ipairs(toc.files) do at[f] = i end
     assert.is_truthy(at["UI/AltsDashboard.lua"])
     assert.is_true(at["UI/AltsTooltips.lua"] < at["UI/AltsDashboard.lua"])
-    assert.equal(#toc.files, at["UI/AltsDashboard.lua"])
+  end)
+  -- Phase 4 Task 11 (preflight row 33): the chat scanner follows the matcher, and its toast registrar goes after the
+  -- phase-3 UI (the Alts Dashboard is no longer the last file).
+  it("loads the phase-4 chat scanner after the matcher and the toasts after UI/AltsDashboard.lua", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    for _, f in ipairs({ "Modules/Social/ChatMatcher.lua", "Modules/Social/ChatScan.lua", "UI/ChatToast.lua" }) do
+      assert.is_truthy(at[f], f)
+    end
+    assert.is_true(at["Modules/Social/Gate.lua"] < at["Modules/Social/ChatScan.lua"])
+    assert.is_true(at["Modules/Social/ChatMatcher.lua"] < at["Modules/Social/ChatScan.lua"])
+    assert.is_true(at["Modules/PlannerSpec.lua"] < at["Modules/Social/ChatScan.lua"])
+    assert.is_true(at["Modules/Social/ChatScan.lua"] < at["UI/Util.lua"])
+    assert.is_true(at["UI/AltsDashboard.lua"] < at["UI/ChatToast.lua"])
   end)
   -- Phase 3 (Task 16, preflight row 3): the phase-3 data files after Data/OrderRewards.lua and before Math, the
   -- phase-3 modules after Modules/Ledger.lua in dependency order, all before the UI.

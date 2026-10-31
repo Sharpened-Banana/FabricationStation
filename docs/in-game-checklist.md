@@ -851,6 +851,27 @@ channel: once Task 11 lands, ChatScan should name both. Also check the colour wr
 handles both `|cffRRGGBB...|r` and the named form `|cnIQ4:...|r`; if the client prints another form, `plain` or `link` will
 keep junk and `extractLinks`/`normalize` need that form added.
 
+P4-20. **Chat channel ids and secret chat (Task 11, ChatScan).** Temporarily run
+`/run local f=CreateFrame("Frame");f:RegisterEvent("CHAT_MSG_CHANNEL");f:SetScript("OnEvent",function(_,_,_,_,_,_,_,z,_,b) print(z,b) end)`
+(`/reload` removes it), then speak in General, Trade and Trade (Services) in a capital and note each `zoneChannelID`
+and channel base name. Fill `ChatScan.ZONE_CHANNEL_KIND` in `Modules/Social/ChatScan.lua` with
+`[<id>] = "general"|"trade"|"services"` (it ships empty, so only the English base-name match works until then). Then
+post `LF crafter` plus an item link of something you can craft in Trade: a toast should appear once, and again only after
+the repeat window ("Repeat window" in `/fs settings` > Chat requests) even if you repeat it in both channels. Inside a
+dungeon or other instance chat lines arrive as secret values: confirm no Lua error and no toast there
+(the error list in `/fs settings` > Diagnostics stays empty), and that scanning works again after leaving.
+
+P4-21. **Whisper from a toast click (preflight row 42).** Click Whisper on a toast: the chat box opens on
+`/w <name>` with "Hi! I can craft <link>. Send me a crafting order?" typed in and nothing is sent. Press Enter, once in
+the open world and once inside an instance. Expected: it sends with no "blocked" or "forbidden" message. A cross-realm
+sender must open the whisper as `Name-Realm`; report if the box opens on the wrong name or the link is missing.
+
+P4-22. **Non-English clients (Task 11).** On a non-English client the channel base name is localized, so the
+`L["trade"]`, `L["services"]` and `L["general"]` words (`Locales/enUS.lua`) only match once translated; until
+`ZONE_CHANNEL_KIND` is filled (P4-20) a German, French or other client sees no Trade toasts. Report the base names the
+client prints in P4-20 so the words or ids can be added. Also check that a name with a realm suffix and one without
+both reach the game's ignore list: ignore a player with `/ignore Name`, have them post a request, no toast appears.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

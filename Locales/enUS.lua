@@ -118,3 +118,39 @@ L["usage: /fs guild [selftest]"] = true
 L["(trimmed to fit: a profile is at the size limit)"] = true
 L["Read-only: the saved data is from a newer version of the addon"] = true
 L["guild selftest: building the profile, one moment..."] = true
+
+-- Chat request scanner and toasts (Task 11)
+-- The three lower-case words are matched against the lower-cased base name of a chat channel ("Trade (Services)"
+-- contains both "services" and "trade"); a translation is the channel's name in that client language.
+L["services"] = true
+L["trade"] = true
+L["general"] = true
+L["Trade"] = true
+L["Services"] = true
+L["General"] = true
+L["Chat requests"] = true
+L["Watches public chat for people asking for something one of your characters can craft and shows a small toast. Nothing is ever sent for you: the toast's Whisper button only opens the chat box. Turn the whole feature off under Modules."] = true
+L["Channels to watch"] = true
+L["Request phrases"] = true
+L["One phrase per line. A chat line containing one of them (or \"WTB\" with an item link) counts as a request."] = true
+L["Ignored phrases"] = true
+L["One phrase per line. A chat line containing one of them is never a request, for example crafters advertising."] = true
+L["Ignored players"] = true
+L["One character per line (Name or Name-Realm). Their requests never show a toast."] = true
+L["Repeat window (seconds)"] = true
+L["The same person asking for the same recipe again within this time shows no new toast."] = true
+L["Toast time (seconds)"] = true
+L["How long a toast stays before it hides."] = true
+L["Play a sound"] = true
+L["Plays the whisper sound when a toast appears."] = true
+L["Match recipe names"] = true
+L["Also recognise a request that names a recipe you know without linking it."] = true
+L["Whisper text"] = true
+L["Typed into the chat box when you click Whisper. Must contain %s once; it is replaced by the item link or recipe name."] = true
+L["Template must contain %s once"] = true
+L["Hi! I can craft %s. Send me a crafting order?"] = true
+L["Whisper"] = true
+L["Ignore"] = true
+L["Dismiss"] = true
+L["You: %s on %s"] = true
+L["no price"] = true
