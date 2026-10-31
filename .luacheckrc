@@ -13,7 +13,9 @@ stds.wow = {
     "debugstack", "debugprofilestop", "geterrorhandler", "date", "time", "wipe", "tinsert", "tremove", "strsplit", "strtrim",
     "GetInboxInvoiceInfo", "GetInboxHeaderInfo", "TakeInboxMoney", "AutoLootMailItem", "AUCTION_SOLD_MAIL_SUBJECT",
     "ScrollUtil", "PlaySound", "SOUNDKIT", "C_QuestLog", "C_Spell", "GetCurrentRegion", "canaccessvalue",
-    "RAID_CLASS_COLORS" },
+    "RAID_CLASS_COLORS", "C_ChatInfo", "C_RestrictedActions", "C_EncodingUtil", "C_GuildInfo", "GetGuildInfo",
+    "IsInGuild", "GetGuildRecipeInfoPostQuery", "GetGuildRecipeMember", "GetNumGuildMembers", "Ambiguate",
+    "issecretvalue", "ChatFrameUtil", "C_FriendList", "IsInInstance", "InCombatLockdown" },
 }
 files["Math/"] = { std = "lua51" }
 files["Data/"] = { std = "lua51" }

@@ -725,6 +725,13 @@ P4-1. **Long provider lines in the profession panel.** The panel's provider sect
 and that hovering the row shows the full text in the tooltip. If the client still wraps, check
 `SetWordWrap(false)` / `SetMaxLines(1)` on the row font strings in `UI/ProfessionPanel.lua`.
 
+P4-2. **Realm flag of the chat gate.** In a capital city on a normal realm, with no instance or restriction active, run
+`/run print(C_ChatInfo.AreOutgoingAddonChatMessagesRestricted(), C_ChatInfo.InChatMessagingLockdown())`. If the first
+value is `true` there while addon messages still arrive (for example a guildmate's FabStn sync), leave
+`Gate.USE_REALM_FLAG = false` in `Modules/Social/Gate.lua` (the shipped value). If the first value is `false` in a city
+and `true` inside a dungeon or raid, setting `USE_REALM_FLAG = true` is safe and makes Comm stop earlier; report the
+readings either way.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in
