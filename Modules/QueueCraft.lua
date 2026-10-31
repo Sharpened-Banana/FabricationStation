@@ -128,7 +128,15 @@ export = function(wait, onRetry)
     waitingNames = w
     QueueCraft:RegisterEvent("GET_ITEM_INFO_RECEIVED", ns.FS:Wrap("QueueCraft:ShoppingRetry", on_item_info))
   end
-  for _, itemID in ipairs(uncached) do C_Item.RequestLoadItemDataByID(itemID) end
+  -- Each request is pcall'd (as the board's item loads are): one that errors is logged and its item dropped from the
+  -- wait (it is skipped in the list), and `requesting` always ends, so the wait can complete for the other names.
+  for _, itemID in ipairs(uncached) do
+    local ok, err = pcall(C_Item.RequestLoadItemDataByID, itemID)
+    if not ok then
+      ns.FS:LogError("Queue:ShoppingList", "RequestLoadItemDataByID(" .. tostring(itemID) .. "): " .. tostring(err))
+      if w then w.items[itemID] = nil end
+    end
+  end
   local function stop_waiting()
     if w and waitingNames == w then
       waitingNames = nil
@@ -212,7 +220,8 @@ end
 -- made dearer is still crafted with rather than reported missing); it counts the same holdings as `have`
 -- below (Queue:CraftEvaluateOpts: no warband while queueUseWarband is off).
 local function one_craft(entry)
-  local result = recipes():Evaluate(entry.recipeID, entry.charKey, Queue:CraftEvaluateOpts(entry))
+  local opts = Queue:CraftEvaluateOpts(entry)
+  local result = recipes():Evaluate(entry.recipeID, entry.charKey, opts)
   if not result then return nil, {} end
   local need = {}
   for _, a in ipairs(result.allocation or {}) do
@@ -221,7 +230,7 @@ local function one_craft(entry)
   for itemID, n in pairs(entry.providedReagents or {}) do
     if need[itemID] then need[itemID] = need[itemID] - n end
   end
-  local useWarband = recipes():GetSetting("queueUseWarband")
+  local useWarband = not opts.excludeWarband   -- the same warband rule the evaluation used
   local missing = {}
   for itemID, n in pairs(need) do
     if n > 0 then

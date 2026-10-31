@@ -52,6 +52,23 @@ describe("H1-5b shopping list waits for item names", function()
     assert.equals(2, #rec.lists); assert.equals(3, #rec.lists[2].searchStrings)
   end)
 
+  it("survives a load request that errors: still exports, and retries once the other names arrive", function()
+    local request = _G.C_Item.RequestLoadItemDataByID
+    _G.C_Item.RequestLoadItemDataByID = function(itemID)
+      if itemID == 2001 then error("request boom") end
+      return request(itemID)
+    end
+    local retried
+    local ok, info
+    assert.has_no.errors(function() ok, info = Q:ExportShoppingList(function(...) retried = { ... } end) end)
+    assert.is_true(ok); assert.same({ added = 0, skipped = 3, loading = true }, info)
+    arrive(1001, "Ore"); arrive(3001, "Flux")
+    assert.equals(1, #rec.lists); assert.equals(2, #rec.lists[1].searchStrings)
+    assert.same({ true, { added = 2, skipped = 1 } }, retried)
+    local errors = ns.FS.db.global.diagnostics.errors
+    assert.equals("Queue:ShoppingList", errors[#errors].source)
+  end)
+
   it("drops an item the client cannot load and still makes the list", function()
     local retried
     Q:ExportShoppingList(function(...) retried = { ... } end)
