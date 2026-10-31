@@ -46,6 +46,10 @@ curl -sSfL -o "$S/release.sh" https://raw.githubusercontent.com/BigWigsMods/pack
 bash "$S/release.sh" -t "$PWD" -d -z -e -l -r "$S/out"
 ```
 
+`release.sh` needs bash 4.3 or newer. macOS ships bash 3.2 and the script stops at once with "bash version 4.3 or
+above is required"; install a current bash (for example `brew install bash`) and run the script with it
+(`"$(brew --prefix)/bin/bash" "$S/release.sh" ...`). Linux and the CI runner already have it.
+
 `-d` skips the upload and the changelog commit, `-z` skips the zip, `-e` skips the svn externals (svn is not needed
 locally) and `-l` skips localization (CurseForge only). Then check the package tree:
 
