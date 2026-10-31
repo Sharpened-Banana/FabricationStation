@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- Alts: what every character of the account has, read from saved data (design rule 1: no profession window needed).
 -- This file holds the module object, its settings and its options group; Modules/AltsCollector.lua (the same module
@@ -627,7 +628,7 @@ function Alts:HoldingsLines(itemID)
   if row.warband and row.warband > 0 then
     local text = tostring(row.warband)
     if row.warbandStale then text = text .. " (" .. format_age(row.warbandAgeSeconds) .. " old)" end
-    lines[#lines + 1] = { "Warband bank", text }
+    lines[#lines + 1] = { L["Warband bank"], text }
   end
   local total = tostring(row.total) .. (row.partial and "+" or "")
   if row.warband == nil then total = total .. " (warband not scanned)" end
@@ -664,18 +665,18 @@ end
 -- the options are shown disabled then so the user can see why.
 function Alts.BuildOptions()
   return {
-    type = "group", name = "Characters", order = 50,
+    type = "group", name = L["Characters"], order = 50,
     args = {
       tooltipHoldings = {
-        type = "toggle", order = 1, width = "full", name = "Show what your characters hold in item tooltips",
+        type = "toggle", order = 1, width = "full", name = L["Show what your characters hold in item tooltips"],
         disabled = read_only,
         get = function() return Alts:Settings().tooltipHoldings end,
         set = function(_, value) Alts:Settings().tooltipHoldings = value and true or false; changed() end,
       },
-      tooltipMaxChars = range_option("tooltipMaxChars", 2, "Characters listed in a tooltip",
-        "How many characters an item tooltip lists by name."),
-      staleDays = range_option("staleDays", 3, "Days before a character's data counts as old",
-        "Older data is still shown, marked as old."),
+      tooltipMaxChars = range_option("tooltipMaxChars", 2, L["Characters listed in a tooltip"],
+        L["How many characters an item tooltip lists by name."]),
+      staleDays = range_option("staleDays", 3, L["Days before a character's data counts as old"],
+        L["Older data is still shown, marked as old."]),
     },
   }
 end

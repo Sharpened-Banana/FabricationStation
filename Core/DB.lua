@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- schemaVersion is deliberately not a default: AceDB strips values equal to their defaults on
 -- logout, so a defaulted version would read back as current after an upgrade and skip migrations.
@@ -52,7 +53,7 @@ function ns.FS:InitDB()
     -- Read-only session on the copy: pending errors stay in memory and LogError/SetModuleEnabled
     -- skip the db.
     self.dbIsNewer = true
-    print("FabricationStation: saved data is from a newer version; nothing was changed.")
+    print(L["FabricationStation: saved data is from a newer version; nothing was changed."])
     return
   end
 

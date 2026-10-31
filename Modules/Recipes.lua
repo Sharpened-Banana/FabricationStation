@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- Recipes: crafting settings, per-character calibration, recipe evaluation (Evaluate, PredictLive) and
 -- lookups (WhoCanCraft, FindRecipesForItem). A calibration records what the game
@@ -108,15 +109,15 @@ end
 
 local function build_options()
   return {
-    type = "group", name = "Crafting", order = 30,
+    type = "group", name = L["Crafting"], order = 30,
     args = {
-      staleCalibrationDays = range(1, "staleCalibrationDays", "Treat a recipe calibration as old after (days)", 1, 60),
-      queueUseWarband = toggle(2, "queueUseWarband", "Use reagents in the warband bank for the queue"),
-      tooltipCraftCost = toggle(3, "tooltipCraftCost", "Show the cost to craft in item tooltips"),
+      staleCalibrationDays = range(1, "staleCalibrationDays", L["Treat a recipe calibration as old after (days)"], 1, 60),
+      queueUseWarband = toggle(2, "queueUseWarband", L["Use reagents in the warband bank for the queue"]),
+      tooltipCraftCost = toggle(3, "tooltipCraftCost", L["Show the cost to craft in item tooltips"]),
       applyWritesBlizzardSlots = toggle(4, "applyWritesBlizzardSlots",
-        "Apply fills the reagent slots in Blizzard's crafting window"),
-      selfCheck = toggle(5, "selfCheck", "Check predictions against the game while the profession window is open"),
-      scanBudgetMs = range(6, "scanBudgetMs", "Recipe scan time per frame (ms)", 1, 16),
+        L["Apply fills the reagent slots in Blizzard's crafting window"]),
+      selfCheck = toggle(5, "selfCheck", L["Check predictions against the game while the profession window is open"]),
+      scanBudgetMs = range(6, "scanBudgetMs", L["Recipe scan time per frame (ms)"], 1, 16),
     },
   }
 end

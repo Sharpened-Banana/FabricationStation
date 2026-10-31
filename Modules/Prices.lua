@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- Prices: the single source of item prices. Lookup order is manual override, Auctionator auction
 -- price (with its age), Auctionator vendor price, then nothing. This is the only file that touches
@@ -14,7 +15,7 @@ local DEFAULT_STALE_DAYS = 3
 local version = 1               -- price version; starts at 1 every session
 local apiErrorLogged = {}       -- [function name] = true once that function's first failure is logged
 local draft = { item = "", price = "" }  -- the override editor's inputs
-local listGroup = { type = "group", name = "Manual prices", order = 50, inline = true, args = {} }
+local listGroup = { type = "group", name = L["Manual prices"], order = 50, inline = true, args = {} }
 
 ---------------------------------------------------------------------------
 -- Helpers
@@ -230,7 +231,7 @@ function Prices:RebuildOverrideArgs()
   for i, itemID in ipairs(ids) do
     args["item" .. itemID] = { type = "description", order = i * 2, width = "double", name = row_name(itemID) }
     args["remove" .. itemID] = {
-      type = "execute", order = i * 2 + 1, width = "half", name = "Remove",
+      type = "execute", order = i * 2 + 1, width = "half", name = L["Remove"],
       func = function() self:SetOverride(itemID, nil) end,
     }
   end
@@ -243,11 +244,11 @@ local function add_override()
   local itemID = UI and UI.ParseItemID and UI.ParseItemID(draft.item)
   local copper = UI and UI.ParseMoney and UI.ParseMoney(draft.price)
   if not itemID then
-    print("FabricationStation: enter an item ID or paste an item link.")
+    print(L["FabricationStation: enter an item ID or paste an item link."])
   elseif not copper then
-    print("FabricationStation: enter a price such as 12g 50s.")
+    print(L["FabricationStation: enter a price such as 12g 50s."])
   elseif not Prices:SetOverride(itemID, copper) then
-    print("FabricationStation: could not save that price.")
+    print(L["FabricationStation: could not save that price."])
   else
     draft.item, draft.price = "", ""
     ns.FS:RegisterOptions("prices", Prices.optionsGroup)
@@ -256,17 +257,17 @@ end
 
 function Prices:OnInitialize()
   self.optionsGroup = {
-    type = "group", name = "Prices", order = 20,
+    type = "group", name = L["Prices"], order = 20,
     args = {
       status = {
         type = "description", order = 1, fontSize = "medium",
         name = function()
-          return Prices:HasSource() and "Auctionator: connected"
-            or "Auctionator: not found — only manual prices are used"
+          return Prices:HasSource() and L["Auctionator: connected"]
+            or L["Auctionator: not found — only manual prices are used"]
         end,
       },
       staleAfterDays = {
-        type = "range", order = 2, name = "Treat auction prices as stale after (days)",
+        type = "range", order = 2, name = L["Treat auction prices as stale after (days)"],
         min = 1, max = 14, step = 1,
         get = function()
           local s = settings()
@@ -277,7 +278,7 @@ function Prices:OnInitialize()
         end,
       },
       ownedReagentsFree = {
-        type = "toggle", order = 3, width = "full", name = "Cost reagents I already own at zero",
+        type = "toggle", order = 3, width = "full", name = L["Cost reagents I already own at zero"],
         get = function()
           local s = settings()
           return s and s.costing and s.costing.ownedReagentsFree or false
@@ -286,18 +287,18 @@ function Prices:OnInitialize()
           set_setting("costing", "ownedReagentsFree", value and true or false)
         end,
       },
-      overridesHeader = { type = "header", order = 10, name = "Manual prices" },
+      overridesHeader = { type = "header", order = 10, name = L["Manual prices"] },
       newItem = {
-        type = "input", order = 11, name = "Item ID or link",
+        type = "input", order = 11, name = L["Item ID or link"],
         get = function() return draft.item end,
         set = function(_, value) draft.item = value or "" end,
       },
       newPrice = {
-        type = "input", order = 12, name = "Price (e.g. 12g 50s)",
+        type = "input", order = 12, name = L["Price (e.g. 12g 50s)"],
         get = function() return draft.price end,
         set = function(_, value) draft.price = value or "" end,
       },
-      add = { type = "execute", order = 13, name = "Add", func = add_override },
+      add = { type = "execute", order = 13, name = L["Add"], func = add_override },
       list = listGroup,
     },
   }

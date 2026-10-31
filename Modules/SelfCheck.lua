@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- SelfCheck: while a profession window is open, compares the addon's prediction for the reagents Blizzard has
 -- allocated (Recipes:PredictLive) with the game's own numbers (Scanner:GetLiveOperationInfo) and logs every
@@ -166,10 +167,10 @@ local function show_status(count)
   if count == nil then
     panel:SetCheckLine(nil)
   elseif count == 0 then
-    panel:SetCheckLine("Math check: OK", "good")
+    panel:SetCheckLine(L["Math check: OK"], "good")
   else
     local noun = count == 1 and "mismatch" or "mismatches"
-    panel:SetCheckLine(("Math check: %d %s (see Settings %s Diagnostics)"):format(count, noun, RSAQUO), "warn")
+    panel:SetCheckLine((L["Math check: %d %s (see Settings %s Diagnostics)"]):format(count, noun, RSAQUO), "warn")
   end
 end
 

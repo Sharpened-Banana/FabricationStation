@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- AltsCollector: event-driven snapshot of the logged-in character's phase-3 data, on the Alts module object.
 --   knowledgeWeekly = { time, quests = { [questID] = true } }   completed quests of the Knowledge sources of the
@@ -335,7 +336,7 @@ end
 function Alts:DebugKnowledge()
   local k = knowledge()
   if not (k and type(k.sources) == "table") then
-    print("FabricationStation: no knowledge data loaded")
+    print(L["FabricationStation: no knowledge data loaded"])
     return
   end
   local c = char_record(ns.FS:CharKey())
@@ -351,7 +352,7 @@ function Alts:DebugKnowledge()
       shown = shown + 1
     end
   end
-  if shown == 0 then print("FabricationStation: no knowledge sources for this character's professions") end
+  if shown == 0 then print(L["FabricationStation: no knowledge sources for this character's professions"]) end
 end
 
 ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- Orders: crafting orders on the board. This part turns Blizzard's CraftingOrderInfo into an OrderInput (plain
 -- values, names normalized, customer-provided reagents summed, expiry on the ns.FS:Now() clock) and values NPC
@@ -300,11 +301,11 @@ end
 
 Orders.RISKS = { "noMatsLowTip", "unreachableQuality", "noConcentration", "expiringSoon", "blockedCustomer" }
 Orders.RISK_LABELS = {
-  noMatsLowTip = "No mats, low tip",
-  unreachableQuality = "Can't reach min quality",
-  noConcentration = "Not enough concentration",
-  expiringSoon = "Expiring soon",
-  blockedCustomer = "Blocked customer",
+  noMatsLowTip = L["No mats, low tip"],
+  unreachableQuality = L["Can't reach min quality"],
+  noConcentration = L["Not enough concentration"],
+  expiringSoon = L["Expiring soon"],
+  blockedCustomer = L["Blocked customer"],
 }
 
 local function skill_line_of(recipeID)
@@ -1051,8 +1052,7 @@ function Orders:InstallBoardHook()
     if not self.hookMissingReported then
       self.hookMissingReported = true
       ns.FS:LogError("Orders", HOOK_MISSING)
-      print("FabricationStation: Orders could not attach to the crafting order board (ShowOrders not found); "
-        .. "orders are not scored there. See /fs settings > Diagnostics.")
+      print(L["FabricationStation: Orders could not attach to the crafting order board (ShowOrders not found); orders are not scored there. See /fs settings > Diagnostics."])
     end
     return false
   end

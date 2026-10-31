@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- Planner: what to do next across every character, from saved data (design rule 1: no profession window needed).
 -- This file holds the module object, its settings and options group, the weekly knowledge checklist, the missing
@@ -289,7 +290,7 @@ function Planner:AnnounceCapWarnings(now)
   if status ~= "ok" then return end
   announced = true
   local A = alts()
-  for _, w in ipairs(warnings) do print("FabricationStation: " .. warning_text(A, w, now)) end
+  for _, w in ipairs(warnings) do print(L["FabricationStation: %s"]:format(warning_text(A, w, now))) end
 end
 
 local CAPWARN_KEY = "planner.capwarn"
@@ -337,20 +338,20 @@ end
 -- the settings when it is shown again.
 function Planner.BuildOptions()
   return {
-    type = "group", name = "Planner", order = 60,
+    type = "group", name = L["Planner"], order = 60,
     args = {
       capWarnChat = {
-        type = "toggle", order = 1, width = "full", name = "Warn in chat when concentration is about to be full",
+        type = "toggle", order = 1, width = "full", name = L["Warn in chat when concentration is about to be full"],
         disabled = read_only,
         get = function() return Planner:Settings().capWarnChat end,
         set = function(_, value) Planner:Settings().capWarnChat = value and true or false end,
       },
-      capWarnHours = range_option("capWarnHours", 2, "Hours before full to warn",
-        "Concentration that will be full within this many hours is listed as a warning."),
-      maxCraftsPerRecipe = range_option("maxCraftsPerRecipe", 3, "Most crafts of one recipe in the plan",
-        "The concentration plan suggests at most this many crafts of each recipe (0 = no limit)."),
-      specTopRecipes = range_option("specTopRecipes", 4, "Recipes compared for spec advice",
-        "How many of the most profitable recipes are recalculated for each specialization choice."),
+      capWarnHours = range_option("capWarnHours", 2, L["Hours before full to warn"],
+        L["Concentration that will be full within this many hours is listed as a warning."]),
+      maxCraftsPerRecipe = range_option("maxCraftsPerRecipe", 3, L["Most crafts of one recipe in the plan"],
+        L["The concentration plan suggests at most this many crafts of each recipe (0 = no limit)."]),
+      specTopRecipes = range_option("specTopRecipes", 4, L["Recipes compared for spec advice"],
+        L["How many of the most profitable recipes are recalculated for each specialization choice."]),
     },
   }
 end

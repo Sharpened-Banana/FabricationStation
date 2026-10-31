@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- Diagnostics: the error log, quality-prediction mismatches (logged by phase 1b's self-check) and
 -- recipe captures (/fs capture), which tools/export_captures.lua turns into test fixtures.
@@ -18,10 +19,10 @@ local LIST_LINES = 10  -- entries shown per list in the options
 local session = { mismatches = {}, captures = { list = {} } }
 
 local CAPTURE_MESSAGES = {
-  noProfessionFrame = "FabricationStation: open a profession, select a recipe, then type /fs capture.",
-  noRecipe = "FabricationStation: open a profession, select a recipe, then type /fs capture.",
-  notReady = "FabricationStation: profession data is still loading (or this is someone else's profession).",
-  apiError = "FabricationStation: capture failed; see Settings > Diagnostics.",
+  noProfessionFrame = L["FabricationStation: open a profession, select a recipe, then type /fs capture."],
+  noRecipe = L["FabricationStation: open a profession, select a recipe, then type /fs capture."],
+  notReady = L["FabricationStation: profession data is still loading (or this is someone else's profession)."],
+  apiError = L["FabricationStation: capture failed; see Settings > Diagnostics."],
 }
 
 ---------------------------------------------------------------------------
@@ -274,7 +275,7 @@ local function slash_capture()
   if not capture then
     print(CAPTURE_MESSAGES[reason] or CAPTURE_MESSAGES.apiError)
   elseif ns.FS.dbIsNewer then
-    print(("FabricationStation: captured %s (#%d) for this session only; saved data is from a newer version, so it is not written to disk.")
+    print((L["FabricationStation: captured %s (#%d) for this session only; saved data is from a newer version, so it is not written to disk."])
       :format(tostring(capture.recipeName), capture.id))
   else
     -- SavedVariables are account-wide and written on /reload or logout; the account folder can be a number like
@@ -328,7 +329,7 @@ end
 local function build_options()
   local D = Diagnostics
   return {
-    type = "group", name = "Diagnostics", order = 95,
+    type = "group", name = L["Diagnostics"], order = 95,
     args = {
       gamedata = {
         type = "description", order = 1, fontSize = "medium",
@@ -336,25 +337,24 @@ local function build_options()
       },
       newerDB = {
         type = "description", order = 2, fontSize = "medium",
-        name = "Saved data is from a newer version of FabricationStation, so nothing is saved this session. "
-          .. "New errors, mismatches and captures are kept only until you log out.",
+        name = L["Saved data is from a newer version of FabricationStation, so nothing is saved this session. New errors, mismatches and captures are kept only until you log out."],
         hidden = function() return not ns.FS.dbIsNewer end,
       },
-      errorsHeader = { type = "header", order = 10, name = "Errors" },
+      errorsHeader = { type = "header", order = 10, name = L["Errors"] },
       errors = {
         type = "description", order = 11,
         name = function() return list_text("Errors", D:GetErrors(), error_line) end,
       },
-      clearErrors = clear_button(12, "Clear errors", "Clear the error log?",
+      clearErrors = clear_button(12, L["Clear errors"], L["Clear the error log?"],
         function() return #D:GetErrors() end, function() D:ClearErrors() end),
-      mismatchesHeader = { type = "header", order = 20, name = "Quality mismatches" },
+      mismatchesHeader = { type = "header", order = 20, name = L["Quality mismatches"] },
       mismatches = {
         type = "description", order = 21,
         name = function() return list_text("Mismatches", D:GetMismatches(), mismatch_line) end,
       },
-      clearMismatches = clear_button(22, "Clear mismatches", "Clear the logged quality mismatches?",
+      clearMismatches = clear_button(22, L["Clear mismatches"], L["Clear the logged quality mismatches?"],
         function() return #D:GetMismatches() end, function() D:ClearMismatches() end),
-      capturesHeader = { type = "header", order = 30, name = "Captures" },
+      capturesHeader = { type = "header", order = 30, name = L["Captures"] },
       captures = {
         type = "description", order = 31,
         name = function()
@@ -362,7 +362,7 @@ local function build_options()
             .. "tools/export_captures.lua on the SavedVariables file."):format(#D:GetCaptures())
         end,
       },
-      clearCaptures = clear_button(32, "Clear captures", "Delete every saved capture?",
+      clearCaptures = clear_button(32, L["Clear captures"], L["Delete every saved capture?"],
         function() return #D:GetCaptures() end, function() D:ClearCaptures() end),
     },
   }

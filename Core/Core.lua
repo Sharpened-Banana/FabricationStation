@@ -3,6 +3,7 @@ local _, ns = ...
 -- Locale table: the real one (Locales\Locales.xml, AceLocale) when the client has loaded it, else an identity table
 -- so a key reads as its own English text (specs load the addon without the .xml files).
 ns.L = ns.L or setmetatable({}, { __index = function(_, k) return k end })
+local L = ns.L
 
 local FS = LibStub("AceAddon-3.0"):NewAddon("FabricationStation", "AceEvent-3.0", "AceConsole-3.0")
 ns.FS = FS
@@ -149,7 +150,7 @@ function FS:HandleSlash(input)
   end
   local ok = self:SafeCall("Slash:" .. word, cmd.fn, rest)
   if not ok then
-    print("FabricationStation: /fs " .. word .. " failed. See /fs settings > Diagnostics.")
+    print(L["FabricationStation: /fs %s failed. See /fs settings > Diagnostics."]:format(word))
   end
 end
 
@@ -224,17 +225,17 @@ local function add_stopped_modules(self, args)
   end
   if #names == 0 then return end
   table.sort(names)
-  args.stoppedHeader = { type = "header", order = STOPPED_ORDER, name = "Stopped modules" }
+  args.stoppedHeader = { type = "header", order = STOPPED_ORDER, name = L["Stopped modules"] }
   for i, name in ipairs(names) do
     local order = STOPPED_ORDER + i * 2
     args["stopped_" .. name] = {
       type = "description", order = order, width = "double",
-      name = ("%s stopped after an error: %s"):format(name, tostring(self.failedModules[name])),
+      name = (L["%s stopped after an error: %s"]):format(name, tostring(self.failedModules[name])),
     }
     -- Wrapped under the module's name: if it fails again while enabling, it is stopped again and
     -- listed here again instead of the error escaping into the options dialog.
     args["turnOn_" .. name] = {
-      type = "execute", order = order + 1, name = "Turn on again",
+      type = "execute", order = order + 1, name = L["Turn on again"],
       func = self:Wrap(name, function() self:SetModuleEnabled(name, true) end),
     }
   end
@@ -257,7 +258,7 @@ function FS:BuildModuleToggles()
       set = function(_, value) self:SetModuleEnabled(name, value) end,
     }
   end
-  if #names == 0 then args.none = { type = "description", order = 1, name = "No optional modules yet." } end
+  if #names == 0 then args.none = { type = "description", order = 1, name = L["No optional modules yet."] } end
   add_stopped_modules(self, args)
   return args
 end
@@ -281,22 +282,22 @@ end
 
 function FS:GameDataStatusText()
   local status, clientBuild = self:GameDataStatus()
-  if not status or status.missing then return "GameData not generated" end
+  if not status or status.missing then return L["GameData not generated"] end
   if status.outdated then
-    return ("GameData is outdated: data build %s, game build %s"):format(tostring(status.build), tostring(clientBuild))
+    return (L["GameData is outdated: data build %s, game build %s"]):format(tostring(status.build), tostring(clientBuild))
   end
   if #status.mismatched > 0 then
     return "GameData tables are from different builds: " .. table.concat(status.mismatched, ", ")
   end
-  return ("GameData: build %s, up to date"):format(tostring(status.build))
+  return (L["GameData: build %s, up to date"]):format(tostring(status.build))
 end
 
 local function build_general_group(self)
   return {
-    type = "group", name = "General", order = 10,
+    type = "group", name = L["General"], order = 10,
     args = {
       minimap = {
-        type = "toggle", order = 1, width = "full", name = "Show minimap button",
+        type = "toggle", order = 1, width = "full", name = L["Show minimap button"],
         get = function()
           local launcher = self:GetModule("Launcher", true)
           return launcher == nil or launcher:IsMinimapShown()
@@ -320,7 +321,7 @@ function FS:OnInitialize()
   self:InitDB()
   self:ApplyModuleSettings()
   self:RegisterOptions("general", build_general_group(self))
-  self.modulesGroup = { type = "group", name = "Modules", order = 90, args = {} }
+  self.modulesGroup = { type = "group", name = L["Modules"], order = 90, args = {} }
   self:RegisterOptions("modules", self.modulesGroup)
   LibStub("AceConfig-3.0"):RegisterOptionsTable("FabricationStation", function() return ns.FS:GetOptionsTable() end)
   optionsLive = true
