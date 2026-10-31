@@ -733,3 +733,52 @@ describe("recipe scan", function()
     end)
   end)
 end)
+
+-- Phase 2 Task 0 (N1), end to end with the real Scanner, Recipes and RecipeScan: a craft raises the profession skill,
+-- Blizzard's TRADE_SKILL_LIST_UPDATE follows, the Scanner's profession scan reports it ("recipes"), and the recipe
+-- scan recalibrates the open profession's recipes with the new skill.
+describe("craft, skill-up and recalibration, end to end", function()
+  local fixture = require("fixtures_scanner")
+  local K = "Thrall-ArgentDawn"
+
+  it("recalibrates the open profession after a craft raised its skill", function()
+    local skill, clock = 75, 0
+    local function child()
+      return { professionID = 2871, professionName = "Midnight Blacksmithing", skillLevel = skill, maxSkillLevel = 100,
+        skillModifier = 5, parentProfessionID = 164, expansionName = "Midnight", profession = 1 }
+    end
+    local W = install_wow_stubs(fixture({
+      debugprofilestop = function() clock = clock + 1; return clock end,
+      C_TradeSkillUI = {
+        GetChildProfessionInfo = child,
+        GetProfessionInfoBySkillLineID = function(id)
+          if id == 2871 then return child() end
+          if id == 2822 then return { skillLevel = 100, maxSkillLevel = 100 } end
+        end,
+        GetCraftingOperationInfo = function(id)
+          if id ~= 1001 then return nil end
+          return { recipeID = 1001, baseDifficulty = 300, bonusDifficulty = 0, baseSkill = skill + 5, bonusSkill = 0,
+            craftingDataID = 777, concentrationCurrencyID = 3256, concentrationCost = 20, bonusStats = {} }
+        end,
+      },
+    }))
+    local ns = load_addon({}, "Modules/RecipeScan.lua"); W.boot()
+    local R = ns.FS:GetModule("Recipes")
+    local function settle()
+      W.advance(0.5)                                           -- the Scanner's profession scan
+      W.advance(2)                                             -- the recipe scan's debounce
+      local steps = 0
+      while R:IsScanning() and steps < 200 do R:_ScanStep(1000); steps = steps + 1 end
+    end
+
+    W.fire("TRADE_SKILL_SHOW"); W.fire("TRADE_SKILL_LIST_UPDATE"); settle()
+    assert.equals(80, R:GetCalibration(K, 1001).baseSkill)
+    assert.equals(75, ns.FS:GetModule("Scanner"):GetProfession(K, 2871).skill)
+
+    skill = 76                                                 -- the craft gave a skill point
+    W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 3001, quantity = 1, operationID = 1 })
+    W.fire("TRADE_SKILL_LIST_UPDATE"); settle()
+    assert.equals(76, ns.FS:GetModule("Scanner"):GetProfession(K, 2871).skill)
+    assert.equals(81, R:GetCalibration(K, 1001).baseSkill)
+  end)
+end)

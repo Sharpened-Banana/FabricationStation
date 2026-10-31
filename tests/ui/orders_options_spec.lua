@@ -33,7 +33,7 @@ describe("Orders options", function()
     assert.is_truthy(args.modules.args.OrdersRowAddons); assert.is_truthy(args.modules.args.Ledger)
   end)
 
-  it("is a group at order 40 with the four subgroups, clear of the other top-level keys", function()
+  it("is a group at order 40 with the four subgroups, registered as \"Orders & Ledger\" beside General and Modules", function()
     assert.equal("group", g.type)
     assert.equal(40, g.order)
     for _, key in ipairs({ "scoring", "panel", "alerts", "ledger" }) do
@@ -233,6 +233,28 @@ describe("Orders options", function()
       end
       ns.FS.dbIsNewer = nil
       assert.is_false(g.args.scoring.args.lowTipMargin.disabled())
+    end)
+
+    it("every editable option's setter (ranges, toggles, the sound select) leaves db.global untouched", function()
+      local set = 0
+      for _, sub in ipairs({ "scoring", "alerts", "ledger" }) do
+        for key, opt in pairs(g.args[sub].args) do
+          if opt.type == "range" then
+            opt.set(nil, opt.max); set = set + 1
+          elseif opt.type == "toggle" then
+            opt.set(nil, not opt.get()); set = set + 1
+          elseif opt.type == "select" then
+            local values = type(opt.values) == "function" and opt.values() or opt.values
+            local value = next(values)
+            assert.is_not_nil(value, sub .. "." .. key)
+            opt.set(nil, value); set = set + 1
+          end
+        end
+      end
+      assert.equal(16, set)   -- scoring: 3 gold + minutes + claim score + 5 risk toggles; alerts: 2 toggles, sound,
+                              -- toast seconds; ledger: 2 ranges
+      local settings = ns.FS.db.global.settings
+      assert.is_nil(settings.orders); assert.is_nil(settings.ledger); assert.is_nil(settings.alerts)
     end)
 
     it("setting a value leaves db.global untouched", function()
