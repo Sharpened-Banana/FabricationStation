@@ -231,6 +231,20 @@ function M.Notes(view)
   return notes
 end
 
+-- The quality an order's tip benchmark (Ledger:Benchmark) is asked for: the quality the order will be delivered at,
+-- which is what the Ledger stores on a commission (the crafted quality). That is the evaluated expectedQuality, raised
+-- to the order's minimum (an order is only delivered at its minimum or better), or the minimum alone without an
+-- evaluation. Nil (all qualities) for a recipe without qualities (1 or less). The board and the Orders tab both use it.
+function M.BenchmarkQuality(view)
+  if type(view) ~= "table" then return nil end
+  local result = type(view.result) == "table" and view.result or nil
+  local expected = result and tonumber(result.expectedQuality) or nil
+  local minimum = tonumber(view.minQuality)
+  local q = (expected ~= nil and expected > 1) and expected or nil
+  if minimum ~= nil and minimum > 1 and (q == nil or q < minimum) then q = minimum end
+  return q
+end
+
 -- "<itemText> · net <money> · tip vs your median <+N%|-N%|n/a>", N = floor((tip / median - 1) * 100 + 0.5). An
 -- estimated net gets "~"; an unknown one is "no price". The caller passes the item's hyperlink when it is cached,
 -- otherwise tostring(itemID), and Ledger:Benchmark's result (nil: no benchmark yet).
@@ -803,7 +817,7 @@ function refresh_side()
   if O and O.GetBestCandidate then view, reason = O:GetBestCandidate() end
   if view then
     local ledger = ns.FS:GetModule("Ledger", true)
-    local benchmark = ledger and ledger.Benchmark and ledger:Benchmark(view.recipeID, nil) or nil
+    local benchmark = ledger and ledger.Benchmark and ledger:Benchmark(view.recipeID, M.BenchmarkQuality(view)) or nil
     side.best:SetText("Best: " .. M.BestText(best_item_text(view.itemID), view, benchmark))
   else
     stop_waiting()

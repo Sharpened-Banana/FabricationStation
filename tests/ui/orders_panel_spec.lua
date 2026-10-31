@@ -52,6 +52,15 @@ describe("OrdersPanel", function()
       ns.FS:GetModule("Orders"):Settings().filters.hideRisks.expiringSoon = true
       assert.is_true(P.RowModel({ orderType = "npc", risks = { "expiringSoon" } }, nil).dimmed)
     end)
+    it("benchmarks with the quality the order will be delivered at, as the Ledger stores it", function()
+      assert.equal(3, P.BenchmarkQuality({ minQuality = 2, result = { expectedQuality = 3 } }))
+      assert.equal(3, P.BenchmarkQuality({ minQuality = 3, result = { expectedQuality = 2 } }))   -- at least the minimum
+      assert.equal(3, P.BenchmarkQuality({ minQuality = 3 }))
+      assert.equal(2, P.BenchmarkQuality({ minQuality = 0, result = { expectedQuality = 2 } }))
+      assert.is_nil(P.BenchmarkQuality({ minQuality = 0, result = { expectedQuality = 1 } }))      -- no qualities: all
+      assert.is_nil(P.BenchmarkQuality({ minQuality = 0 })); assert.is_nil(P.BenchmarkQuality({ result = {} }))
+      assert.is_nil(P.BenchmarkQuality(nil))
+    end)
     it("rounds the tip percentage and shows n/a without a usable benchmark", function()
       local money = ns.UI.FormatMoney(1000)
       assert.equal("X · net " .. money .. " · tip vs your median -10%", P.BestText("X", { net = 1000, tip = 360 }, { median = 400 }))
@@ -463,6 +472,19 @@ describe("OrdersPanel on the crafting orders page", function()
       rawset(unscored.button, "GetChecked", function() return true end)
       unscored.button:GetScript("OnClick")(unscored.button)
       assert.is_true(O:Settings().filters.hideUnscored)
+    end)
+    it("asks the tip benchmark for the best order's delivered quality, as the Orders tab does", function()
+      boot()
+      local asked = {}
+      ns.FS:GetModule("Ledger").Benchmark = function(_, recipeID, quality)
+        asked[#asked + 1] = { recipeID, quality }
+        return { median = 500000, p25 = 1, p75 = 1, n = 3 }
+      end
+      show_board({ P2.raw_order({ orderID = 10, minQuality = 2 }) })
+      local best = O:GetBestCandidate()
+      assert.equal(3, best.result.expectedQuality)
+      assert.same({ 4444, 3 }, asked[#asked])
+      assert.equal(ns.UI.OrdersPanel.BenchmarkQuality(best), asked[#asked][2])
     end)
     it("shows the best order and claims exactly it from the button", function()
       boot()

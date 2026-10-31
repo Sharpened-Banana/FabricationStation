@@ -227,9 +227,9 @@ function Tab.CellTexts(row, model)
   }
 end
 
--- The quality the tip benchmark is asked for: the order's minimum quality, or nil (all qualities) without one.
+-- The quality the tip benchmark is asked for: the delivered quality, as on the board (OrdersPanel.BenchmarkQuality).
 local function benchmark_quality(v)
-  return type(v) == "table" and type(v.minQuality) == "number" and v.minQuality > 1 and v.minQuality or nil
+  return panel().BenchmarkQuality(v)
 end
 
 -- Ledger:Benchmark's result for quality (nil: all qualities) -> "Your tips (Q3): median <m> (p25 <a>, p75 <b>,
@@ -254,7 +254,7 @@ end
 
 -- A row's tooltip, as { { text, color = {r, g, b} } }: the item, the customer, the full tip and net (what the
 -- compact cells may cut), the risk labels (RowModel.riskText, red), why numbers are missing or uncertain
--- (OrdersPanel.Notes, grey) and the tip benchmark for the order's minimum quality.
+-- (OrdersPanel.Notes, grey) and the tip benchmark for the order's delivered quality.
 function Tab.TooltipLines(row, benchmark, model)
   local v = row.view or {}
   model = row_model(row, model)

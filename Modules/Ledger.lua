@@ -308,7 +308,8 @@ function Ledger.Percentile(sorted, p)
 end
 
 -- What this recipe's commissions have tipped: { median, p25, p75, n } of the gross `tip` of the player's
--- commission entries for the recipe (`quality` nil = all qualities). Entries with no known (or a negative) tip are
+-- commission entries for the recipe (`quality` nil = all qualities; otherwise the delivered (crafted) quality stored
+-- on the commission, which callers derive with ns.UI.OrdersPanel.BenchmarkQuality). Entries with no known (or a negative) tip are
 -- not samples, and neither are recraft commissions (recraft = true: a recraft is not the fresh craft benchmarked).
 -- Nil when there are fewer than the benchmarkMinSamples setting.
 function Ledger:Benchmark(recipeID, quality)
