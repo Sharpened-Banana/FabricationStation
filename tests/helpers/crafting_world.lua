@@ -43,6 +43,8 @@
 --   haveAll(charKey)    1000 in the bags of every reagent of every world recipe for that character
 --   cooldown(charKey, recipeID, readyAt, charges?)  stores the profession record's cooldown entry
 --   names       [itemID] = name answered by C_Item.GetItemNameByID (nil = not cached)
+--   C_Item.GetItemCount answers the logged-in character's world.items entry (+ world.warband with
+--               includeAccountBank), as the game counts it (H1-5: the current character's owned counts are live)
 --   loadRequests  itemIDs passed to C_Item.RequestLoadItemDataByID, in call order
 --   crafts      C_TradeSkillUI.CraftRecipe calls, each { n = select("#", ...), ... } of its arguments
 --   recordAuctionatorTerms()  wraps the stub Auctionator v1 and returns { terms, lists }: terms are
@@ -328,6 +330,13 @@ local function make_world(opts)
   end
   fake("C_Item", "GetItemNameByID", function(itemID) return world.names[itemID] end)
   fake("C_Item", "RequestLoadItemDataByID", function(itemID) world.loadRequests[#world.loadRequests + 1] = itemID end)
+  -- The game's own count for the logged-in character (Scanner:GetOwnedCount): its world.items entry and, with
+  -- includeAccountBank, the warband.
+  fake("C_Item", "GetItemCount", function(itemID, includeBank, _, includeReagentBank, includeAccountBank)
+    local e = (world.items[ns.FS:CharKey()] or {})[itemID] or {}
+    return (e.bags or 0) + (includeBank and (e.bank or 0) or 0) + (includeReagentBank and (e.reagentBank or 0) or 0)
+      + (includeAccountBank and (world.warband[itemID] or 0) or 0)
+  end)
   fake("C_TradeSkillUI", "CraftRecipe", function(...)
     world.crafts[#world.crafts + 1] = { n = select("#", ...), ... }
   end)

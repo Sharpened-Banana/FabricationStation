@@ -781,6 +781,40 @@ function Scanner:GetItemCount(itemID, charKey)
   return out
 end
 
+-- The game's count of itemID for the logged-in character: bags, bank and reagent bank, plus the warband bank when
+-- includeAccountBank (C_Item.GetItemCount(itemID, includeBank, includeUses, includeReagentBank, includeAccountBank)).
+-- nil when the client lacks the function or the call fails.
+local function live_count(itemID, includeAccountBank)
+  local fn = type(C_Item) == "table" and C_Item.GetItemCount
+  if type(fn) ~= "function" then return nil end
+  local ok, n = pcall(fn, itemID, true, false, true, includeAccountBank and true or false)
+  if ok and type(n) == "number" then return n end
+  return nil
+end
+
+-- How many of itemID charKey (nil = the current character) holds in bags, bank and reagent bank, plus the warband
+-- bank when includeWarband. The current character's count is the game's own (C_Item.GetItemCount), so reagents count
+-- even when no snapshot has seen them yet; other characters', and the current one's when the game cannot answer,
+-- come from the snapshots.
+function Scanner:GetOwnedCount(itemID, charKey, includeWarband)
+  local me = ns.FS:CharKey()
+  charKey = charKey or me
+  if charKey == me then
+    local n = live_count(itemID, includeWarband)
+    if n then return n end
+  end
+  local c = self:GetItemCount(itemID, charKey)
+  return (c.bags or 0) + (c.bank or 0) + (c.reagentBank or 0) + (includeWarband and (c.warband or 0) or 0)
+end
+
+-- The warband bank's count of itemID: the game's own (with and without the account bank) when it can answer, else
+-- the last warband snapshot.
+function Scanner:GetWarbandCount(itemID)
+  local all, own = live_count(itemID, true), live_count(itemID, false)
+  if all and own then return math.max(0, all - own) end
+  return self:GetItemCount(itemID, nil).warband or 0
+end
+
 ---------------------------------------------------------------------------
 -- Lifecycle
 ---------------------------------------------------------------------------
@@ -798,6 +832,8 @@ function Scanner:OnEnable()
     c.gold = GetMoney()
     self:RefreshCurrencies(nil)
     self:CheckDroppedProfessions()
+    -- A first bag snapshot at login: BAG_UPDATE_DELAYED may not fire until the bags change.
+    self:ScanBags()
   end
 
   local scan = ns.FS:Wrap("Scanner", function() self:ScanProfession() end)
@@ -825,7 +861,13 @@ function Scanner:OnEnable()
   local scanBags = ns.FS:Wrap("Scanner", function() self:ScanBags() end)
   local scanBank = ns.FS:Wrap("Scanner", function() self:ScanBank(); self:ScanWarband() end)
   local scanWarband = ns.FS:Wrap("Scanner", function() self:ScanWarband() end)
-  self:RegisterEvent("BAG_UPDATE_DELAYED", function() ns.FS:Debounce("scanner.bags", SCAN_DEBOUNCE, scanBags) end)
+  -- While the bank is open a bag update can be a deposit into (or withdrawal from) a bank or warband tab (12.x bank
+  -- tabs are bags 6-16, and PLAYERBANKSLOTS_CHANGED does not reliably fire for them), so the bank is rescanned too.
+  self:RegisterEvent("BAG_UPDATE_DELAYED", function()
+    ns.FS:Debounce("scanner.bags", SCAN_DEBOUNCE, scanBags)
+    if self.bankOpen then ns.FS:Debounce("scanner.bank", SCAN_DEBOUNCE, scanBank) end
+  end)
+  self:RegisterEvent("PLAYER_ENTERING_WORLD", function() ns.FS:Debounce("scanner.bags", SCAN_DEBOUNCE, scanBags) end)
   self:RegisterEvent("BANKFRAME_OPENED", function()
     self.bankOpen = true
     ns.FS:Debounce("scanner.bank", SCAN_DEBOUNCE, scanBank)

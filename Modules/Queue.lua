@@ -287,7 +287,8 @@ local function per_craft(entry)
   return need
 end
 
--- Per character, what entries need beyond bags + bank + reagent bank: { [charKey] = { [itemID] = qty } }.
+-- Per character, what entries need beyond bags + bank + reagent bank: { [charKey] = { [itemID] = qty } }. The current
+-- character's holdings are the game's own count, other characters' their snapshots (Scanner:GetOwnedCount).
 local function shortfalls(entries)
   local required = {}
   for _, e in ipairs(entries) do
@@ -302,8 +303,7 @@ local function shortfalls(entries)
   for charKey, r in pairs(required) do
     local short = {}
     for itemID, n in pairs(r) do
-      local c = scanner():GetItemCount(itemID, charKey)
-      local missing = n - (c.bags + c.bank + c.reagentBank)   -- not .total: that already holds the warband
+      local missing = n - scanner():GetOwnedCount(itemID, charKey, false)   -- the warband is taken off once, below
       if missing > 0 then short[itemID] = missing end
     end
     out[charKey] = short
@@ -319,7 +319,7 @@ local function missing_total(entries)
   end
   if recipes():GetSetting("queueUseWarband") then
     for itemID, n in pairs(sum) do
-      local left = n - scanner():GetItemCount(itemID, nil).warband
+      local left = n - scanner():GetWarbandCount(itemID)
       sum[itemID] = left > 0 and left or nil
     end
   end

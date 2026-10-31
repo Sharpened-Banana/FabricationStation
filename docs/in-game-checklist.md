@@ -250,6 +250,14 @@ H1-4. **Panel quality with empty GameData.** Select a quality recipe and fill ev
     Blizzard's quality meter, and the concentration line matches Blizzard's concentration cost. The per-quality rows
     under `Cheapest reagents per quality (estimate)` list every reachable quality (two or more rows for a recipe
     whose top quality is reachable), not only Q1.
+H1-5. **Held reagents count.** Log in with the rank-2 (or top-rank) reagents of a recipe split between your bags and
+    the bank, without opening the bank this session. Queue one craft at the crafting station. Expected: the Queue tab
+    shows nothing missing and Craft Next starts the craft with the reagents you hold. Then open the bank, deposit some
+    of them into a bank tab and some into the warband bank, close the bank and `/reload`: the counts in
+    `/dump FabricationStationDB.global.characters[UnitName("player").."-"..GetNormalizedRealmName()].items[<itemID>]`
+    and `FabricationStationDB.global.warband.items[<itemID>]` match where the items are. Also report what
+    `/dump C_Item.GetItemCount(<itemID>, true, false, true, true)` says before the bank was ever opened this session
+    (the addon relies on it seeing the bank and warband bank everywhere).
 
 ## Not done here
 

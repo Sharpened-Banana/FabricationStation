@@ -397,10 +397,10 @@ local function full_opts(opts)
   }
 end
 
+-- Bags, bank, reagent bank and (unless excludeWarband) the warband: the game's own count for the current character,
+-- the snapshots for other characters (Scanner:GetOwnedCount).
 local function owned_count(itemID, charKey, excludeWarband)
-  local c = scanner():GetItemCount(itemID, charKey) or {}
-  local warband = excludeWarband and 0 or (c.warband or 0)
-  return (c.bags or 0) + (c.bank or 0) + (c.reagentBank or 0) + warband
+  return scanner():GetOwnedCount(itemID, charKey, not excludeWarband) or 0
 end
 
 -- RecipeInput and the PriceResults behind it for recipeID on charKey (schematic nil = fetch it). nil without
