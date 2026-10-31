@@ -1,5 +1,5 @@
 -- PlanCalc: pure planning rules for phase 3 (weekly reset, Darkmoon window, time to full, knowledge
--- progress; scheduler and spec ranking follow in later tasks).
+-- progress, concentration scheduler, cap warnings and spec node ranking).
 -- Pure Lua 5.1: no WoW globals, no ns.FS. Callers pass the clock, API results and projections in.
 local ADDON_NAME, ns = ...
 
@@ -172,4 +172,141 @@ function PlanCalc.StripCodes(text)
     :gsub("%s+", " ")
     :gsub(PIPE, "|")
   return (text:gsub("^ ", ""):gsub(" $", ""))
+end
+
+-- Concentration planning ---------------------------------------------------------------------------
+
+local function isNumber(x)
+  return type(x) == "number" and x == x and x ~= math.huge and x ~= -math.huge
+end
+
+local function positive(x)
+  return isNumber(x) and x > 0
+end
+
+-- pools = { Pool }; results = { RecipeResult annotated with skillLineID }; opts = { maxCraftsPerRecipe|nil }
+-- (nil = no per-recipe cap). Greedy per pool (charKey + skillLineID): best goldPerConcentration first, each recipe
+-- crafted as often as the pool's current value and the cap allow. A pool with an unknown value (projection
+-- unavailable) schedules nothing. Results need a positive concentrationCost and goldPerConcentration and no
+-- noPrice/unknownRecipe flag. concentrationUsed charges the full concentrationCost per craft; expectedGain uses
+-- expectedConcentrationCost (cost after the ingenuity refund, which goldPerConcentration is per point of;
+-- falls back to concentrationCost). Rows: soonest-full pool first (no fullAt last), then best gold/concentration.
+function PlanCalc.Schedule(pools, results, opts)
+  local maxCrafts = opts and positive(opts.maxCraftsPerRecipe) and math.floor(opts.maxCraftsPerRecipe) or math.huge
+  local byPool = {}
+  for _, r in ipairs(results or {}) do
+    local f = r.flags or {}
+    if positive(r.concentrationCost) and positive(r.goldPerConcentration) and not f.noPrice and not f.unknownRecipe
+        and r.charKey ~= nil and r.skillLineID ~= nil then
+      local k = r.charKey .. ":" .. r.skillLineID
+      byPool[k] = byPool[k] or {}
+      table.insert(byPool[k], r)
+    end
+  end
+  local rows, done = {}, {}
+  for _, p in ipairs(pools or {}) do
+    local key = p.charKey ~= nil and p.skillLineID ~= nil and (p.charKey .. ":" .. p.skillLineID)
+    if key and not done[key] and isNumber(p.value) then
+      done[key] = true
+      local list, left = byPool[key] or {}, p.value
+      table.sort(list, function(a, b)
+        if a.goldPerConcentration ~= b.goldPerConcentration then return a.goldPerConcentration > b.goldPerConcentration end
+        return a.recipeID < b.recipeID
+      end)
+      for _, r in ipairs(list) do
+        local n = math.min(math.floor(left / r.concentrationCost), maxCrafts)
+        if n > 0 then
+          local used = n * r.concentrationCost
+          local expectedCost = positive(r.expectedConcentrationCost) and r.expectedConcentrationCost or r.concentrationCost
+          rows[#rows + 1] = { charKey = p.charKey, skillLineID = p.skillLineID, recipeID = r.recipeID, crafts = n,
+            concentrationUsed = used, expectedGain = math.floor(n * r.goldPerConcentration * expectedCost),
+            goldPerConcentration = r.goldPerConcentration, fullAt = p.fullAt }
+          left = left - used
+        end
+      end
+    end
+  end
+  table.sort(rows, function(a, b)
+    local fa, fb = a.fullAt or math.huge, b.fullAt or math.huge
+    if fa ~= fb then return fa < fb end
+    if a.goldPerConcentration ~= b.goldPerConcentration then return a.goldPerConcentration > b.goldPerConcentration end
+    if a.charKey ~= b.charKey then return a.charKey < b.charKey end
+    if a.skillLineID ~= b.skillLineID then return a.skillLineID < b.skillLineID end
+    return a.recipeID < b.recipeID
+  end)
+  return rows
+end
+
+-- pools = { Pool }. Returns copies of the pools that are full (value >= max: status "capped") or fill by
+-- now + withinSeconds (status "soon"). Pools with an unknown value or a missing/non-positive max are skipped
+-- (concentration unknown); a pool below its max without fullAt is skipped. A capped pool is listed even
+-- without fullAt; without a numeric now/withinSeconds only capped pools are listed.
+-- Sorted capped first, then fullAt (nil last), charKey, skillLineID.
+function PlanCalc.CapWarnings(pools, now, withinSeconds)
+  local out = {}
+  for _, p in ipairs(pools or {}) do
+    if isNumber(p.value) and positive(p.max) then
+      local status
+      if p.value >= p.max then
+        status = "capped"
+      elseif isNumber(p.fullAt) and isNumber(now) and isNumber(withinSeconds) and p.fullAt <= now + withinSeconds then
+        status = "soon"
+      end
+      if status then
+        local w = {}
+        for k, v in pairs(p) do w[k] = v end
+        w.status = status
+        out[#out + 1] = w
+      end
+    end
+  end
+  table.sort(out, function(a, b)
+    if a.status ~= b.status then return a.status == "capped" end
+    local fa, fb = a.fullAt or math.huge, b.fullAt or math.huge
+    if fa ~= fb then return fa < fb end
+    if a.charKey ~= b.charKey then return tostring(a.charKey) < tostring(b.charKey) end
+    return (a.skillLineID or 0) < (b.skillLineID or 0)
+  end)
+  return out
+end
+
+-- Spec advice ---------------------------------------------------------------------------------------
+
+local SPEC_STEP = 5 -- ranks per step when no perk lies ahead
+
+-- candidates = { { pathID, name, rank, maxRank, available, perkRanks } } (display ranks); gainFn(pathID, fromRank,
+-- toRank) -> copper|nil; unspent = points to spend|nil. Each available, unfinished path steps to its next perk rank
+-- above rank (else rank + 5), capped at maxRank. gainPerPoint = floor(gain / points); affordable = unspent >= points
+-- (nil when unspent is unknown). Known gains <= 0 are dropped; an unknown gain (nil or not a finite number) stays
+-- nil, never 0, and sorts after the known ones. Sorted by gainPerPoint desc, then pathID.
+function PlanCalc.RankSpecNodes(candidates, gainFn, unspent)
+  local rows = {}
+  for _, c in ipairs(candidates or {}) do
+    if c.available and isNumber(c.rank) and isNumber(c.maxRank) and c.rank < c.maxRank then
+      local toRank
+      for _, perk in ipairs(c.perkRanks or {}) do
+        if isNumber(perk) and perk > c.rank and (toRank == nil or perk < toRank) then toRank = perk end
+      end
+      toRank = math.min(c.maxRank, toRank or c.rank + SPEC_STEP)
+      local points = toRank - c.rank
+      local gain = gainFn(c.pathID, c.rank, toRank)
+      if not isNumber(gain) then gain = nil end
+      if gain == nil or gain > 0 then
+        local affordable
+        if isNumber(unspent) then affordable = unspent >= points end
+        rows[#rows + 1] = { pathID = c.pathID, name = c.name, rank = c.rank, maxRank = c.maxRank, points = points,
+          gain = gain, gainPerPoint = gain and math.floor(gain / points), affordable = affordable }
+      end
+    end
+  end
+  table.sort(rows, function(a, b)
+    local ga, gb = a.gainPerPoint, b.gainPerPoint
+    if ga ~= gb then
+      if ga == nil then return false end
+      if gb == nil then return true end
+      return ga > gb
+    end
+    return a.pathID < b.pathID
+  end)
+  return rows
 end
