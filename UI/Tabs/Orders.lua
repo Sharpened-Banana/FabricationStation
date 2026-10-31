@@ -74,7 +74,7 @@ end
 for _, key in ipairs(HIDE_ORDER) do HIDEABLE[key] = true end
 
 local view            -- built frames and the displayed rows, nil before the tab is built
-local OFF_NOTICE = "Orders off: the board is not captured"
+local OFF_NOTICE = L["Orders off: the board is not captured"]
 local status          -- one line of feedback after an Add to Queue click (with its colour code)
 local statusAt        -- ns.FS:Now() when it was set
 local requested = {}  -- [itemID] = true while its data is requested, "done" after; asked once per session
@@ -112,7 +112,7 @@ function Tab.Model(snapshot, filters, now)
   snapshot = type(snapshot) == "table" and snapshot or {}
   local orders = type(snapshot.orders) == "table" and snapshot.orders or {}
   local seen = type(snapshot.time) == "number"
-  local header = "No orders seen yet"
+  local header = L["No orders seen yet"]
   if seen then
     header = "Orders seen " .. ns.UI.FormatAge(now - snapshot.time) .. " ago"
     if snapshot.charKey ~= nil then header = header .. " on " .. tostring(snapshot.charKey) end
@@ -193,7 +193,7 @@ function Tab.CellTexts(row, model)
 
   local net = P.ProfitText(v)
   if net == "?" then
-    net = color(DIM, "no price")
+    net = color(DIM, L["no price"])
   elseif flags.recraft then
     net = color(DIM, net)
   else
@@ -202,7 +202,7 @@ function Tab.CellTexts(row, model)
 
   local score = P.ScoreText(v)
   if score == "?" then
-    score = color(DIM, flags.noPrice and "no price" or "?")
+    score = color(DIM, flags.noPrice and L["no price"] or "?")
   elseif flags.recraft then
     score = color(DIM, score)
   elseif flags.unknownConcentrationValue then
@@ -237,7 +237,7 @@ end
 -- Ledger:Benchmark's result for quality (nil: all qualities) -> "Your tips (Q3): median <m> (p25 <a>, p75 <b>,
 -- n=<n>)", or "Your tips (all qualities): no history yet".
 function Tab.BenchmarkText(benchmark, quality)
-  local scope = quality ~= nil and ("Q" .. tostring(quality)) or "all qualities"
+  local scope = quality ~= nil and ("Q" .. tostring(quality)) or L["all qualities"]
   local b = benchmark
   if not (type(b) == "table" and is_money(b.median) and is_money(b.p25) and is_money(b.p75)) then
     return (L["Your tips (%s): no history yet"]):format(scope)
@@ -250,7 +250,7 @@ end
 local function net_text(v)
   local flags = flags_of(v)
   if flags.recraft then return EM_DASH end
-  if not is_money(v.net) then return "no price" end
+  if not is_money(v.net) then return L["no price"] end
   return (flags.estimated and "~" or "") .. ns.UI.FormatMoney(v.net)
 end
 
@@ -543,10 +543,10 @@ end
 
 local function empty_text(model)
   if not model.seen then
-    return "Open the crafting orders board at a profession table; the orders seen there are kept here."
+    return L["Open the crafting orders board at a profession table; the orders seen there are kept here."]
   end
   if model.total == 0 then return L["No open orders were on the last board seen."] end
-  return "Every order is hidden by the filters."
+  return L["Every order is hidden by the filters."]
 end
 
 local function refresh()

@@ -23,8 +23,8 @@ local BULLET = "\226\128\162 "        -- "• " (the logged-in character)
 local RED, ORANGE, DIM = "|cffff4040", "|cffff8000", "|cff9d9d9d"
 local DEFAULT_CAP_WARN_HOURS = 24
 
-V.EMPTY_TEXT = "Open your professions on this character"
-V.OFF_TEXT = "Alts is turned off"
+V.EMPTY_TEXT = L["Open your professions on this character"]
+V.OFF_TEXT = L["Alts is turned off"]
 
 -- seconds -> "now" (<= 0), "<1m", "45m", "1h 0m", "2d 12h"; "—" for nil or a non-finite value.
 function V.FormatDuration(seconds)
@@ -48,21 +48,21 @@ end
 -- First crafts 2". Weekly and one-time counts are "?" unless the status is "ok"; "noData" says so instead.
 function V.KnowledgeBreakdown(summary)
   summary = type(summary) == "table" and summary or {}
-  local first = "First crafts " .. (finite(summary.firstCraftsPending) and whole(summary.firstCraftsPending) or "?")
+  local first = L["First crafts %s"]:format(finite(summary.firstCraftsPending) and whole(summary.firstCraftsPending) or "?")
   if summary.status == "noData" or summary.status == nil then
-    return "No knowledge data for this profession" .. DOT .. first
+    return L["No knowledge data for this profession"] .. DOT .. first
   end
   local ok = summary.status == "ok"
-  local weekly, oneTime = L["Weekly ? (log in on this character this week)"], "One-time ?"
+  local weekly, oneTime = L["Weekly ? (log in on this character this week)"], L["One-time ?"]
   if ok and finite(summary.weeklyLeft) and finite(summary.weeklyTotal) then
-    weekly = "Weekly " .. whole(summary.weeklyLeft) .. " of " .. whole(summary.weeklyTotal) .. " left"
+    weekly = L["Weekly %s of %s left"]:format(whole(summary.weeklyLeft), whole(summary.weeklyTotal))
   end
-  if ok and finite(summary.oneTimeLeft) then oneTime = "One-time " .. whole(summary.oneTimeLeft) .. " left" end
-  local darkmoon = "Darkmoon ?"
+  if ok and finite(summary.oneTimeLeft) then oneTime = L["One-time %s left"]:format(whole(summary.oneTimeLeft)) end
+  local darkmoon = L["Darkmoon ?"]
   if summary.darkmoon == "closed" then
-    darkmoon = "Darkmoon closed"
+    darkmoon = L["Darkmoon closed"]
   elseif summary.darkmoon == "open" and finite(summary.monthlyLeft) then
-    darkmoon = "Darkmoon " .. whole(summary.monthlyLeft) .. " left"
+    darkmoon = L["Darkmoon %s left"]:format(whole(summary.monthlyLeft))
   end
   return table.concat({ weekly, darkmoon, oneTime, first }, DOT)
 end
@@ -146,6 +146,7 @@ function V.Row(altRow, now)
     gold = ns.UI.FormatMoney(altRow.gold),
     goldShort = U.compactMoney(altRow.gold),
     age = current and "online" or ns.UI.FormatAge(altRow.dataAgeSeconds),
+    neverSeen = not current and type(altRow.dataAgeSeconds) ~= "number",   -- decided on the data, not on the age text
     staleAge = not current and flags.stale == true,
     profs = {},
   }
@@ -204,7 +205,7 @@ local function spec_detail(s, who, now)
   local spent = (finite(s.spent) and finite(s.max)) and (whole(s.spent) .. "/" .. whole(s.max) .. " spent") or "? spent"
   local currency = type(s.currencyName) == "string" and s.currencyName ~= "" and s.currencyName or "points"
   local unspent = (finite(s.unspent) and whole(s.unspent) or "?") .. " unspent " .. currency
-  local age = finite(s.time) and ("data " .. ns.UI.FormatAge(now - s.time) .. " old") or "data age unknown"
+  local age = finite(s.time) and ("data " .. ns.UI.FormatAge(now - s.time) .. " old") or L["data age unknown"]
   return "  Spec: " .. spent .. DOT .. unspent .. DOT .. age
 end
 
@@ -227,7 +228,7 @@ local function cooldown_detail(cd, now)
   elseif finite(cd.readyAt) then
     state = "ready in " .. V.FormatDuration(cd.readyAt - now) .. " (" .. clock(cd.readyAt) .. ")"
   else
-    state = "ready time unknown"
+    state = L["ready time unknown"]
   end
   if finite(cd.charges) and finite(cd.maxCharges) and cd.maxCharges > 1 then
     state = state .. DOT .. "charges " .. whole(cd.charges) .. "/" .. whole(cd.maxCharges)
@@ -357,9 +358,9 @@ function V.TooltipLines(row, note)
   if row.hidden then lines[#lines + 1] = L["Hidden (shown because \"Show hidden\" is ticked)"] end
   lines[#lines + 1] = "Gold: " .. row.gold
   if row.isCurrent then
-    lines[#lines + 1] = "Last seen: online"
-  elseif row.age == "never" then
-    lines[#lines + 1] = "Last seen: never (stale)"
+    lines[#lines + 1] = L["Last seen: online"]
+  elseif row.neverSeen then
+    lines[#lines + 1] = L["Last seen: never (stale)"]
   else
     lines[#lines + 1] = "Last seen: " .. row.age .. " ago" .. (row.staleAge and " (stale)" or "")
   end
@@ -374,7 +375,7 @@ function V.TooltipLines(row, note)
   end
   if row.empty then lines[#lines + 1] = row.empty end
   if row.older then lines[#lines + 1] = row.older end
-  lines[#lines + 1] = "Click for details"
+  lines[#lines + 1] = L["Click for details"]
   return lines
 end
 
@@ -396,7 +397,7 @@ function V.CurrentDataNote()
   return V.DataBuildNote(U.knowledgeBuild(), U.clientBuild())
 end
 
-V.MARKER_LABEL = "Old data"
+V.MARKER_LABEL = L["Old data"]
 
 -- The outdated-data marker the Characters and Planner tabs show in their own fixed region (Task 14 wording):
 -- knowledgeBuild, clientBuild -> { label = "Old data", tooltip = { "Game data build X is outdated", why } } under the
@@ -451,7 +452,7 @@ function V.Header(rows, note)
     tooltip[#tooltip + 1] = goldUnknown .. (goldUnknown == 1 and " character's" or " characters'") .. " gold is unknown"
   end
   if kpPartial then
-    tooltip[#tooltip + 1] = "?: some professions have no knowledge data, or no quest data from this week yet"
+    tooltip[#tooltip + 1] = L["?: some professions have no knowledge data, or no quest data from this week yet"]
   end
   if note then
     tooltip[#tooltip + 1] = "Knowledge " .. note .. ": the game has changed since, so counts may be wrong"

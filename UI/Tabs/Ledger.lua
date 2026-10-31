@@ -50,11 +50,11 @@ local SCROLL_STEP = ROW_HEIGHT * 3
 local DIM, WARN, GOOD, BAD = "|cff9d9d9d", "|cffffd100", "|cff40ff40", "|cffff4040"
 local WHITE, GREY, GOLD = { 1, 1, 1 }, { 0.62, 0.62, 0.62 }, { 1, 0.82, 0 }
 
-local READ_ONLY_NOTICE = "Read-only: saved data is from a newer addon version"
-local READ_ONLY_DETAIL = "Nothing new is recorded until the addon is updated."
-local OFF_NOTICE = "Ledger off: nothing new is recorded"
-local OFF_DETAIL = "Turn the Ledger on again in /fs settings > Modules."
-local PARTIAL_DETAIL = "Their cost is not subtracted, so the real profit may be lower than shown."
+local READ_ONLY_NOTICE = L["Read-only: saved data is from a newer addon version"]
+local READ_ONLY_DETAIL = L["Nothing new is recorded until the addon is updated."]
+local OFF_NOTICE = L["Ledger off: nothing new is recorded"]
+local OFF_DETAIL = L["Turn the Ledger on again in /fs settings > Modules."]
+local PARTIAL_DETAIL = L["Their cost is not subtracted, so the real profit may be lower than shown."]
 
 local TYPE_LABELS = { craft = "craft", sale = "sale", commission = "commission" }
 local TYPE_NAMES = { craft = L["Craft (cost record)"], sale = L["Auction sale"], commission = L["Order commission"] }
@@ -395,7 +395,7 @@ local function money_cell(copper, signed, estimated)
 end
 
 local function partial_note(incomplete)
-  return ("partial: %d with missing or partial cost"):format(incomplete)
+  return (L["partial: %d with missing or partial cost"]):format(incomplete)
 end
 
 -- The display text of one data row's cells, by column key.
@@ -413,7 +413,7 @@ function Tab.CellTexts(section, data)
       if data.total then
         cells.week = (L["%d weeks"]):format(WEEKS)
       elseif data.index == 1 then
-        cells.week = "This week"
+        cells.week = L["This week"]
       else
         cells.week = date_text(data.weekStart, "%m-%d")
       end
@@ -541,7 +541,7 @@ function Tab.TooltipLines(item)
     lines[#lines + 1] = line("Sales and commissions: " .. tostring(count(data.n)))
     totals_lines(lines, data)
   elseif item.section == "benchmark" then
-    local scope = data.quality ~= nil and ("quality " .. tostring(data.quality)) or "all qualities"
+    local scope = data.quality ~= nil and ("quality " .. tostring(data.quality)) or L["all qualities"]
     lines[1] = line(("%s (%s)"):format(recipe_name(data.recipeID), scope))
     lines[2] = line("Median tip: " .. full_money(data.median))
     lines[3] = line("A quarter of your tips were below " .. full_money(data.p25))

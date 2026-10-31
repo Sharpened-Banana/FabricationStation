@@ -25,8 +25,8 @@ local REFRESH_SOURCE = "OrdersWidgets"
 local REFRESH_KEY, REFRESH_DELAY = "ordersWidgets.refresh", 0.5
 local DIM, WARN, GOOD, BAD = "|cff9d9d9d", "|cffffd100", "|cff40ff40", "|cffff4040"
 
-local READ_ONLY_LINE = "Read-only: saved data is from a newer addon version"
-local OFF_LINE = "Ledger off: nothing new is recorded"
+local READ_ONLY_LINE = L["Read-only: saved data is from a newer addon version"]
+local OFF_LINE = L["Ledger off: nothing new is recorded"]
 
 local function module(name)
   return ns.FS:GetModule(name, true)
@@ -138,7 +138,7 @@ function M.OpenOrdersLines(snapshot, now)
   end
   local lines = {}
   if model.total == 0 then
-    lines[1] = "No open orders on the last board"
+    lines[1] = L["No open orders on the last board"]
   else
     local personal = (L["%d personal"]):format(model.personal)
     lines[1] = (L["%d on the board, %s"]):format(model.total, model.personal > 0 and color(GOOD, personal) or personal)

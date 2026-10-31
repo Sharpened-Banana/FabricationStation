@@ -156,13 +156,13 @@ function MainWindow:GetHeaderText()
   local prices = ns.FS:GetModule("Prices", true)
   local priceText
   if not (prices and prices:HasSource()) then
-    priceText = "Prices: no Auctionator"
+    priceText = L["Prices: no Auctionator"]
   else
     local lastUpdate = prices:GetLastUpdate()
     if lastUpdate then
       priceText = "Prices: " .. ns.UI.FormatAge(ns.FS:Now() - lastUpdate) .. " ago"
     else
-      priceText = "Prices: not scanned yet"
+      priceText = L["Prices: not scanned yet"]
     end
   end
   return {
@@ -407,10 +407,10 @@ local function open_tab(id)
 end
 
 function MainWindow:OnInitialize()
-  ns.FS:RegisterSlash("", function() MainWindow:Toggle() end, "open or close the window")
-  ns.FS:RegisterSlash("show", function() MainWindow:Show() end, "open the window")
-  ns.FS:RegisterSlash("settings", function() open_tab("settings") end, "open the settings tab")
-  ns.FS:RegisterSlash("tab", function(arg) open_tab((arg or ""):lower()) end, "open a tab by id: /fs tab <id>")
+  ns.FS:RegisterSlash("", function() MainWindow:Toggle() end, L["open or close the window"])
+  ns.FS:RegisterSlash("show", function() MainWindow:Show() end, L["open the window"])
+  ns.FS:RegisterSlash("settings", function() open_tab("settings") end, L["open the settings tab"])
+  ns.FS:RegisterSlash("tab", function(arg) open_tab((arg or ""):lower()) end, L["open a tab by id: /fs tab <id>"])
 end
 
 function MainWindow:OnEnable()

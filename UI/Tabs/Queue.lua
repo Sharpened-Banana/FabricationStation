@@ -35,7 +35,7 @@ local DEFAULT_VIEW_HEIGHT = 400   -- before a scroll frame has a size
 local ELLIPSIS, TIMES = "\226\128\166", "\195\151"
 local DIM, WARN, BAD = "|cff9d9d9d", "|cffffd100", "|cffff4040"
 local TONES = { good = { 0.25, 1, 0.25 }, bad = { 1, 0.25, 0.25 }, warn = { 1, 0.82, 0 }, plain = { 1, 1, 1 } }
-local READ_ONLY = "Saved data is from a newer version of FabricationStation; the queue is read-only."
+local READ_ONLY = L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
 local DAY, HOUR, MINUTE = 86400, 3600, 60
 
 -- Left to right; the flexible recipe column takes the width the fixed ones leave over. Missing reagents
@@ -640,7 +640,7 @@ local function build_restock_panel(container, created)
   created.itemEdit = create_edit(panel, PAD + 8, 200)
   local itemHint = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   itemHint:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -PAD, -6)
-  itemHint:SetText(color(DIM, "item ID or shift-click an item link"))
+  itemHint:SetText(color(DIM, L["item ID or shift-click an item link"]))
   created.targetEdit = create_edit(panel, PAD + 8 + 200 + 70, 50)
   created.targetEdit:SetNumeric(true)
   created.targetEdit:SetMaxLetters(5)

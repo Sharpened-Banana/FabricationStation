@@ -79,15 +79,15 @@ local function flags_text(result)
   local flags = result.flags or {}
   local parts = {}
   if result.profit == nil then
-    parts[#parts + 1] = "no price"
+    parts[#parts + 1] = L["no price"]
   elseif flags.noPrice then
-    parts[#parts + 1] = "some prices missing"
+    parts[#parts + 1] = L["some prices missing"]
   end
-  if flags.stalePrice then parts[#parts + 1] = "stale price" end
-  if flags.staleData then parts[#parts + 1] = "stale data" end
+  if flags.stalePrice then parts[#parts + 1] = L["stale price"] end
+  if flags.staleData then parts[#parts + 1] = L["stale data"] end
   if flags.estimated then parts[#parts + 1] = "estimate" end
-  if flags.unreachableTarget then parts[#parts + 1] = "quality unreachable" end
-  if flags.unknownRecipe then parts[#parts + 1] = "unknown recipe" end
+  if flags.unreachableTarget then parts[#parts + 1] = L["quality unreachable"] end
+  if flags.unknownRecipe then parts[#parts + 1] = L["unknown recipe"] end
   return table.concat(parts, ", ")
 end
 
@@ -147,11 +147,11 @@ end
 -- The display text of one row's cells, by column key. The price columns say "no price" for a nil value.
 function Tab.CellTexts(row)
   local function money(value)
-    return value ~= nil and ns.UI.FormatMoney(value) or color(DIM, "no price")
+    return value ~= nil and ns.UI.FormatMoney(value) or color(DIM, L["no price"])
   end
   local profit
   if row.noPrice then
-    profit = color(DIM, "no price")
+    profit = color(DIM, L["no price"])
   else
     profit = ns.UI.FormatMoney(row.profit)
     if row.profit > 0 then profit = color(GOOD, profit) elseif row.profit < 0 then profit = color(BAD, profit) end
@@ -247,7 +247,7 @@ local function queue_row(row)
     status = color(GOOD, "Queued " .. row.name .. " (" .. short_name(row.charKey) .. ")")
   else
     status = color(BAD, ns.FS.dbIsNewer
-      and "Saved data is from a newer version of FabricationStation; the queue is read-only."
+      and L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
       or L["Could not add to the queue"])
   end
   if view then view.status:SetText(status) end
@@ -333,9 +333,9 @@ end
 
 local function update_controls()
   local labels = view.labels
-  labels.profession = label_of(profession_options(), state.profession) or "All professions"
-  labels.character = label_of(character_options(), state.character) or "All characters"
-  labels.minQuality = label_of(quality_options(), state.minQuality) or "Any quality"
+  labels.profession = label_of(profession_options(), state.profession) or L["All professions"]
+  labels.character = label_of(character_options(), state.character) or L["All characters"]
+  labels.minQuality = label_of(quality_options(), state.minQuality) or L["Any quality"]
   view.professionButton:SetText(labels.profession)
   view.characterButton:SetText(labels.character)
   view.qualityButton:SetText(labels.minQuality)

@@ -151,7 +151,7 @@ end
 local function off_text(ctx)
   if not enabled("Alts") then return L["Alts is turned off"] end
   if ctx.recipes and not enabled("Recipes") then return L["Recipes is turned off"] end
-  return "Alts is turned off"
+  return L["Alts is turned off"]
 end
 
 -- status (a Planner getter's second return, or "plannerOff" while the Planner module is off), ctx = { char = the
@@ -220,9 +220,9 @@ function PV.SpecAdvice(rows, status, ctx)
     if finite(build) then
       -- The table is generated, so the data is not what is missing: the paths' effects are types Math does not model
       -- (Ingenuity, for one) or the recipes carry no matching labels.
-      model.message = "No modelled spec effects for these paths and recipes"
+      model.message = L["No modelled spec effects for these paths and recipes"]
     else
-      model.message = "Spec effect data not in this GameData build (not generated)"
+      model.message = L["Spec effect data not in this GameData build (not generated)"]
     end
     return model
   end
@@ -362,9 +362,9 @@ function PV.KnowledgeTooltipLines(row)
   lines[#lines + 1] = "Left this week: " .. c.left
   local status = type(row) == "table" and type(row.summary) == "table" and row.summary.status or nil
   if status == "unknown" then
-    lines[#lines + 1] = "Unknown: no quest data from this week yet (log in on this character)"
+    lines[#lines + 1] = L["Unknown: no quest data from this week yet (log in on this character)"]
   elseif status ~= "ok" then
-    lines[#lines + 1] = "No knowledge data for this profession in this GameData build"
+    lines[#lines + 1] = L["No knowledge data for this profession in this GameData build"]
   end
   local note = view().CurrentDataNote()
   if note then lines[#lines + 1] = "Knowledge " .. note end

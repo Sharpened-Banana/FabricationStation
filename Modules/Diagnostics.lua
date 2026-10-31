@@ -285,7 +285,7 @@ local function slash_capture()
   end
 end
 
-ns.FS:RegisterSlash("capture", slash_capture, "save the selected recipe as a test fixture")
+ns.FS:RegisterSlash("capture", slash_capture, L["save the selected recipe as a test fixture"])
 
 ---------------------------------------------------------------------------
 -- Options

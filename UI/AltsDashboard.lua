@@ -32,8 +32,8 @@ local PLANNER_TAB = "planner"
 local DIM, WARN = "|cff9d9d9d", "|cffff8000"   -- WARN: the orange of the tabs' "Old data" marker
 
 M.MAX_LINES = 6
-M.CLICK_HINT = "Click to open the Planner"
-M.EMPTY_TEXT = "No knowledge data yet"
+M.CLICK_HINT = L["Click to open the Planner"]
+M.EMPTY_TEXT = L["No knowledge data yet"]
 
 local function module(name)
   return ns.FS:GetModule(name, true)
@@ -61,7 +61,7 @@ local function format_pair(pair, isTotal)
     return pair.tooltip and color(WARN, text) or text
   end
   if right == "" then return color(DIM, left) end
-  if right:sub(1, 1) == "?" then right = color(DIM, right) end
+  if right == L["? KP"] then right = color(DIM, right) end
   return right .. "  " .. left
 end
 

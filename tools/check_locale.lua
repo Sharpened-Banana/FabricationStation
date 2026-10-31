@@ -176,15 +176,70 @@ local function load_allowlist(path)
   return literals, files
 end
 
+-- Extra keys whose string value is display text, wherever they appear (option/tab/widget/column tables).
+local KEYED = { "tooltip", "text", "long", "hint", "header" }
+
+-- Lines carrying one of these calls hold ids, log sources, developer errors or lookup patterns, not display text.
+local NON_DISPLAY_LINE = {
+  "%f[%w_]error%(", "%f[%w_]assert%(", "LogError%(", "SafeCall%(", "Debounce%(", "RegisterEvent%(", "RegisterMessage%(",
+  "SendMessage%(", "NewModule%(", "GetModule%(", "LibStub%(", "CreateFrame%(", "hooksecurefunc%(", "%f[%w_]require%(",
+  ":find%(", ":match%(", ":gmatch%(", ":gsub%(", "string%.find%(", "string%.match%(", "string%.gsub%(",
+  "RegisterCallback%(", "UnregisterCallback%(", "Msg%.", "IsAddOnLoaded%(", "GetAddOnMetadata%(", "SetScript%(",
+  "SetAtlas%(", "SetTexture%(", "SetNormalTexture%(", "SetFont%(", "PlaySound%(",
+}
+
+-- Names of constant tables that hold display text: LABELS, TEXTS, NOTES, REFUSED, NONE, MESSAGES, ...
+local function is_text_table_name(name)
+  return name:find("LABEL") or name:find("TEXT") or name:find("NOTE") or name:find("NAMES") or name:find("REFUSED")
+    or name:find("_NONE") or name:find("MESSAGE") or name:find("TITLE") or name:find("HINT") or name:find("WORDS")
+end
+
+-- Every string literal on the line: { startPos, endPos(after quote), text, before, after } (comments skipped).
+local function line_literals(line)
+  local out, i = {}, 1
+  while i <= #line do
+    local c = line:sub(i, i)
+    if c == '"' or c == "'" then
+      local text, after = parse_string(line, i)
+      if not text then break end
+      out[#out + 1] = { i, after, text, line:sub(1, i - 1), line:sub(after) }
+      i = after
+    elseif c == "-" and line:sub(i, i + 1) == "--" then
+      break
+    else
+      i = i + 1
+    end
+  end
+  return out
+end
+
+local function words_of(text)
+  text = text:gsub("%%%%", ""):gsub("%%[%d%.%-%+ #]*%a", ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+  local n = 0
+  for _ in text:gmatch("%a%a+") do n = n + 1 end
+  return n
+end
+
 function M.find_literals(paths, allowlistPath)
   local allowLiteral, allowFile = load_allowlist(allowlistPath)
-  local hits = {}
+  local hits, seen = {}, {}
+  local function hit(file, lineNo, t)
+    local key = file .. "\0" .. lineNo .. "\0" .. t
+    if seen[key] or allowLiteral[file .. "\0" .. t] then return end
+    seen[key] = true
+    hits[#hits + 1] = { file = file, line = lineNo, text = t }
+  end
   for _, file in ipairs(lua_files(paths)) do
     local src = not allowFile[file] and read_file(file)
     if src then
-      local lineNo = 0
-      for line in (src .. "\n"):gmatch("(.-)\r?\n") do
-        lineNo = lineNo + 1
+      local prev = ""
+      local lines = {}
+      for line in (src .. "\n"):gmatch("(.-)\r?\n") do lines[#lines + 1] = line end
+      local textDepth = nil   -- brace depth inside a display-text constant table
+      local depth = 0
+      for idx, line in ipairs(lines) do
+        local lineNo = idx
+        local nextLine = lines[idx + 1] or ""
         if not is_comment(line) then
           for _, spec in ipairs(CALL_PATTERNS) do
             local init = 1
@@ -203,13 +258,46 @@ function M.find_literals(paths, allowlistPath)
                 end
               end
               for _, t in ipairs(found) do
-                if has_words(t) and not allowLiteral[file .. "\0" .. t] then
-                  hits[#hits + 1] = { file = file, line = lineNo, text = t }
-                end
+                if has_words(t) then hit(file, lineNo, t) end
               end
             end
           end
+
+          -- Second rule: complete literals (not one piece of a concatenation) that read as display text.
+          local skipLine = false
+          for _, p in ipairs(NON_DISPLAY_LINE) do
+            if line:find(p) then skipLine = true; break end
+          end
+          local code = line:gsub("%-%-.*$", "")
+          local opens = select(2, code:gsub("{", "")) - select(2, code:gsub("}", ""))
+          if not textDepth and opens > 0 then
+            local name = code:match("^%s*local%s+([%w_]+)%s*=%s*{") or code:match("^%s*([%w_%.]+)%s*=%s*{")
+            if name and is_text_table_name(name) then textDepth = depth + 1 end
+          end
+          for _, lit in ipairs(line_literals(line)) do
+            local before, after, text = lit[4], lit[5], lit[3]
+            local concat = before:match("%.%.%s*$") or after:match("^%s*%.%.")
+              or (before:match("^%s*$") and prev:match("%.%.%s*$"))
+              or (after:match("^%s*[,%)]?%s*$") and nextLine:match("^%s*%.%."))
+            local direct = before:match("%f[%w_]L%[%s*$") or before:match("%f[%w_]L%(%s*$") or before:match("[=~]=%s*$")
+            local ctxKey = before:match("([%w_]+)%s*=%s*$")
+            local keyed = false
+            if ctxKey then
+              for _, k in ipairs(KEYED) do if ctxKey == k then keyed = true end end
+            end
+            local inTextTable = textDepth and (ctxKey or before:match('%[%s*"[%w_]+"%s*%]%s*=%s*$'))
+            if not concat and not direct and not skipLine and not text:find("^Interface") and not text:find("://") then
+              if (words_of(text) >= 2 and text:find("%a%a+[ ]+[%a%d%(%[]"))
+                  or text:find("^%u[%a ]+:$")
+                  or ((keyed or inTextTable) and has_words(text)) then
+                hit(file, lineNo, text)
+              end
+            end
+          end
+          depth = depth + opens
+          if textDepth and depth < textDepth then textDepth = nil end
         end
+        prev = line
       end
     end
   end

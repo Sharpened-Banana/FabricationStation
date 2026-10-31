@@ -602,7 +602,7 @@ local function holding_text(entry)
   end
   if entry.reagentBank > 0 then parts[#parts + 1] = "reagent bank " .. entry.reagentBank end
   if entry.stale then
-    parts[#parts + 1] = entry.dataAgeSeconds and (format_age(entry.dataAgeSeconds) .. " old") or "age unknown"
+    parts[#parts + 1] = entry.dataAgeSeconds and (format_age(entry.dataAgeSeconds) .. " old") or L["age unknown"]
   end
   return entry.total .. (entry.bank == nil and "+" or "") .. " (" .. table.concat(parts, ", ") .. ")"
 end

@@ -184,10 +184,10 @@ local function plural(n, one, many) return whole(n) .. " " .. (n == 1 and one or
 -- Models (pure)
 ---------------------------------------------------------------------------
 
-local CATEGORY_LABELS = { weeklyQuest = L["Weekly quest"], treatise = "Treatise", treasure = "Treasure", drop = "Drop",
+local CATEGORY_LABELS = { weeklyQuest = L["Weekly quest"], treatise = L["Treatise"], treasure = L["Treasure"], drop = L["Drop"],
   darkmoon = L["Darkmoon Faire"] }
-local STATE_WORDS = { done = "done", open = "open", closed = "closed (not the faire week)",
-  unknown = "unknown (no quest data from this week)" }
+local STATE_WORDS = { done = L["done"], open = L["open"], closed = L["closed (not the faire week)"],
+  unknown = L["unknown (no quest data from this week)"] }
 
 -- Checklist row (Planner:GetKnowledgeChecklist), names = { [itemID] = item name | false (not cached) } (resolved by
 -- the caller; this model reads no API) -> the detail lines: a gold "<charKey> <profession>" title, then one line per
@@ -201,7 +201,7 @@ function Tab.KnowledgeDetailLines(row, names)
   local states = type(row.states) == "table" and row.states or {}
   local lines = { color(GOLD, tostring(row.charKey) .. " " .. tostring(row.name or profession_name(row.skillLineID))) }
   if summary.status == "noData" or #states == 0 then
-    lines[#lines + 1] = "  No knowledge data for this profession in this GameData build"
+    lines[#lines + 1] = L["  No knowledge data for this profession in this GameData build"]
   else
     for _, st in ipairs(states) do
       local source = type(st.source) == "table" and st.source or {}
@@ -239,12 +239,12 @@ end
 -- where the knowledge data comes from.
 function Tab.KnowledgeFooter()
   local kb, client = U.knowledgeBuild(), U.clientBuild()
-  local text = "Knowledge data: " .. (kb and ("build " .. whole(kb)) or "not generated")
+  local text = "Knowledge data: " .. (kb and ("build " .. whole(kb)) or L["not generated"])
   local reset = seconds_until_reset()
   if reset then text = text .. DOT .. "Weekly reset in " .. CV().FormatDuration(reset) end
   local about
   if not kb then
-    about = "No knowledge data in this GameData: knowledge counts show as ?"
+    about = L["No knowledge data in this GameData: knowledge counts show as ?"]
   else
     about = "Knowledge sources come from GameData build " .. whole(kb)
     if client and client ~= kb then about = about .. " (this is game build " .. whole(client) .. ")" end
@@ -255,7 +255,7 @@ end
 -- -> text, tooltip for the Missing recipes footer; "Recipe sources: not generated · " first while the RecipeSources
 -- table has no build (the checked-in table is generated; this covers a build that has not been generated yet).
 function Tab.MissingFooter()
-  local base = "Recipe lists fill in when you open the profession on any character"
+  local base = L["Recipe lists fill in when you open the profession on any character"]
   local build = ns.GameData.Get("RecipeSources") ~= nil and ns.GameData.TableBuild("RecipeSources") or nil
   if not finite(build) then
     local text = "Recipe sources: not generated" .. DOT .. base
@@ -292,11 +292,11 @@ function Tab.ScheduleRow(r, now)
   local toFull = finite(r.fullAt) and math.max(0, r.fullAt - now) or nil
   local caps, capsLine
   if toFull == nil and r.rateUnknown then
-    caps, capsLine = "?", "Full in: unknown"
+    caps, capsLine = "?", L["Full in: unknown"]
   elseif toFull == nil then
-    caps, capsLine = ">14d", "Full in: more than 14 days"
+    caps, capsLine = ">14d", L["Full in: more than 14 days"]
   elseif toFull == 0 then
-    caps, capsLine = "Full", "Full in: now (full)"
+    caps, capsLine = "Full", L["Full in: now (full)"]
   else
     caps = CV().FormatDuration(toFull)
     capsLine = "Full in: " .. caps
@@ -372,13 +372,13 @@ local function queue_row(grow)
   local what = whole(r.crafts) .. " " .. TIMES .. " " .. grow.recipeName
   local Q = enabled("Queue")
   if not Q or type(Q.Add) ~= "function" then
-    notice = "Not queued: the Queue is turned off"
+    notice = L["Not queued: the Queue is turned off"]
   else
     local id = Q:Add({ recipeID = r.recipeID, quantity = r.crafts, charKey = r.charKey, useConcentration = true })
     if id ~= nil then
       notice = "Queued: " .. what .. " for " .. tostring(r.charKey) .. " (with concentration)"
     elseif ns.FS.dbIsNewer then
-      notice = "Not queued: the saved data is from a newer version (read-only)"
+      notice = L["Not queued: the saved data is from a newer version (read-only)"]
     else
       notice = "Not queued: the Queue did not accept " .. what
     end
@@ -540,9 +540,9 @@ local function spec_section(P)
     local r = raw[m.pathID] or {}
     local afford
     if r.affordable == true then
-      afford = "Affordable with your unspent points"
+      afford = L["Affordable with your unspent points"]
     elseif r.affordable == false then
-      afford = "Needs more points than you have unspent"
+      afford = L["Needs more points than you have unspent"]
     end
     out.rows[#out.rows + 1] = {
       key = m.pathID,

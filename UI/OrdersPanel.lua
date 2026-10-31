@@ -78,9 +78,9 @@ local BACKDROP = {
 }
 local BEST_NONE = {
   disabled = L["Orders module is off"],
-  noProfession = "open a profession",
-  alreadyClaimed = "you already have a claimed order",
-  none = "none claimable",
+  noProfession = L["open a profession"],
+  alreadyClaimed = L["you already have a claimed order"],
+  none = L["none claimable"],
 }
 local CLAIM_REFUSED = {
   disabled = L["The Orders module is off"],
@@ -251,7 +251,7 @@ end
 -- otherwise tostring(itemID), and Ledger:Benchmark's result (nil: no benchmark yet).
 function M.BestText(itemText, view, benchmark)
   local net = view.net
-  local netText = "no price"
+  local netText = L["no price"]
   if is_money(net) then netText = (flags_of(view).estimated and "~" or "") .. ns.UI.FormatMoney(net) end
   local pct = "n/a"
   local tip, median = view.tip, type(benchmark) == "table" and benchmark.median or nil

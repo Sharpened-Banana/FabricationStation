@@ -90,7 +90,7 @@ function Dashboard.SetLines(frame, lines)
 end
 
 local function show_failure(frame)
-  frame.errorText = "widget failed"
+  frame.errorText = L["widget failed"]
   if not frame.errorLine then
     frame.errorLine = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.errorLine:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PADDING, -PADDING)
@@ -344,12 +344,12 @@ end
 local function top_craft_line(row)
   local parts = {}
   if row.noPrice then
-    parts[1] = color(DIM, "no price")
+    parts[1] = color(DIM, L["no price"])
   else
     parts[1] = color(row.profit > 0 and GOOD or BAD, ns.UI.FormatMoney(row.profit))
   end
   parts[#parts + 1] = recipe_name(row.recipeID) .. " (" .. short_name(row.charKey) .. ")"
-  if row.missingPrices then parts[#parts + 1] = color(WARN, "some prices missing") end
+  if row.missingPrices then parts[#parts + 1] = color(WARN, L["some prices missing"]) end
   if row.estimated then parts[#parts + 1] = color(WARN, "estimate") end
   if row.ageDays ~= nil then
     local age = "price " .. ns.UI.FormatAge(row.ageDays * SECONDS_PER_DAY) .. " old"
@@ -401,12 +401,12 @@ local function refresh_queue_summary(frame)
     local age = prices_age_text()
     lines[2] = "Reagent cost: " .. ns.UI.FormatMoney(model.totalCost) .. (age and color(DIM, "  (" .. age .. ")") or "")
   else
-    lines[2] = "Reagent cost: " .. color(WARN, "unknown (some prices missing)")
+    lines[2] = "Reagent cost: " .. color(WARN, L["unknown (some prices missing)"])
   end
   if model.missingItems > 0 then
     lines[3] = color(WARN, (L["%d reagents missing"]):format(model.missingItems))
   else
-    lines[3] = "All reagents on hand."
+    lines[3] = L["All reagents on hand."]
   end
   Dashboard.SetLines(frame, lines)
 end
@@ -455,7 +455,7 @@ local function concentration_line(row, now)
   elseif row.fullAt then
     status = "full in " .. duration_text(row.fullAt - now)
   else
-    status = color(DIM, "full in ?")
+    status = color(DIM, L["full in ?"])
   end
   return ("%s  %s  %d/%d  %s"):format(short_name(row.charKey), tostring(row.profession or "?"),
     math.floor(row.value), math.floor(row.max), status)

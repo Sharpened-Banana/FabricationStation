@@ -51,9 +51,9 @@ local TONES = { good = GOOD, warn = WARN, bad = BAD }
 local WHITE, GREY, GOLD, RED = { 1, 1, 1 }, { 0.62, 0.62, 0.62 }, { 1, 0.82, 0 }, { 1, 0.25, 0.25 }
 local SELECTED_TINT = { 0.25, 0.5, 1, 0.3 }
 
-local READ_ONLY = "Saved data is from a newer version of the addon (read-only); nothing was changed"
+local READ_ONLY = L["Saved data is from a newer version of the addon (read-only); nothing was changed"]
 -- At 516 px the status line is ~218 px, so this can be cut there; the status area's tooltip shows it in full.
-local READ_ONLY_NOTICE = "Read-only: saved data is from a newer addon version"
+local READ_ONLY_NOTICE = L["Read-only: saved data is from a newer addon version"]
 local LINK_ERRORS = {
   empty = L["Type the main character's name first"],
   self = L["A character cannot be its own alt"],
@@ -1053,7 +1053,7 @@ local function refresh_detail()
   end
   d.blockedHint.value = via
   if via then
-    d.blockedHint.text:SetText(color(DIM, "Group blocked via " .. via))
+    d.blockedHint.text:SetText(color(DIM, L["Group blocked via %s"]:format(via)))
     d.blockedHint:Show()
   else
     d.blockedHint.text:SetText("")
@@ -1086,7 +1086,7 @@ local function refresh_detail()
     chip.value, chip.label = name, name == root and (name .. " (main)") or name
     chip:SetText(chip.label)
   end
-  d.groupLabel:SetText(#others > 0 and "Group:" or color(DIM, L["No linked characters"]))
+  d.groupLabel:SetText(#others > 0 and L["Group:"] or color(DIM, L["No linked characters"]))
   local layout = view.historyLayout
   local groupWidth = (layout and layout.left or 0) - GROUP_LABEL_WIDTH
   if groupWidth <= 0 then groupWidth = 200 end
@@ -1107,7 +1107,7 @@ function refresh()
   view.selectedRoot = C and selected and C:Root(selected) or nil
   if #view.list.rows == 0 then
     local text = searchText ~= "" and (L['No customer matches "%s".']):format((searchText:gsub("|", "||")))
-      or "Customers appear here after you fulfil a crafting order for another player."
+      or L["Customers appear here after you fulfil a crafting order for another player."]
     view.empty:SetText(color(DIM, text))
     view.empty:Show()
   else

@@ -44,7 +44,7 @@ local PROVIDER_RIGHT_WIDTH = 120   -- the right-hand column of a provider line; 
 local MAX_QUALITY_ROWS = 5
 local SECONDS_PER_DAY = 86400
 local EM_DASH, TIMES, RSAQUO = "\226\128\148", "\195\151", "\226\128\186"
-local READ_ONLY = "Saved data is from a newer version of FabricationStation; the queue is read-only."
+local READ_ONLY = L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
 local TONES = { good = { 0.25, 1, 0.25 }, bad = { 1, 0.25, 0.25 }, warn = { 1, 0.82, 0 }, plain = { 1, 1, 1 },
   dim = { 0.62, 0.62, 0.62 } }
 local BACKDROP = {
@@ -310,7 +310,7 @@ function M.BuildModel(r, liveResult)
   local skill, difficulty = src.skill, src.difficulty
   local lower, nextThreshold = src.lowerThreshold, src.nextThreshold
   local atMax = type(skill) == "number" and nextThreshold == nil
-  local barFill, skillToNext, skillText = 0, nil, "Skill unknown"
+  local barFill, skillToNext, skillText = 0, nil, L["Skill unknown"]
   if type(skill) == "number" then
     local shown = math.floor(skill + 0.5)
     local versus = type(difficulty) == "number" and (" / " .. math.floor(difficulty + 0.5)) or ""
@@ -326,18 +326,19 @@ function M.BuildModel(r, liveResult)
     end
   end
   local flagsText = flags_text(r)
-  local qualityLabel = headerSource == "game" and L["Quality: "] or "Predicted quality: "
-  local qualityText = qualityLabel .. (type(src.expectedQuality) == "number" and ("Q" .. src.expectedQuality) or "--")
-    .. (liveResult and liveResult.applyingConcentration and " (concentration)" or "")
+  local qualityValue = type(src.expectedQuality) == "number" and L["Q%d"]:format(src.expectedQuality) or "--"
+  local qualityText = headerSource == "game" and L["Quality: %s"]:format(qualityValue)
+    or L["Predicted quality: %s"]:format(qualityValue)
+  if liveResult and liveResult.applyingConcentration then qualityText = L["%s (concentration)"]:format(qualityText) end
   if headerSource == "game" then
-    qualityText = qualityText .. " (game)"
+    qualityText = L["%s (game)"]:format(qualityText)
   elseif headerSource == "estimate" and type(src.expectedQuality) == "number" then
-    qualityText = qualityText .. " (estimate)"
+    qualityText = L["%s (estimate)"]:format(qualityText)
   end
   return {
     qualityText = qualityText,
     headerSource = headerSource,
-    qualityHeaderText = "Cheapest reagents per quality" .. (estimated and " (estimate)" or ""),
+    qualityHeaderText = estimated and L["Cheapest reagents per quality (estimate)"] or L["Cheapest reagents per quality"],
     skill = skill, difficulty = difficulty, lowerThreshold = lower, nextThreshold = nextThreshold,
     barFill = barFill, skillToNext = skillToNext, skillText = skillText,
     concentrationText = concentration_text(r, liveResult, atMax),

@@ -136,7 +136,7 @@ function Tab.ResultRow(r, me)
   local total = tostring(r.total) .. (r.partial and "+" or "")
   local warband, warbandTip
   if r.warband == nil then
-    warband, warbandTip = color(DIM, "not scanned"), "not scanned"
+    warband, warbandTip = color(DIM, L["not scanned"]), L["not scanned"]
   else
     warband, warbandTip = tostring(r.warband), tostring(r.warband)
     if r.warbandStale then
@@ -151,7 +151,7 @@ function Tab.ResultRow(r, me)
     if e.bank == nil then parts[#parts + 1] = "bank ?" elseif e.bank > 0 then parts[#parts + 1] = "bank " .. e.bank end
     if e.reagentBank > 0 then parts[#parts + 1] = "reagent bank " .. e.reagentBank end
     if e.stale then
-      parts[#parts + 1] = e.dataAgeSeconds and (ns.UI.FormatAge(e.dataAgeSeconds) .. " old") or "age unknown"
+      parts[#parts + 1] = e.dataAgeSeconds and (ns.UI.FormatAge(e.dataAgeSeconds) .. " old") or L["age unknown"]
     end
     tooltip[#tooltip + 1] = short_name(e.charKey, me) .. ": " .. count_text(e) .. " (" .. table.concat(parts, ", ") .. ")"
   end
@@ -183,7 +183,7 @@ function Tab.SearchStatus(query, rows, hiddenShown)
     return text, nil
   end
   if not query:match("^%d+$") and #query < 3 then
-    return L["Search: too short"], "Type at least 3 letters of a reagent name, or an item ID"
+    return L["Search: too short"], L["Type at least 3 letters of a reagent name, or an item ID"]
   end
   return L["Search: no items"],
     (L['No reagent named "%s" on your visible characters or in the warband bank']):format((query:gsub("|", "||")))
@@ -453,7 +453,7 @@ function refresh()
     view.results.frame:Hide(); view.grid.frame:Show()
     view.grid:SetRows(grid_rows(rows, ns.FS:Now()))
     if #rows == 0 then
-      show_empty(hiddenCount > 0 and "Every character is hidden: tick Show hidden to see them"
+      show_empty(hiddenCount > 0 and L["Every character is hidden: tick Show hidden to see them"]
         or L["No characters saved yet: log in on each character once"])
     else
       show_empty(nil)

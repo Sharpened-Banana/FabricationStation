@@ -23,3 +23,32 @@ Modules/PlanCalc.lua:*
 # Not localized on purpose, and not flagged by find_literals: Util.LogError / Diagnostics texts, slash command
 # names, saved-data and setting keys, message names, module ids, Auctionator search terms, CSV field names, and
 # Ledger's mail-subject and invoice matching (compared against the client's own text).
+
+# ChatMatcher is a pure file (specs load it without Core): its words are chat keywords matched against player text.
+Modules/Social/ChatMatcher.lua:*
+
+# Error codes compared in code and log texts (Util.LogError / diagnostics): not shown in the UI as written.
+Core/Migrations.lua:bad schemaVersion
+Modules/Ledger.lua:Auction successful: %s
+Modules/Ledger.lua:auction sales are not recorded from mail
+Modules/Ledger.lua:that action is not recorded
+Modules/Orders.lua:hook target missing: ProfessionsFrame.OrdersPage.ShowOrders
+Modules/Orders.lua:hook target missing: ProfessionsFrame.OrdersPage.ShowBuckets
+Modules/Scanner.lua:dropped professions
+Modules/Social/Guild.lua:own profile of %s failed validation (%s); not shared
+Modules/Social/GuildOptions.lua:no codec
+Modules/Social/GuildOptions.lua:no profile
+Modules/Social/GuildOptions.lua:build failed
+
+# Pieces of sentences that code joins with `..`, table.concat or plural logic. They cannot be translated one by
+# one; turning each sentence into one format string is a follow-up (see the Task 13 report).
+UI/Tabs/Queue.lua: in Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear
+UI/Tabs/Queue.lua: item name
+UI/Tabs/Queue.lua: item names
+UI/Tabs/Queue.lua:its name
+UI/Tabs/Queue.lua:their names
+UI/Tabs/Characters.lua: (hidden characters are not searched)
+UI/Tabs/Characters.lua: (this session only: the saved data is from a newer version)
+UI/Tabs/Characters.lua: (tick Show hidden to see it again)
+UI/Tabs/PlannerView.lua:this character
+UI/Tabs/PlannerView.lua:This character
