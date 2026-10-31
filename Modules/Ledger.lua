@@ -333,6 +333,405 @@ function Ledger:Benchmark(recipeID, quality)
   }
 end
 
+---------------------------------------------------------------------------
+-- Capture: craft cost basis, order commissions, AH sale mail
+---------------------------------------------------------------------------
+-- Crafts: the post-hook on C_TradeSkillUI.CraftRecipe remembers what is being crafted; each
+-- TRADE_SKILL_ITEM_CRAFTED_RESULT then records a "craft" entry (amount = -cost). A craft for no order also feeds
+-- costBasis[itemID] = {totalCost, totalQty, recipeID} and nameIndex[itemName] = {itemID, ambiguous}, which price the
+-- AH sales read from mail later.
+-- Ruling P3: recrafts and enchants on existing items are not tracked by the Ledger in phase 2. They do not go
+-- through CraftRecipe (Blizzard calls RecraftRecipe, RecraftRecipeForOrder or CraftEnchant), so their hooks only
+-- drop the pending craft (a result after them is not charged to an earlier, unfinished multi-cast craft), an
+-- enchant result (data.isEnchant) is ignored, and a recraft order records neither a craft nor its commission.
+-- Salvage is no fresh craft either and is handled the same way.
+-- Every amount is rounded to whole copper here (Ledger:Add raises for anything else); a cost that is not a finite
+-- number is skipped and logged once, so a hook never turns the Ledger off.
+
+local pendingCraft      -- { recipeID, craftingReagents, orderID, provided, castsLeft } from the last CraftRecipe
+local lastCraft         -- { operationID, entry, fedBasis, itemID }: the last recorded craft (kept after pendingCraft)
+local untrackedOrders = {}  -- [orderID] = true: recraft orders (Ruling P3), for this session
+local seenMail = {}         -- [signature] = true: mail money already recorded this session
+local loggedOnce = {}
+
+local DEFAULT_SOLD_SUBJECT = "Auction successful: %s"
+
+local function log_once(key, text)
+  if loggedOnce[key] then return end
+  loggedOnce[key] = true
+  ns.FS:LogError("Ledger:Capture", text)
+end
+
+-- Whole copper (half up), or nil for anything that is not a finite number.
+local function to_copper(x)
+  if type(x) ~= "number" or x ~= x or x == math.huge or x == -math.huge then return nil end
+  return math.floor(x + 0.5)
+end
+
+-- db.global.ledger[key] for reads (nil when missing; nothing is created).
+local function store_view(key)
+  local g = global()
+  local ledger = g and g.ledger
+  local t = type(ledger) == "table" and ledger[key]
+  if type(t) == "table" then return t end
+end
+
+-- db.global.ledger[key] for writes (created when missing). Nil while the saved data is read-only.
+local function store_for_write(key)
+  if not writable() then return nil end
+  local g = global()
+  if type(g.ledger) ~= "table" then g.ledger = {} end
+  if type(g.ledger[key]) ~= "table" then g.ledger[key] = {} end
+  return g.ledger[key]
+end
+
+local function price_of(itemID)
+  local prices = ns.FS:GetModule("Prices", true)
+  if not prices or type(itemID) ~= "number" then return nil end
+  local result = prices:Get(itemID)
+  local value = type(result) == "table" and result.value or nil
+  if type(value) == "number" and value == value and value >= 0 then return value end
+end
+
+local function modified_reagent_type()
+  local types = Enum and Enum.TradeskillSlotDataType
+  return type(types) == "table" and types.ModifiedReagent or 2
+end
+
+-- The item text of a link or invoice name: atlas (quality icon) and colour markup removed, spaces trimmed.
+local function clean_name(text)
+  if type(text) ~= "string" then return nil end
+  text = text:gsub("|A.-|a", ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|cn[^:]*:", ""):gsub("|r", "")
+  text = text:match("^%s*(.-)%s*$")
+  if text ~= "" then return text end
+end
+
+-- The item name inside a link's [...], without the quality icon. Nil when there is none.
+function Ledger.ItemNameFromLink(link)
+  if type(link) ~= "string" then return nil end
+  return clean_name(link:match("|h%[(.-)%]|h") or link:match("%[(.-)%]"))
+end
+
+-- The itemID last crafted (for no order) under this name, and whether more than one itemID was crafted under it
+-- (quality ranks of one item have different IDs but the same name). Nil when the name is unknown.
+function Ledger:ResolveItemName(name)
+  local index = store_view("nameIndex")
+  local found = index and type(name) == "string" and index[name]
+  if type(found) ~= "table" or found.itemID == nil then return nil end
+  return found.itemID, found.ambiguous == true
+end
+
+local function reagent_item(r)
+  local reagent = type(r) == "table" and r.reagent
+  local itemID = type(reagent) == "table" and reagent.itemID or nil
+  if type(itemID) == "number" then return itemID end
+end
+
+-- What one craft cost: cost (whole copper, nil when not a finite number), incomplete, estimated.
+-- craftingReagents = { {reagent = {itemID?, currencyID?}, dataSlotIndex, quantity} } (ModifiedReagent slots only),
+-- provided = { [itemID] = n } customer-provided items (free), returned = { {reagent = {itemID?}, quantity} }.
+-- Each schematic slot uses the entries with its dataSlotIndex. A required slot with none is a fixed reagent
+-- (lowest rank × quantity, exact) or a ModifiedReagent slot (same, but estimated), unless the customer provided it:
+-- Blizzard leaves customer-provided slots out of an order's craftingReagents. Optional slots with no entry and
+-- currency costs add nothing. A provided item is free once (max(0, used - provided)). Returned reagents are
+-- subtracted at their price. An item with no price makes the cost incomplete (the cost then sums the priced
+-- items only); so does a missing schematic (fixed reagents are then unknown).
+function Ledger:CostOfCraft(recipeID, craftingReagents, provided, returned)
+  local remaining = {}
+  if type(provided) == "table" then
+    for itemID, n in pairs(provided) do
+      if type(n) == "number" and n > 0 then remaining[itemID] = n end
+    end
+  end
+  local cost, incomplete, estimated = 0, false, false
+
+  -- Charges the part of `quantity` not covered by provided items.
+  local function charge(itemID, quantity)
+    if type(itemID) ~= "number" or type(quantity) ~= "number" or quantity <= 0 then return end
+    local free = math.min(quantity, remaining[itemID] or 0)
+    if free > 0 then remaining[itemID] = remaining[itemID] - free end
+    local paid = quantity - free
+    if paid <= 0 then return end
+    local price = price_of(itemID)
+    if price == nil then incomplete = true else cost = cost + price * paid end
+  end
+
+  local entries = type(craftingReagents) == "table" and craftingReagents or {}
+  local scanner = ns.FS:GetModule("Scanner", true)
+  local schematic = scanner and type(recipeID) == "number" and scanner:GetSchematic(recipeID) or nil
+  local slots = type(schematic) == "table" and type(schematic.reagentSlots) == "table" and schematic.reagentSlots
+  local used = {}  -- [entry index] = true once charged through a slot
+  if not slots then incomplete = true; slots = {} end
+  local modified = modified_reagent_type()
+  for _, slot in ipairs(slots) do
+    local items = type(slot) == "table" and type(slot.reagents) == "table" and slot.reagents or {}
+    if type(slot) == "table" and not (slot.currencyID ~= nil and #items == 0) then
+      local found = false
+      for i, r in ipairs(entries) do
+        if type(r) == "table" and r.dataSlotIndex ~= nil and r.dataSlotIndex == slot.dataSlotIndex then
+          found, used[i] = true, true
+          charge(reagent_item(r), r.quantity)
+        end
+      end
+      if not found and slot.required and type(items[1]) == "number" then
+        local quantity = number_or(slot.quantity, 0)
+        local covered = 0   -- customer-provided items of this slot, any rank
+        for _, itemID in ipairs(items) do
+          local free = math.min(quantity - covered, remaining[itemID] or 0)
+          if free > 0 then remaining[itemID] = remaining[itemID] - free; covered = covered + free end
+        end
+        if quantity - covered > 0 then
+          charge(items[1], quantity - covered)
+          if slot.dataSlotType == modified then estimated = true end
+        end
+      end
+    end
+  end
+  for i, r in ipairs(entries) do  -- entries the schematic does not know (or no schematic) were still used
+    if not used[i] then charge(reagent_item(r), type(r) == "table" and r.quantity or nil) end
+  end
+
+  if type(returned) == "table" then
+    for _, r in ipairs(returned) do
+      local itemID, quantity = reagent_item(r), type(r) == "table" and r.quantity or nil
+      if itemID and type(quantity) == "number" and quantity > 0 then
+        local price = price_of(itemID)
+        if price == nil then incomplete = true else cost = cost - price * quantity end
+      end
+    end
+  end
+  local copper = to_copper(cost)  -- checked before clamping: math.max(0, NaN) would give 0
+  if copper and copper < 0 then copper = 0 end
+  return copper, incomplete, estimated
+end
+
+-- Post-hook on C_TradeSkillUI.CraftRecipe (Blizzard's UI and Queue:CraftNext alike): remembers the craft until its
+-- results arrive. The claimed order's customer-provided reagents are free; a recraft order is not tracked (P3).
+function Ledger:OnCraftRecipe(recipeID, numCasts, craftingReagents, _recipeLevel, orderID, _applyConcentration)
+  pendingCraft = nil
+  if type(recipeID) ~= "number" then return end
+  local provided = {}
+  if orderID ~= nil then
+    if untrackedOrders[orderID] then return end
+    local orders = ns.FS:GetModule("Orders", true)
+    local ok, claimed = pcall(function() return orders and orders:GetClaimedOrder() end)
+    if ok and type(claimed) == "table" and claimed.orderID == orderID then
+      if claimed.isRecraft then untrackedOrders[orderID] = true; return end
+      if type(claimed.provided) == "table" then provided = copy(claimed.provided) end
+    end
+  end
+  local casts = math.max(1, math.floor(number_or(numCasts, 1)))
+  pendingCraft = {
+    recipeID = recipeID, craftingReagents = copy(type(craftingReagents) == "table" and craftingReagents or {}),
+    orderID = orderID, provided = provided, castsLeft = casts,
+  }
+end
+
+-- Post-hook on RecraftRecipe / RecraftRecipeForOrder(orderID) / CraftEnchant / CraftSalvage (Ruling P3): what
+-- follows is not the pending craft, and a recraft order's commission is not recorded.
+function Ledger:OnUntrackedCraft(orderID)
+  pendingCraft = nil
+  if orderID ~= nil then untrackedOrders[orderID] = true end
+end
+
+local function add_cost_basis(itemID, cost, quantity, recipeID)
+  local basis = store_for_write("costBasis")
+  if not basis then return false end
+  local row = basis[itemID]
+  if type(row) ~= "table" or type(row.totalCost) ~= "number" or type(row.totalQty) ~= "number" then
+    row = { totalCost = 0, totalQty = 0 }
+    basis[itemID] = row
+  end
+  row.totalCost = row.totalCost + cost
+  row.totalQty = row.totalQty + quantity
+  row.recipeID = recipeID
+  return true
+end
+
+local function index_name(name, itemID)
+  local index = name and store_for_write("nameIndex")
+  if not index then return end
+  local old = index[name]
+  local ambiguous = type(old) == "table" and (old.ambiguous == true or (old.itemID ~= nil and old.itemID ~= itemID))
+  index[name] = { itemID = itemID, ambiguous = ambiguous or false }
+end
+
+-- A multicraft extra (same operationID as the last recorded craft): more items, no new cost, no cast used.
+local function add_extra(self, quantity)
+  if type(quantity) ~= "number" or quantity <= 0 or not writable() then return end
+  local entry = lastCraft.entry
+  entry.quantity = number_or(entry.quantity, 0) + quantity
+  if lastCraft.fedBasis then
+    local basis = store_view("costBasis")
+    local row = basis and basis[lastCraft.itemID]
+    if type(row) == "table" and type(row.totalQty) == "number" then row.totalQty = row.totalQty + quantity end
+  end
+  self:SendMessage(ns.Msg.LEDGER_CHANGED)
+end
+
+-- TRADE_SKILL_ITEM_CRAFTED_RESULT(data): records one cast of the pending craft as a "craft" entry.
+function Ledger:OnCraftResult(_, data)
+  if type(data) ~= "table" or data.isEnchant then return end  -- Ruling P3: enchants are not tracked
+  local operationID = data.operationID
+  if operationID == 0 then operationID = nil end
+  if operationID ~= nil and lastCraft and lastCraft.operationID == operationID then
+    add_extra(self, data.quantity)
+    return
+  end
+  local craft = pendingCraft
+  if not craft then return end
+  craft.castsLeft = craft.castsLeft - 1
+  if craft.castsLeft <= 0 then pendingCraft = nil end
+
+  local cost, incomplete, estimated =
+    self:CostOfCraft(craft.recipeID, craft.craftingReagents, craft.provided, data.resourcesReturned)
+  if cost == nil then
+    log_once("craftCost", "craft cost of recipe " .. tostring(craft.recipeID) .. " is not a number; craft not recorded")
+    return
+  end
+  local stored = self:Add({
+    type = "craft", amount = 0 - cost, itemID = data.itemID, quantity = data.quantity, quality = data.craftingQuality,
+    recipeID = craft.recipeID, ref = craft.orderID, operationID = operationID,
+    incomplete = incomplete or nil, estimated = estimated or nil,
+  })
+  if not stored then return end
+  store_for_write("costBasis"); store_for_write("nameIndex")  -- created with the first craft, even an order's
+  local fedBasis = false
+  local quantity = data.quantity
+  if craft.orderID == nil and not incomplete and type(data.itemID) == "number"
+    and type(quantity) == "number" and quantity > 0 then
+    fedBasis = add_cost_basis(data.itemID, cost, quantity, craft.recipeID)
+    index_name(Ledger.ItemNameFromLink(data.hyperlink), data.itemID)
+  end
+  lastCraft = operationID ~= nil
+    and { operationID = operationID, entry = stored, fedBasis = fedBasis, itemID = data.itemID } or nil
+end
+
+-- ns.Msg.ORDER_FULFILLED(fulfilled): records the commission. Its cost is what this order's craft entries cost
+-- (nil when there are none); an incomplete or estimated craft makes the commission so too.
+function Ledger:OnOrderFulfilled(_, fulfilled)
+  if type(fulfilled) ~= "table" then return end
+  local orderID = fulfilled.orderID
+  if fulfilled.isRecraft or (orderID ~= nil and untrackedOrders[orderID]) then return end  -- Ruling P3
+  local amount = to_copper(fulfilled.commission)
+  if amount == nil then
+    log_once("commission", "commission of order " .. tostring(orderID) .. " is unknown; not recorded")
+    return
+  end
+  local cost, incomplete, estimated = nil, false, false
+  if orderID ~= nil then
+    for _, entry in ipairs(self:Query({ type = "craft" })) do
+      if entry.ref == orderID and is_integer(entry.amount) then
+        cost = (cost or 0) - entry.amount
+        incomplete = incomplete or entry.incomplete == true
+        estimated = estimated or entry.estimated == true
+      end
+    end
+  end
+  self:Add({
+    type = "commission", amount = amount, tip = fulfilled.tip, recipeID = fulfilled.recipeID,
+    itemID = fulfilled.itemID, quality = fulfilled.quality, customer = fulfilled.customer,
+    orderType = fulfilled.orderType, ref = orderID, rewardsValue = fulfilled.rewardsValue, cost = cost,
+    incomplete = incomplete or nil, estimated = estimated or nil, time = fulfilled.time, charKey = fulfilled.charKey,
+  })
+end
+
+-- Lua pattern for the sold-mail subject (AUCTION_SOLD_MAIL_SUBJECT, English fallback), capturing the item text.
+local function sold_subject_pattern()
+  local format = AUCTION_SOLD_MAIL_SUBJECT
+  if type(format) ~= "string" or not format:find("%%%d?%$?s") then format = DEFAULT_SOLD_SUBJECT end
+  local pattern = format:gsub("%%%d?%$?s", "\0", 1):gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0"):gsub("%z", "(.+)")
+  return "^" .. pattern .. "$"
+end
+
+-- Item name and quantity from a sold-mail subject ("Potion of Foo" or "Potion of Foo (5)"), or nil.
+local function parse_sold_subject(subject)
+  if type(subject) ~= "string" then return nil end
+  local text = subject:match(sold_subject_pattern())
+  if not text then return nil end
+  local name, count = text:match("^(.-)%s*%((%d+)%)$")
+  if name and name ~= "" then return clean_name(name), tonumber(count) end
+  return clean_name(text), 1
+end
+
+-- Post-hook on TakeInboxMoney(index) and AutoLootMailItem(index): records an AH sale ("sale" entry) from the mail's
+-- seller invoice, or, without an invoice, from its "Auction successful" subject. Mail with no money left (already
+-- taken, or none) and mail already recorded this session (same signature) are skipped.
+function Ledger:OnTakeMoney(index)
+  local _, _, _, subject, money, _, daysLeft = GetInboxHeaderInfo(index)
+  if type(money) ~= "number" or money <= 0 then return end
+  local invoiceType, itemName, playerName, bid, _, deposit, consignment, _, _, _, count = GetInboxInvoiceInfo(index)
+  local sale
+  if invoiceType ~= nil then
+    if invoiceType ~= "seller" then return end
+    local amount = type(bid) == "number" and to_copper(bid - number_or(consignment, 0)) or to_copper(money)
+    sale = {
+      source = "invoice", itemName = clean_name(itemName), quantity = type(count) == "number" and count or 1,
+      amount = amount, buyer = playerName, deposit = type(deposit) == "number" and deposit or nil,
+    }
+  else
+    local name, quantity = parse_sold_subject(subject)
+    if not name then return end
+    sale = { source = "subject", itemName = name, quantity = quantity, amount = to_copper(money) }
+  end
+  if sale.amount == nil then return end
+
+  local minutes = type(daysLeft) == "number" and math.floor(daysLeft * 1440) or nil
+  local signature = table.concat({ tostring(itemName or sale.itemName), tostring(bid or money), tostring(count),
+    tostring(playerName), tostring(minutes) }, "|")
+  if seenMail[signature] then return end
+  seenMail[signature] = true
+
+  local itemID, ambiguous = self:ResolveItemName(sale.itemName)
+  local basis = store_view("costBasis")
+  local row = itemID and basis and basis[itemID]
+  if type(row) == "table" then
+    sale.recipeID = row.recipeID
+    if not ambiguous and type(row.totalCost) == "number" and type(row.totalQty) == "number" and row.totalQty > 0 then
+      sale.cost = to_copper(row.totalCost / row.totalQty * sale.quantity)
+    end
+  end
+  sale.type, sale.itemID, sale.ambiguous = "sale", itemID, ambiguous or nil
+  self:Add(sale)
+end
+
 function Ledger:OnEnable()
-  ns.FS:Wrap("Ledger", function() self:Prune(ns.FS:Now()) end)()
+  local function wrap(fn) return ns.FS:Wrap("Ledger", fn) end
+  wrap(function() self:Prune(ns.FS:Now()) end)()
+  self:RegisterEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", wrap(function(event, data) self:OnCraftResult(event, data) end))
+  self:RegisterMessage(ns.Msg.ORDER_FULFILLED, wrap(function(message, fulfilled)
+    self:OnOrderFulfilled(message, fulfilled)
+  end))
+
+  -- hooksecurefunc cannot be undone: install once per session; the bodies do nothing while the Ledger is off.
+  if self.hooked then return end
+  self.hooked = true
+  local function body(fn)
+    return wrap(function(...)
+      if self:IsEnabled() then fn(...) end
+    end)
+  end
+  local function hook(tbl, name, fn)  -- optional targets: skipped when the client does not have them
+    if type(tbl) == "table" and type(tbl[name]) == "function" then hooksecurefunc(tbl, name, body(fn)) end
+  end
+  local function hook_global(name, fn)
+    if type(_G[name]) == "function" then hooksecurefunc(name, body(fn)) end
+  end
+  wrap(function()
+    -- A post-hook only: FabricationStation calls CraftRecipe nowhere but Queue:CraftNext (tests/queue/craft_spec.lua
+    -- allows exactly this line).
+    hooksecurefunc(C_TradeSkillUI, "CraftRecipe", body(function(...) self:OnCraftRecipe(...) end))
+    hook(C_TradeSkillUI, "RecraftRecipe", function() self:OnUntrackedCraft() end)
+    hook(C_TradeSkillUI, "RecraftRecipeForOrder", function(orderID) self:OnUntrackedCraft(orderID) end)
+    hook(C_TradeSkillUI, "CraftEnchant", function() self:OnUntrackedCraft() end)
+    hook(C_TradeSkillUI, "CraftSalvage", function() self:OnUntrackedCraft() end)
+    hook_global("TakeInboxMoney", function(index) self:OnTakeMoney(index) end)
+    hook_global("AutoLootMailItem", function(index) self:OnTakeMoney(index) end)
+  end)()
+end
+
+-- Hooks stay installed (their bodies return early); a pending craft is dropped.
+function Ledger:OnDisable()
+  pendingCraft = nil
+  lastCraft = nil
 end

@@ -455,6 +455,10 @@ end)
 -- Structural rule (global constraints): C_TradeSkillUI.CraftRecipe is called only inside
 -- Queue:CraftNext, and Queue:CraftNext is referenced only from OnClick handlers (a call, or the
 -- function passed on, as in pcall(Queue.CraftNext, Q) or Wrap(name, Queue.CraftNext)).
+-- CraftRecipe matches as an exact token (Ledger:OnCraftRecipe and C_TradeSkillUI.RecraftRecipe are other names).
+-- The one allowed reference outside Queue:CraftNext is the Ledger's post-hook (phase 2 Task 7), a line of the form
+-- hooksecurefunc(C_TradeSkillUI, "CraftRecipe", ...) in Modules/Ledger.lua: a hook runs after Blizzard's call and
+-- never calls CraftRecipe itself.
 describe("click-only crafting", function()
   local DIRS = "Core Data Math Modules UI"
 
@@ -508,7 +512,10 @@ describe("click-only crafting", function()
       for i, line in ipairs(code_lines(path)) do
         if line:match("^function Queue:CraftNext%(") then inside = true
         elseif line:match("^end") then inside = false end
-        if line:find("CraftRecipe", 1, true) then
+        local posthook = path == "Modules/Ledger.lua"
+          and line:match('^%s*hooksecurefunc%(C_TradeSkillUI, "CraftRecipe", [^"]*$') ~= nil
+        local _, refs = line:gsub("%f[%w_]CraftRecipe%f[^%w_]", "")
+        if refs > 0 and not (posthook and refs == 1) then
           hits[#hits + 1] = path .. ":" .. i
           assert.is_true(inside, path .. ":" .. i .. " calls CraftRecipe outside Queue:CraftNext")
         end

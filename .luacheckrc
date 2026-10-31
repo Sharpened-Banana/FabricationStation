@@ -10,7 +10,8 @@ stds.wow = {
     "GetNormalizedRealmName", "GetProfessions", "GetProfessionInfo", "GetInventoryItemLink", "ProfessionsFrame",
     "ProfessionsRecipeSchematicFormMixin", "Professions", "ScrollBoxListMixin", "TooltipDataProcessor",
     "ButtonFrameTemplate_HidePortrait", "ButtonFrameTemplate_HideButtonBar", "hooksecurefunc", "EventRegistry",
-    "debugstack", "debugprofilestop", "geterrorhandler", "date", "time", "wipe", "tinsert", "tremove", "strsplit", "strtrim" },
+    "debugstack", "debugprofilestop", "geterrorhandler", "date", "time", "wipe", "tinsert", "tremove", "strsplit", "strtrim",
+    "GetInboxInvoiceInfo", "GetInboxHeaderInfo", "TakeInboxMoney", "AutoLootMailItem", "AUCTION_SOLD_MAIL_SUBJECT" },
 }
 files["Math/"] = { std = "lua51" }
 files["Data/"] = { std = "lua51" }
