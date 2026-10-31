@@ -43,6 +43,7 @@ Modules\PlanCalc.lua
 Modules\Alts.lua
 Modules\AltsCollector.lua
 Modules\Planner.lua
+Modules\PlannerSpec.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua

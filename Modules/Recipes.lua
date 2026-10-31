@@ -450,9 +450,16 @@ local function used_prices(r, ctx)
   return used
 end
 
-local function evaluate(recipeID, charKey, o, schematic)
+-- extraStats (phase 3 spec what-if, nil = none): { skill, multicraft, resourcefulness, ingenuity } added through
+-- 1b's own optional-reagent path as a free pseudo-optional (Stats.ApplyOptionals adds skill and converts the
+-- ratings with Stats.RATING_PER_UNIT; price 0 adds no cost), so Math needs no change.
+local function evaluate(recipeID, charKey, o, schematic, extraStats)
   local input, ctx = build(recipeID, charKey, o, nil, schematic)
   if not input then return nil end
+  if extraStats then
+    input.optionals = input.optionals or {}
+    input.optionals[#input.optionals + 1] = { itemID = 0, price = 0, stats = extraStats }
+  end
   local r = ns.Math.Profit.EvaluateCraft(input)
   local mathFlags = r.flags or {}
 
@@ -497,11 +504,18 @@ end
 -- character and opts (defaults filled) while Prices:GetVersion(), GetDataStamp(charKey), the schematic
 -- (the cached table and its build and time: schematics are shared by every character) and the day
 -- (floor(Now() / 86400), so time-based flags and price ages move) are unchanged; treat them as read-only.
+-- [phase 3 Task 11] opts.extraStats = { skill, multicraft, resourcefulness, ingenuity } (each optional; ratings, as
+-- optional reagents carry them) evaluates a what-if with those bonuses (spec advice). A non-empty table is read
+-- before full_opts (which keeps only the five cached opts) and such calls neither read nor write the cache; an empty
+-- or non-table value is a plain call.
 function Recipes:Evaluate(recipeID, charKey, opts)
   charKey = charKey or ns.FS:CharKey()
   local schematic = scanner():GetSchematic(recipeID)
   if not schematic then return nil end
+  local extraStats = type(opts) == "table" and type(opts.extraStats) == "table" and next(opts.extraStats) ~= nil
+    and opts.extraStats or nil
   local o = full_opts(opts)
+  if extraStats then return evaluate(recipeID, charKey, o, schematic, extraStats) end
   local version = prices():GetVersion()
   if version ~= cachePriceVersion then
     cache, cachePriceVersion = {}, version
