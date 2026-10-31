@@ -50,6 +50,7 @@ Modules\Social\Gate.lua
 Modules\Social\Codec.lua
 Modules\Social\Protocol.lua
 Modules\Social\Comm.lua
+Modules\Social\Guild.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua

@@ -7,7 +7,9 @@ describe("whole addon", function()
       "Customers", "Orders", "Ledger", "OrdersRowAddons", "OrdersSidePanel", "OrderViewWarning", "OrderAlert",
       "OrdersTab", "CustomersTab", "LedgerTab", "OrdersWidgets",
       -- phase 3
-      "Alts", "AltsTooltips", "Planner", "CharactersTab", "PlannerTab", "AltsWidgets" }) do
+      "Alts", "AltsTooltips", "Planner", "CharactersTab", "PlannerTab", "AltsWidgets",
+      -- phase 4
+      "Guild" }) do
       assert.is_true(ns.FS:GetModule(name):IsEnabled(), name)
     end
     assert.same({}, ns.FS.db.global.diagnostics.errors)

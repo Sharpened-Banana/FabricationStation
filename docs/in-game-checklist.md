@@ -742,6 +742,29 @@ the gate read this enum and use 11 only when the enum is missing, so a different
 Also confirm AceComm's chunk callback reports the lockdown on the first refused chunk: during P4-3, `/fs diagnostics`
 should show no `Comm:Result` errors.
 
+P4-5. **Guild key at login.** Log in on a guilded character and run `/dump GetGuildInfo("player")` right after the
+loading screen and again a few seconds later. Expected: name, rank name, rank index, then the realm (nil for a guild on
+your own realm). Guild assumes the name may be nil at the first `PLAYER_ENTERING_WORLD` and starts syncing on the next
+`GUILD_ROSTER_UPDATE` / `PLAYER_GUILD_UPDATE`; then `/dump FabricationStationDB.global.guildMyChars` lists the
+character under `"<Guild>-<Realm>"`. Report when the name first appeared.
+
+P4-6. **Profile refresh cost at login.** On a character with two Midnight professions and many recipes (and an alt
+in the same guild), log in with `shareLevel = "quality"`. Expected: no visible hitch while the own profiles are built
+(the refresh is time-sliced on `scanBudgetMs`, 4 ms per frame by default) and the guild HELLO goes out 5-20 s after
+the loading screen. If there is a freeze, note how long and how many recipes the characters have.
+
+P4-7. **Two-client sync.** Two accounts in one guild, both running this build. Log in A, then B. Expected within
+about 30 s: `/dump FabricationStationDB.global.guildDirectory` on B shows A under `members` (with its `chars` hashes)
+and A's characters under `profiles` (`owner` = A, `lv` = "q", `lines` per Midnight skill line), and the reverse on A.
+Then on A turn sharing to recipes only (once Task 9's options exist, or
+`/run local G=LibStub("AceAddon-3.0"):GetAddon("FabricationStation"):GetModule("Guild") G:Settings().shareLevel="recipes" G:OnPrivacyChanged()`):
+B's copy turns `lv` = "r" with no `q`/`qc` tables. Turn sharing off: A's characters disappear from B's `profiles`.
+Report anything that stays behind, and any `Guild:*` entry in `/fs diagnostics`.
+
+P4-8. **Addon version in HELLO.** `/dump C_AddOns.GetAddOnMetadata("FabricationStation", "Version")` should print the
+packaged version (a dev checkout prints `@project-version@`); HELLO carries it (first 32 bytes) as the member's
+`addonVersion`.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

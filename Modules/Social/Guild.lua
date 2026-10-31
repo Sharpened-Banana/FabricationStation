@@ -1,0 +1,966 @@
+local ADDON_NAME, ns = ...
+
+-- Guild: the guild crafter directory's sync core. It builds the player's own crafting profiles (current-expansion lines
+-- only, time-sliced), applies the privacy settings, runs the HELLO / REQUEST / DATA delta sync over guild addon
+-- messages through ns.Social.Comm, and stores and prunes guildmates' profiles. Tasks 7-9 read what it stores.
+--
+-- Sync, per guild (protocol shapes in Modules/Social/Protocol.lua):
+--   * Login (first loading screen of the session only) and every own profile change send a HELLO to GUILD listing
+--     { [charKey] = hash } for the characters shared; a sharing-off HELLO lists nothing, which withdraws them.
+--   * A HELLO's receiver whispers one REQUEST for the listed characters whose stored hash differs (each pair at most
+--     once per REREQUEST_COOLDOWN), and answers a GUILD HELLO with a whispered HELLO of its own (once per
+--     HELLO_REPLY_COOLDOWN per sender; never answers a whispered HELLO).
+--   * Requests collect for REQUEST_WINDOW seconds; then each character goes out once: whispered to a single requester,
+--     to GUILD for two or more (never to the same target twice within RESEND_COOLDOWN).
+--   * DATA is stored only when its content hashes to the hash it carries and to the one the sender's last HELLO
+--     listed, and the sender may publish that character (see may_claim).
+-- No comm exists at all outside a guild, without C_EncodingUtil, while the module is off or while the saved data is
+-- from a newer version (then nothing is written either; settings live in a session copy).
+--
+-- Saved data (lazily created):
+--   db.global.settings.guild = { share, shareLevel = "quality"|"recipes", shareAlts = "current"|"guild"|"all",
+--                                tooltipLine, panelLine, useNative }
+--   db.global.guildDirectory[guildKey] = { members = { [nameRealm] = Member }, profiles = { [charKey] = Stored },
+--                                          native = {} }
+--     Member = { addonVersion, proto, lastSeen, chars = { [charKey] = hash }, lastHelloSent }
+--     Stored = { c, ts, lv, h, owner, rt, lines = { [skillLineID] = { k, m, recipes = { [recipeID] = true },
+--                q = { [recipeID] = 0..5 } | nil, qc = { [recipeID] = 0..5 } | nil } } }
+--       (a keyed copy of a validated DATA: a repeated line or recipeID overwrites, unknown keys are never copied,
+--        q/qc exist only for lv = "q"; h is recomputed here; rt = when it arrived or its owner's HELLO last confirmed it)
+--   db.global.guildMyChars[charKey] = guildKey   (the guild each of the account's characters was last seen in)
+local Guild = ns.FS:NewModule("Guild", "AceEvent-3.0", "AceComm-3.0")
+
+local Util = ns.Social.Util
+
+Guild.REQUEST_WINDOW = 3
+Guild.HELLO_REPLY_COOLDOWN = 600
+Guild.REREQUEST_COOLDOWN = 120
+Guild.RESEND_COOLDOWN = 60
+Guild.HELLO_DEBOUNCE = 120
+Guild.PROFILE_MAX_AGE = 30 * 86400
+Guild.LOGIN_JITTER = { 5, 20 }
+Guild.REPLY_JITTER = { 1, 10 }
+Guild.CHANGED_DEBOUNCE = 1        -- FS_GUILD_CHANGED at most this often (preflight row 18)
+Guild.DEFAULT_BUDGET_MS = 4       -- refresh budget per frame when Recipes' scanBudgetMs is unavailable
+Guild.YIELD_EVERY = 50            -- recipes per frame when debugprofilestop is missing
+
+Guild.SETTINGS_DEFAULTS = { share = true, shareLevel = "quality", shareAlts = "guild", tooltipLine = true,
+  panelLine = true, useNative = true }
+
+local SHARE_LEVELS = { quality = true, recipes = true }
+local SHARE_ALTS = { current = true, guild = true, all = true }
+local BOOLEANS = { "share", "tooltipLine", "panelLine", "useNative" }
+
+-- Debounce keys this module owns (OnDisable cancels them); per-sender reply keys are tracked in replyKeys.
+local HELLO_KEY = "guildHello"
+local LOGIN_HELLO_KEY = "guild.loginHello"
+local CHANGED_KEY = "guild.changed"
+local REPLY_PREFIX = "guild.reply:"
+
+local floor = math.floor
+
+---------------------------------------------------------------------------
+-- Settings and saved data
+---------------------------------------------------------------------------
+
+-- Guild's repair rules: booleans and the two enums fall back to their defaults.
+local function fill(target, defaults)
+  for _, key in ipairs(BOOLEANS) do
+    if type(target[key]) ~= "boolean" then target[key] = defaults[key] end
+  end
+  if not SHARE_LEVELS[target.shareLevel] then target.shareLevel = defaults.shareLevel end
+  if not SHARE_ALTS[target.shareAlts] then target.shareAlts = defaults.shareAlts end
+  return target
+end
+
+local settingsTable = ns.Util.SettingsAccessor("guild")
+
+-- db.global.settings.guild with defaults filled in (a session-only copy while the saved data is read-only).
+function Guild:Settings()
+  return settingsTable(self.SETTINGS_DEFAULTS, function(target, defaults)
+    return fill(Util.ApplyDefaults(target, defaults), defaults)
+  end)
+end
+
+local function global()
+  return ns.FS.db and ns.FS.db.global
+end
+
+local function writable()
+  return global() ~= nil and not ns.FS.dbIsNewer
+end
+
+local function scanner() return ns.FS:GetModule("Scanner", true) end
+local function recipes_module() return ns.FS:GetModule("Recipes", true) end
+
+---------------------------------------------------------------------------
+-- Session state (never saved)
+---------------------------------------------------------------------------
+
+local sessionStarted = false   -- the first PLAYER_ENTERING_WORLD of the session was handled
+local warnedNewer = false      -- the newer-protocol notice was printed this session
+
+local own = { profiles = {}, hashes = {}, info = {} }   -- built own profiles, their hashes, { wireBytes, trimmed }
+local refresh = { co = nil, ticker = nil, dirty = false, mode = nil }
+local requested = {}       -- [charKey .. " " .. hash] = Now() of our REQUEST for that pair
+local pending = {}         -- [charKey] = { [requester] = true }, collected for REQUEST_WINDOW
+local flushTimer           -- C_Timer handle of the pending FlushRequests
+local lastData = {}        -- [charKey] = { [requester | "GUILD"] = Now() of our DATA }
+local announced = {}       -- the { [charKey] = hash } of our last GUILD HELLO
+local deferredHello = {}   -- [target | "GUILD"] = true: HELLOs asked for while the refresh runs
+local replyKeys = {}       -- [debounce key] = true
+local loggedDrops = {}     -- [charKey] = true: the oversize/dropped DATA was logged
+
+Guild.stats = { helloSent = 0, requestSent = 0, dataSent = 0, dataDropped = 0, rejected = 0, trimmed = 0 }
+
+local function reset_sync_state()
+  requested, pending, lastData, announced, deferredHello = {}, {}, {}, {}, {}
+  if flushTimer then flushTimer:Cancel(); flushTimer = nil end
+end
+
+local function clear_own()
+  own.profiles, own.hashes, own.info = {}, {}, {}
+end
+
+local function cancel_refresh()
+  if refresh.ticker then refresh.ticker:Cancel() end
+  refresh.co, refresh.ticker, refresh.dirty, refresh.mode = nil, nil, false, nil
+end
+
+local function jitter(range)
+  return range[1] + math.random() * (range[2] - range[1])
+end
+
+local function sorted_keys(t)
+  local out = {}
+  for k in pairs(t) do out[#out + 1] = k end
+  table.sort(out, function(a, b) return tostring(a) < tostring(b) end)
+  return out
+end
+
+local function now() return ns.FS:Now() end
+
+local function addon_version()
+  local api = C_AddOns
+  local ok, v = false, nil
+  if api and type(api.GetAddOnMetadata) == "function" then ok, v = pcall(api.GetAddOnMetadata, ADDON_NAME, "Version") end
+  if not ok or type(v) ~= "string" then return "" end
+  return v:sub(1, ns.Social.Protocol.LIMITS.MAX_VERSION)
+end
+
+-- The account's own characters (normalized), which are never stored or requested as guildmates' data.
+local function own_char_set()
+  local set, S = {}, scanner()
+  for _, key in ipairs(S and S:GetCharacters() or {}) do
+    local n = Util.NormalizeName(key)
+    if type(n) == "string" then set[n] = true end
+  end
+  return set
+end
+
+---------------------------------------------------------------------------
+-- Guild key and directory
+---------------------------------------------------------------------------
+
+local function changed(self)
+  ns.FS:Debounce(CHANGED_KEY, Guild.CHANGED_DEBOUNCE, ns.FS:Wrap("Guild", function()
+    self:SendMessage(ns.Msg.GUILD_CHANGED, self.guildKey)
+  end))
+end
+
+-- The cached "Guild Name-Realm" of the current character (nil outside a guild or before the name loaded).
+function Guild:GetGuildKey()
+  return self.guildKey
+end
+
+-- db.global.guildDirectory[guildKey or current] with its three tables, created on first use. While the saved data is
+-- read-only an existing record is returned as it is and a missing one is not created (nil).
+function Guild:GetDirectory(guildKey)
+  local key = guildKey or self.guildKey
+  local g = global()
+  if type(key) ~= "string" or not g then return nil end
+  local all = g.guildDirectory
+  local dir = type(all) == "table" and all[key] or nil
+  if not writable() then return type(dir) == "table" and dir or nil end
+  if type(all) ~= "table" then all = {}; g.guildDirectory = all end
+  if type(dir) ~= "table" then dir = {}; all[key] = dir end
+  for _, sub in ipairs({ "members", "profiles", "native" }) do
+    if type(dir[sub]) ~= "table" then dir[sub] = {} end
+  end
+  return dir
+end
+
+---------------------------------------------------------------------------
+-- Comm lifecycle
+---------------------------------------------------------------------------
+
+-- In a guild, with the codec, enabled and writable: the conditions for any comm at all.
+local function can_sync(self)
+  return self:IsEnabled() and writable() and self.guildKey ~= nil and ns.Social.Codec.IsAvailable()
+end
+
+local function ensure_comm(self)
+  if self.comm or not can_sync(self) then return self.comm end
+  local comm = ns.Social.Comm.New({
+    ace = self,
+    gate = ns.Social.Gate,
+    selfName = function() return Util.NormalizeName(ns.FS:CharKey()) end,
+    now = now,
+  })
+  comm:RegisterHandler("H", function(msg, sender, distribution) self:OnHello(msg, sender, distribution) end)
+  comm:RegisterHandler("Q", function(msg, sender) self:OnRequest(msg, sender) end)
+  comm:RegisterHandler("D", function(msg, sender, distribution) self:OnData(msg, sender, distribution) end)
+  comm:RegisterHandler("version", function(sender, proto) self:OnVersion(sender, proto) end)
+  self.comm = comm
+  -- Inbound runs under Comm's own log-only source ("Guild:Comm"), never SafeCall("Guild"): a hostile message must not
+  -- be able to turn the module off (preflight row 17).
+  self:RegisterComm(ns.Social.Protocol.PREFIX, function(prefix, text, distribution, sender)
+    local c = Guild.comm
+    if c then c:OnCommReceived(prefix, text, distribution, sender) end
+  end)
+  return comm
+end
+
+local function stop_comm(self)
+  if self.comm then self.comm:Stop(); self.comm = nil end
+  self:UnregisterAllComm()
+end
+
+local function cancel_timers()
+  ns.FS:CancelDebounce(HELLO_KEY)
+  ns.FS:CancelDebounce(LOGIN_HELLO_KEY)
+  ns.FS:CancelDebounce(CHANGED_KEY)
+  for key in pairs(replyKeys) do ns.FS:CancelDebounce(key) end
+  replyKeys = {}
+  if flushTimer then flushTimer:Cancel(); flushTimer = nil end
+end
+
+-- Starts syncing for the current guild: comm, an own-profile refresh and the jittered login HELLO.
+local function start_sync(self)
+  if not can_sync(self) then return end
+  self.syncKey = self.guildKey
+  ensure_comm(self)
+  self:RefreshOwnProfiles()
+  ns.FS:Debounce(LOGIN_HELLO_KEY, jitter(Guild.LOGIN_JITTER), ns.FS:Wrap("Guild", function() self:SendHello() end))
+end
+
+-- Handler for PLAYER_GUILD_UPDATE / GUILD_ROSTER_UPDATE (and called at login): refreshes the cached key and the
+-- current character's guildMyChars entry; a changed key resets the per-guild session state and fires
+-- FS_GUILD_CHANGED. In a guild whose name has not loaded yet nothing changes.
+function Guild:OnGuildUpdate()
+  local inGuild = type(IsInGuild) == "function" and IsInGuild() and true or false
+  local key = inGuild and Util.GuildKey() or nil
+  if inGuild and key == nil then return end
+  if writable() then
+    local g = global()
+    if type(g.guildMyChars) ~= "table" then g.guildMyChars = {} end
+    local me = ns.FS:CharKey()
+    if g.guildMyChars[me] ~= key then g.guildMyChars[me] = key end
+  end
+  if key == self.guildKey then return end
+  self.guildKey = key
+  self.syncKey = nil
+  cancel_refresh()
+  clear_own()
+  reset_sync_state()
+  ns.FS:CancelDebounce(LOGIN_HELLO_KEY)
+  if key == nil then stop_comm(self) end
+  changed(self)
+  if key and sessionStarted then start_sync(self) end
+end
+
+-- The first loading screen of the session starts everything; later ones only re-check the gate and flush.
+function Guild:OnEnteringWorld()
+  if sessionStarted then
+    if self.comm then self.comm:Flush() end
+    return
+  end
+  sessionStarted = true
+  if type(IsInGuild) == "function" and IsInGuild() and C_GuildInfo and type(C_GuildInfo.GuildRoster) == "function" then
+    C_GuildInfo.GuildRoster()
+  end
+  self:Prune(now())
+  self:OnGuildUpdate()
+  if self.guildKey and self.syncKey ~= self.guildKey then start_sync(self) end
+end
+
+-- "readOnly" | "disabled" | "noCodec" | "noGuild" | "off" (sharing off) | "paused" (chat gate locked) | "ok".
+function Guild:SyncStatus()
+  if not writable() then return "readOnly" end
+  if not self:IsEnabled() then return "disabled" end
+  if not ns.Social.Codec.IsAvailable() then return "noCodec" end
+  if not self.guildKey then return "noGuild" end
+  if not self:Settings().share then return "off" end
+  if self.comm and ns.Social.Gate:IsLocked() then return "paused" end
+  return "ok"
+end
+
+---------------------------------------------------------------------------
+-- Own profiles
+---------------------------------------------------------------------------
+
+local function variants()
+  local GD = ns.GameData
+  local k = GD and type(GD.Get) == "function" and GD.Get("Knowledge") or nil
+  return type(k) == "table" and type(k.variants) == "table" and k.variants or nil
+end
+
+-- The character's current-expansion profession lines, sorted, at most LIMITS.MAX_LINES (preflight row 12). Alts'
+-- rule (Modules/Alts.lua listed_lines): dropped records never count; a line in Knowledge.variants is listed; a line
+-- with a concentration or spec snapshot is listed unless a listed variant line has the same base profession; without
+-- Knowledge data every line with a snapshot is listed. Older-expansion lines are not shared.
+local function current_lines(record)
+  local profs = type(record) == "table" and type(record.professions) == "table" and record.professions or {}
+  local v, out, parents, candidates = variants(), {}, {}, {}
+  for line, p in pairs(profs) do
+    if type(line) == "number" and type(p) == "table" and not p.dropped then
+      if v and v[line] ~= nil then
+        out[#out + 1] = line
+        local parent = p.parentSkillLineID
+        if parent == nil and type(v[line]) == "table" then parent = v[line].base end
+        if parent ~= nil then parents[parent] = true end
+      elseif type(p.concentration) == "table" or type(p.spec) == "table" then
+        candidates[#candidates + 1] = line
+      end
+    end
+  end
+  for _, line in ipairs(candidates) do
+    local parent = profs[line].parentSkillLineID
+    if not (parent ~= nil and parents[parent]) then out[#out + 1] = line end
+  end
+  table.sort(out)
+  local cap = ns.Social.Protocol.LIMITS.MAX_LINES
+  while #out > cap do table.remove(out) end
+  return out
+end
+
+local function int_in(v, lo, hi)
+  if type(v) ~= "number" or v ~= v then return lo end
+  v = floor(v)
+  if v < lo then return lo end
+  if v > hi then return hi end
+  return v
+end
+
+local function recipe_ids(p, cap)
+  local ids, maxID = {}, ns.Social.Protocol.LIMITS.MAX_RECIPE_ID
+  for id, known in pairs(type(p.recipes) == "table" and p.recipes or {}) do
+    if known and type(id) == "number" and id >= 1 and id <= maxID and id == floor(id) then ids[#ids + 1] = id end
+  end
+  table.sort(ids)
+  while #ids > cap do table.remove(ids) end
+  return ids
+end
+
+-- Evaluate's expectedQuality as 0..5 (0 = unknown, also when Evaluate fails or has no result).
+local function quality_of(R, recipeID, charKey, opts)
+  local ok, result = pcall(R.Evaluate, R, recipeID, charKey, opts)
+  local q = ok and type(result) == "table" and result.expectedQuality or nil
+  if type(q) ~= "number" or q ~= q then return 0 end
+  return int_in(q, 0, ns.Social.Protocol.LIMITS.MAX_QUALITY)
+end
+
+local function wire_size(profile)
+  local text = ns.Social.Protocol.Wire(ns.Social.Protocol.Data(profile))
+  return text and #text or nil
+end
+
+-- Makes the profile fit Codec.MAX_WIRE on the wire: quality data goes first (lv "q" -> "r"), then every line keeps a
+-- proportional share of its recipes (lowest recipeIDs first) until it fits. -> { wireBytes|nil, trimmed|nil }.
+local function fit(profile)
+  local info = {}
+  if not ns.Social.Codec.IsAvailable() then return info end
+  local max = ns.Social.Codec.MAX_WIRE
+  local size = wire_size(profile)
+  if size and size > max and profile.lv == "q" then
+    profile.lv = "r"
+    for _, line in ipairs(profile.pr) do
+      local r = {}
+      for i = 1, #line.r, 3 do r[#r + 1] = line.r[i] end
+      line.r = r
+    end
+    info.trimmed = "quality"
+    size = wire_size(profile)
+  end
+  local rounds = 0
+  while size and size > max and rounds < 10 do
+    rounds = rounds + 1
+    local factor = max / size * 0.9
+    for _, line in ipairs(profile.pr) do
+      local keep = floor(#line.r * factor)
+      for i = #line.r, keep + 1, -1 do line.r[i] = nil end
+    end
+    info.trimmed = "recipes"
+    size = wire_size(profile)
+  end
+  info.wireBytes = size
+  return info
+end
+
+local logged = {}   -- [source .. charKey] = true: one-time log entries this session
+
+local function log_once(source, charKey, text)
+  local key = source .. "\0" .. tostring(charKey)
+  if logged[key] then return end
+  logged[key] = true
+  ns.FS:LogError(source, text)
+end
+
+-- The wire Profile (Protocol's D table without t, p and h) of one of the account's characters, or nil without current
+-- lines. `checkpoint` (optional) runs after each evaluated recipe: the refresh coroutine yields there.
+local function build(self, charKey, checkpoint)
+  local S = scanner()
+  local record = S and S:GetCharacter(charKey)
+  local lines = current_lines(record)
+  if #lines == 0 then return nil end
+  local Protocol = ns.Social.Protocol
+  local R = recipes_module()
+  local quality = self:Settings().shareLevel == "quality" and R ~= nil and R.Evaluate ~= nil
+  local cap = quality and floor(Protocol.LIMITS.MAX_RECIPE_ENTRIES / 3) or Protocol.LIMITS.MAX_RECIPE_ENTRIES
+  local pr = {}
+  for i, line in ipairs(lines) do
+    local p = record.professions[line]
+    local k = int_in(p.skill, 0, Protocol.LIMITS.MAX_SKILL)
+    local m = int_in(p.maxSkill, 0, Protocol.LIMITS.MAX_SKILL)
+    if k > m then m = k end
+    local r = {}
+    for _, id in ipairs(recipe_ids(p, cap)) do
+      r[#r + 1] = id
+      if quality then
+        r[#r + 1] = quality_of(R, id, charKey, {})
+        r[#r + 1] = quality_of(R, id, charKey, { useConcentration = true })
+        if checkpoint then checkpoint() end
+      end
+    end
+    pr[i] = { s = line, k = k, m = m, r = r }
+  end
+  local profile = { c = Util.NormalizeName(charKey), ts = now(), lv = quality and "q" or "r", pr = pr }
+  local info = fit(profile)
+  if info.trimmed then self.stats.trimmed = self.stats.trimmed + 1 end
+  local ok, code = Protocol.Validate(Protocol.Data(profile))
+  if not ok then
+    log_once("Guild:Profile", charKey, ("own profile of %s failed validation (%s); not shared"):format(charKey, code))
+    return nil
+  end
+  return profile, info
+end
+
+-- The current own Profile of charKey (built now, not cached). For lv = "q" each recipe carries Evaluate's plain and
+-- concentration expectedQuality (0 = unknown).
+function Guild:BuildProfile(charKey)
+  return (build(self, charKey, nil))
+end
+
+-- The account's characters this player shares in the current guild: normalized, only characters with at least one
+-- current-expansion line, the current character first, at most LIMITS.MAX_CHARS; {} when sharing is off.
+function Guild:GetSharedCharKeys()
+  local s = self:Settings()
+  if not s.share then return {} end
+  local S = scanner()
+  if not S then return {} end
+  local current = ns.FS:CharKey()
+  local g = global()
+  local myChars = g and type(g.guildMyChars) == "table" and g.guildMyChars or {}
+  local out, seen = {}, {}
+  local function add(key)
+    local n = Util.NormalizeName(key)
+    if type(n) == "string" and not seen[n] and #current_lines(S:GetCharacter(key)) > 0 then
+      seen[n] = true
+      out[#out + 1] = n
+    end
+  end
+  add(current)
+  if s.shareAlts ~= "current" then
+    for _, key in ipairs(S:GetCharacters() or {}) do
+      if key ~= current and (s.shareAlts == "all" or (self.guildKey ~= nil and myChars[key] == self.guildKey)) then
+        add(key)
+      end
+    end
+  end
+  local cap = ns.Social.Protocol.LIMITS.MAX_CHARS
+  while #out > cap do table.remove(out) end
+  return out
+end
+
+-- Scanner keys by normalized key, for the shared characters (they are equal for every realm name without spaces).
+local function shared_sources(self)
+  local S, byNorm = scanner(), {}
+  for _, key in ipairs(S and S:GetCharacters() or {}) do byNorm[Util.NormalizeName(key)] = key end
+  byNorm[Util.NormalizeName(ns.FS:CharKey())] = ns.FS:CharKey()
+  local out = {}
+  for _, n in ipairs(self:GetSharedCharKeys()) do out[#out + 1] = { norm = n, key = byNorm[n] or n } end
+  return out
+end
+
+-- { [charKey] = hash } of the last completed refresh ({} while sharing is off). A copy.
+function Guild:GetOwnHashes()
+  local out = {}
+  if not self:Settings().share then return out end
+  for c, h in pairs(own.hashes) do out[c] = h end
+  return out
+end
+
+-- The own Profile of charKey from the last completed refresh (read-only), or nil.
+function Guild:GetOwnProfile(charKey)
+  return own.profiles[Util.NormalizeName(charKey)]
+end
+
+function Guild:IsRefreshing()
+  return refresh.co ~= nil
+end
+
+local stepStart, stepBudget, stepCount = 0, 0, 0
+
+local function checkpoint()
+  stepCount = stepCount + 1
+  local clock = debugprofilestop
+  if type(clock) == "function" then
+    if clock() - stepStart >= stepBudget then coroutine.yield() end
+  elseif stepCount % Guild.YIELD_EVERY == 0 then
+    coroutine.yield()
+  end
+end
+
+local function run_pass(self)
+  local profiles, hashes, info = {}, {}, {}
+  for _, entry in ipairs(shared_sources(self)) do
+    local p, i = build(self, entry.key, checkpoint)
+    if p then
+      profiles[entry.norm] = p
+      hashes[entry.norm] = ns.Social.Protocol.HashProfile(p)
+      info[entry.norm] = i
+    end
+  end
+  return profiles, hashes, info
+end
+
+local function new_pass(self)
+  refresh.co = coroutine.create(function() return run_pass(self) end)
+end
+
+local function budget()
+  local R = recipes_module()
+  local ok, v = false, nil
+  if R and type(R.GetSetting) == "function" then ok, v = pcall(R.GetSetting, R, "scanBudgetMs") end
+  if ok and type(v) == "number" and v > 0 then return v end
+  return Guild.DEFAULT_BUDGET_MS
+end
+
+local function same_hashes(a, b)
+  for k, v in pairs(a) do if b[k] ~= v then return false end end
+  for k in pairs(b) do if a[k] == nil then return false end end
+  return true
+end
+
+local function arm_flush(self)
+  if flushTimer or next(pending) == nil then return end
+  flushTimer = C_Timer.NewTimer(Guild.REQUEST_WINDOW, ns.FS:Wrap("Guild", function()
+    flushTimer = nil
+    self:FlushRequests()
+  end))
+end
+
+-- After a completed refresh: the HELLO its mode asks for ("always", or "ifChanged" when a hash differs from the last
+-- GUILD HELLO) and the HELLOs deferred while it ran.
+local function finish_refresh(self, mode)
+  local deferred = deferredHello
+  deferredHello = {}
+  if mode == "always" or deferred.GUILD or (mode == "ifChanged" and not same_hashes(own.hashes, announced)) then
+    self:SendHello()
+  end
+  for _, target in ipairs(sorted_keys(deferred)) do
+    if target ~= "GUILD" then self:SendHello(target) end
+  end
+  arm_flush(self)
+end
+
+-- One frame's work of the refresh: runs until budgetMs is spent (at least one recipe). Returns true when no refresh
+-- is left. A refresh asked for meanwhile restarts the pass; the results are committed only by a complete pass.
+function Guild:_RefreshStep(budgetMs)
+  if not refresh.co then return true end
+  stepStart, stepBudget, stepCount = type(debugprofilestop) == "function" and debugprofilestop() or 0, budgetMs or budget(), 0
+  local co = refresh.co
+  local ok, profiles, hashes, info = coroutine.resume(co)
+  if not ok then
+    cancel_refresh()
+    error(profiles, 0)
+  end
+  if coroutine.status(co) == "suspended" then return false end
+  if refresh.dirty then
+    refresh.dirty = false
+    new_pass(self)
+    return false
+  end
+  local mode = refresh.mode
+  cancel_refresh()
+  own.profiles, own.hashes, own.info = profiles, hashes, info
+  finish_refresh(self, mode)
+  return true
+end
+
+local MODE_RANK = { ifChanged = 1, always = 2 }
+
+-- Rebuilds the own profiles of the shared characters in a time-sliced coroutine (preflight row 13), only while syncing
+-- is possible and sharing is on. mode: nil (rebuild only), "ifChanged" (then HELLO when a hash changed since the last
+-- GUILD HELLO) or "always" (then HELLO). A call during a pass restarts it once it ends, keeping the stronger mode.
+-- Returns true when a refresh runs. With sharing off the own profiles are cleared at once.
+function Guild:RefreshOwnProfiles(mode)
+  if not can_sync(self) then return false end
+  if not self:Settings().share then
+    cancel_refresh()
+    clear_own()
+    return false
+  end
+  if mode and (MODE_RANK[mode] or 0) > (MODE_RANK[refresh.mode] or 0) then refresh.mode = mode end
+  if refresh.co then
+    refresh.dirty = true
+    return true
+  end
+  new_pass(self)
+  refresh.ticker = C_Timer.NewTicker(0, ns.FS:Wrap("Guild", function() self:_RefreshStep() end))
+  return true
+end
+
+---------------------------------------------------------------------------
+-- Sending
+---------------------------------------------------------------------------
+
+-- Sends a HELLO with the shared characters' hashes (nil target = GUILD, queue key "hello"; else a whisper, key
+-- "hello:" .. target). Re-checks enabled/share/shared characters when it runs; while a refresh runs the HELLO waits
+-- for it. Returns Comm's status, "deferred", or nil when nothing can be sent.
+function Guild:SendHello(target)
+  if not can_sync(self) or not self.comm then return nil end
+  local share = self:Settings().share
+  if share and refresh.co then
+    deferredHello[target or "GUILD"] = true
+    return "deferred"
+  end
+  local chars = {}
+  if share then
+    for _, c in ipairs(self:GetSharedCharKeys()) do chars[c] = own.hashes[c] end
+  end
+  local msg = ns.Social.Protocol.Hello(addon_version(), chars)
+  local status
+  if target then
+    status = self.comm:Send(msg, "WHISPER", target, { key = "hello:" .. target })
+    if status ~= "dropped" then
+      local dir = self:GetDirectory()
+      local member = dir and dir.members[target]
+      if member then member.lastHelloSent = now() end
+    end
+  else
+    status = self.comm:Send(msg, "GUILD", nil, { key = "hello" })
+    if status ~= "dropped" then announced = chars end
+  end
+  if status ~= "dropped" then self.stats.helloSent = self.stats.helloSent + 1 end
+  return status
+end
+
+-- Sends the collected requests (scheduled REQUEST_WINDOW after the first one). Each character goes out once: to
+-- GUILD for two or more requesters, else whispered; a target (requester or "GUILD") that got this character within
+-- RESEND_COOLDOWN is skipped, and a GUILD copy covers every requester. Re-checks enabled, sharing and the shared
+-- characters first. Characters whose profile is still being built wait for the refresh.
+function Guild:FlushRequests()
+  if flushTimer then flushTimer:Cancel(); flushTimer = nil end
+  local batch = pending
+  pending = {}
+  if not can_sync(self) or not self.comm or not self:Settings().share then return end
+  local shared = {}
+  for _, c in ipairs(self:GetSharedCharKeys()) do shared[c] = true end
+  local t = now()
+  local Protocol = ns.Social.Protocol
+  for _, c in ipairs(sorted_keys(batch)) do
+    local profile = own.profiles[c]
+    if shared[c] and not profile and refresh.co then
+      pending[c] = batch[c]
+    elseif shared[c] and profile then
+      local requesters = sorted_keys(batch[c])
+      local dist, target, slot = "WHISPER", requesters[1], requesters[1]
+      if #requesters >= 2 then dist, target, slot = "GUILD", nil, "GUILD" end
+      local sent = lastData[c] or {}
+      local recent = function(at) return at ~= nil and t - at < Guild.RESEND_COOLDOWN end
+      if not recent(sent[slot]) and not recent(sent.GUILD) then
+        local status = self.comm:Send(Protocol.Data(profile), dist, target, { prio = "BULK", key = "data:" .. c .. ":" .. slot })
+        if status == "dropped" then
+          self.stats.dataDropped = self.stats.dataDropped + 1
+          local size = (own.info[c] and own.info[c].wireBytes) or wire_size(profile) or 0
+          if not loggedDrops[c] then
+            loggedDrops[c] = true
+            ns.FS:LogError("Guild:Data", ("DATA for %s was dropped (%d bytes)"):format(c, size))
+          end
+        else
+          self.stats.dataSent = self.stats.dataSent + 1
+          sent[slot] = t
+          lastData[c] = sent
+        end
+      end
+    end
+  end
+  arm_flush(self)
+end
+
+---------------------------------------------------------------------------
+-- Receiving
+---------------------------------------------------------------------------
+
+local function valid(msg, t)
+  return type(msg) == "table" and msg.t == t and (ns.Social.Protocol.Validate(msg))
+end
+
+local function member_of(dir, name)
+  local m = dir.members[name]
+  if type(m) ~= "table" then
+    m = { chars = {} }
+    dir.members[name] = m
+  end
+  if type(m.chars) ~= "table" then m.chars = {} end
+  return m
+end
+
+-- Whether `sender` may publish `charKey` (anti-spoof; senders are named by the server, charKeys are just text). A
+-- player may always publish their own name. Another character may be published when nobody holds it, the sender
+-- already does, its holder no longer lists it, or its holder lists the sender (characters of one player list each
+-- other: Q's HELLO naming P lets P update Q-Realm, while a stranger P cannot take over or withdraw Q's data).
+local function may_claim(dir, sender, charKey)
+  if charKey == sender then return true end
+  local p = dir.profiles[charKey]
+  if type(p) ~= "table" or p.owner == sender then return true end
+  local holder = dir.members[p.owner]
+  if type(holder) ~= "table" or type(holder.chars) ~= "table" or holder.chars[charKey] == nil then return true end
+  return holder.chars[sender] ~= nil
+end
+
+local function linked(dir, owner, sender)
+  local m = dir.members[owner]
+  return type(m) == "table" and type(m.chars) == "table" and m.chars[sender] ~= nil
+end
+
+-- A HELLO from a guildmate: stores the member, withdraws what it stopped listing, requests what differs and answers a
+-- GUILD HELLO with a whispered one (rate-limited). sender is the normalized "Name-Realm".
+function Guild:OnHello(msg, sender, distribution)
+  sender = Util.NormalizeName(sender)
+  if not self:IsEnabled() or not writable() or not valid(msg, "H") or type(sender) ~= "string" then return end
+  local dir = self:GetDirectory()
+  if not dir then return end
+  local t = now()
+  local mine = own_char_set()
+  local member = member_of(dir, sender)
+  local previous = member.chars
+  member.addonVersion = msg.v
+  member.proto = ns.Social.Protocol.VERSION      -- the wire header (Comm dispatches only this version), never msg.p
+  member.lastSeen = t
+  local chars = {}
+  for key, hash in pairs(msg.c) do
+    local n = Util.NormalizeName(key)
+    if type(n) == "string" and not mine[n] then chars[n] = hash end
+  end
+  member.chars = chars
+
+  for charKey, p in pairs(dir.profiles) do
+    if chars[charKey] == nil and type(p) == "table"
+      and (p.owner == sender or (previous[charKey] ~= nil and linked(dir, p.owner, sender))) then
+      dir.profiles[charKey] = nil
+    end
+  end
+
+  local want = {}
+  for _, charKey in ipairs(sorted_keys(chars)) do
+    local hash, p = chars[charKey], dir.profiles[charKey]
+    if may_claim(dir, sender, charKey) then
+      if type(p) == "table" and p.h == hash then
+        p.rt = t                                   -- confirmed unchanged by a publisher
+      else
+        local rk = charKey .. " " .. hash
+        if not requested[rk] or t - requested[rk] >= Guild.REREQUEST_COOLDOWN then want[#want + 1] = charKey end
+      end
+    end
+  end
+  if #want > 0 and self.comm then
+    local status = self.comm:Send(ns.Social.Protocol.Request(want), "WHISPER", sender)
+    if status ~= "dropped" then
+      self.stats.requestSent = self.stats.requestSent + 1
+      for _, charKey in ipairs(want) do requested[charKey .. " " .. chars[charKey]] = t end
+    end
+  end
+
+  if distribution == "GUILD" and self.comm
+    and (type(member.lastHelloSent) ~= "number" or t - member.lastHelloSent >= Guild.HELLO_REPLY_COOLDOWN) then
+    local key = REPLY_PREFIX .. sender
+    replyKeys[key] = true
+    ns.FS:Debounce(key, jitter(Guild.REPLY_JITTER), ns.FS:Wrap("Guild", function()
+      replyKeys[key] = nil
+      self:SendHello(sender)
+    end))
+  end
+  changed(self)
+end
+
+-- A REQUEST: collects the requester for each asked character this player shares; FlushRequests runs REQUEST_WINDOW
+-- after the first one.
+function Guild:OnRequest(msg, sender)
+  sender = Util.NormalizeName(sender)
+  if not can_sync(self) or not self:Settings().share or not valid(msg, "Q") or type(sender) ~= "string" then return end
+  local shared = {}
+  for _, c in ipairs(self:GetSharedCharKeys()) do shared[c] = true end
+  for _, key in ipairs(msg.c) do
+    local c = Util.NormalizeName(key)
+    if shared[c] then
+      pending[c] = pending[c] or {}
+      pending[c][sender] = true
+    end
+  end
+  arm_flush(self)
+end
+
+-- The keyed copy stored for a validated DATA (known fields only; see the header).
+local function stored_copy(msg, hash, owner, t)
+  local quality = msg.lv == "q"
+  local lines = {}
+  for _, line in ipairs(msg.pr) do
+    local entry = { k = line.k, m = line.m, recipes = {} }
+    local r = line.r
+    if quality then
+      entry.q, entry.qc = {}, {}
+      for i = 1, #r, 3 do
+        entry.recipes[r[i]] = true
+        entry.q[r[i]], entry.qc[r[i]] = r[i + 1], r[i + 2]
+      end
+    else
+      for i = 1, #r do entry.recipes[r[i]] = true end
+    end
+    lines[line.s] = entry
+  end
+  return { c = msg.c, ts = msg.ts, lv = msg.lv, h = hash, owner = owner, rt = t, lines = lines }
+end
+
+-- A DATA: stored (replacing the previous copy, so an "r" profile drops the qualities) only when the sender's last
+-- HELLO lists exactly this hash, the content hashes to it, and the sender may publish the character.
+function Guild:OnData(msg, sender, _distribution)   -- distribution: WHISPER or GUILD, both accepted
+  sender = Util.NormalizeName(sender)
+  if not self:IsEnabled() or not writable() or type(sender) ~= "string" then return end
+  if not valid(msg, "D") then return end
+  local dir = self:GetDirectory()
+  if not dir then return end
+  local c = Util.NormalizeName(msg.c)
+  local member = dir.members[sender]
+  local hash = ns.Social.Protocol.HashProfile(msg)
+  if own_char_set()[c] or type(member) ~= "table" or type(member.chars) ~= "table" or member.chars[c] ~= msg.h
+    or hash ~= msg.h or not may_claim(dir, sender, c) then
+    self.stats.rejected = self.stats.rejected + 1
+    return
+  end
+  dir.profiles[c] = stored_copy(msg, hash, sender, now())
+  changed(self)
+end
+
+-- A message under another protocol version (from Comm's header check): records it on the member and, for a newer
+-- one, tells the player once per session.
+function Guild:OnVersion(sender, proto)
+  sender = Util.NormalizeName(sender)
+  if not self:IsEnabled() or type(sender) ~= "string" or type(proto) ~= "number" then return end
+  if proto > ns.Social.Protocol.VERSION and not warnedNewer then
+    warnedNewer = true
+    ns.FS:Print(ns.L["A guildmate uses a newer FabricationStation sync protocol. Update to see their data."])
+  end
+  if not writable() then return end
+  local dir = self:GetDirectory()
+  if not dir then return end
+  local member = member_of(dir, sender)
+  member.proto = proto
+  member.lastSeen = now()
+  changed(self)
+end
+
+---------------------------------------------------------------------------
+-- Privacy, own changes, storage upkeep
+---------------------------------------------------------------------------
+
+-- Called by the options group and Onboarding after a privacy setting changed. Sharing off: forgets the own profiles
+-- and pending requests and sends the empty HELLO now. Otherwise: rebuilds and sends a HELLO when that completes.
+function Guild:OnPrivacyChanged()
+  if not self:IsEnabled() then return end
+  if not self:Settings().share then
+    cancel_refresh()
+    clear_own()
+    pending, deferredHello = {}, {}
+    if flushTimer then flushTimer:Cancel(); flushTimer = nil end
+    ns.FS:CancelDebounce(HELLO_KEY)
+    self:SendHello()
+  else
+    self:RefreshOwnProfiles("always")
+  end
+end
+
+local function on_own_change(self)
+  if not can_sync(self) or not self:Settings().share then return end
+  ns.FS:Debounce(HELLO_KEY, Guild.HELLO_DEBOUNCE, ns.FS:Wrap("Guild", function()
+    self:RefreshOwnProfiles("ifChanged")
+  end))
+end
+
+-- Drops profiles (rt) and members (lastSeen) older than PROFILE_MAX_AGE in every stored guild. -> entries removed.
+function Guild:Prune(t)
+  local g = global()
+  if not writable() or type(g.guildDirectory) ~= "table" then return 0 end
+  local cutoff = (t or now()) - Guild.PROFILE_MAX_AGE
+  local removed = 0
+  for _, dir in pairs(g.guildDirectory) do
+    if type(dir) == "table" then
+      for _, sub in ipairs({ { "profiles", "rt" }, { "members", "lastSeen" } }) do
+        local tbl, field = dir[sub[1]], sub[2]
+        if type(tbl) == "table" then
+          for key, entry in pairs(tbl) do
+            if type(entry) ~= "table" or type(entry[field]) ~= "number" or entry[field] < cutoff then
+              tbl[key] = nil
+              removed = removed + 1
+            end
+          end
+        end
+      end
+    end
+  end
+  if removed > 0 then changed(self) end
+  return removed
+end
+
+-- Forgets everything stored for one guild. -> true when it was removed (false while read-only).
+function Guild:PurgeGuild(guildKey)
+  local g = global()
+  if not writable() or type(guildKey) ~= "string" then return false end
+  if type(g.guildDirectory) == "table" then g.guildDirectory[guildKey] = nil end
+  if guildKey == self.guildKey then requested = {} end
+  changed(self)
+  return true
+end
+
+---------------------------------------------------------------------------
+-- Lifecycle
+---------------------------------------------------------------------------
+
+function Guild:OnEnable()
+  self:RegisterEvent("PLAYER_ENTERING_WORLD", ns.FS:Wrap("Guild", function() self:OnEnteringWorld() end))
+  local onGuild = ns.FS:Wrap("Guild", function() self:OnGuildUpdate() end)
+  self:RegisterEvent("PLAYER_GUILD_UPDATE", onGuild)
+  self:RegisterEvent("GUILD_ROSTER_UPDATE", onGuild)
+  self:RegisterMessage(ns.Msg.RECIPES_CHANGED, ns.FS:Wrap("Guild", function() on_own_change(self) end))
+  self:RegisterMessage(ns.Msg.DATA_CHANGED, ns.FS:Wrap("Guild", function(_, _, kind)
+    if kind == "recipes" or kind == "professions" then on_own_change(self) end   -- "moxie" etc. change no profile
+  end))
+  self:RegisterMessage(ns.Msg.COMM_GATE_CHANGED, ns.FS:Wrap("Guild", function(_, locked)
+    if locked == false and self.comm then self.comm:Flush() end
+  end))
+  self.guildKey, self.syncKey = nil, nil
+  self:OnGuildUpdate()
+  if sessionStarted and self.guildKey and self.syncKey ~= self.guildKey then start_sync(self) end   -- re-enabled
+end
+
+function Guild:OnDisable()
+  cancel_refresh()
+  cancel_timers()
+  stop_comm(self)
+  self:UnregisterAllEvents()
+  self:UnregisterAllMessages()
+  clear_own()
+  reset_sync_state()
+  self.syncKey = nil
+end

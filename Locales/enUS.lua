@@ -5,3 +5,4 @@ local L = LibStub("AceLocale-3.0"):NewLocale("FabricationStation", "enUS", true,
 if not L then return end
 
 L["Guild crafters"] = true
+L["A guildmate uses a newer FabricationStation sync protocol. Update to see their data."] = true
