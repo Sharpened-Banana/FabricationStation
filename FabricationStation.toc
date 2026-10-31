@@ -48,3 +48,4 @@ UI\ProfessionPanel.lua
 UI\RecipeListLabels.lua
 UI\Tooltips.lua
 UI\OrdersPanel.lua
+UI\OrderAlert.lua
