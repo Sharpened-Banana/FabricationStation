@@ -268,8 +268,9 @@ end
 -- While the logged-in character's own profession is open (1a's IsProfessionOpen: not a linked, guild or NPC view):
 -- catalogs every recipe of a planned line (learned or not: the catalog is account-wide) and counts learned first-craft
 -- recipes per planned line. A catalog entry is (re)written, with a new time, only when it is new or its name or source
--- text changed (an empty source text keeps the stored one). Writes planning[line] = { pathNames, firstCraftsPending, time } for each planned line seen (time is
--- always refreshed). FS_ALTS_CHANGED is sent only when a catalog entry or a line's count or path names changed.
+-- text changed (an empty source text keeps the stored one). Writes planning[line] = { pathNames, firstCraftsPending,
+-- time } for each planned line seen (time is always refreshed). FS_ALTS_CHANGED is sent only when a catalog entry or a
+-- line's count or path names changed.
 function Alts:CollectOpenProfession()
   if not writable() then return end
   local S = scanner()

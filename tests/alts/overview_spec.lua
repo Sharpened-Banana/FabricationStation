@@ -341,6 +341,35 @@ describe("Alts overview", function()
       local c = A:GetAltRow("Cato-Silvermoon", NOW)
       assert.same({ nil, false, false }, { c.knowledgeLeft, c.flags.knowledgePartial, c.flags.noProfessions })
     end)
+
+    -- The variant IDs are hand-authored and unverified: a wrong ID must not hide a real profession or its pool.
+    it("a line missing from Knowledge.variants is listed as noData when it has a concentration snapshot", function()
+      char(ns, "Cato-Silvermoon").professions = {
+        [2999] = { name = "Midnight Tailoring", skill = 20, maxSkill = 100, recipes = {}, time = NOW,
+          concentration = { currencyID = 3260, value = 500, max = 1000, time = NOW, perCycle = 1,
+            cycleSeconds = 360 } },
+      }
+      local c = A:GetAltRow("Cato-Silvermoon", NOW)
+      assert.same({ 2999 }, lines(c))
+      assert.same({ 0, false, "noData", "Midnight Tailoring" },
+        { c.olderProfessions, c.flags.noProfessions, c.professions[1].knowledge.status, c.professions[1].name })
+      assert.same({ 500, 1000 }, { c.professions[1].concentration.now, c.professions[1].concentration.max })
+      local found
+      for _, p in ipairs(A:GetPools(NOW)) do
+        if p.charKey == "Cato-Silvermoon" then found = p end
+      end
+      assert.same({ 2999, 500, 1000 }, { found.skillLineID, found.value, found.max })
+    end)
+
+    it("a line missing from Knowledge.variants is listed when it has only a spec snapshot", function()
+      char(ns, "Cato-Silvermoon").professions = {
+        [2999] = { name = "Midnight Tailoring", skill = 20, maxSkill = 100, recipes = {}, time = NOW,
+          spec = { configID = 9, unspent = 1, tabs = {}, paths = {}, perks = {}, time = NOW } },
+      }
+      local c = A:GetAltRow("Cato-Silvermoon", NOW)
+      assert.same({ { 2999 }, 0, "noData" }, { lines(c), c.olderProfessions, c.professions[1].knowledge.status })
+      assert.is_nil(c.professions[1].concentration)
+    end)
   end)
 
   describe("GetKnowledgeState / GetKnowledgeSummary", function()

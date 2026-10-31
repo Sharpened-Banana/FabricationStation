@@ -31,4 +31,12 @@ describe("FabricationStation.toc", function()
       assert.is_true(at[order[i - 1]] < at[order[i]], order[i - 1] .. " before " .. order[i])
     end
   end)
+  -- Phase 3 (preflight row 3): the tooltip registrar after the phase-2 UI, so 1b worlds that load through
+  -- UI/Tooltips.lua never load it.
+  it("loads UI/AltsTooltips.lua after UI/OrdersOptions.lua", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    assert.is_truthy(at["UI/AltsTooltips.lua"])
+    assert.is_true(at["UI/OrdersOptions.lua"] < at["UI/AltsTooltips.lua"])
+  end)
 end)
