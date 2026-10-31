@@ -96,6 +96,29 @@ describe("public docs and release metadata", function()
     assert.truthy(block:find("required: true", 1, true), "capture is not required")
   end)
 
+  it("has a release checklist covering setup, smoke tests and publish", function()
+    local s = read("docs/RELEASE_CHECKLIST.md")
+    for _, k in ipairs({ "CF_PROJECT_ID", "WAGO_API_TOKEN", "## Interface", "check_release.lua", "selftest", "git tag -a",
+      "Wago", "WoWInterface" }) do
+      assert.truthy(s:find(k, 1, true), k)
+    end
+  end)
+
+  it("keeps the release checklist's dry run and CI-only library check", function()
+    local s = read("docs/RELEASE_CHECKLIST.md")
+    for _, k in ipairs({ "release.sh", "-d -z -e -l", "PACKAGE_OK", "AceComm-3.0", "AceLocale-3.0", "CI-only",
+      "THIRD_PARTY_NOTICES.md", "Locales/Locales.xml" }) do
+      assert.truthy(s:find(k, 1, true), k)
+    end
+  end)
+
+  it("keeps development files out of the package", function()
+    local pkg = read(".pkgmeta")
+    for _, name in ipairs({ "tests", "tools", "docs", "reports", ".superpowers", ".github", ".gitignore" }) do
+      assert.truthy(pkg:find("\n  %- " .. name:gsub("%.", "%%.") .. "\n"), name)
+    end
+  end)
+
   it("declares the licence in the TOC", function()
     assert.truthy(read("FabricationStation.toc"):find("## X-License: MIT", 1, true))
   end)
