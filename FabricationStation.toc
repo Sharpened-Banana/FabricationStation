@@ -53,3 +53,4 @@ UI\Tooltips.lua
 UI\OrdersPanel.lua
 UI\OrderAlert.lua
 UI\OrdersWidgets.lua
+UI\OrdersOptions.lua

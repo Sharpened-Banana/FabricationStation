@@ -9,4 +9,26 @@ describe("FabricationStation.toc", function()
       if f ~= "embeds.xml" then assert.is_truthy(io.open(f, "r"), "missing " .. f) end
     end
   end)
+  it("lists every addon .lua file under Core, Data, Math, Modules and UI", function()
+    local listed = {}
+    for _, f in ipairs(toc.files) do listed[f] = true end
+    local found = io.popen("find Core Data Math Modules UI -name '*.lua' | sort")
+    local count = 0
+    for path in found:lines() do
+      count = count + 1
+      assert.is_truthy(listed[path], "not in the TOC: " .. path)
+    end
+    found:close()
+    assert.is_true(count > 0)
+  end)
+  it("loads the phase-2 UI additions in order, the options group last", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    local order = { "UI/Tooltips.lua", "UI/OrdersPanel.lua", "UI/OrderAlert.lua", "UI/OrdersWidgets.lua",
+      "UI/OrdersOptions.lua" }
+    for i = 2, #order do
+      assert.is_truthy(at[order[i]], order[i])
+      assert.is_true(at[order[i - 1]] < at[order[i]], order[i - 1] .. " before " .. order[i])
+    end
+  end)
 end)
