@@ -1,10 +1,11 @@
-# FabricationStation phases 1a, 1b and 2: in-game verification checklist
+# FabricationStation phases 1a, 1b, 2 and 3: in-game verification checklist
 
 Phase 1a is verified against stubs only. These checks need the real WoW client (retail, Midnight 12.1.5)
 and cannot be run in CI. Work through them in order. Checks 1-9 are the original plan checks; checks 10-15 come
 from code reviews and each name the exact thing to look for. Phase 1b (crafting) has its own section,
 [Phase 1b](#phase-1b-crafting), numbered 1b-1 to 1b-15; run it after the phase 1a checks. Phase 2 (crafting orders, customers, ledger) has
-[Phase 2](#phase-2-orders-customers-ledger), numbered P2-1 onwards; run it last.
+[Phase 2](#phase-2-orders-customers-ledger), numbered P2-1 onwards; run it after phase 1b. Phase 3 (alts, planner) has
+[Phase 3](#phase-3-alts-planner), numbered P3-1 onwards; run it last.
 
 The Settings tab is the "Settings" tab in the main window (`/fs settings`). Its left-hand tree has the groups
 General, Prices, Modules and Diagnostics.
@@ -437,7 +438,247 @@ P2-29. **Chips, input and the pick menu.** In the Customers tab, give a customer
     open its pick menu on a customer near the bottom of the window: the menu stays inside the screen and closes on a
     click elsewhere.
 
+## Phase 3 (alts, planner)
+
+Run these after the phase 2 checks. You need at least two characters with different Midnight professions; one of
+them should have a profession with concentration. Turn on `/console scriptErrors 1` (and BugSack) for the whole
+session. In the `/dump` and `/run` lines, `FS` stands for the addon object: run
+`/run FS = LibStub("AceAddon-3.0"):GetAddon("FabricationStation")` once per session (again after every `/reload`).
+`<Name-Realm>` is a character key as the addon writes it, for example `Aria-Silvermoon`
+(`/dump UnitName("player").."-"..GetNormalizedRealmName()` prints the logged-in one). `<id>` is a Midnight child
+skill line ID: 2906 Alchemy, 2907 Blacksmithing, 2909 Enchanting, 2910 Engineering, 2912 Herbalism, 2913 Inscription,
+2914 Jewelcrafting, 2915 Leatherworking, 2916 Mining, 2917 Skinning, 2918 Tailoring (P3-24 checks these numbers).
+The Characters tab is `/fs tab characters` and the Planner tab is `/fs tab planner`. Settings > Characters and
+Settings > Planner hold the phase-3 options; Settings > Modules has the Alts and Planner switches.
+
+The knowledge table ships from hand-authored data (`tools/gamedata/sources/knowledge_sources.csv`, every row marked
+unverified), and the recipe-source and spec-effect tables are not generated yet. So some numbers can be wrong
+(P3-24 to P3-31 find them), recipe sources often read "Unknown", and Spec advice says its data is missing. Those are
+the expected degraded states, not failures.
+
+### Acceptance run (plan Task 16 Steps 2-3)
+
+Run P3-1 to P3-6 in one session.
+
+P3-1. **Character 1: knowledge and spec.** On character 1, open each of its professions once (wait 2 s after each
+    opens) and open the Specializations page once. Then finish one weekly knowledge source you have not done this
+    week (the trainer's weekly quest, or a weekly treasure). Wait a few seconds and open `/fs tab characters`.
+    Expected: character 1 is listed first, marked `•`, in its class colour; its knowledge count went down by that
+    source's points compared with before; the spec points match the unspent points in Blizzard's specialization UI.
+P3-2. **Character 2.** Log in character 2 (different professions), open each of its professions once, then log back
+    to character 1 and open `/fs tab characters`. Expected: character 2's row shows its professions, knowledge and
+    concentration, and its Age is the time since you logged out of it (character 1 reads `online`). Planner >
+    Knowledge has rows for both characters' Midnight professions.
+P3-3. **Addon off.** Disable FabricationStation in the AddOns list and `/reload`. Expected: Blizzard's Professions
+    frame (recipe list, Specializations page, crafting orders) and item tooltips look and work exactly as without
+    the addon, and no item tooltip has holdings lines (design rule 2). Enable it again and `/reload`.
+P3-4. **No Lua errors.** With the addon on and Auctionator on: play a few minutes with the professions window closed,
+    then enter a dungeon (two loading screens), and open the Characters tab and every Planner section once. Then
+    disable Auctionator, `/reload` and do the same again. Expected: no Lua error at any point, Settings >
+    Diagnostics lists no errors, and Settings > Modules shows no stopped modules.
+P3-5. **Weekly reset.** Do this after the next weekly reset, or simulate it now. Pick an alt (not the logged-in
+    character) that has done at least one weekly knowledge source this week and has looted at least one one-time
+    treasure. To simulate, run
+    `/run FabricationStationDB.global.characters["<Name-Realm>"].knowledgeWeekly.time = FS:GetModule("Alts"):WeekStart() - 60`
+    (the alt's quest flags then look as if they were saved before this week's reset). Open Planner > Knowledge.
+    Expected: that alt's weekly categories (Quest, Treatise, Treasure, Drops) show nothing earned again, while its
+    One-time column keeps what it already looted; `/dump FS:GetModule("Alts"):GetAltRow("<Name-Realm>").professions[1].knowledge`
+    shows `weeklyLeft` equal to `weeklyTotal`. After a real reset, check the same before the alt logs in again.
+    Logging the alt in afterwards restores its real flags.
+P3-6. **Spec advice hitch check.** On a character with many learned recipes (a high-skill Midnight crafter, after the
+    Recipes scan has finished a few seconds after login), open Planner > Spec advice and pick that character and
+    profession with the two picker buttons; switch between the professions and back to Knowledge a few times.
+    Expected: no visible stutter or frame drop when the section opens or the picker changes, and none while it is
+    left open (advice is computed only when the section is drawn, and a second draw is memoised).
+
+### Acceptance run, continued: tabs, tooltips and widget (plan Tasks 8-15)
+
+P3-7. **Characters tab.** `/fs tab characters`. Expected: every saved character is listed, the logged-in one first
+    with `•`, names in class colours; the header sums read sensibly, and hovering the header and the status line
+    shows their tooltips. Click a row: its detail opens under it with spec, knowledge, concentration
+    (`full at <weekday HH:MM>`, your local time) and cooldown recipe names; the text is not cut off and the
+    `Hide character` button sits below it. Click the row again: the detail closes. The mouse wheel scrolls, and
+    hovering a row shows a tooltip with every value. An em dash `—` and `·` show as characters, not boxes.
+P3-8. **Minimum width.** Drag the main window to its smallest width on the Characters tab and on each Planner section.
+    Expected: lower-priority columns disappear (the Character column keeps a readable width, no text overlaps), a
+    `+1` shows on the profession cell of a character with two professions, the open detail re-wraps, the section
+    buttons and pickers do not overlap, and the values of hidden columns appear in the row tooltip. Widen it again:
+    the columns come back.
+P3-9. **Reagent search.** Type `ore` in the `Find reagent…` box. Expected: about 0.3 s after you stop typing, the grid
+    is replaced by results with item icons (not `|T…|t` text), `+N` when more characters hold an item, and Warband
+    `not scanned` on an account whose warband bank was never opened. Clear the box (also with the box's own clear
+    button): the grid comes back at once. The box keeps its placeholder text and clear button.
+P3-10. **Hide a character.** Open an alt's detail and press `Hide character`. Expected: it leaves the grid, the
+    Planner and the Dashboard widget. Tick `Show hidden (1)`: it is listed marked `(hidden)`; `Show character`
+    brings it back. Hide it again and `/reload`: it stays hidden.
+P3-11. **Alts off.** Turn Alts off in Settings > Modules. Expected: the Characters tab says `Alts is turned off` (with
+    how to turn it on), and so does the Planner. Turn it back on.
+P3-12. **Planner sections.** `/fs tab planner`. Expected: the four section buttons (Knowledge, Concentration, Spec
+    advice, Missing recipes) switch sections and the shown one stays highlighted (if it does not look selected,
+    report it). `/reload` reopens the last section.
+P3-13. **Planner Knowledge.** Expected: one row per character and Midnight profession; a done category shows its
+    count followed by the ready-check icon (an icon, not text, inside its 44-56 px cell); Darkmoon says `closed`
+    outside the faire week (first Sunday to Saturday of the month) and an `0/3`-style count during it. Click a row:
+    the detail lists each source with its item name (an uncached item shows `item:<id>` briefly, then its name), its
+    KP and its state. The footer reads `Knowledge data: build 70575 · Weekly reset in …` and the reset time matches
+    the in-game weekly reset; hovering it says where the knowledge data comes from. On a client build other than
+    70575 an orange `Old data` marker shows at the footer's left (not cut off at minimum width) and its tooltip starts
+    `Game data build <X> is outdated`; the Characters tab shows the same marker. With the shipped data, the Missing
+    recipes footer starts `Recipe sources: not generated ·`.
+P3-14. **Planner Concentration.** Expected: a full pool shows a red `Capped: concentration is full` row; with
+    Settings > Planner > "Hours before full to warn" raised to cover a filling pool, that pool shows an orange
+    `Soon: full in …` row. Click `Queue` on a plan row: the status line says
+    `Queued: N × <recipe> for <Name-Realm> (with concentration)` and the Queue tab lists the entry with concentration
+    on. Nothing is queued without a click. The Queue button fits its 52 px column without covering the Gain or
+    Caps in cells. With cap warnings but an empty plan, the message line above the footer stays on one line and
+    hovering it shows the whole text.
+P3-15. **Planner Spec advice.** Expected: the character and profession buttons cycle through characters with a
+    Midnight profession. On a character whose Specializations page was never opened it says
+    `Open this profession's specializations on <Name-Realm> to load spec data`. With the shipped data it says
+    `Spec effect data not in this GameData build (…)`.
+P3-16. **Planner Missing recipes.** After opening a Midnight profession, the list shows that character's unlearned
+    recipes with readable source text (no `|c` or `|T` codes); a `Recipe item: <name>` entry shows the item name
+    after a moment. Turn Planner off in Settings > Modules: the tab says `Planner is turned off`. Turn it back on.
+P3-17. **Holdings in item tooltips.** Hover a reagent that this character and an alt both hold (an ore, for example).
+    Expected: the tooltip ends with one line per character (same-realm characters by short name, for example
+    `Aria  15 (bags 5, bank 10)`; an alt whose data is over 7 days old adds `<N>d old`; an alt whose bank was never
+    scanned shows `5+ (bags 5, bank ?)`), then `Warband bank N` and `Total N` (`N+ (warband not scanned)` only when
+    the game cannot count the warband bank). Move a stack between bags and bank (bank open) and hover again: the
+    counts follow without `/reload`; this character's numbers match its bags and bank right after moving a stack
+    even without opening the bank. Report whether the warband count is there before you opened the warband bank
+    this session. Hover an item nobody holds: no holdings lines. Turn off Settings > Characters > "Show what your
+    characters hold in item tooltips": the lines go away; turn it on and turn the Alts module off: the lines go away.
+    With Settings > Crafting > "Show the cost to craft in item tooltips" off (and Alts on), the holdings lines still
+    show.
+P3-18. **Item search from chat.** `/dump FS:GetModule("Alts"):FindItems("ore")`. Expected: the ores your characters
+    hold, with totals. Right after login it may list fewer at first (names not cached yet); run it again a moment
+    later and the rest appear.
+P3-19. **Concentration warning in chat.** With an alt whose concentration is full (or with Settings > Planner > "Hours
+    before full to warn" high enough to cover a pool), log out and back in (a `/reload` deliberately prints
+    nothing). Expected: about 10 s after the loading screen, chat shows
+    `FabricationStation: <Name-Realm> <Profession>: concentration is full` (or `... concentration full in <N>h`)
+    once; a second loading screen (a portal or an instance) prints nothing more. With Settings > Planner > "Warn in
+    chat when concentration is about to be full" off, a new login prints nothing.
+P3-20. **Dashboard widget.** Expected: the Dashboard shows "Knowledge left this week" after "Gold this week"; it
+    updates within a second of turning in a weekly knowledge quest, and hiding a character on the Characters tab
+    removes its line. Hovering it lists every line plus `Click to open the Planner`; a left click opens the Planner.
+    At the smallest window a cut line still shows its `<n> KP` count. With Alts or Planner turned off, the widget
+    says `Alts is turned off` / `Planner is turned off` when the Dashboard is shown again.
+P3-21. **Planner from chat.** `/dump FS:GetModule("Planner"):GetKnowledgeChecklist()`. Expected: one row per character
+    and Midnight profession (no older-expansion lines, no hidden characters), each `summary.weeklyLeft` equal to the
+    Characters tab's knowledge for that profession. After the Recipes scan has finished (a few seconds after login),
+    `/dump FS:GetModule("Planner"):GetSchedule()` lists, per character and Midnight profession with concentration,
+    crafts whose `concentrationUsed` never exceeds that character's current concentration and whose recipes the
+    Recipes tab shows with a gold-per-concentration value (no "no price" recipes); `/dump FS:GetModule("Planner"):GetCapWarnings()`
+    lists the same pools the Characters tab shows as full or nearly full. Settings shows a "Planner" options group
+    (four settings) and Settings > Modules lists Planner.
+
+### Not verified from source
+
+These game behaviours were assumed from documentation or other addons' data; report what you see.
+
+P3-22. **Calendar and week start.** (a) On a Sunday, `/dump C_DateAndTime.GetCurrentCalendarTime().weekday` prints `1`
+    (the Darkmoon window assumes 1 = Sunday; if Sunday is 0, report it). (b) `/dump C_DateAndTime.GetCurrentCalendarTime()`
+    shows `monthDay`, `weekday`, `hour` and `minute` as plain numbers (not secret values). (c)
+    `/dump FS:GetModule("Alts"):WeekStart()` equals the server time of this week's reset: compare
+    `/dump date("!%c", FS:GetModule("Alts"):WeekStart())` with the reset time you know for your region (US Tuesday
+    15:00 UTC, EU Wednesday 04:00 UTC). (d) If you can, compare `/dump time() + C_DateAndTime.GetSecondsUntilWeeklyReset() - 604800`
+    on a US realm (`/dump GetCurrentRegion()` prints 1) and an EU realm (3) with those times: the addon's fallback, used
+    only when the game cannot say, guesses them.
+P3-23. **Darkmoon Faire window.** During a faire week, confirm it opened at 00:00 server time on the first Sunday of
+    the month and closes after that Saturday, and that Planner > Knowledge's Darkmoon cell is a count, not `closed`.
+    If your realm observes daylight saving time, check a faire that starts on the first Sunday of November: it must
+    still start at 00:00 (not 23:00 or 01:00). During the faire, report whether each profession's Darkmoon quest
+    gives 3 Midnight knowledge (29506 Alchemy, 29508 Blacksmithing, 29510 Enchanting, 29511 Engineering,
+    29514 Herbalism, 29515 Inscription, 29516 Jewelcrafting, 29517 Leatherworking, 29518 Mining, 29519 Skinning,
+    29520 Tailoring).
+P3-24. **Skill line IDs.** On a Midnight crafter with the profession open, `/dump C_TradeSkillUI.GetChildProfessionInfo().professionID`.
+    Expected: the ID listed at the top of this section for that profession, and the same number is a key under
+    `/dump FabricationStationDB.global.characters["<Name-Realm>"].professions`.
+P3-25. **Spec points and ranks.** On a profession with spec points, compare `spent` from
+    `/dump FS:GetModule("Alts"):GetSpecSnapshot("<Name-Realm>", <id>)` with `spent` from
+    `/dump C_Traits.GetTreeCurrencyInfo(C_ProfSpecs.GetConfigIDForSkillLine(<id>), C_ProfSpecs.GetSpecTabIDsForSkillLine(<id>)[1], false)`.
+    Report both numbers: if they differ by the number of unlocked paths, the unlock point is free and the addon must
+    count display ranks. In the same snapshot, one path's `rank` must equal the number Blizzard's specialization UI
+    shows for it, and one perk's entry in that path's `perkRanks` must equal the rank at which the UI shows it
+    unlocking (report it if it is one higher). The path names (`paths[<pathID>].name`) must match the names in the
+    specialization UI; report any that read `Path <id>`.
+P3-26. **Recipe list APIs.** (a) `/dump #C_TradeSkillUI.GetAllRecipeIDs()` prints a number (if the function is missing,
+    report it: the fallback then depends on the profession window's filters). (b) After a `/reload`, without opening
+    any profession, `/dump C_ProfSpecs.GetConfigIDForSkillLine(<id>)` is not 0 (if it is 0, path names are only
+    collected after the profession window opens; report it). (c) Pick an unlearned recipe and compare
+    `/dump C_TradeSkillUI.GetRecipeSourceText(<recipeID>)` with its `sourceText` in
+    `/dump FabricationStationDB.global.recipeCatalog[<id>][<recipeID>]`: the stored text has the same words with no
+    `|c`, `|r`, `|T`, `|A`, `|H` or `|n` codes left. Report any other escape code you see in the game's text.
+P3-27. **Knowledge flags.** With a profession open, run `/run FS:GetModule("Alts"):DebugKnowledge()`. Expected: one line
+    per knowledge source of this character's professions, `<questID>=true` for exactly the sources you finished
+    (this week for weekly ones, ever for one-time ones). Also, for three sources you finished this week (for example
+    your trainer's weekly quest, 93690-93696 or 93697-93714; your treatise, 95127-95138; a weekly treasure,
+    93528-93543), `/dump C_QuestLog.IsQuestFlaggedCompleted(<questID>)` prints `true`, and for one you have not done it
+    prints `false`.
+P3-28. **First crafts and the recipe catalog.** With a profession open,
+    `/dump FabricationStationDB.global.characters["<Name-Realm>"].planning[<id>].firstCraftsPending` equals the number
+    of learned recipes that show the first-craft bonus marker in the recipe list, and
+    `/dump FabricationStationDB.global.recipeCatalog[<id>]` lists every Midnight recipe of that profession (learned or
+    not) with readable source text. `/dump FS:GetModule("Planner"):GetMissingRecipes("<Name-Realm>", <id>)` lists
+    exactly the recipes the profession window's unlearned filter shows; for an alt with the same profession, recipes
+    that alt knows are left out even though the catalog was filled on another character.
+P3-29. **Overview row.** `/dump FS:GetModule("Alts"):GetAltRow("<Name-Realm>")` for the logged-in character.
+    Expected: `professions` lists only the Midnight lines (older expansions are counted in `olderProfessions`), each
+    profession's `concentration.now` and `.max` match the profession window, `concentration.fullAt` is roughly when it
+    will be full, and `knowledge.weeklyLeft` matches what you still have to do this week.
+P3-30. **Spec effect data** (needs a generated SpecEntryEffects table, not the shipped empty one; skip until then).
+    On a profession with spec points, hover the next rank of one path in the specialization UI and compare its bonus
+    with `/dump FS:GetModule("Planner"):_nodeBonus("<Name-Realm>", <id>, <pathID>, r, r + 1)` (r = the displayed
+    rank). Report whether the game's amount is per rank or cumulative, whether a perk's bonus is counted exactly when
+    crossing its displayed unlock rank, and whether multicraft/resourcefulness amounts are ratings (the addon divides
+    them by 1100/900) or percentages. Then `/dump FS:GetModule("Planner"):GetSpecAdvice("<Name-Realm>", <id>)` returns
+    up to 5 paths with a positive gain or a nil gain and status `"ok"` once prices exist; it takes well under a second,
+    and a second call is instant.
+
+### Knowledge data checks
+
+These check the hand-authored rows of `tools/gamedata/sources/knowledge_sources.csv`. Send corrections as
+"profession, quest ID, item ID, points"; after editing the CSV, regenerate with
+`lua tools/gamedata/gen_phase3.lua --empty --build 12.1.5.70575 --out Data`.
+
+P3-31. **Point values.** Read the "Knowledge" amount in the item tooltip (or the points gained) for: the Alchemy weekly
+    item 263454 (table: 1, quest 93690; guides say both 1 and 2), the Engineering weekly item 263456 (table: 1, quest
+    93692) and the Tailoring item 263460 (table: 2, quest 93696); the weekly treasures 259188/259189 (Alchemy, 1),
+    259191 (Blacksmithing, 2), 259192/259193 (Enchanting, 2), 259194/259195 (Engineering, 1), 259196/259197
+    (Inscription, 2), 259198/259199 (Jewelcrafting, 2), 259200/259201 (Leatherworking, 2) and 259202/259203
+    (Tailoring, 2); the 1-point gathering drops (Enchanting 267654, Herbalism 238465, Mining 237496, Skinning 238625)
+    and Brimming Mana Shard 267655 (Enchanting, 4); and each rotating trainer quest (Enchanting 93697-93699,
+    Herbalism 93700-93704, Mining 93705-93709, Skinning 93710-93714; table: 3). Also: is Mana-Infused Bone (238626,
+    quest 88529) worth 3 or 4? Does the Inscription trainer quest 93693 give 4 points in total, or 2?
+P3-32. **Quest flags of three treasures.** After looting each, `/dump C_QuestLog.IsQuestFlaggedCompleted(<questID>)`
+    for 93535 (Engineering, Dawn Capacitor), 93536 (Inscription, Brilliant Phoenix Ink) and 93542 (Tailoring,
+    Embroidered Memento). Expected: `true`; report any that stays `false` (the quest ID is then wrong).
+P3-33. **Books.** After buying or using each book you have, check that its quest flag
+    (`/dump C_QuestLog.IsQuestFlaggedCompleted(<questID>)`) is `true` and that it gave 10 points: 93794/93795/93796
+    Beyond the Event Horizon; 92374, 93222, 93201 Skill Issue; 93411/93412 Traditions of the Haranir; 92371-92373
+    Whisper of the Loa; 92174 and 92186-92188 Echo of Abundance (its 10 points come from one source only). Also look
+    for "Demystifyin': <Profession>" books: for each one that exists, record its item ID, then use it and record the
+    quest ID in game (find it with `/dump C_QuestLog.IsQuestFlaggedCompleted(<candidate>)` before and after, or from
+    the quest-completed chat message), and the points it gave. AllTheThings' `CharacterItemDB` can suggest candidate
+    IDs, but only your in-game reading goes into the table.
+P3-34. **Recipe sources and the generator** (when wago.tools is reachable; on your machine). Run
+    `bash tools/gamedata/fetch.sh <version.build>` and
+    `lua tools/gamedata/gen_phase3.lua --build <version.build> --cache tools/gamedata/cache/<version.build> --out Data`.
+    Check that `head -1 tools/gamedata/cache/<version.build>/SpellEffect.csv` names `EffectMiscValue[0]` or
+    `EffectMiscValue_0`, that SpellEffect.Effect 36 is LEARN_SPELL and 16 is QUEST_COMPLETE (a known recipe item
+    comes out kind `"item"` with its itemID, and the Blacksmithing weekly item 263455 completes quest 93691 with no
+    cross-check warning). The first run is expected to print cross-check warnings for the grouped drop rows that carry
+    one item for 5 quests (Enchanting 267654, Herbalism 238465, Mining 237496, Skinning 238625): the item probably
+    completes the quests one after another while the generator compares quest sets. Confirm in game before re-running
+    with `--allow-warnings`; do not just change the rows. Then, in game, spot-check RecipeSources kinds: a Midnight
+    recipe marked `"auto"` (AcquireMethod not 0) is learned automatically when you learn or level the profession; one
+    marked `"unknown"` (AcquireMethod 0, no teaching item) comes from a trainer, discovery, renown or a spec unlock.
+    Report it if AcquireMethod means something else.
+
 ## Not done here
 
 `Data/GameData_Manual.lua` (Moxie IDs and build) and `tests/fixtures/captures/` are intentionally untouched;
-they need your in-game results from checks 5, 6 and 15.
+they need your in-game results from checks 5, 6 and 15. The phase-3 knowledge CSV
+(`tools/gamedata/sources/knowledge_sources.csv`) is also left as authored: its rows change only from your P3-31 to
+P3-33 readings.
