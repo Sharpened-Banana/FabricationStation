@@ -4,10 +4,25 @@ local toc = require("toc")
 
 local M = {}
 
+-- Compiled chunks of the checked-in Data/ files, which no test rewrites. The generated GameData is over a
+-- megabyte, and parsing it again for every addon boot made the suite many times slower. Each call of a
+-- cached chunk still builds fresh tables.
+local dataChunks = {}
+
+local function load_chunk(path)
+  if not path:match("^Data[/\\]") then return loadfile(path) end
+  if not dataChunks[path] then
+    local chunk, err = loadfile(path)
+    if not chunk then return nil, err end
+    dataChunks[path] = chunk
+  end
+  return dataChunks[path]
+end
+
 -- Runs loadfile(path)("FabricationStation", ns) for each path; errors with the path on failure.
 function M.load_files(ns, paths)
   for _, path in ipairs(paths) do
-    local chunk, err = loadfile(path)
+    local chunk, err = load_chunk(path)
     if not chunk then error("failed to load " .. path .. ": " .. tostring(err), 2) end
     local ok, runErr = pcall(chunk, "FabricationStation", ns)
     if not ok then error("error running " .. path .. ": " .. tostring(runErr), 2) end
