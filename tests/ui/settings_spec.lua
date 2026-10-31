@@ -82,9 +82,14 @@ describe("Settings tab", function()
   describe("GameData status line", function()
     local function line() return ns.FS:GetOptionsTable().args.general.args.gamedata.name() end
 
-    it("says not generated for the checked-in files, although the manual table is stamped", function()
-      -- The generated tables are unstamped (--empty) and GameData_Manual is stamped 70575, so
+    it("says not generated while one table is ungenerated, although the others are stamped", function()
+      -- One table unstamped (--empty) and the rest stamped with the client build, so
       -- Build() equals the client build while Status().missing is true.
+      ns.GameData.Define("CraftingData", nil, {})
+      for _, name in ipairs({ "ItemCraftingData", "QualityThresholds", "ConcentrationCurves", "ReagentQuality",
+        "ReagentCategories", "OptionalReagents", "ProfessionLines", "SpecEntryEffects", "RecipeLabels", "MoxieCurrency" }) do
+        ns.GameData.Define(name, 70575, ns.GameData.Get(name) or {})
+      end
       local status = ns.GameData.Status(70575)
       assert.is_true(status.missing); assert.equals(70575, status.build); assert.is_false(status.outdated)
       assert.equals("GameData not generated", line())

@@ -385,11 +385,12 @@ describe("PlannerView", function()
   end)
 
   -- [Phase 3 final M3] The message names the SpecEntryEffects table's own build (GameData.TableBuild), not the most
-  -- common GameData build: the shipped table is not generated, although Knowledge is stamped 70575.
+  -- common GameData build: here the table is not generated, although Knowledge is stamped 70575.
   it("says the spec effect data is missing instead of ranking when every gain is unknown", function()
     local rows = { { pathID = 2, name = "Path 2", rank = 0, maxRank = 20, points = 5 },
       { pathID = 1, name = "Path 1", rank = 0, maxRank = 20, points = 5 } }
-    assert.equal(70575, ns.GameData.Build())
+    ns.GameData.Define("SpecEntryEffects", nil, {})
+    assert.equal(70575, ns.GameData.TableBuild("Knowledge"))
     local m = PV.SpecAdvice(rows, "ok", { char = "Aria" })
     assert.same({}, m.rows)
     assert.equal("Spec effect data not in this GameData build (not generated)", m.message)

@@ -150,10 +150,10 @@ General, Prices, Modules and Diagnostics.
     `12.1.5.70575` the number is `70575`) and fill its Moxie currency IDs (check 6) against the printed candidates.
     `/reload` and read the status line in the Settings tab. Settings > General (second line) and
     Settings > Diagnostics (first line) show the same text; a difference between the two is a failure.
-    Before generating (the shipped placeholder data), expect: `GameData not generated`.
-
-    After generating and bumping, with the client on that build, expect:
-    `GameData: build 70575, up to date` (your build number).
+    The shipped data was generated for `12.1.5.70688` on 2026-10-31 (Moxie IDs filled), so on that client build
+    expect `GameData: build 70688, up to date`. On a newer client build expect
+    `GameData is outdated: data build 70688, game build <yours>`; regenerate as above. Placeholder data
+    (`generate.lua --empty`) shows `GameData not generated`.
 
     Failure forms and what they mean:
     - `GameData tables are from different builds: MoxieCurrency` (or another table name): that table's
@@ -529,12 +529,13 @@ P3-13. **Planner Knowledge.** Expected: one row per character and Midnight profe
     count followed by the ready-check icon (an icon, not text, inside its 44-56 px cell); Darkmoon says `closed`
     outside the faire week (first Sunday to Saturday of the month) and an `0/3`-style count during it. Click a row:
     the detail lists each source with its item name (an uncached item shows `item:<id>` briefly, then its name), its
-    KP and its state. The footer reads `Knowledge data: build 70575 · Weekly reset in …` and the reset time matches
+    KP and its state. The footer reads `Knowledge data: build 70688 · Weekly reset in …` and the reset time matches
     the in-game weekly reset; hovering it says where the knowledge data comes from. On a client build other than
-    70575 an orange `Old data` marker shows at the footer's left (not cut off at minimum width) and its tooltip starts
-    `Game data build 70575 is outdated` (the knowledge data's build; the next line names your game build); the
+    70688 an orange `Old data` marker shows at the footer's left (not cut off at minimum width) and its tooltip starts
+    `Game data build 70688 is outdated` (the knowledge data's build; the next line names your game build); the
     Characters tab shows the same marker. With the shipped data, the Missing
-    recipes footer starts `Recipe sources: not generated ·`.
+    recipes footer has no `Recipe sources: not generated ·` prefix and its tooltip says
+    `Recipe sources come from GameData build 70688`.
 P3-14. **Planner Concentration.** Expected: a full pool shows a red `Capped: concentration is full` row; with
     Settings > Planner > "Hours before full to warn" raised to cover a filling pool, that pool shows an orange
     `Soon: full in …` row. Click `Queue` on a plan row: the status line says
@@ -546,9 +547,9 @@ P3-15. **Planner Spec advice.** Expected: the character and profession buttons c
     Midnight profession. On a character whose Specializations page was never opened it says
     `Open this profession's specializations on <Name> to load spec data` (`<Name>` is the character name alone, no
     realm). On a character with spec data but no profitable priced recipe in that profession it says
-    `No profitable recipes for <Name> in this profession yet: check prices or open the profession`. Otherwise, with
-    the shipped data, it says `Spec effect data not in this GameData build (not generated)` (the spec effect table
-    is not generated yet; the number would be that table's own build, not the knowledge data's 70575).
+    `No profitable recipes for <Name> in this profession yet: check prices or open the profession`. Otherwise it ranks
+    spec paths by profit gain per point from the shipped spec effect data (build 70688). Only when every gain is
+    unknown does it say `Spec effect data not in this GameData build (70688)`.
 P3-16. **Planner Missing recipes.** After opening a Midnight profession, the list shows that character's unlearned
     recipes with readable source text (no `|c` or `|T` codes); a recipe the game gives no source text for reads
     `Unknown — open the profession on any character to load sources`. With the shipped data no entry reads

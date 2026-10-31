@@ -379,7 +379,7 @@ describe("Planner GameDataBuild", function()
   it("is the GameData build", function()
     local ns = env()
     assert.equal(ns.GameData.Build(), planner(ns):GameDataBuild())
-    assert.equal(70575, planner(ns):GameDataBuild())
+    assert.is_number(planner(ns):GameDataBuild())
   end)
 end)
 

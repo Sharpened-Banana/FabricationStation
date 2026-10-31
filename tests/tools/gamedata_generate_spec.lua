@@ -121,12 +121,16 @@ describe("tools/gamedata/generate.lua", function()
     assert.is_nil(s.build); assert.is_true(s.missing); assert.same({}, s.mismatched); assert.is_nil(ns.GameData.Build())
   end)
 
-  it("the checked-in Data files load and report missing data", function()
+  it("the checked-in Data files load as one complete build", function()
     local ns = load_files({}, { "Data/GameData.lua", "Data/GameData_Professions.lua", "Data/GameData_Reagents.lua",
       "Data/GameData_Difficulty.lua", "Data/GameData_Spec.lua", "Data/GameData_Manual.lua" })
-    for _, name in ipairs(DEFINES) do assert.is_table(ns.GameData.Get(name)) end
-    assert.same({}, ns.GameData.Get("MoxieCurrency"))
-    assert.is_true(ns.GameData.Status(70575).missing)
+    for _, name in ipairs(DEFINES) do
+      local t = ns.GameData.Get(name)
+      assert.is_table(t); assert.is_not_nil(next(t), name .. " is empty")
+    end
+    assert.equals(3257, ns.GameData.Get("MoxieCurrency")[2907])
+    local s = ns.GameData.Status(70688)
+    assert.equals(70688, s.build); assert.is_false(s.missing); assert.is_false(s.outdated); assert.same({}, s.mismatched)
   end)
 
   it("exits 1 with a usage error when --out is missing", function()

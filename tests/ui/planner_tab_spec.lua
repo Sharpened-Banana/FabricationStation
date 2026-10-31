@@ -286,8 +286,9 @@ describe("Planner tab", function()
 
     -- Fix round 1: only the Knowledge table's own build counts (GameData.TableBuild), never 1a's status.missing.
     it("names the Knowledge table's own build in the footer", function()
+      ns.GameData.Define("CraftingData", nil, {})      -- an ungenerated 1a table must not change the footer
       local v = open()
-      assert.is_true(ns.FS:GameDataStatus().missing)   -- the 1a tables are ungenerated in this environment
+      assert.is_true(ns.FS:GameDataStatus().missing)
       assert.equal("Knowledge data: build 70575" .. DOT .. "Weekly reset in 4d 3h", v.footer:GetText())
       hover(v.footerHit)
       assert.same({ "Knowledge data: build 70575" .. DOT .. "Weekly reset in 4d 3h",
@@ -541,6 +542,7 @@ describe("Planner tab", function()
 
     it("says when no gain is known from this GameData build", function()
       boot()
+      ns.GameData.Define("SpecEntryEffects", nil, {})
       PL._nodeBonus = function() return {} end
       local v = open()
       select(v, "spec")
