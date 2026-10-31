@@ -172,8 +172,8 @@ function Tab.RecipeRows(byRecipe)
   return rows
 end
 
--- Ledger entries -> { {recipeID, quality, median, p25, p75, n} }: Ledger:Benchmark for every distinct (recipeID,
--- quality) of a commission, sorted by recipeID, then quality. Pairs without enough samples (Benchmark nil) are
+-- Ledger entries -> { {recipeID, quality, median, p25, p75, n} }: the benchmark (Ledger:Benchmarks) of every
+-- distinct (recipeID, quality) of a commission, sorted by recipeID, then quality. Pairs without enough samples are
 -- skipped, and so are recrafts (Benchmark leaves them out) and commissions with no recipeID. A commission with no
 -- numeric quality is left out of a recipe that has commissions with one (an all-qualities row would repeat those);
 -- a recipe whose commissions have no quality at all gets one Benchmark(recipeID, nil) row with quality nil (shown
@@ -203,9 +203,16 @@ function Tab.BenchmarkRows(entries)
     if a.recipeID ~= b.recipeID then return id_less(a.recipeID, b.recipeID) end
     return (a.quality or 0) < (b.quality or 0)
   end)
+  -- One Ledger:Benchmarks pass for every pair (same rules as Benchmark); Benchmark per pair only without it.
+  local all = ledger.Benchmarks and ledger:Benchmarks() or nil
+  local function benchmark(recipeID, quality)
+    if not all then return ledger:Benchmark(recipeID, quality) end
+    local byQuality = all[recipeID]
+    return byQuality and byQuality[quality == nil and "all" or quality] or nil
+  end
   local rows = {}
   for _, p in ipairs(pairsList) do
-    local b = ledger:Benchmark(p.recipeID, p.quality)
+    local b = benchmark(p.recipeID, p.quality)
     if type(b) == "table" then
       rows[#rows + 1] = { recipeID = p.recipeID, quality = p.quality, median = b.median, p25 = b.p25, p75 = b.p75,
         n = b.n }

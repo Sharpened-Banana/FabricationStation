@@ -69,18 +69,18 @@ local function entries_view()
   if type(list) == "table" then return list end
 end
 
--- The saved entries that are tables, in order, skipping holes and damaged rows (for reads).
-local function each_saved()
-  local list = entries_view() or {}
-  local last = 0
-  for key in pairs(list) do
-    if type(key) == "number" and key > last then last = key end
+-- Calls visit(entry, index) for every saved entry that is a table at a whole positive index, in no particular order
+-- (callers that need an order sort; Query sorts by time and index). One pass, no table per row; holes and damaged
+-- rows are skipped, and a hole never hides the rows after it. visit returning true stops the pass. Reads only.
+local function each_saved(visit)
+  local list = entries_view()
+  if not list then return end
+  for index, entry in pairs(list) do
+    if type(entry) == "table" and type(index) == "number" and index >= 1 and index == math.floor(index)
+      and index ~= math.huge then
+      if visit(entry, index) then return end
+    end
   end
-  local out = {}
-  for i = 1, last do
-    if type(list[i]) == "table" then out[#out + 1] = { entry = list[i], index = i } end
-  end
-  return out
 end
 
 -- The saved entries list for writes (created when missing). Nil while the saved data is read-only.
@@ -158,12 +158,11 @@ end
 function Ledger:Query(filter)
   filter = type(filter) == "table" and filter or {}
   local found = {}
-  for _, saved in ipairs(each_saved()) do
-    local entry = saved.entry
+  each_saved(function(entry, index)
     if matches(entry, filter) then
-      found[#found + 1] = { entry = entry, index = saved.index, time = number_or(entry.time, 0) }
+      found[#found + 1] = { entry = entry, index = index, time = number_or(entry.time, 0) }
     end
-  end
+  end)
   table.sort(found, function(a, b)
     if a.time ~= b.time then return a.time > b.time end
     return a.index > b.index
@@ -255,14 +254,13 @@ function Ledger:Weekly(now, weeks)
   for i = 1, weeks do
     rows[i] = { weekStart = current - (i - 1) * WEEK_SECONDS, income = 0, cost = 0, profit = 0, incomplete = 0 }
   end
-  for _, saved in ipairs(each_saved()) do
-    local entry = saved.entry
+  each_saved(function(entry)
     if type(entry.time) == "number" and counts_as_profit(entry) then
       local back = entry.time >= current and 0 or math.ceil((current - entry.time) / WEEK_SECONDS)
       local row = rows[back + 1]
       if row then accumulate(row, entry) end
     end
-  end
+  end)
   return rows
 end
 
@@ -279,6 +277,16 @@ function Ledger:ByRecipe(filter)
     end
   end
   return result
+end
+
+-- True when the ledger holds at least one sale or commission. Stops at the first one; no sorting. Reads only.
+function Ledger:HasIncome()
+  local found = false
+  each_saved(function(entry)
+    found = counts_as_profit(entry)
+    return found
+  end)
+  return found
 end
 
 -- The same totals for the matching sales and commissions that have no recipeID (e.g. a mail sale whose item could
@@ -312,21 +320,58 @@ end
 -- on the commission, which callers derive with ns.UI.OrdersPanel.BenchmarkQuality). Entries with no known (or a negative) tip are
 -- not samples, and neither are recraft commissions (recraft = true: a recraft is not the fresh craft benchmarked).
 -- Nil when there are fewer than the benchmarkMinSamples setting.
-function Ledger:Benchmark(recipeID, quality)
-  local tips = {}
-  for _, saved in ipairs(each_saved()) do
-    local entry = saved.entry
-    if entry.type == "commission" and entry.recipeID == recipeID and not entry.recraft
-      and (quality == nil or entry.quality == quality) and is_integer(entry.tip) and entry.tip >= 0 then
-      tips[#tips + 1] = entry.tip
-    end
-  end
-  if #tips == 0 or #tips < self:Settings().benchmarkMinSamples then return nil end
+-- A commission whose tip is a benchmark sample (recipeID known, not a recraft, a known tip of 0 or more).
+local function benchmark_sample(entry)
+  return entry.type == "commission" and entry.recipeID ~= nil and not entry.recraft and is_integer(entry.tip)
+    and entry.tip >= 0
+end
+
+-- The summary of a list of tips, or nil below minSamples. Sorts `tips`.
+local function summarize(tips, minSamples)
+  if #tips == 0 or #tips < minSamples then return nil end
   table.sort(tips)
   return {
     median = Ledger.Percentile(tips, 0.5), p25 = Ledger.Percentile(tips, 0.25), p75 = Ledger.Percentile(tips, 0.75),
     n = #tips,
   }
+end
+
+function Ledger:Benchmark(recipeID, quality)
+  local tips = {}
+  each_saved(function(entry)
+    if benchmark_sample(entry) and entry.recipeID == recipeID and (quality == nil or entry.quality == quality) then
+      tips[#tips + 1] = entry.tip
+    end
+  end)
+  return summarize(tips, self:Settings().benchmarkMinSamples)
+end
+
+-- Every benchmark in one pass, by Benchmark's rules: { [recipeID] = { [quality] = summary, all = summary } } (a
+-- quality key only for numeric qualities; "all" covers every quality, like Benchmark(recipeID, nil)). Summaries with
+-- fewer than benchmarkMinSamples tips are left out. For views that show many benchmarks (the Ledger tab).
+function Ledger:Benchmarks()
+  local tips = {}
+  each_saved(function(entry)
+    if benchmark_sample(entry) then
+      local byQuality = tips[entry.recipeID]
+      if not byQuality then byQuality = { all = {} }; tips[entry.recipeID] = byQuality end
+      local all = byQuality.all
+      all[#all + 1] = entry.tip
+      if type(entry.quality) == "number" then
+        local list = byQuality[entry.quality]
+        if not list then list = {}; byQuality[entry.quality] = list end
+        list[#list + 1] = entry.tip
+      end
+    end
+  end)
+  local minSamples = self:Settings().benchmarkMinSamples
+  local out = {}
+  for recipeID, byQuality in pairs(tips) do
+    local summaries = {}
+    for key, list in pairs(byQuality) do summaries[key] = summarize(list, minSamples) end
+    if next(summaries) ~= nil then out[recipeID] = summaries end
+  end
+  return out
 end
 
 ---------------------------------------------------------------------------

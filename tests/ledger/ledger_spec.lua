@@ -247,6 +247,37 @@ describe("Ledger store", function()
       for _, t in ipairs({100, 200, 300}) do L:Add({type="commission", amount=t - 10, tip=t, recipeID=1}) end
       assert.equal(200, L:Benchmark(1).median)
     end)
+    it("Benchmarks gives every recipe and quality in one pass, by Benchmark's rules", function()
+      for _, t in ipairs({100, 200, 300}) do
+        L:Add({type="commission", amount=t, tip=t, recipeID=1, quality=2})
+        L:Add({type="commission", amount=t, tip=t, recipeID=1, quality=3, recraft=true})   -- not a sample
+        L:Add({type="commission", amount=t, tip=t, recipeID=2})                            -- no quality
+      end
+      L:Add({type="commission", amount=9, tip=9, recipeID=1, quality=3})
+      L:Add({type="commission", amount=9, tip=-9, recipeID=1, quality=2})                  -- negative: not a sample
+      L:Add({type="sale", amount=9, tip=9, recipeID=1, quality=2})
+      local all = L:Benchmarks()
+      assert.same({median=200, p25=150, p75=250, n=3}, all[1][2])
+      assert.same(L:Benchmark(1, 2), all[1][2]); assert.same(L:Benchmark(1, nil), all[1].all)
+      assert.is_nil(all[1][3]); assert.is_nil(L:Benchmark(1, 3))                          -- 1 sample < 3
+      assert.same(L:Benchmark(2, nil), all[2].all); assert.equal(3, all[2].all.n)
+      assert.same({median=150, p25=77, p75=225, n=4}, all[1].all)          -- 9, 100, 200, 300
+      L:Settings().benchmarkMinSamples = 1
+      assert.same({median=9, p25=9, p75=9, n=1}, L:Benchmarks()[1][3])
+    end)
+  end)
+
+  describe("HasIncome", function()
+    it("is true once a sale or commission exists, and ignores crafts and damaged rows", function()
+      assert.is_false(L:HasIncome())
+      L:Add({type="craft", amount=-10})
+      ns.FS.db.global.ledger.entries[5] = "damaged"
+      assert.is_false(L:HasIncome())
+      L:Add({type="sale", amount=10})
+      assert.is_true(L:HasIncome())
+      ns.FS.db.global.ledger = nil
+      assert.is_false(L:HasIncome())
+    end)
   end)
 
   describe("Settings and Prune", function()

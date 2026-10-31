@@ -90,6 +90,20 @@ describe("Ledger tab models", function()
     assert.same({ recipeID = 5, quality = 1, median = 20, p25 = 15, p75 = 25, n = 3 }, rows[1])
   end)
 
+  it("builds the benchmark rows from one Ledger:Benchmarks pass, not one Benchmark call per pair", function()
+    for _, t in ipairs({ 10, 20, 30 }) do
+      L:Add({ type = "commission", amount = t, tip = t, recipeID = 5, quality = 3 })
+      L:Add({ type = "commission", amount = t, tip = t, recipeID = 5, quality = 1 })
+      L:Add({ type = "commission", amount = t, tip = t, recipeID = 8 })
+    end
+    local expected = T.BenchmarkRows(L:Query({}))
+    local calls = 0
+    L.Benchmark = function() calls = calls + 1 end
+    assert.same(expected, T.BenchmarkRows(L:Query({})))
+    assert.equal(0, calls); assert.equal(3, #expected)
+    L.Benchmark = nil
+  end)
+
   it("gives a recipe whose commissions have no quality one all-qualities row, shown as quality -", function()
     for _, t in ipairs({ 10, 20, 30 }) do
       L:Add({ type = "commission", amount = t, tip = t, recipeID = 8 })
@@ -530,6 +544,15 @@ describe("Orders dashboard widgets", function()
     assert.equal("Income: " .. ns.UI.FormatMoney(100000), lines[2])
     assert.equal("Partial: 1 with missing or partial cost", lines[3])
     assert.is_nil(frames.goldThisWeek.errorText)
+  end)
+
+  it("checks for sales with Ledger:HasIncome instead of reading the whole ledger", function()
+    L:Add({ type = "sale", amount = 10000, cost = 1 })
+    local query = L.Query
+    L.Query = function() error("Query must not be called for the sales check") end
+    local lines = ns.UI.OrdersWidgets.GoldThisWeekLines(L, ns.FS:Now())
+    assert.is_truthy(lines[1]:find(ns.UI.FormatMoney(9999), 1, true))
+    L.Query = query
   end)
 
   it("still shows the ledger while the saved data is read-only, and says so", function()

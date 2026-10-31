@@ -162,8 +162,10 @@ function M.OpenOrdersLines(snapshot, now)
   return lines
 end
 
--- True when the ledger holds at least one sale or commission (one pass over the entries).
+-- True when the ledger holds at least one sale or commission: Ledger:HasIncome (stops at the first one), else a
+-- pass over Query for a Ledger without it.
 local function has_sales(ledger)
+  if ledger.HasIncome then return ledger:HasIncome() end
   for _, entry in ipairs(ledger:Query({})) do
     if entry.type == "sale" or entry.type == "commission" then return true end
   end
