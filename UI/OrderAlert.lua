@@ -43,7 +43,9 @@ local MIN_TOAST_SECONDS, MAX_TOAST_SECONDS = 1, 60
 local function is_finite(n) return type(n) == "number" and n == n and n ~= math.huge and n ~= -math.huge end
 
 -- Fills every default `target` is missing or holds with the wrong type, keeping valid values (a stored false stays
--- false). toastSeconds must be a finite number from 1 to 60, else the default.
+-- false). toastSeconds must be a finite number from 1 to 60, else the default. Deliberately not shared with Orders'
+-- and Ledger's fill: each module repairs its own settings by its own rules (Orders coerces numeric strings, Ledger
+-- rejects NaN, OrderAlert range-checks toastSeconds).
 local function fill(target, defaults)
   for key, default in pairs(defaults) do
     if type(target[key]) ~= type(default) then target[key] = default end

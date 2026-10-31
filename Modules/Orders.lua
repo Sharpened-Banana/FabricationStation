@@ -52,15 +52,13 @@ local function number_or(v, default)
   return default
 end
 
-local function copy(v)
-  if type(v) ~= "table" then return v end
-  local out = {}
-  for k, x in pairs(v) do out[k] = copy(x) end
-  return out
-end
+-- Plain values only (views, inputs, settings defaults; at most ~7 levels deep, no functions): 1a's shared deep copy.
+local copy = ns.Util.DeepCopy
 
 -- Fills every default `target` is missing (or holds with the wrong type), keeping what it has. A numeric string
--- where a number belongs (e.g. "20000") is kept, as a number.
+-- where a number belongs (e.g. "20000") is kept, as a number. Deliberately not shared with Ledger's and
+-- OrderAlert's fill: each module repairs its own settings by its own rules (Orders coerces numeric strings and
+-- recurses into tables, Ledger rejects NaN, OrderAlert range-checks toastSeconds).
 local function fill(target, defaults)
   for k, v in pairs(defaults) do
     local current = target[k]

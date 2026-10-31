@@ -44,14 +44,12 @@ local function is_integer(v)
   return type(v) == "number" and v == math.floor(v) and v ~= math.huge and v ~= -math.huge
 end
 
-local function copy(v)
-  if type(v) ~= "table" then return v end
-  local out = {}
-  for k, x in pairs(v) do out[k] = copy(x) end
-  return out
-end
+-- Plain values only (reagent tables, provided counts; no functions): 1a's shared deep copy.
+local copy = ns.Util.DeepCopy
 
--- Fills every default `target` is missing (or holds with the wrong type), keeping what it has.
+-- Fills every default `target` is missing (or holds with the wrong type, or NaN where a number belongs), keeping
+-- what it has. Deliberately not shared with Orders' and OrderAlert's fill: each module repairs its own settings by
+-- its own rules (Orders coerces numeric strings, Ledger rejects NaN, OrderAlert range-checks toastSeconds).
 local function fill(target, defaults)
   for k, v in pairs(defaults) do
     if type(target[k]) ~= type(v) or (type(v) == "number" and target[k] ~= target[k]) then target[k] = v end
