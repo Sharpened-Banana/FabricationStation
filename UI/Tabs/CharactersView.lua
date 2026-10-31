@@ -396,6 +396,24 @@ function V.CurrentDataNote()
   return V.DataBuildNote((ns.FS:GameDataStatus()))
 end
 
+V.MARKER_LABEL = "Old data"
+
+-- The outdated-data marker the Characters and Planner tabs show in their own fixed region (Task 14 wording):
+-- GameData.Status -> { label = "Old data", tooltip = { "Game data build X is outdated", why } } when DataBuildNote
+-- has a note (same rule), else nil.
+function V.DataMarker(status)
+  if not V.DataBuildNote(status) then return nil end
+  return { label = V.MARKER_LABEL, tooltip = {
+    "Game data build " .. whole(status.build) .. " is outdated",
+    "Knowledge sources and counts come from that game build; the game has changed since, so they may be wrong.",
+  } }
+end
+
+-- DataMarker for this session's game build, or nil.
+function V.CurrentDataMarker()
+  return V.DataMarker((ns.FS:GameDataStatus()))
+end
+
 -- { AltRow } (the rows the grid shows) -> { text, base, note|nil, tooltip = { line } }:
 -- "Characters: N · Gold: <sum> · Knowledge left: <sum> KP" (gold compact, e.g. "1,234g"; the full sum is in the
 -- tooltip). Unknown gold makes the sum "<sum>+"; a knowledge sum over only some professions is "N+? KP", none known

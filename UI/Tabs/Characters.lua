@@ -27,10 +27,10 @@ local _, ns = ...
 -- times to full moving (cancelled when the tab hides). OnDisable cancels everything pending and no timer starts while
 -- the registrar is off.
 --
--- The header line: an "Outdated" marker in its own fixed region first (only while the data build is outdated; its
--- tooltip has the build), then the header sums (compact gold; full values in the header tooltip). A narrow window cuts
--- only the header's tail, never the marker. While Alts
--- is off the tab says "Alts is turned off" instead of showing an empty grid.
+-- The header line: an "Old data" marker in its own fixed region first (only while the data build is outdated; its
+-- tooltip names the build, CharactersView.DataMarker), then the header sums (compact gold; full values in the header
+-- tooltip). A narrow window cuts only the header's tail, never the marker. While Alts is off the tab says "Alts is
+-- turned off" instead of showing an empty grid.
 --
 -- Own frames only; every handler runs isolated (ns.FS:Wrap, log-only sources).
 local CharactersTab = ns.FS:NewModule("CharactersTab", "AceEvent-3.0")
@@ -48,9 +48,9 @@ local PAD = 6
 local LINE_TOP, LINE_HEIGHT, CHECK_TOP, CHECK_SIZE = 4, 20, 28, 24
 local SEARCH_WIDTH, SEARCH_GAP, MAX_SEARCH = 160, 8, 60
 local CHECK_LABEL_GAP, CHECK_LABEL_WIDTH, STATUS_GAP = 2, 90, 8
--- The outdated-data marker: its own region at the start of the header line, fixed and wider than its 8 characters
--- (about 50 px in GameFontNormal), so truncation can only cut the header's tail, never the marker.
-local MARKER_TEXT, MARKER_WIDTH, MARKER_GAP = "Outdated", 70, 6
+-- The outdated-data marker ("Old data"): its own region at the start of the header line, fixed and wider than its 8
+-- characters (about 50 px in GameFontNormal), so truncation can only cut the header's tail, never the marker.
+local MARKER_WIDTH, MARKER_GAP = 70, 6
 local STATUS_LEFT = CHECK_SIZE + CHECK_LABEL_GAP + CHECK_LABEL_WIDTH + STATUS_GAP   -- 124 px into the bar
 local BAR_HEIGHT = CHECK_TOP + CHECK_SIZE + 2                                       -- 54
 local GRID_TOP = BAR_HEIGHT + 2                                                     -- 56
@@ -380,12 +380,11 @@ local function apply_layout()
   view.status:SetWidth(math.max(0, inner - STATUS_LEFT))
 end
 
--- note: CharactersView's data build note ("data build X (outdated)") or nil.
-local function set_marker(note)
-  if note then
-    view.outdated:SetText(color(ORANGE, MARKER_TEXT))
-    view.outdatedTooltip = { "Outdated: " .. note,
-      "Knowledge sources and counts come from that game build; the game has changed since, so they may be wrong." }
+-- marker: CharactersView.DataMarker ({ label = "Old data", tooltip }) or nil.
+local function set_marker(marker)
+  if marker then
+    view.outdated:SetText(color(ORANGE, marker.label))
+    view.outdatedTooltip = marker.tooltip
     view.outdated:Show(); view.outdatedHit:Show()
   else
     view.outdated:SetText("")
@@ -409,6 +408,7 @@ function refresh()
   local A = alts()
   if not A then
     listen_for_items(false)
+    notice = nil
     view.grid.frame:Hide(); view.results.frame:Hide()
     view.header:SetText("Characters")
     view.headerTooltip = { "Characters", V().OFF_TEXT }
@@ -431,7 +431,7 @@ function refresh()
   local header = V().Header(rows)
   view.header:SetText(header.base)
   view.headerTooltip = header.tooltip
-  set_marker(header.note)
+  set_marker(header.note and V().CurrentDataMarker() or nil)
   view.showHiddenLabel:SetText("Show hidden (" .. hiddenCount .. ")")
   view.hiddenCount = hiddenCount
   view.showHidden:SetChecked(showHidden)

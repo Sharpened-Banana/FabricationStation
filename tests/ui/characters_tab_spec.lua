@@ -447,6 +447,7 @@ describe("Characters tab", function()
       A:Enable()
       reg.characters.refresh(container)
       assert.is_true(v.grid.frame:IsShown()); assert.is_false(v.empty:IsShown())
+      assert.equal("", v.status:GetText())   -- the Hide feedback from before Alts went off is gone
     end)
 
     it("logs a failing handler under the tab's source without stopping the registrar", function()
@@ -510,7 +511,7 @@ describe("Characters tab", function()
       boot({ GetBuildInfo = function() return "12.2.0", "70700", "Nov 1 2026", 120200 end })
       local v = open(516)
       -- The marker: first on the line, anchored to the bar's left edge, a fixed 70 px for its 8 characters.
-      assert.same({ true, "Outdated" }, { v.outdated:IsShown(), plain(v.outdated:GetText()) })
+      assert.same({ true, "Old data" }, { v.outdated:IsShown(), plain(v.outdated:GetText()) })
       assert.same({ "TOPLEFT", v.bar, "TOPLEFT", 0, -4 }, point(v.outdated))
       assert.equal(1, v.outdated:GetNumPoints())
       assert.equal(70, v.outdated:GetWidth())
@@ -519,7 +520,9 @@ describe("Characters tab", function()
       assert.equal(336 - 76, v.header:GetWidth())
       assert.equal("Characters: 3 \194\183 Gold: 1,234g \194\183 Knowledge left: 5 KP", v.header:GetText())
       v.outdatedHit:GetScript("OnEnter")(v.outdatedHit)
-      assert.equal("Outdated: data build 70575 (outdated)", tooltip.lines[1])
+      assert.same({ "Game data build 70575 is outdated",
+        "Knowledge sources and counts come from that game build; the game has changed since, so they may be wrong." },
+        tooltip.lines)
       assert.is_true(v.outdatedHit:IsShown())
       resize(900)
       assert.same({ 70, 900 - 12 - 168 - 76 }, { v.outdated:GetWidth(), v.header:GetWidth() })
@@ -555,7 +558,8 @@ describe("Characters tab in a full load", function()
     local tabs = ns.FS:GetModule("MainWindow"):GetTabs()
     local ids = {}
     for _, t in ipairs(tabs) do ids[#ids + 1] = t.id end
-    assert.same({ "dashboard", "recipes", "queue", "orders", "customers", "ledger", "characters", "settings" }, ids)
+    assert.same({ "dashboard", "recipes", "queue", "orders", "customers", "ledger", "characters", "planner", "settings" },
+      ids)
     assert.is_true(ns.FS:GetModule("CharactersTab"):IsEnabled())
     assert.is_nil(ns.FS:GetOptionsTable().args.modules.args.CharactersTab)
     ns.FS:HandleSlash("tab characters")

@@ -14,7 +14,9 @@
 --   opts.ranked        { RecipeResult } for Recipes:GetRanked (filtered by filter.charKey / filter.skillLineID)
 --   opts.recipeLines   { [recipeID] = skillLineID } used by that filter (falls back to the schematic's skillLineID)
 --   opts.evaluate      function(recipeID, charKey, o) or { [recipeID] = result } for Recipes:Evaluate
--- env = { scanner, recipes, registered = { tabs = {[id]=def}, widgets = {[id]=def}, lineProviders = {[id]=fn} } }.
+--   opts.queue         [Task 14] methods of a fake Queue module (e.g. { Add = fn }); no Queue module without it
+-- env = { scanner, recipes, queue|nil, registered = { tabs = {[id]=def}, widgets = {[id]=def},
+--   lineProviders = {[id]=fn} } }.
 -- Extend this file additively (later phase-3 tasks share it).
 local P2 = require("tests.helpers.phase2")
 
@@ -238,6 +240,7 @@ function P3.phase3_env(opts)
     RefreshTab = function() end,
     SelectTab = function() end,
   })
+  if opts.queue then env.queue = P2.fake_module(ns, "Queue", opts.queue) end
   if opts.knowledge ~= false then
     ns.GameData.Define("Knowledge", 70575, opts.knowledge or P3.knowledge())
   end

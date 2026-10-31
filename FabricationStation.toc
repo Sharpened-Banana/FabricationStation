@@ -57,6 +57,7 @@ UI\Tabs\ViewUtil.lua
 UI\Tabs\CharactersView.lua
 UI\Tabs\PlannerView.lua
 UI\Tabs\Characters.lua
+UI\Tabs\Planner.lua
 UI\Tabs\Settings.lua
 UI\Launcher.lua
 UI\ProfessionPanel.lua

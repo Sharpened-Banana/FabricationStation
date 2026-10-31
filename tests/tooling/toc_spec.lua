@@ -39,7 +39,7 @@ describe("FabricationStation.toc", function()
     assert.is_truthy(at["UI/AltsTooltips.lua"])
     assert.is_true(at["UI/OrdersOptions.lua"] < at["UI/AltsTooltips.lua"])
   end)
-  -- Phase 3 (Tasks 12-13): the shared view helpers before the view files, the view files before the tabs that use
+  -- Phase 3 (Tasks 12-14): the shared view helpers before the view files, the view files before the tabs that use
   -- them, all before the Settings tab.
   it("loads the phase-3 grid, view helpers, views and tabs in order", function()
     local at = {}
@@ -52,6 +52,9 @@ describe("FabricationStation.toc", function()
       { "UI/Tabs/CharactersView.lua", "UI/Tabs/Characters.lua" },
       { "UI/Tabs/PlannerView.lua", "UI/Tabs/Characters.lua" },
       { "UI/Tabs/Characters.lua", "UI/Tabs/Settings.lua" },
+      { "UI/Tabs/PlannerView.lua", "UI/Tabs/Planner.lua" },
+      { "UI/Tabs/Characters.lua", "UI/Tabs/Planner.lua" },
+      { "UI/Tabs/Planner.lua", "UI/Tabs/Settings.lua" },
     }) do
       assert.is_truthy(at[pair[1]], pair[1]); assert.is_truthy(at[pair[2]], pair[2])
       assert.is_true(at[pair[1]] < at[pair[2]], pair[1] .. " before " .. pair[2])

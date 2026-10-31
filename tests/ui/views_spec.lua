@@ -199,6 +199,18 @@ describe("CharactersView", function()
     assert.is_nil(V.CurrentDataNote())                        -- stubs: client 70575, Knowledge 70575
   end)
 
+  -- Task 14 (Task 13 minor): one marker wording for the Characters and Planner tabs, without "Outdated: … (outdated)".
+  it("words the outdated-data marker once", function()
+    local m = V.DataMarker({ build = 70575, missing = false, outdated = true, mismatched = {} })
+    assert.same({ label = "Old data", tooltip = { "Game data build 70575 is outdated",
+      "Knowledge sources and counts come from that game build; the game has changed since, so they may be wrong." } }, m)
+    assert.is_nil(V.DataMarker({ build = 70575, missing = false, outdated = false, mismatched = {} }))
+    assert.is_nil(V.DataMarker(nil))
+    assert.is_nil(V.CurrentDataMarker())
+    local ns2 = boot({ GetBuildInfo = function() return "12.2.0", "70700", "Nov 1 2026", 120200 end })
+    assert.equal("Game data build 70575 is outdated", ns2.UI.CharactersView.CurrentDataMarker().tooltip[1])
+  end)
+
   it("puts the outdated marker on the header knowledge sum and in its tooltip", function()
     local ns2, A2 = boot({ GetBuildInfo = function() return "12.2.0", "70700", "Nov 1 2026", 120200 end })
     local V2 = ns2.UI.CharactersView
