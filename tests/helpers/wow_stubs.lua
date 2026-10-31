@@ -668,9 +668,10 @@ local function install(overrides)
   end
 
   -- ScrollUtil (Blizzard_SharedXML, always loaded): like ScrollUtil.lua, AddAcquiredFrameCallback /
-  -- AddReleasedFrameCallback register callback(owner, frame, elementData[, new]) on the box's OnAcquiredFrame /
-  -- OnReleasedFrame event (ScrollBoxListMixin.Event when a fake Professions frame defined it). A box without
-  -- RegisterCallback (a plain table) is ignored. iterateExisting is not supported.
+  -- AddInitializedFrameCallback / AddReleasedFrameCallback register callback(owner, frame, elementData[, new]) on the
+  -- box's OnAcquiredFrame / OnInitializedFrame / OnReleasedFrame event (ScrollBoxListMixin.Event when a fake
+  -- Professions frame defined it). A box without RegisterCallback (a plain table) is ignored. iterateExisting is not
+  -- supported.
   local function scroll_event(key)
     local mixin = rawget(_G, "ScrollBoxListMixin")
     return type(mixin) == "table" and type(mixin.Event) == "table" and mixin.Event[key] or key
@@ -683,6 +684,7 @@ local function install(overrides)
   end
   local ScrollUtil = {
     AddAcquiredFrameCallback = add_scroll_callback("OnAcquiredFrame"),
+    AddInitializedFrameCallback = add_scroll_callback("OnInitializedFrame"),
     AddReleasedFrameCallback = add_scroll_callback("OnReleasedFrame"),
   }
 

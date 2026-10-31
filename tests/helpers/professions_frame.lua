@@ -55,14 +55,18 @@
 -- opts.withoutOrderView    build no OrdersPage.OrderView
 --   browseFrame, orderList, orderScrollBox, orderView  the Blizzard objects (empty proxies, writes recorded)
 --   orderCallbacks[event]  { fn, owner } registered on the order ScrollBox (ScrollUtil.Add*FrameCallback lands here)
---   setOrderCalls          the orders passed to OrderView:SetOrder, in call order
+--   setOrderCalls          the orders passed to OrderView:SetOrder, in call order (SetOrder also keeps the order in
+--                         OrderView.order, as Blizzard's does; that write is not recorded)
 --   orderElement(option, browseType?)  a list element as Blizzard inserts it: { option, browseType ("flat" by
 --                         default; a bucket is { option = bucketInfo, browseType = "bucketed" }), pageFrame }
 --   newOrderRow(geometry?) a fake order-list row (a Button; writes recorded as "OrderRow.<key>"). geometry (read-only):
 --                         { left, width, itemRight, textLeft, textWidth }: row:GetLeft/GetRight/GetWidth and
 --                         row.cells[1] (the item-name cell) with GetRight and .Text:GetLeft/GetStringWidth
---   acquireOrderRow(row, elementData, new?)  the ScrollBox acquires the row for elementData: runs the OnAcquiredFrame
---                         callbacks as fn(owner, row, elementData, new) and lists the row for ForEachFrame
+--   acquireOrderRow(row, elementData, new?, fill?)  the ScrollBox shows the row for elementData, in Blizzard's order
+--                         (ScrollBoxListView): OnAcquiredFrame callbacks fn(owner, row, elementData, new); then the
+--                         initializer, played by fill(row, elementData) (e.g. change the geometry's textWidth as
+--                         Blizzard writes the new item name); then OnInitializedFrame callbacks fn(owner, row,
+--                         elementData). The row is listed for ForEachFrame.
 --   releaseOrderRow(row)  runs the OnReleasedFrame callbacks as fn(owner, row, elementData) and unlists the row
 --   showBrowse() / hideBrowse()  set BrowseFrame's shown state and run its OnShow / OnHide script chain
 --
@@ -221,7 +225,10 @@ local function fake_professions_frame(opts)
   end
   if not opts.withoutOrderView then
     local orderView = CreateFrame("Frame", nil, ordersPage)
-    rawset(orderView, "SetOrder", function(_, order) form.setOrderCalls[#form.setOrderCalls + 1] = order end)
+    rawset(orderView, "SetOrder", function(_, order)
+      form.setOrderCalls[#form.setOrderCalls + 1] = order
+      rawset(orderView, "order", order)
+    end)
     rawset(orderView, "GetFrameLevel", function() return 4 end)
     form.orderView = recorded("OrderView", orderView)
     rawset(ordersPage, "OrderView", form.orderView)
@@ -357,13 +364,15 @@ local function fake_professions_frame(opts)
     end
     return recorded("OrderRow", target)
   end
-  function form.acquireOrderRow(row, elementData, new)
+  function form.acquireOrderRow(row, elementData, new, fill)
     local found
     for _, entry in ipairs(orderRows) do
       if entry.row == row then entry.elementData = elementData; found = true end
     end
     if not found then orderRows[#orderRows + 1] = { row = row, elementData = elementData } end
     run_callbacks(form.orderCallbacks, ACQUIRED_FRAME, row, elementData, new and true or false)
+    if fill then fill(row, elementData) end
+    run_callbacks(form.orderCallbacks, INITIALIZED_FRAME, row, elementData)
   end
   function form.releaseOrderRow(row)
     for i = #orderRows, 1, -1 do

@@ -218,6 +218,17 @@ local ClaimBestOrder, x = 1, "call ClaimOrder now"
     end
   end)
 
+  it("has exactly one :ClaimBest( caller, in UI/OrdersPanel.lua", function()
+    local calls = {}
+    for _, path in ipairs(lua_files()) do
+      for _, r in ipairs(references(read(path))) do
+        if r.name == "ClaimBest" and r.call then calls[#calls + 1] = path .. ":" .. r.line end
+      end
+    end
+    assert.equal(1, #calls, "expected exactly one :ClaimBest( call, got: " .. table.concat(calls, ", "))
+    assert.truthy(calls[1]:find("^UI/OrdersPanel%.lua:"))
+  end)
+
   it("defines Orders:ClaimBest in Modules/Orders.lua", function()
     assert.truthy(read("Modules/Orders.lua"):find("\nfunction Orders:ClaimBest%("))
   end)

@@ -12,10 +12,11 @@ local ADDON_NAME, ns = ...
 -- order list's ScrollBox, anchored over it, clipping its children) and are anchored to Blizzard's rows; nothing is
 -- ever assigned on a Blizzard frame or table, and no Blizzard method that changes state is called. Blizzard's code
 -- gets only post-hooks: hooksecurefunc on OrdersPage:ShowOrders / :ShowBuckets and OrderView:SetOrder,
--- ScrollUtil.AddAcquiredFrameCallback / AddReleasedFrameCallback on the ScrollBox, and HookScript OnShow / OnHide on
+-- ScrollUtil.AddInitializedFrameCallback / AddReleasedFrameCallback on the ScrollBox, and HookScript OnShow / OnHide on
 -- the BrowseFrame. The row layout is measured read-only (zero-touch, as in RecipeListLabels): the item-name cell's
--- right edge and the end of its text (GetRight / GetLeft / GetStringWidth); the cell strip sits at the right of the
--- item-name column and gets a dark backing when a long name reaches it.
+-- right edge and the end of its text (GetRight / GetLeft / GetStringWidth), once Blizzard has filled the row
+-- (OnInitializedFrame). The cell strip sits at the right of the item-name column and gives way to the name (H1-6):
+-- the profit cell goes first, then the whole strip; our cells never cover Blizzard's item name.
 --
 -- Claiming (design rule 3): Orders:ClaimBest (C_CraftingOrders.ClaimOrder is HasRestrictions) is called only as a
 -- direct call inside the Claim Best Order button's OnClick handler (tests/orders/claim_click_only_spec.lua enforces
@@ -48,7 +49,10 @@ local COPPER_PER_SILVER, COPPER_PER_GOLD = 100, 10000
 -- fill column, then fixed columns Customer 160, Tip 160, Reagents 90 and Expiration 60: 470 after the item name when
 -- the row cannot be measured yet.
 local FIXED_COLUMNS = 470
-local STRIP_WIDTH, STRIP_HEIGHT, CELL_WIDTH, RISK_WIDTH, ADD_SIZE = 140, 16, 44, 22, 16
+local STRIP_HEIGHT, CELL_WIDTH, RISK_WIDTH, ADD_SIZE, WARN_SIZE, CELL_GAP = 16, 44, 22, 16, 14, 2
+local CORE_WIDTH = ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP + CELL_WIDTH   -- [score] [risk] [+]: always together
+local WARN_SLOT, PROFIT_SLOT = WARN_SIZE + CELL_GAP, CELL_WIDTH + CELL_GAP
+local STRIP_WIDTH = CORE_WIDTH + WARN_SLOT + PROFIT_SLOT
 local PAD, GAP = 6, 4
 local CONTAINER_LEVELS = 20   -- our container sits this many frame levels above the ScrollBox (rows are ~2-4 above)
 local TINTS = {
@@ -57,7 +61,6 @@ local TINTS = {
   ["repeat"] = { 0.3, 0.7, 1, 0.12 },
 }
 local DIM = { 0, 0, 0, 0.55 }
-local BACKING = { 0, 0, 0, 0.75 }
 local TEXT_COLORS = { green = { 0.25, 1, 0.25 }, red = { 1, 0.25, 0.25 }, grey = { 0.62, 0.62, 0.62 },
   gold = { 1, 0.82, 0 }, white = { 1, 1, 1 } }
 local TONES = { good = TEXT_COLORS.green, bad = TEXT_COLORS.red, warn = TEXT_COLORS.gold, plain = TEXT_COLORS.white }
@@ -137,25 +140,39 @@ function M.RowModel(view, customer, filters)
   }
 end
 
--- Compact signed money for a narrow cell: "+12g", "-3g", "+45s", "+7c", "0g"; nil for unknown. Rounded down so an
--- amount is never overstated.
+-- Compact signed money for a narrow cell, in its largest unit: "+12g", "-4g", "+45s", "+7c", "0g"; nil for unknown.
+-- Profits are rounded toward zero and losses away from it, so a cell never looks better than the order: +12.9g is
+-- "+12g", -3.9g is "-4g" (a loss just under 1g reads "-1g", never "-100s").
 local function compact(copper)
   if not is_money(copper) then return nil end
-  local abs = math.floor(math.abs(copper))
-  if abs == 0 then return "0g" end
-  local sign = copper > 0 and "+" or "-"
-  if abs >= COPPER_PER_GOLD then return ("%s%dg"):format(sign, math.floor(abs / COPPER_PER_GOLD)) end
-  if abs >= COPPER_PER_SILVER then return ("%s%ds"):format(sign, math.floor(abs / COPPER_PER_SILVER)) end
-  return ("%s%dc"):format(sign, abs)
+  if copper > 0 then
+    local abs = math.floor(copper)
+    if abs == 0 then return "0g" end
+    if abs >= COPPER_PER_GOLD then return ("+%dg"):format(math.floor(abs / COPPER_PER_GOLD)) end
+    if abs >= COPPER_PER_SILVER then return ("+%ds"):format(math.floor(abs / COPPER_PER_SILVER)) end
+    return ("+%dc"):format(abs)
+  elseif copper < 0 then
+    local abs = math.ceil(-copper)
+    if abs >= COPPER_PER_GOLD then return ("-%dg"):format(math.ceil(abs / COPPER_PER_GOLD)) end
+    if abs >= COPPER_PER_SILVER then
+      local silver = math.ceil(abs / COPPER_PER_SILVER)
+      if silver * COPPER_PER_SILVER >= COPPER_PER_GOLD then return "-1g" end
+      return ("-%ds"):format(silver)
+    end
+    return ("-%dc"):format(abs)
+  end
+  return "0g"
 end
 
 local function sign_color(copper)
-  if not is_money(copper) or math.floor(math.abs(copper)) == 0 then return TEXT_COLORS.grey end
+  if not is_money(copper) or compact(copper) == "0g" then return TEXT_COLORS.grey end
   return copper > 0 and TEXT_COLORS.green or TEXT_COLORS.red
 end
 
 -- The profit cell: the order's net ("?" when unknown), "~" before an estimate, "?" after it when a price is missing.
+-- A recraft is not evaluated at all (judged manually): an em dash, not "?".
 function M.ProfitText(view)
+  if flags_of(view).recraft then return EM_DASH end
   local text = compact(view.net)
   if not text then return "?" end
   local flags = flags_of(view)
@@ -208,13 +225,19 @@ function M.BestText(itemText, view, benchmark)
 end
 
 -- The Queue:Add entry for an order (one craft for the order, its customer-provided reagents, the minimum quality as
--- the target when above 1, concentration when the score assumed it), or nil for a recraft (not a fresh craft) or a
--- view without a recipe.
+-- the target when above 1, concentration when the score assumed it and it reaches the target), or nil for a recraft
+-- (not a fresh craft), a recipe the character does not know (flags.unknownRecipe) or a view without a recipe.
 function M.QueueEntry(view)
-  if type(view) ~= "table" or type(view.recipeID) ~= "number" or flags_of(view).recraft then return nil end
+  local flags = flags_of(view)
+  if type(view) ~= "table" or type(view.recipeID) ~= "number" or flags.recraft or flags.unknownRecipe then return nil end
   local entry = { recipeID = view.recipeID, quantity = 1, orderID = view.orderID, charKey = view.charKey }
   if type(view.minQuality) == "number" and view.minQuality > 1 then entry.targetQuality = view.minQuality end
-  if view.usedConcentration then entry.useConcentration = true end
+  local unreachable = false
+  for _, risk in ipairs(type(view.risks) == "table" and view.risks or {}) do
+    if risk == "unreachableQuality" then unreachable = true end
+  end
+  -- Concentration that cannot reach the minimum quality anyway is not spent.
+  if view.usedConcentration and not unreachable then entry.useConcentration = true end
   local provided = type(view.input) == "table" and view.input.provided or nil
   if type(provided) == "table" and next(provided) ~= nil then
     entry.providedReagents = {}
@@ -264,17 +287,17 @@ local function current_profession()
   return type(info) == "table" and info.profession or nil
 end
 
--- The item's hyperlink when the client has it cached, otherwise its ID as text (its data is requested).
-local function item_text(itemID)
+-- The item's hyperlink when the client has it cached, else nil.
+local function cached_link(itemID)
   local api = C_Item
-  if type(api) == "table" and type(api.GetItemInfo) == "function" then
-    local _, link = api.GetItemInfo(itemID)
-    if type(link) == "string" then return link end
-  end
-  if type(api) == "table" and type(api.RequestLoadItemDataByID) == "function" and itemID ~= nil then
-    api.RequestLoadItemDataByID(itemID)
-  end
-  return tostring(itemID)
+  if itemID == nil or type(api) ~= "table" or type(api.GetItemInfo) ~= "function" then return nil end
+  local _, link = api.GetItemInfo(itemID)
+  return type(link) == "string" and link or nil
+end
+
+-- The item's hyperlink when cached, otherwise its ID as text.
+local function item_text(itemID)
+  return cached_link(itemID) or tostring(itemID)
 end
 
 local announced = {}  -- [module name] = true once its missing hook target was announced this session
@@ -358,7 +381,7 @@ local function add_to_queue(c)
 end
 
 local function new_cells(row)
-  local c = { dimmed = false, backed = false, warnShown = false }
+  local c = { dimmed = false, warnShown = false, fit = "all" }
   local frame = CreateFrame("Frame", nil, container)
   frame:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
   frame:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, 0)
@@ -369,12 +392,11 @@ local function new_cells(row)
   c.dimTexture:SetAllPoints(frame)
   c.dimTexture:SetColorTexture(DIM[1], DIM[2], DIM[3], DIM[4])
 
+  -- The strip, right to left: [profit] [warning] [score] [risk] [+]. Positions are fixed offsets from its right edge;
+  -- only profit moves (left of the warning icon when that shows).
   local strip = CreateFrame("Frame", nil, frame)
   strip:SetSize(STRIP_WIDTH, STRIP_HEIGHT)
   c.strip = strip
-  c.backTexture = strip:CreateTexture(nil, "BACKGROUND")
-  c.backTexture:SetAllPoints(strip)
-  c.backTexture:SetColorTexture(BACKING[1], BACKING[2], BACKING[3], BACKING[4])
 
   c.add = CreateFrame("Button", nil, strip)
   c.add:SetSize(ADD_SIZE, ADD_SIZE)
@@ -389,7 +411,7 @@ local function new_cells(row)
 
   c.risk = CreateFrame("Frame", nil, strip)
   c.risk:SetSize(RISK_WIDTH, STRIP_HEIGHT)
-  c.risk:SetPoint("RIGHT", c.add, "LEFT", -2, 0)
+  c.risk:SetPoint("RIGHT", strip, "RIGHT", -(ADD_SIZE + CELL_GAP), 0)
   c.risk:EnableMouse(true)
   c.riskCount = text(c.risk, "GameFontNormalSmall")
   c.riskCount:SetAllPoints(c.risk)
@@ -399,23 +421,26 @@ local function new_cells(row)
   c.score = text(strip)
   c.score:SetSize(CELL_WIDTH, STRIP_HEIGHT)
   c.score:SetJustifyH("RIGHT")
-  c.score:SetPoint("RIGHT", c.risk, "LEFT", -2, 0)
+  c.score:SetPoint("RIGHT", strip, "RIGHT", -(ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP), 0)
+
+  c.warn = strip:CreateTexture(nil, "OVERLAY")
+  c.warn:SetTexture(WARNING_ICON)
+  c.warn:SetSize(WARN_SIZE, WARN_SIZE)
+  c.warn:SetPoint("RIGHT", strip, "RIGHT", -CORE_WIDTH - CELL_GAP, 0)
+
   c.profit = text(strip)
   c.profit:SetSize(CELL_WIDTH, STRIP_HEIGHT)
   c.profit:SetJustifyH("RIGHT")
-  c.profit:SetPoint("RIGHT", c.score, "LEFT", -2, 0)
-
-  c.warn = frame:CreateTexture(nil, "OVERLAY")
-  c.warn:SetTexture(WARNING_ICON)
-  c.warn:SetSize(14, 14)
-  c.warn:SetPoint("RIGHT", strip, "LEFT", -2, 0)
   cells[row] = c
   return c
 end
 
--- Places the strip at the right of the item-name column (measured read-only; Blizzard's fixed columns otherwise)
--- and backs it when the item name reaches it.
-local function layout(c, row)
+-- Places the strip at the right of the item-name column (measured read-only; Blizzard's fixed columns otherwise) and
+-- makes it give way to Blizzard's item name (hotfix H1-6 rule: our cells never cover the name). With room for
+-- everything: "all"; else without the profit cell (score, risk and the warning icon stay): "noProfit"; else no strip
+-- at all: "none" (the side panel and the Orders tab still carry the numbers). A row that cannot be measured keeps
+-- everything. Only getters are called on Blizzard's row, its item-name cell and that cell's Text.
+local function fit(c, row, warn)
   local itemCell = type(row.cells) == "table" and child(row.cells, 1) or nil
   local reserve = FIXED_COLUMNS
   local rowRight, cellRight = read_number(row, "GetRight"), read_number(itemCell, "GetRight")
@@ -423,15 +448,17 @@ local function layout(c, row)
   c.strip:ClearAllPoints()
   c.strip:SetPoint("RIGHT", row, "RIGHT", -(reserve + PAD), 0)
 
-  local backed = false
   local nameText = child(itemCell, "Text")
   local rowLeft, rowWidth = read_number(row, "GetLeft"), read_number(row, "GetWidth")
   local textLeft, textWidth = read_number(nameText, "GetLeft"), read_number(nameText, "GetStringWidth")
-  if rowLeft and rowWidth and textLeft and textWidth then
-    backed = textLeft + textWidth - rowLeft + GAP > rowWidth - reserve - PAD - STRIP_WIDTH
-  end
-  c.backed = backed
-  set_shown(c.backTexture, backed)
+  if not (rowLeft and rowWidth and textLeft and textWidth) then return "all" end
+  local nameEnd = textLeft + textWidth - rowLeft         -- from the row's left edge
+  local stripRight = rowWidth - reserve - PAD
+  local core = CORE_WIDTH + (warn and WARN_SLOT or 0)
+  local function fits(width) return nameEnd + GAP <= stripRight - width end
+  if fits(core + PROFIT_SLOT) then return "all" end
+  if fits(core) then return "noProfit" end
+  return "none"
 end
 
 local function hide_row(row)
@@ -444,6 +471,7 @@ local function hide_all_cells()
 end
 
 -- Shows the cells of one row for its element, or hides them when it holds no order or the order is not scored.
+-- Runs once Blizzard has filled the row (OnInitializedFrame), so a recycled row is measured with its new item name.
 local function show_row(row, elementData)
   local O = orders()
   local orderID = order_id_of(elementData)
@@ -462,8 +490,6 @@ local function show_row(row, elementData)
   c.tint, c.tintColor = model.highlight, tint
   if tint then c.tintTexture:SetColorTexture(tint[1], tint[2], tint[3], tint[4]) end
   set_shown(c.tintTexture, tint ~= nil)
-  c.warnShown = model.highlight == "blocked"
-  set_shown(c.warn, c.warnShown)
   c.dimmed = model.dimmed
   set_shown(c.dimTexture, model.dimmed)
   c.strip:SetAlpha(model.dimmed and 0.6 or 1)
@@ -481,8 +507,14 @@ local function show_row(row, elementData)
   end
   set_shown(c.add, M.QueueEntry(view) ~= nil and ns.FS:GetModule("Queue", true) ~= nil)
 
-  layout(c, row)
-  c.strip:Show()
+  local blocked = model.highlight == "blocked"
+  c.fit = fit(c, row, blocked)
+  c.warnShown = blocked and c.fit ~= "none"
+  set_shown(c.warn, c.warnShown)
+  c.profit:ClearAllPoints()
+  c.profit:SetPoint("RIGHT", c.strip, "RIGHT", -(CORE_WIDTH + CELL_GAP + (c.warnShown and WARN_SLOT or 0)), 0)
+  set_shown(c.profit, c.fit == "all")
+  set_shown(c.strip, c.fit ~= "none")
   c.frame:Show()
 end
 
@@ -511,9 +543,11 @@ local function attach_rows(self)
     return hook_target_missing(self, ROWS, "ProfessionsFrame.OrdersPage.BrowseFrame.OrderList.ScrollBox")
   end
   local util = ScrollUtil
-  if not (type(util) == "table" and type(util.AddAcquiredFrameCallback) == "function"
-    and type(util.AddReleasedFrameCallback) == "function") then
-    return hook_target_missing(self, ROWS, "ScrollUtil.AddAcquiredFrameCallback")
+  if not (type(util) == "table" and type(util.AddInitializedFrameCallback) == "function") then
+    return hook_target_missing(self, ROWS, "ScrollUtil.AddInitializedFrameCallback")
+  end
+  if type(util.AddReleasedFrameCallback) ~= "function" then
+    return hook_target_missing(self, ROWS, "ScrollUtil.AddReleasedFrameCallback")
   end
 
   container = CreateFrame("Frame", nil, box)
@@ -525,7 +559,9 @@ local function attach_rows(self)
 
   hooksecurefunc(page, "ShowOrders", function() M.Guard(ROWS, refresh_rows) end)
   hooksecurefunc(page, "ShowBuckets", function() M.Guard(ROWS, hide_all_cells) end)
-  util.AddAcquiredFrameCallback(box, function(_, row, elementData) M.Guard(ROWS, show_row, row, elementData) end,
+  -- After Blizzard's initializer has filled the row (ScrollBoxListView: OnAcquiredFrame, the initializer, then
+  -- OnInitializedFrame), as RecipeListLabels does; the released row's cells are hidden.
+  util.AddInitializedFrameCallback(box, function(_, row, elementData) M.Guard(ROWS, show_row, row, elementData) end,
     rowsOwner)
   util.AddReleasedFrameCallback(box, function(_, row) M.Guard(ROWS, hide_row, row) end, rowsOwner)
   rowsAttached = true
@@ -533,7 +569,7 @@ local function attach_rows(self)
 end
 
 function RowAddons:AttachIfReady()
-  if professions_ready() then M.Guard(ROWS, attach_rows, self) end
+  if rowsAttached or professions_ready() then M.Guard(ROWS, attach_rows, self) end
 end
 
 -- Test and diagnostics access: a row's cell set (nil before it was first shown) and our container.
@@ -593,7 +629,50 @@ local function filters()
   return O and O:Settings().filters or nil
 end
 
-local function refresh_side()
+local waitingItem      -- itemID the best line waits for (GET_ITEM_INFO_RECEIVED), or nil
+local requesting       -- true while our RequestLoadItemDataByID call runs
+local refresh_side
+
+local function stop_waiting()
+  if waitingItem == nil then return end
+  waitingItem = nil
+  SidePanel:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
+end
+
+-- GET_ITEM_INFO_RECEIVED(itemID, success): the awaited item's data arrived (or cannot load: success false); the wait
+-- ends either way. The event is synchronous and can fire inside RequestLoadItemDataByID: the refresh in progress then
+-- reads the link itself.
+local function on_item_info(_, itemID)
+  if waitingItem == nil or itemID ~= waitingItem then return end
+  stop_waiting()
+  if not requesting then refresh_side() end
+end
+
+-- The best line's item text: the cached hyperlink, else the item ID while its data is requested. As in hotfix H1's
+-- shopping-list retry (Modules/QueueCraft.lua), the wait is registered before the request, so data that arrives
+-- inside the request is not missed; one item is awaited at a time and the event is unregistered when the wait ends
+-- (arrival, another best order, the panel hiding, the module turning off).
+local function best_item_text(itemID)
+  local link = cached_link(itemID)
+  if link then
+    stop_waiting()
+    return link
+  end
+  local api = C_Item
+  if waitingItem ~= itemID and itemID ~= nil and type(api) == "table"
+    and type(api.RequestLoadItemDataByID) == "function" then
+    stop_waiting()
+    waitingItem = itemID
+    SidePanel:RegisterEvent("GET_ITEM_INFO_RECEIVED", function(...) M.Guard(SIDE, on_item_info, ...) end)
+    requesting = true
+    local ok, err = pcall(api.RequestLoadItemDataByID, itemID)
+    requesting = false
+    if not ok then error(err, 0) end
+  end
+  return cached_link(itemID) or tostring(itemID)
+end
+
+function refresh_side()
   if not (side and side.frame:IsShown()) then return end
   local f = filters()
   for _, check in ipairs(side.checks) do check.button:SetChecked(f ~= nil and check.get(f) or false) end
@@ -609,8 +688,9 @@ local function refresh_side()
   if view then
     local ledger = ns.FS:GetModule("Ledger", true)
     local benchmark = ledger and ledger.Benchmark and ledger:Benchmark(view.recipeID, nil) or nil
-    side.best:SetText("Best: " .. M.BestText(item_text(view.itemID), view, benchmark))
+    side.best:SetText("Best: " .. M.BestText(best_item_text(view.itemID), view, benchmark))
   else
+    stop_waiting()
     side.best:SetText("Best: " .. (BEST_NONE[reason] or "none claimable"))
   end
   side.claimEnabled = view ~= nil
@@ -732,6 +812,7 @@ local function show_side()
 end
 
 local function hide_side()
+  stop_waiting()
   if side then side.frame:Hide() end
 end
 
@@ -762,7 +843,7 @@ local function attach_side(self)
 end
 
 function SidePanel:AttachIfReady()
-  if professions_ready() then M.Guard(SIDE, attach_side, self) end
+  if sideAttached or professions_ready() then M.Guard(SIDE, attach_side, self) end
 end
 
 -- Shows a line under the best order (claim results, Add to Queue results). tone: "good" | "bad" | "warn" | "plain".
@@ -828,12 +909,22 @@ local function set_warning_order(order)
   refresh_warning()
 end
 
+-- The order Blizzard's detail view shows now (OrderView.order, which its SetOrder keeps; read only), or nil when the
+-- view is not on screen.
+local function open_order(orderView)
+  if not is_visible(orderView) then return nil end
+  return child(orderView, "order")
+end
+
+-- Hooks OrderView:SetOrder once; on every attach (also when the module is turned on again) the warning is rebuilt
+-- from the order on screen, or cleared.
 local function attach_warning(self)
+  local orderView = child(child(ProfessionsFrame, "OrdersPage"), "OrderView")
   if warnAttached then
+    warnOrder = open_order(orderView)
     refresh_warning()
     return
   end
-  local orderView = child(child(ProfessionsFrame, "OrdersPage"), "OrderView")
   if not (orderView and type(orderView.SetOrder) == "function") then
     return hook_target_missing(self, WARN, "ProfessionsFrame.OrdersPage.OrderView.SetOrder")
   end
@@ -848,10 +939,12 @@ local function attach_warning(self)
   warn = { frame = frame, text = line }
   hooksecurefunc(orderView, "SetOrder", function(_, order) M.Guard(WARN, set_warning_order, order) end)
   warnAttached = true
+  warnOrder = open_order(orderView)
+  refresh_warning()
 end
 
 function Warning:AttachIfReady()
-  if professions_ready() then M.Guard(WARN, attach_warning, self) end
+  if warnAttached or professions_ready() then M.Guard(WARN, attach_warning, self) end
 end
 
 -- Test and diagnostics access: { frame, text, tone } (nil before the first attach).
@@ -866,5 +959,6 @@ function Warning:OnEnable()
 end
 
 function Warning:OnDisable()
+  warnOrder = nil
   if warn then warn.frame:Hide() end
 end

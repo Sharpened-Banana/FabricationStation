@@ -68,6 +68,10 @@ describe("OrdersPanel", function()
       assert.same({ "+25g", "+20g" }, { P.ProfitText({ net = 250000 }), P.ScoreText({ score = 200000 }) })
       assert.same({ "-3g", "+45s", "+7c", "0g" }, { P.ProfitText({ net = -30000 }), P.ProfitText({ net = 4500 }),
         P.ProfitText({ net = 7 }), P.ProfitText({ net = 0 }) })
+      -- profits round toward zero, losses away from it: a cell never looks better than the order
+      assert.same({ "+12g", "-4g", "-46s", "-1g", "-1c" }, { P.ProfitText({ net = 129999 }), P.ProfitText({ net = -39000 }),
+        P.ProfitText({ net = -4501 }), P.ProfitText({ net = -9999 }), P.ProfitText({ net = -1 }) })
+      assert.equal(EM_DASH, P.ProfitText({ flags = { recraft = true, estimated = true } }))
       assert.same({ "?", "?" }, { P.ProfitText({}), P.ScoreText({ net = 5 }) })
       assert.same({ "~+25g", "~+20g" }, { P.ProfitText({ net = 250000, flags = { estimated = true } }),
         P.ScoreText({ score = 200000, flags = { estimated = true } }) })
@@ -92,6 +96,10 @@ describe("OrdersPanel", function()
       assert.same({ recipeID = 4444, quantity = 1, orderID = 10 },
         P.QueueEntry({ orderID = 10, recipeID = 4444, minQuality = 1, input = { provided = {} } }))
       assert.is_nil(P.QueueEntry({ orderID = 10, recipeID = 4444, flags = { recraft = true } }))
+      assert.is_nil(P.QueueEntry({ orderID = 10, recipeID = 4444, flags = { unknownRecipe = true, noPrice = true } }))
+      local unreachable = P.QueueEntry({ orderID = 10, recipeID = 4444, minQuality = 3, usedConcentration = true,
+        risks = { "unreachableQuality" } })
+      assert.same({ recipeID = 4444, quantity = 1, orderID = 10, targetQuality = 3 }, unreachable)   -- no concentration
       assert.is_nil(P.QueueEntry({ orderID = 10 })); assert.is_nil(P.QueueEntry(nil))
     end)
     it("Guard does nothing for an unknown module", function()
@@ -103,10 +111,11 @@ describe("OrdersPanel", function()
 end)
 
 describe("OrdersPanel on the crafting orders page", function()
-  local ns, W, form, O, C, claimCalls, board, claimed, tooltip, queued
+  local ns, W, form, O, C, claimCalls, board, claimed, tooltip, queued, cachedItems, itemRequests, loadSync
 
   local function boot(frameOpts)
     claimCalls, board, claimed, queued = {}, {}, nil, {}
+    cachedItems, itemRequests, loadSync = { [211111] = "Potion" }, {}, false
     tooltip = { lines = {} }
     local GameTooltip = {
       SetOwner = function(_, owner) tooltip.owner = owner; tooltip.lines = {} end,
@@ -120,7 +129,16 @@ describe("OrdersPanel on the crafting orders page", function()
         GetClaimedOrder = function() return claimed end, GetOrderClaimInfo = function() return { claimsRemaining = 3 } end,
         ClaimOrder = function(id, p) claimCalls[#claimCalls + 1] = { id, p } end },
       C_TradeSkillUI = { GetChildProfessionInfo = function() return { profession = 7 } end },
-      C_Item = { GetItemInfo = function(id) if id == 211111 then return "Potion", "|Hitem:211111|h[Potion]|h" end end } })
+      C_Item = {
+        GetItemInfo = function(id)
+          local name = cachedItems[id]
+          if name then return name, ("|Hitem:%d|h[%s]|h"):format(id, name) end
+        end,
+        RequestLoadItemDataByID = function(id)
+          itemRequests[#itemRequests + 1] = id
+          if loadSync then cachedItems[id] = "Elixir"; W.fire("GET_ITEM_INFO_RECEIVED", id, true) end
+        end,
+      } })
     P2.fake_module(ns, "Recipes", { Evaluate = function() return { expectedQuality = 3, reagentCost = 200000, flags = {} } end,
       GetRanked = function() return {} end })
     P2.fake_module(ns, "Prices", { Get = function() return {} end })
@@ -176,6 +194,7 @@ describe("OrdersPanel on the crafting orders page", function()
       show_board({ raw })
       local c = rows():GetCells(row)
       assert.is_true(c.risk:IsShown()); assert.equal("1", c.riskCount:GetText()); assert.equal("recraft", c.score:GetText())
+      assert.equal(EM_DASH, c.profit:GetText())
       c.risk:GetScript("OnEnter")(c.risk)
       assert.same({ "Expiring soon", "Recraft " .. EM_DASH .. " judge manually" }, tooltip.lines)
       assert.is_true(tooltip.shown); assert.equal(c.risk, tooltip.owner)
@@ -238,17 +257,65 @@ describe("OrdersPanel on the crafting orders page", function()
       c.add:GetScript("OnClick")(c.add)
       assert.equal(1, #queued); assert.equal("Already in the queue", side():GetView().result:GetText())
     end)
-    it("places the cells at the right of the item-name column, backed when the name reaches them", function()
+    -- Row geometry: the strip's right edge is 760 - (860 - 400) - 6 = 294 from the row's left; the name ends at
+    -- 22 + textWidth. [score][risk][+] need 86, the profit cell 46 more, the warning icon 16 more; 4 px gap.
+    local function geometry(textWidth)
+      return { left = 100, width = 760, itemRight = 400, textLeft = 122, textWidth = textWidth }
+    end
+    local function state(c)
+      return { c.fit, c.strip:IsShown(), c.profit:IsShown(), c.score:GetText() ~= nil, c.warnShown }
+    end
+    it("places the cells at the right of the item-name column", function()
       boot()
       local raw = P2.raw_order({ orderID = 10 })
-      local short = row_for(raw, { left = 100, width = 760, itemRight = 400, textLeft = 122, textWidth = 80 })
-      local long = row_for(P2.raw_order({ orderID = 10 }), { left = 100, width = 760, itemRight = 400, textLeft = 122, textWidth = 240 })
+      local measured = row_for(raw, geometry(80))
       show_board({ raw })
-      local a, b = rows():GetCells(short), rows():GetCells(long)
-      assert.same({ "RIGHT", short, "RIGHT", -(460 + 6), 0 }, { a.strip:GetPoint(1) })   -- measured: 860 - 400
-      assert.is_false(a.backed); assert.is_true(b.backed)
-      local plain = row_for(raw)   -- not laid out: Blizzard's fixed columns after the item name
+      assert.same({ "RIGHT", measured, "RIGHT", -(460 + 6), 0 }, { rows():GetCells(measured).strip:GetPoint(1) })
+      local plain = row_for(raw)   -- not laid out: Blizzard's fixed columns after the item name, everything shown
       assert.same({ "RIGHT", plain, "RIGHT", -(470 + 6), 0 }, { rows():GetCells(plain).strip:GetPoint(1) })
+      assert.same({ "all", true, true, true, false }, state(rows():GetCells(plain)))
+    end)
+    it("gives way to Blizzard's item name: profit first, then the whole strip", function()
+      boot()
+      local raw = P2.raw_order({ orderID = 10 })
+      local short, medium, long = row_for(raw, geometry(80)), row_for(raw, geometry(150)), row_for(raw, geometry(200))
+      show_board({ raw })
+      assert.same({ "all", true, true, true, false }, state(rows():GetCells(short)))
+      assert.same({ "noProfit", true, false, true, false }, state(rows():GetCells(medium)))
+      assert.same({ "none", false, false, true, false }, state(rows():GetCells(long)))
+      assert.is_true(rows():GetCells(long).frame:IsShown())   -- the row tint and dimming stay
+      assert.same({}, form.assignedFields)
+    end)
+    it("keeps the blocked warning icon inside the strip, under the same rule", function()
+      boot()
+      C:SetTag("Bob-Silvermoon", "blocked", true)
+      local raw = P2.raw_order({ orderID = 10 })
+      local short, mid, medium, long = row_for(raw, geometry(80)), row_for(raw, geometry(130)),
+        row_for(raw, geometry(150)), row_for(raw, geometry(200))
+      show_board({ raw })
+      assert.same({ "all", true, true, true, true }, state(rows():GetCells(short)))
+      assert.same({ "noProfit", true, false, true, true }, state(rows():GetCells(mid)))   -- the icon costs the profit cell
+      assert.same({ "noProfit", true, false, true, true }, state(rows():GetCells(medium)))
+      assert.same({ "none", false, false, true, false }, state(rows():GetCells(long)))
+      assert.same({}, form.assignedFields)
+    end)
+    it("measures a recycled row after Blizzard has written its new item name", function()
+      boot()
+      local short, long = P2.raw_order({ orderID = 10 }), P2.raw_order({ orderID = 11 })
+      show_board({ short, long })
+      local g = geometry(80)
+      local row = form.newOrderRow(g)
+      form.acquireOrderRow(row, form.orderElement(short), true)
+      assert.same({ "all", true }, { rows():GetCells(row).fit, rows():GetCells(row).strip:IsShown() })
+      form.releaseOrderRow(row)
+      -- At acquire time the recycled row still carries the short name; Blizzard's initializer writes the long one.
+      form.acquireOrderRow(row, form.orderElement(long), false, function() g.textWidth = 200 end)
+      assert.same({ "none", false }, { rows():GetCells(row).fit, rows():GetCells(row).strip:IsShown() })
+      assert.equal(11, rows():GetCells(row).orderID)
+      form.releaseOrderRow(row)
+      form.acquireOrderRow(row, form.orderElement(short), false, function() g.textWidth = 80 end)
+      assert.same({ "all", true }, { rows():GetCells(row).fit, rows():GetCells(row).strip:IsShown() })
+      assert.same({}, form.assignedFields)
     end)
     it("parents the cells to its own clipping container over the order list", function()
       boot()
@@ -273,7 +340,8 @@ describe("OrdersPanel on the crafting orders page", function()
       ns.FS:SetModuleEnabled("OrdersRowAddons", true)
       W.fire("ADDON_LOADED", "Blizzard_Professions")
       assert.equal(2, count(W.hooks, function(h) return h[2] == "ShowOrders" end))   -- Orders' and ours
-      assert.equal(1, #form.orderCallbacks.OnAcquiredFrame); assert.equal(1, #form.orderCallbacks.OnReleasedFrame)
+      assert.equal(1, #form.orderCallbacks.OnInitializedFrame); assert.equal(1, #form.orderCallbacks.OnReleasedFrame)
+      assert.is_nil(form.orderCallbacks.OnAcquiredFrame)
       assert.is_true(rows():GetCells(row).frame:IsShown())   -- re-enabling refreshes the rows on screen
     end)
     it("turns itself off when the order list is missing, keeping the saved setting", function()
@@ -333,6 +401,40 @@ describe("OrdersPanel on the crafting orders page", function()
       W.fire("CRAFTINGORDERS_CLAIM_ORDER_RESPONSE", 0, 10)
       assert.equal("Claimed " .. EM_DASH .. " open it from the order list", v.result:GetText())
     end)
+    it("refreshes the best line once the item's data arrives, then stops listening", function()
+      boot()
+      show_board({ P2.raw_order({ orderID = 10, itemID = 222222 }) })
+      local v, panel = side():GetView(), side()
+      assert.truthy(v.best:GetText():find("^Best: 222222 "))
+      assert.same({ 222222 }, itemRequests); assert.is_true(panel:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")   -- a refresh while waiting does not ask again
+      assert.same({ 222222 }, itemRequests)
+      W.fire("GET_ITEM_INFO_RECEIVED", 333333, true)   -- another item: still waiting
+      assert.is_true(panel:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+      cachedItems[222222] = "Elixir"
+      W.fire("GET_ITEM_INFO_RECEIVED", 222222, true)
+      assert.truthy(v.best:GetText():find("^Best: |Hitem:222222|h%[Elixir%]|h "))
+      assert.is_false(panel:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+    end)
+    it("picks up item data that arrives inside the request, and drops the wait when hidden or off", function()
+      boot()
+      loadSync = true
+      show_board({ P2.raw_order({ orderID = 10, itemID = 222222 }) })
+      local v, panel = side():GetView(), side()
+      assert.truthy(v.best:GetText():find("^Best: |Hitem:222222|h%[Elixir%]|h "))
+      assert.is_false(panel:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+      loadSync = false
+      show_board({ P2.raw_order({ orderID = 11, itemID = 444444 }) })
+      assert.is_true(panel:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+      form.hideBrowse()
+      assert.is_false(panel:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+      form.showBrowse()
+      assert.is_true(panel:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+      ns.FS:SetModuleEnabled("OrdersSidePanel", false)
+      assert.is_false(panel:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+      ns.FS:SetModuleEnabled("OrdersSidePanel", true)
+      assert.is_true(v.frame:IsShown()); assert.is_true(panel:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+    end)
     it("reports a failed claim and says why nothing was claimed", function()
       boot()
       show_board({ P2.raw_order({ orderID = 10 }) })
@@ -384,6 +486,29 @@ describe("OrdersPanel on the crafting orders page", function()
       C:SetTag("Bob-Silvermoon", "VIP", false)   -- refreshes the order on screen
       assert.is_false(v.frame:IsShown())
       form.orderView:SetOrder(P2.raw_order({ orderType = 3, customerName = "Bad", npcCustomerCreatureID = 5 }))
+      assert.is_false(v.frame:IsShown())
+      assert.same({}, form.assignedFields)
+    end)
+    it("rebuilds the warning from the open order when turned on again, or clears it", function()
+      boot()
+      C:SetTag("Bad-Silvermoon", "blocked", true)
+      form.orderView:SetOrder(P2.raw_order({ customerName = "Bad" }))
+      local v = warning():GetView()
+      assert.is_true(v.frame:IsShown())
+      ns.FS:SetModuleEnabled("OrderViewWarning", false)
+      assert.is_false(v.frame:IsShown())
+      form.orderView:SetOrder(P2.raw_order({ customerName = "Bob" }))   -- while off: the hook does nothing
+      ns.FS:SetModuleEnabled("OrderViewWarning", true)
+      assert.is_false(v.frame:IsShown())   -- Bob is neither blocked nor VIP: not the stale "Bad" warning
+      ns.FS:SetModuleEnabled("OrderViewWarning", false)
+      form.orderView:SetOrder(P2.raw_order({ customerName = "Bad" }))
+      ns.FS:SetModuleEnabled("OrderViewWarning", true)
+      assert.is_true(v.frame:IsShown()); assert.equal("Blocked customer: Bad-Silvermoon", v.text:GetText())
+      ns.FS:SetModuleEnabled("OrderViewWarning", false)
+      form.orderView:Hide()   -- back to the list
+      ns.FS:SetModuleEnabled("OrderViewWarning", true)
+      assert.is_false(v.frame:IsShown())
+      C:SetTag("Bad-Silvermoon", "VIP", true)   -- a refresh does not bring back an order no longer open
       assert.is_false(v.frame:IsShown())
       assert.same({}, form.assignedFields)
     end)
