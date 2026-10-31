@@ -40,6 +40,18 @@ describe("Scanner professions", function()
     Scanner:GetSchematic(1001); _G.ProfessionsFrame = nil
     assert.equals(1001, Scanner:GetSchematic(1001).recipeID); assert.is_nil(Scanner:GetSchematic(9999))
   end)
+  it("GetCachedSchematic serves stored schematics only: never fetches, never stores", function()
+    -- the window is open (a GetSchematic would fetch and store 1001 now), yet the read-only lookup does neither
+    assert.is_nil(Scanner:GetCachedSchematic(1001))
+    assert.is_nil(ns.FS.db.global.schematics[1001])
+    local stored = Scanner:GetSchematic(1001)
+    assert.equals(stored, Scanner:GetCachedSchematic(1001))
+    local calls = 0
+    C_TradeSkillUI.GetRecipeSchematic = function() calls = calls + 1 end
+    Scanner:GetCachedSchematic(1001); Scanner:GetCachedSchematic(1002); Scanner:GetCachedSchematic(nil)
+    assert.equals(0, calls)
+    assert.is_nil(ns.FS.db.global.schematics[1002])
+  end)
   it("caches schematics in chunks of 25 per frame", function()
     local ids, calls = {}, 0; for i = 1, 60 do ids[i] = 5000 + i end
     C_TradeSkillUI.GetRecipeSchematic = function(id) calls = calls + 1; return { recipeID = id, reagentSlotSchematics = {} } end

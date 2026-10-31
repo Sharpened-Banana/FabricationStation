@@ -174,6 +174,9 @@ local function own_char_set()
   return set
 end
 
+-- Shared with GuildDirectory (the read side): the same normalized set Task 8's reads exclude.
+Guild._OwnCharSet = own_char_set
+
 ---------------------------------------------------------------------------
 -- Guild key and directory
 ---------------------------------------------------------------------------
@@ -309,6 +312,7 @@ function Guild:OnEnteringWorld()
   end
   self:Prune(now())
   self:OnGuildUpdate()
+  if self.RebuildItemIndex then self:RebuildItemIndex() end    -- GuildDirectory: 200 recipes per tick
   if self.guildKey and self.syncKey ~= self.guildKey then start_sync(self) end
 end
 
@@ -1057,6 +1061,7 @@ function Guild:OnEnable()
   self:RegisterMessage(ns.Msg.COMM_GATE_CHANGED, ns.FS:Wrap("Guild", function(_, locked)
     if locked == false and self.comm then self.comm:Flush() end
   end))
+  if self._DirectoryEnable then self:_DirectoryEnable() end     -- tooltip/panel providers, index upkeep (GuildDirectory)
   self.guildKey, self.syncKey = nil, nil
   if worldEntered and not sessionStarted then
     self:OnEnteringWorld()        -- turned on after the first loading screen passed while Guild was off
@@ -1070,6 +1075,7 @@ function Guild:OnDisable()
   cancel_refresh()
   cancel_timers()
   stop_native("unavailable")
+  if self._DirectoryDisable then self:_DirectoryDisable() end
   stop_comm(self)
   self:UnregisterAllEvents()
   self:UnregisterAllMessages()

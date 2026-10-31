@@ -778,6 +778,29 @@ either is nil the fallback reports "unavailable" and nothing else breaks. Then o
 panel on another recipe and confirm that recipe appears under `native` too (passive capture), and `/fs diagnostics`
 shows no `GuildNative` entry.
 
+P4-10. **Guild membership name format.** `/run print(C_GuildInfo.MemberExistsByName("<sameRealmMate>"), C_GuildInfo.MemberExistsByName("<sameRealmMate>-<Realm>"))`
+with a guildmate on your own realm, then the same for a guildmate on a connected realm (their name with and without
+`-Realm`). Expected: at least one form prints true for each; `Guild:IsGuildMember` tries the full `Name-Realm` first and
+`Ambiguate(name, "guild")` second. If same-realm mates only answer true to the bare name and `Ambiguate` does not give it,
+the guild crafter lines would hide their addon rows: report which forms answered true. Also check right after login
+(before the roster loaded) that rows still show (an empty roster counts as "member").
+
+P4-11. **Recipe outputs for recipes you do not know.** With no profession window open, run
+`/run print(C_TradeSkillUI.GetRecipeSchematic(<recipeID you do not know>, false).outputItemID)` (take the ID from
+`/dump FabricationStationDB.global.guildDirectory`, any recipe in a guildmate's `profiles[...].lines[...].recipes`).
+Expected: the recipe's output item ID. If it errors or prints nil, the guild tooltip line only works for recipes one of
+your characters has a cached schematic for (open that profession once); then say so in the "Guild crafters tooltip
+line" setting's description (Task 9). Also open a profession window and confirm `FabricationStationDB.global.schematics`
+did not grow by the guild recipes (the index reads `Scanner:GetCachedSchematic`, which never stores).
+
+P4-12. **Guild crafters line and panel rows.** Hover a crafted item (an output of a recipe a guildmate knows but your
+characters do not craft) in your bags or the auction house: one extra "Guild crafters" line with up to 3 names,
+"(Q3)" after names with a known quality, "+N more" beyond that; none of your own characters in it (those are on the
+existing "Crafters" line). Open the profession window on a recipe a guildmate knows: a "Guild crafters" block under the
+profit breakdown with the count on the right, then one row per crafter ("Q3, synced 2h ago", or "quality unknown" for
+rows from the native query); long names are cut off and the full line shows on hover. A name copied from an
+unverified claim reads "<char> (via <owner>)". Report any colored or broken text in a name.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

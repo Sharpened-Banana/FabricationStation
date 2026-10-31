@@ -465,6 +465,15 @@ function Scanner:GetSchematic(recipeID)
   return store_schematic(fetch_schematic(recipeID)) or cached
 end
 
+-- The stored schematic for recipeID, or nil. Read-only: never fetches from the client and never stores, so bulk
+-- lookups (the guild item index over every recipe a guildmate knows) cannot fill the saved schematic cache.
+function Scanner:GetCachedSchematic(recipeID)
+  local g = global()
+  local schematics = g and g.schematics
+  if type(schematics) ~= "table" or recipeID == nil then return nil end
+  return schematics[recipeID]
+end
+
 -- Fetches and caches the given schematics, SCHEMATIC_CHUNK per frame. The first chunk runs now.
 function Scanner:CacheSchematics(recipeIDs)
   local queue = {}

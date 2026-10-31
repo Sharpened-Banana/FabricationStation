@@ -62,3 +62,11 @@ function Util.GuildKey()
   if type(realm) ~= "string" or realm == "" then return nil end
   return name .. "-" .. realm:gsub(" ", "")
 end
+
+-- Text that came from a peer (character, owner and guild names, version strings) made safe for tooltips and font
+-- strings: values that passed Protocol.Validate can still hold "|c", "|T" or "|H" sequences, and a doubled pipe
+-- prints as one literal pipe. A non-string becomes "".
+function Util.EscapePipes(s)
+  if type(s) ~= "string" then return "" end
+  return (s:gsub("|", "||"))
+end
