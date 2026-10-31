@@ -542,7 +542,8 @@ P3-15. **Planner Spec advice.** Expected: the character and profession buttons c
     `Open this profession's specializations on <Name> to load spec data` (`<Name>` is the character name alone, no
     realm). On a character with spec data but no profitable priced recipe in that profession it says
     `No profitable recipes for <Name> in this profession yet: check prices or open the profession`. Otherwise, with
-    the shipped data, it says `Spec effect data not in this GameData build (…)`.
+    the shipped data, it says `Spec effect data not in this GameData build (not generated)` (the spec effect table
+    is not generated yet; the number would be that table's own build, not the knowledge data's 70575).
 P3-16. **Planner Missing recipes.** After opening a Midnight profession, the list shows that character's unlearned
     recipes with readable source text (no `|c` or `|T` codes); a recipe the game gives no source text for reads
     `Unknown — open the profession on any character to load sources`. With the shipped data no entry reads

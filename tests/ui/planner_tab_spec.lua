@@ -523,7 +523,7 @@ describe("Planner tab", function()
       local v = open()
       select(v, "spec")
       assert.same({}, shown_keys(v.grids.spec))
-      assert.equal("Spec effect data not in this GameData build (70575)", plain(v.empty:GetText()))
+      assert.equal("Spec effect data not in this GameData build (not generated)", plain(v.empty:GetText()))
     end)
   end)
 

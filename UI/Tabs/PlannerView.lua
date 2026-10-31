@@ -186,11 +186,13 @@ end
 ---------------------------------------------------------------------------
 
 -- rows, status = Planner:GetSpecAdvice(charKey, sl) (the tab calls it on demand), ctx = { char, build = data build
--- (default Planner:GameDataBuild(); false = none), topRecipes (default Settings().specTopRecipes) } ->
+-- (default: the SpecEntryEffects table's own build, GameData.TableBuild, nil when not generated; false = none),
+-- topRecipes (default Settings().specTopRecipes) } ->
 -- { rows = { { pathID, path, rank = "r/max", points, gain, perPoint, affordable = "Affordable"|"" } }, message|nil,
 -- note = "Estimate from your top N profitable recipes" }. A status other than "ok" gives its StatusText (ctx.recipes
 -- implied); "ok" without rows the empty line; "ok" with no known gain at all "Spec effect data not in this GameData
--- build (<build>)" instead of a ranking. Unknown gains are "?", unknown affordability no tag.
+-- build (<build>)" ("(not generated)" without a build) instead of a ranking. Unknown gains are "?", unknown
+-- affordability no tag.
 function PV.SpecAdvice(rows, status, ctx)
   ctx = type(ctx) == "table" and ctx or {}
   local top = finite(ctx.topRecipes) and ctx.topRecipes or planner_setting("specTopRecipes", DEFAULT_TOP_RECIPES)
@@ -208,10 +210,8 @@ function PV.SpecAdvice(rows, status, ctx)
   for _, r in ipairs(rows) do if finite(r.gain) then anyKnown = true end end
   if not anyKnown then
     local build = ctx.build
-    if build == nil then
-      local P = module("Planner")
-      build = P and P.GameDataBuild and P:GameDataBuild() or ns.GameData.Build()
-    end
+    -- The table the advice reads, not the most common GameData build (Task 14 rule: each table's own build).
+    if build == nil then build = ns.GameData.TableBuild("SpecEntryEffects") end
     model.message = "Spec effect data not in this GameData build ("
       .. (finite(build) and whole(build) or "not generated") .. ")"
     return model

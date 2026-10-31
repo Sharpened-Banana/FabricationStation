@@ -55,7 +55,9 @@ function Planner:Settings()
   return settingsTable(self.SETTINGS_DEFAULTS, fill)
 end
 
--- The build of the loaded GameData (shown in the Planner header next to the knowledge data it describes).
+-- The most common build of the loaded GameData tables (ns.GameData.Build). No view shows it: each view names the
+-- build of the table it reads (GameData.TableBuild: Knowledge for the footer and marker, SpecEntryEffects for spec
+-- advice).
 function Planner:GameDataBuild()
   return ns.GameData.Build()
 end
