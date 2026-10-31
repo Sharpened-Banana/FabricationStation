@@ -193,8 +193,9 @@ end
 -- topRecipes (default Settings().specTopRecipes) } ->
 -- { rows = { { pathID, path, rank = "r/max", points, gain, perPoint, affordable = "Affordable"|"" } }, message|nil,
 -- note = "Estimate from your top N profitable recipes" }. A status other than "ok" gives its StatusText (ctx.recipes
--- implied); "ok" without rows the empty line; "ok" with no known gain at all "Spec effect data not in this GameData
--- build (<build>)" ("(not generated)" without a build) instead of a ranking. Unknown gains are "?", unknown
+-- implied); "ok" without rows the empty line; "ok" with no known gain at all instead of a ranking: "Spec effect data
+-- not in this GameData build (not generated)" while the SpecEntryEffects table is ungenerated, else "No modelled spec
+-- effects for these paths and recipes". Unknown gains are "?", unknown
 -- affordability no tag.
 function PV.SpecAdvice(rows, status, ctx)
   ctx = type(ctx) == "table" and ctx or {}
@@ -215,8 +216,13 @@ function PV.SpecAdvice(rows, status, ctx)
     local build = ctx.build
     -- The table the advice reads, not the most common GameData build (Task 14 rule: each table's own build).
     if build == nil then build = ns.GameData.TableBuild("SpecEntryEffects") end
-    model.message = "Spec effect data not in this GameData build ("
-      .. (finite(build) and whole(build) or "not generated") .. ")"
+    if finite(build) then
+      -- The table is generated, so the data is not what is missing: the paths' effects are types Math does not model
+      -- (Ingenuity, for one) or the recipes carry no matching labels.
+      model.message = "No modelled spec effects for these paths and recipes"
+    else
+      model.message = "Spec effect data not in this GameData build (not generated)"
+    end
     return model
   end
   for _, r in ipairs(rows) do

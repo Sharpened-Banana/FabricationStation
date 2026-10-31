@@ -549,6 +549,16 @@ describe("Planner tab", function()
       assert.same({}, shown_keys(v.grids.spec))
       assert.equal("Spec effect data not in this GameData build (not generated)", plain(v.empty:GetText()))
     end)
+
+    it("says no spec effects are modelled when the table is generated but no gain is known", function()
+      boot()
+      ns.GameData.Define("SpecEntryEffects", 70575, {})
+      PL._nodeBonus = function() return {} end
+      local v = open()
+      select(v, "spec")
+      assert.same({}, shown_keys(v.grids.spec))
+      assert.equal("No modelled spec effects for these paths and recipes", plain(v.empty:GetText()))
+    end)
   end)
 
   describe("Missing recipes", function()
