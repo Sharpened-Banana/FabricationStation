@@ -268,7 +268,7 @@ end
 -- While the logged-in character's own profession is open (1a's IsProfessionOpen: not a linked, guild or NPC view):
 -- catalogs every recipe of a planned line (learned or not: the catalog is account-wide) and counts learned first-craft
 -- recipes per planned line. A catalog entry is (re)written, with a new time, only when it is new or its name or source
--- text changed. Writes planning[line] = { pathNames, firstCraftsPending, time } for each planned line seen (time is
+-- text changed (an empty source text keeps the stored one). Writes planning[line] = { pathNames, firstCraftsPending, time } for each planned line seen (time is
 -- always refreshed). FS_ALTS_CHANGED is sent only when a catalog entry or a line's count or path names changed.
 function Alts:CollectOpenProfession()
   if not writable() then return end
@@ -294,6 +294,8 @@ function Alts:CollectOpenProfession()
       local catalog = g.recipeCatalog[line]
       if type(catalog) ~= "table" then catalog = {}; g.recipeCatalog[line] = catalog end
       local entry, text = catalog[id], source_text(id)
+      -- An empty text never replaces a known one (GetRecipeSourceText is feature-tested: without it every text is "").
+      if text == "" and type(entry) == "table" and type(entry.sourceText) == "string" then text = entry.sourceText end
       if type(entry) ~= "table" or entry.name ~= info.name or entry.sourceText ~= text then
         catalog[id] = { name = info.name, sourceText = text, time = now }
         any = true

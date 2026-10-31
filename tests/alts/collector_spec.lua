@@ -281,6 +281,26 @@ describe("Alts collector", function()
       assert.same({ name = "C", sourceText = "", time = NOW }, ns.FS.db.global.recipeCatalog[2907][103])
     end)
 
+    it("keeps a known source text when the client now gives none", function()
+      -- GetRecipeSourceText is not a documented API: on a client without it every recipe reads "".
+      local text = "|cffffd200Vendor:|r Smith"
+      local ns, _, W = phase3_env({ files = FILES, wow = { C_TradeSkillUI = trade_skill({
+        GetRecipeSourceText = function() return text end }) } })
+      alts(ns):CollectOpenProfession()
+      local catalog = ns.FS.db.global.recipeCatalog[2907]
+      W.messages = {}
+      text = ""
+      W.now = NOW + 100
+      alts(ns):CollectOpenProfession()
+      assert.same({ name = "C", sourceText = "Vendor: Smith", time = NOW }, catalog[103])
+      assert.equal(0, #sent(W, "FS_ALTS_CHANGED"))
+      local info = C_TradeSkillUI.GetRecipeInfo
+      C_TradeSkillUI.GetAllRecipeIDs = function() return { 101, 102, 103, 104, 105 } end
+      C_TradeSkillUI.GetRecipeInfo = function(id) return id == 105 and { learned = false, name = "E" } or info(id) end
+      alts(ns):CollectOpenProfession()                                  -- a new recipe still gets ""
+      assert.same({ name = "E", sourceText = "", time = NOW + 100 }, catalog[105])
+    end)
+
     it("caps a long source text at 200 characters", function()
       local long = string.rep("abcdefghij", 30)
       local ns = phase3_env({ files = FILES, wow = { C_TradeSkillUI = trade_skill({
