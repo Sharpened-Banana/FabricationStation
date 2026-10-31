@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Planner tab view model (pure strings and flags; the tab frame is UI/Tabs/Planner.lua, the knowledge widget
 -- UI/AltsDashboard.lua): concentration and knowledge summary lines, the knowledge grid (columns, hide priority,
@@ -130,7 +131,7 @@ function PV.KnowledgeLines(rows, max)
       if s.weeklyLeft > 0 then items[#items + 1] = { left, whole(s.weeklyLeft) .. " KP" } end
     else
       unknown = true
-      items[#items + 1] = { left, "? KP" }
+      items[#items + 1] = { left, L["? KP"] }
     end
   end
   local totalLine = { "Total", (known and (whole(total) .. (unknown and "+?" or "")) or "?") .. " KP" }
@@ -148,8 +149,8 @@ end
 
 -- The module behind an "off" status: Alts, else (ctx.recipes: the getter also needs Recipes) Recipes.
 local function off_text(ctx)
-  if not enabled("Alts") then return "Alts is turned off" end
-  if ctx.recipes and not enabled("Recipes") then return "Recipes is turned off" end
+  if not enabled("Alts") then return L["Alts is turned off"] end
+  if ctx.recipes and not enabled("Recipes") then return L["Recipes is turned off"] end
   return "Alts is turned off"
 end
 
@@ -161,10 +162,10 @@ function PV.StatusText(status, ctx)
   local char = ctx.char ~= nil and tostring(ctx.char) or "this character"
   if status == "ok" then return nil end
   if status == "off" then return off_text(ctx) end
-  if status == "plannerOff" then return "Planner is turned off" end
+  if status == "plannerOff" then return L["Planner is turned off"] end
   if status == "hidden" then return "Hidden: " .. char .. " is hidden on the Characters tab" end
   if status == "noProfession" then return char .. " does not have this profession" end
-  if status == "noData" then return "No recipe list yet: open this profession on any character" end
+  if status == "noData" then return L["No recipe list yet: open this profession on any character"] end
   if status == "notScanned" then return "Open this profession on " .. char end
   if status == "noSpec" then return "Open this profession's specializations on " .. char .. " to load spec data" end
   if status == "noRecipes" then
@@ -178,9 +179,9 @@ function PV.EmptyText(section, ctx)
   ctx = type(ctx) == "table" and ctx or {}
   local char = ctx.char ~= nil and tostring(ctx.char) or "This character"
   if section == "missing" then return char .. " knows every listed recipe of this profession" end
-  if section == "spec" then return "No spec step left that would earn more" end
-  if section == "knowledge" then return "No characters with a Midnight profession yet" end
-  if section == "schedule" then return "Nothing to schedule: no concentration pool has a priced recipe" end
+  if section == "spec" then return L["No spec step left that would earn more"] end
+  if section == "knowledge" then return L["No characters with a Midnight profession yet"] end
+  if section == "schedule" then return L["Nothing to schedule: no concentration pool has a priced recipe"] end
   return ""
 end
 
@@ -244,7 +245,7 @@ end
 function PV.SourceText(source, itemName)
   source = type(source) == "table" and source or {}
   if type(source.text) == "string" and source.text ~= "" then return source.text end
-  if source.kind == "auto" then return "Learned automatically" end
+  if source.kind == "auto" then return L["Learned automatically"] end
   if source.kind == "item" then
     local name = type(itemName) == "string" and itemName ~= "" and itemName or ("item:" .. tostring(source.itemID))
     return "Recipe item: " .. name
@@ -259,32 +260,32 @@ end
 -- Category columns: the KnowledgeSource categories (weekly: weeklyQuest, treatise, treasure, drop; monthly:
 -- darkmoon) and every reset = "once" source (unique) as One-time.
 local CATEGORY_COLUMNS = {
-  { key = "weeklyQuest", label = "Quest", long = "Weekly quest", width = 44 },
-  { key = "treatise", label = "Treatise", long = "Treatise", width = 50 },
-  { key = "treasure", label = "Treasure", long = "Treasures", width = 50 },
-  { key = "drop", label = "Drops", long = "Drops", width = 44 },
-  { key = "darkmoon", label = "Darkmoon", long = "Darkmoon Faire", width = 56 },
-  { key = "once", label = "One-time", long = "One-time", width = 50 },
+  { key = "weeklyQuest", label = L["Quest"], long = L["Weekly quest"], width = 44 },
+  { key = "treatise", label = L["Treatise"], long = L["Treatise"], width = 50 },
+  { key = "treasure", label = L["Treasure"], long = L["Treasures"], width = 50 },
+  { key = "drop", label = L["Drops"], long = L["Drops"], width = 44 },
+  { key = "darkmoon", label = L["Darkmoon"], long = L["Darkmoon Faire"], width = 56 },
+  { key = "once", label = L["One-time"], long = L["One-time"], width = 50 },
 }
 local CATEGORY_TOOLTIPS = {
-  weeklyQuest = "Weekly quest: points earned/total", treatise = "Treatise (weekly): points earned/total",
-  treasure = "Treasures (weekly): points earned/total", drop = "Drops (weekly): points earned/total",
-  darkmoon = "Darkmoon Faire quest (monthly): points earned/total, or closed",
-  once = "One-time sources: points earned/total",
+  weeklyQuest = L["Weekly quest: points earned/total"], treatise = L["Treatise (weekly): points earned/total"],
+  treasure = L["Treasures (weekly): points earned/total"], drop = L["Drops (weekly): points earned/total"],
+  darkmoon = L["Darkmoon Faire quest (monthly): points earned/total, or closed"],
+  once = L["One-time sources: points earned/total"],
 }
 
 PV.KNOWLEDGE_COLUMNS = {
-  { key = "character", label = "Character", flex = true },
-  { key = "profession", label = "Profession", width = 100 },
+  { key = "character", label = L["Character"], flex = true },
+  { key = "profession", label = L["Profession"], width = 100 },
 }
 for _, col in ipairs(CATEGORY_COLUMNS) do
   PV.KNOWLEDGE_COLUMNS[#PV.KNOWLEDGE_COLUMNS + 1] = { key = col.key, label = col.label, width = col.width,
     tooltip = CATEGORY_TOOLTIPS[col.key] }
 end
-PV.KNOWLEDGE_COLUMNS[#PV.KNOWLEDGE_COLUMNS + 1] = { key = "firstCrafts", label = "First", width = 36, right = true,
-  tooltip = "First crafts pending (one-time points)" }
-PV.KNOWLEDGE_COLUMNS[#PV.KNOWLEDGE_COLUMNS + 1] = { key = "left", label = "Left", width = 36, right = true,
-  tooltip = "Knowledge points left this week" }
+PV.KNOWLEDGE_COLUMNS[#PV.KNOWLEDGE_COLUMNS + 1] = { key = "firstCrafts", label = L["First"], width = 36, right = true,
+  tooltip = L["First crafts pending (one-time points)"] }
+PV.KNOWLEDGE_COLUMNS[#PV.KNOWLEDGE_COLUMNS + 1] = { key = "left", label = L["Left"], width = 36, right = true,
+  tooltip = L["Knowledge points left this week"] }
 
 -- Lowest priority first; the weekly categories (what "Left" counts) stay longest. At 516 px First crafts, One-time
 -- and Darkmoon are hidden and Character gets 156 px.

@@ -1,0 +1,6 @@
+describe("locale coverage", function()
+  it("has no unlocalized user-facing literals", function()
+    local C = dofile("tools/check_locale.lua")
+    assert.are.same({}, C.find_literals({ "Core", "Modules", "UI" }, "tools/locale_allowlist.txt"))
+  end)
+end)

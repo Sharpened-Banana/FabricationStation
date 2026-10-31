@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Customers tab: the players the player has crafted orders for (Customers module). A search box filters through
 -- Customers:Search as the text changes; the list shows Name, Orders, Tips, Last seen and Tags per customer group:
@@ -54,30 +55,30 @@ local READ_ONLY = "Saved data is from a newer version of the addon (read-only); 
 -- At 516 px the status line is ~218 px, so this can be cut there; the status area's tooltip shows it in full.
 local READ_ONLY_NOTICE = "Read-only: saved data is from a newer addon version"
 local LINK_ERRORS = {
-  empty = "Type the main character's name first",
-  self = "A character cannot be its own alt",
-  cycle = "%s is already linked below %s; unlink it first",
-  invalid = "That is not a character name",
+  empty = L["Type the main character's name first"],
+  self = L["A character cannot be its own alt"],
+  cycle = L["%s is already linked below %s; unlink it first"],
+  invalid = L["That is not a character name"],
   readonly = READ_ONLY,
 }
 
 -- Left to right. Name takes the width the fixed columns leave; they are laid out from the right edge.
 local COLUMNS = {
-  { key = "name", label = "Name", flex = true },
-  { key = "orders", label = "Orders", width = 44, right = true },
-  { key = "tips", label = "Tips", width = 64, right = true },
-  { key = "lastSeen", label = "Last seen", width = 56, right = true },
-  { key = "tags", label = "Tags", width = 130 },
+  { key = "name", label = L["Name"], flex = true },
+  { key = "orders", label = L["Orders"], width = 44, right = true },
+  { key = "tips", label = L["Tips"], width = 64, right = true },
+  { key = "lastSeen", label = L["Last seen"], width = 56, right = true },
+  { key = "tags", label = L["Tags"], width = 130 },
 }
 local HIDE_ORDER = { "tags", "orders" }   -- dropped in this order when Name would get under MIN_NAME
 
 -- The detail pane's order history: Date (month-day; the full date is in the tooltip), Item (flexible), Quality,
 -- Tip (compact). Quality is hidden when Item would get under MIN_ITEM.
 local HISTORY_COLUMNS = {
-  { key = "date", label = "Date", width = 34 },
-  { key = "item", label = "Item", flex = true },
+  { key = "date", label = L["Date"], width = 34 },
+  { key = "item", label = L["Item"], flex = true },
   { key = "quality", label = "Q", width = 20, right = true },
-  { key = "tip", label = "Tip", width = 44, right = true },
+  { key = "tip", label = L["Tip"], width = 44, right = true },
 }
 
 local view            -- built frames and the displayed rows, nil before the tab is built
@@ -473,7 +474,7 @@ local function remove_tag(tag)
   local C = module("Customers")
   if not (C and selected and tag) then return end
   if C:SetTag(selected, tag, false) then
-    set_status(('Removed the tag "%s" from %s'):format(tag, selected), "good")
+    set_status((L['Removed the tag "%s" from %s']):format(tag, selected), "good")
   else
     report_unchanged()
   end
@@ -487,7 +488,7 @@ local function do_link()
   box:ClearFocus()
   if ok then
     local C = module("Customers")
-    set_status(("%s is now an alt of %s"):format(selected, C and C:Root(selected) or "?"), "good")
+    set_status((L["%s is now an alt of %s"]):format(selected, C and C:Root(selected) or "?"), "good")
     view.detail.linkFor = nil   -- show the stored link
   else
     local message = LINK_ERRORS[err] or ("Could not link (" .. tostring(err) .. ")")
@@ -545,7 +546,7 @@ local function row_tooltip(owner)
   end
   for _, name in ipairs(group and group.blockedBy or {}) do
     if name ~= row.nameRealm then
-      lines[#lines + 1] = { text = ("Blocked because %s is blocked"):format(name), color = RED }
+      lines[#lines + 1] = { text = (L["Blocked because %s is blocked"]):format(name), color = RED }
     end
   end
   if group and #group.members > 1 then
@@ -556,7 +557,7 @@ local function row_tooltip(owner)
   if record and type(record.notes) == "string" and record.notes ~= "" then
     lines[#lines + 1] = { text = record.notes, color = GREY }
   end
-  lines[#lines + 1] = { text = "Click to show the orders, notes, tags and alts", color = GREY }
+  lines[#lines + 1] = { text = L["Click to show the orders, notes, tags and alts"], color = GREY }
   show_lines(owner, lines)
 end
 
@@ -978,11 +979,11 @@ local function new_more_chip(parent, title, hint, onPick)
 end
 
 local function tag_chip_tooltip(self)
-  show_lines(self, { { text = self.value }, { text = "Click to remove this tag", color = GREY } })
+  show_lines(self, { { text = self.value }, { text = L["Click to remove this tag"], color = GREY } })
 end
 
 local function group_chip_tooltip(self)
-  show_lines(self, { { text = self.label or self.value }, { text = "Click to show this character", color = GREY } })
+  show_lines(self, { { text = self.label or self.value }, { text = L["Click to show this character"], color = GREY } })
 end
 
 local function set_enabled(widget, on)
@@ -1012,7 +1013,7 @@ local function refresh_detail()
   local readOnly = ns.FS.dbIsNewer and true or false
 
   local root = C:Root(selected)
-  d.titleText = root ~= selected and ("%s (alt of %s)"):format(selected, root) or selected
+  d.titleText = root ~= selected and (L["%s (alt of %s)"]):format(selected, root) or selected
   d.title:SetText(d.titleText)
 
   d.history.rows = Tab.HistoryRows(selected)
@@ -1085,7 +1086,7 @@ local function refresh_detail()
     chip.value, chip.label = name, name == root and (name .. " (main)") or name
     chip:SetText(chip.label)
   end
-  d.groupLabel:SetText(#others > 0 and "Group:" or color(DIM, "No linked characters"))
+  d.groupLabel:SetText(#others > 0 and "Group:" or color(DIM, L["No linked characters"]))
   local layout = view.historyLayout
   local groupWidth = (layout and layout.left or 0) - GROUP_LABEL_WIDTH
   if groupWidth <= 0 then groupWidth = 200 end
@@ -1105,7 +1106,7 @@ function refresh()
   view.list.rows = Tab.ListModel(view.groups)
   view.selectedRoot = C and selected and C:Root(selected) or nil
   if #view.list.rows == 0 then
-    local text = searchText ~= "" and ('No customer matches "%s".'):format((searchText:gsub("|", "||")))
+    local text = searchText ~= "" and (L['No customer matches "%s".']):format((searchText:gsub("|", "||")))
       or "Customers appear here after you fulfil a crafting order for another player."
     view.empty:SetText(color(DIM, text))
     view.empty:Show()
@@ -1143,7 +1144,7 @@ local function create_dialog()
   title:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -18)
   title:SetPoint("TOPRIGHT", f, "TOPRIGHT", -40, -18)
   title:SetJustifyH("LEFT")
-  title:SetText("Customers (CSV): press Ctrl+C to copy")
+  title:SetText(L["Customers (CSV): press Ctrl+C to copy"])
   local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
   close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
   close:SetScript("OnClick", function() f:Hide() end)
@@ -1290,7 +1291,7 @@ local function build_detail(container)
   d.hint:SetPoint("TOPLEFT", pane, "TOPLEFT", 4, -10)
   d.hint:SetPoint("TOPRIGHT", pane, "TOPRIGHT", -4, -10)
   d.hint:SetJustifyH("LEFT")
-  d.hint:SetText(color(DIM, "Select a customer to see the orders, notes, tags and linked characters."))
+  d.hint:SetText(color(DIM, L["Select a customer to see the orders, notes, tags and linked characters."]))
 
   local body = CreateFrame("Frame", nil, pane)
   body:SetAllPoints(pane)
@@ -1314,7 +1315,7 @@ local function build_detail(container)
   hint:SetScript("OnClick", ns.FS:Wrap(SOURCE, function(self) if self.value then select_customer(self.value) end end))
   hint:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
     if not self.value then return end
-    show_lines(self, { { text = ("Blocked because %s is blocked"):format(self.value), color = RED },
+    show_lines(self, { { text = (L["Blocked because %s is blocked"]):format(self.value), color = RED },
       { text = "Click to show " .. self.value, color = GREY } })
   end))
   hint:SetScript("OnLeave", hide_tooltip)
@@ -1322,19 +1323,19 @@ local function build_detail(container)
   d.blockedHint = hint
   local notesLabel = right:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   notesLabel:SetPoint("TOPLEFT", right, "TOPLEFT", 0, -26)
-  notesLabel:SetText("Notes (saved when you click elsewhere)")
+  notesLabel:SetText(L["Notes (saved when you click elsewhere)"])
   d.notes = create_notes(right, 40, 52)
   d.tagEdit = create_edit(right, 160, MAX_TAG, add_tag)
   d.tagEdit:SetPoint("TOPLEFT", right, "TOPLEFT", 6, -98)
-  d.tagAdd = create_button(right, "Add tag", 70, add_tag)
+  d.tagAdd = create_button(right, L["Add tag"], 70, add_tag)
   d.tagAdd:SetPoint("LEFT", d.tagEdit, "RIGHT", GAP + 2, 0)
   d.chipsTop = 122
-  d.chipsMore = new_more_chip(right, "Remove which tag?", "More tags (click to remove one):", remove_tag)
+  d.chipsMore = new_more_chip(right, L["Remove which tag?"], L["More tags (click to remove one):"], remove_tag)
   local linkLabel = right:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   linkLabel:SetPoint("TOPLEFT", right, "TOPLEFT", 0, -168)
   linkLabel:SetWidth(54)
   linkLabel:SetJustifyH("LEFT")
-  linkLabel:SetText("Linked to")
+  linkLabel:SetText(L["Linked to"])
   d.linkEdit = create_edit(right, 86, MAX_NAME, do_link)
   d.linkEdit:SetPoint("TOPLEFT", right, "TOPLEFT", 60, -164)
   d.link = create_button(right, "Link", 46, do_link)
@@ -1342,8 +1343,8 @@ local function build_detail(container)
   d.unlink = create_button(right, "Unlink", 56, do_unlink)
   d.unlink:SetPoint("LEFT", d.link, "RIGHT", GAP, 0)
   d.linkEdit:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
-    show_lines(self, { { text = d.linked and ("Linked to " .. d.linked) or "Not linked to a main character" },
-      { text = "Type the name of the main character this one is an alt of (Name or Name-Realm)", color = GREY } })
+    show_lines(self, { { text = d.linked and ("Linked to " .. d.linked) or L["Not linked to a main character"] },
+      { text = L["Type the name of the main character this one is an alt of (Name or Name-Realm)"], color = GREY } })
   end))
   d.linkEdit:SetScript("OnLeave", hide_tooltip)
 
@@ -1372,7 +1373,7 @@ local function build_detail(container)
   d.history.scroll:SetPoint("BOTTOMRIGHT", left, "BOTTOMRIGHT", 0, CHIP_HEIGHT + 6)
   d.historyEmpty = left:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   d.historyEmpty:SetPoint("TOPLEFT", left, "TOPLEFT", 2, -24)
-  d.historyEmpty:SetText(color(DIM, "No orders recorded for this character."))
+  d.historyEmpty:SetText(color(DIM, L["No orders recorded for this character."]))
   d.historyEmpty:Hide()
   d.groupBar = CreateFrame("Frame", nil, left)
   d.groupBar:SetPoint("BOTTOMLEFT", left, "BOTTOMLEFT", 0, 2)
@@ -1380,7 +1381,7 @@ local function build_detail(container)
   d.groupBar:SetHeight(CHIP_HEIGHT)
   d.groupLabel = d.groupBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   d.groupLabel:SetPoint("LEFT", d.groupBar, "LEFT", 0, 0)
-  d.groupMore = new_more_chip(d.groupBar, "Show which character?", "More linked characters (click to show one):",
+  d.groupMore = new_more_chip(d.groupBar, L["Show which character?"], L["More linked characters (click to show one):"],
     select_customer)
 
   body:Hide()
@@ -1413,7 +1414,7 @@ local function build(container)
   bar:SetHeight(BAR_HEIGHT)
   local searchLabel = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   searchLabel:SetPoint("LEFT", bar, "LEFT", 0, 0)
-  searchLabel:SetText("Search")
+  searchLabel:SetText(L["Search"])
   created.search = create_edit(bar, 150, MAX_SEARCH)
   created.search:SetPoint("LEFT", bar, "LEFT", 50, 0)
   created.search:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
@@ -1484,7 +1485,7 @@ function CustomersTab:OnInitialize()
   local window = module("MainWindow")
   if window then
     window:RegisterTab(TAB_ID, {
-      label = "Customers", icon = "Interface\\Icons\\INV_Misc_GroupNeedMore", order = 50, phase = 2,
+      label = L["Customers"], icon = "Interface\\Icons\\INV_Misc_GroupNeedMore", order = 50, phase = 2,
       build = build,
       refresh = refresh,
     })

@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Dashboard: the first tab of the main window. A two-column grid of widgets in a scroll frame. Widgets
 -- come from a registry (RegisterWidget), so later phases add theirs without touching this file; the
@@ -365,9 +366,9 @@ local function refresh_top_crafts(frame)
   for i, row in ipairs(rows) do lines[i] = top_craft_line(row) end
   if #lines == 0 then
     if recipes and recipes:IsScanning() then
-      lines[1] = color(DIM, "Scanning recipes...")
+      lines[1] = color(DIM, L["Scanning recipes..."])
     else
-      lines[1] = color(DIM, "No profitable crafts right now \226\128\148 check prices (Auctionator scan) or wait for the next scan.")
+      lines[1] = color(DIM, L["No profitable crafts right now \226\128\148 check prices (Auctionator scan) or wait for the next scan."])
     end
   end
   Dashboard.SetLines(frame, lines)
@@ -383,19 +384,19 @@ end
 local function refresh_queue_summary(frame)
   local queue = module("Queue")
   if not queue then
-    Dashboard.SetLines(frame, { color(DIM, "Queue is not available.") })
+    Dashboard.SetLines(frame, { color(DIM, L["Queue is not available."]) })
     return
   end
   local entries = queue:GetEntries()
   if #entries == 0 then
-    Dashboard.SetLines(frame, { "Queue is empty." })
+    Dashboard.SetLines(frame, { L["Queue is empty."] })
     return
   end
   local costs = {}
   for _, e in ipairs(entries) do costs[e.id] = queue:GetEntryCost(e.id) end
   local model = Dashboard.QueueSummaryModel(entries, costs, queue:GetMissingReagents(nil))
   local lines = {}
-  lines[1] = ("%d entries, %d crafts"):format(model.entries, model.crafts)
+  lines[1] = (L["%d entries, %d crafts"]):format(model.entries, model.crafts)
   if model.totalCost ~= nil then
     local age = prices_age_text()
     lines[2] = "Reagent cost: " .. ns.UI.FormatMoney(model.totalCost) .. (age and color(DIM, "  (" .. age .. ")") or "")
@@ -403,7 +404,7 @@ local function refresh_queue_summary(frame)
     lines[2] = "Reagent cost: " .. color(WARN, "unknown (some prices missing)")
   end
   if model.missingItems > 0 then
-    lines[3] = color(WARN, ("%d reagents missing"):format(model.missingItems))
+    lines[3] = color(WARN, (L["%d reagents missing"]):format(model.missingItems))
   else
     lines[3] = "All reagents on hand."
   end
@@ -465,7 +466,7 @@ local function refresh_concentration(frame)
   local rows = Dashboard.ConcentrationModel(concentration_rows(now), now)
   local lines = {}
   for i, row in ipairs(rows) do lines[i] = concentration_line(row, now) end
-  if #lines == 0 then lines[1] = color(DIM, "No concentration data yet. Open each profession once.") end
+  if #lines == 0 then lines[1] = color(DIM, L["No concentration data yet. Open each profession once."]) end
   Dashboard.SetLines(frame, lines)
 end
 
@@ -473,9 +474,9 @@ local function empty_build(frame)
   Dashboard.SetLines(frame, {})
 end
 
-Dashboard:RegisterWidget("topCrafts", { order = 10, title = "Top crafts by profit", build = empty_build, refresh = refresh_top_crafts })
-Dashboard:RegisterWidget("queueSummary", { order = 20, title = "Queue", build = empty_build, refresh = refresh_queue_summary })
-Dashboard:RegisterWidget("concentration", { order = 30, title = "Concentration", build = empty_build, refresh = refresh_concentration })
+Dashboard:RegisterWidget("topCrafts", { order = 10, title = L["Top crafts by profit"], build = empty_build, refresh = refresh_top_crafts })
+Dashboard:RegisterWidget("queueSummary", { order = 20, title = L["Queue"], build = empty_build, refresh = refresh_queue_summary })
+Dashboard:RegisterWidget("concentration", { order = 30, title = L["Concentration"], build = empty_build, refresh = refresh_concentration })
 
 ---------------------------------------------------------------------------
 -- Lifecycle
@@ -497,7 +498,7 @@ function Dashboard:OnEnable()
     local window = module("MainWindow")
     if window then
       registered = window:RegisterTab(TAB_ID, {
-        label = "Dashboard", icon = "Interface\\Icons\\INV_Misc_Note_01", order = 10, phase = 1,
+        label = L["Dashboard"], icon = "Interface\\Icons\\INV_Misc_Note_01", order = 10, phase = 1,
         build = function(container) Dashboard:BuildAll(container) end,
         refresh = function() Dashboard:RefreshAll() end,
       })

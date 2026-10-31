@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Orders tab: the last crafting-order board seen (Orders:GetSnapshot), so it can be read away from the profession
 -- table and on another character. A header says when and on which character the board was seen; a checkbox row
@@ -54,14 +55,14 @@ local TYPE_LABELS = { public = "Public", guild = "Guild", personal = "Personal",
 -- Left to right. The flexible Item column takes the width the fixed ones leave over; the columns before it are laid
 -- out from the left edge, the ones after it from the right edge.
 local COLUMNS = {
-  { key = "type", label = "Type", width = 48 },
-  { key = "item", label = "Item", flex = true },
-  { key = "customer", label = "Customer", width = 90 },
-  { key = "tip", label = "Tip", width = 60, right = true },
-  { key = "net", label = "Net", width = 56, right = true },
-  { key = "score", label = "Score", width = 56, right = true },
-  { key = "risk", label = "Risk", width = 32 },
-  { key = "expires", label = "Expires", width = 44, right = true },
+  { key = "type", label = L["Type"], width = 48 },
+  { key = "item", label = L["Item"], flex = true },
+  { key = "customer", label = L["Customer"], width = 90 },
+  { key = "tip", label = L["Tip"], width = 60, right = true },
+  { key = "net", label = L["Net"], width = 56, right = true },
+  { key = "score", label = L["Score"], width = 56, right = true },
+  { key = "risk", label = L["Risk"], width = 32 },
+  { key = "expires", label = L["Expires"], width = 44, right = true },
   { key = "action", label = "", width = 52 },
 }
 local ACTION = #COLUMNS
@@ -239,9 +240,9 @@ function Tab.BenchmarkText(benchmark, quality)
   local scope = quality ~= nil and ("Q" .. tostring(quality)) or "all qualities"
   local b = benchmark
   if not (type(b) == "table" and is_money(b.median) and is_money(b.p25) and is_money(b.p75)) then
-    return ("Your tips (%s): no history yet"):format(scope)
+    return (L["Your tips (%s): no history yet"]):format(scope)
   end
-  return ("Your tips (%s): median %s (p25 %s, p75 %s, n=%s)"):format(scope, ns.UI.FormatMoney(b.median),
+  return (L["Your tips (%s): median %s (p25 %s, p75 %s, n=%s)"]):format(scope, ns.UI.FormatMoney(b.median),
     ns.UI.FormatMoney(b.p25), ns.UI.FormatMoney(b.p75), tostring(b.n))
 end
 
@@ -326,7 +327,7 @@ end
 local function add_to_queue(row)
   local O = module("Orders")
   local current = O and row.orderID ~= nil and O:GetView(row.orderID) or nil
-  if not current then return set_status("That order is gone or has expired", "warn") end
+  if not current then return set_status(L["That order is gone or has expired"], "warn") end
   local message, tone = panel().AddToQueue(current)
   if message then set_status(message, tone) end
 end
@@ -465,7 +466,7 @@ local function create_row()
   end
   local button = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   button:SetHeight(ROW_HEIGHT - 2)
-  button:SetText("Queue")
+  button:SetText(L["Queue"])
   -- SetScript is deliberate: the row and the button are our own.
   button:SetScript("OnClick", ns.FS:Wrap(SOURCE, function() if row.data then add_to_queue(row.data) end end))
   row.queue = button
@@ -544,7 +545,7 @@ local function empty_text(model)
   if not model.seen then
     return "Open the crafting orders board at a profession table; the orders seen there are kept here."
   end
-  if model.total == 0 then return "No open orders were on the last board seen." end
+  if model.total == 0 then return L["No open orders were on the last board seen."] end
   return "Every order is hidden by the filters."
 end
 
@@ -649,7 +650,7 @@ local function build(container)
   created.status:SetWordWrap(false)
   created.filterLabel = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   created.filterLabel:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, -(filterLabelTop + 2))
-  created.filterLabel:SetText("Hide orders with:")
+  created.filterLabel:SetText(L["Hide orders with:"])
   for i, d in ipairs(descriptors) do created.checks[i] = create_check(bar, i, checksTop, d) end
   created.headerBar, created.headers = create_headers(container, headersTop)
 
@@ -696,7 +697,7 @@ function OrdersTab:OnInitialize()
   local window = module("MainWindow")
   if window then
     window:RegisterTab(TAB_ID, {
-      label = "Orders", icon = "Interface\\Icons\\INV_Misc_Note_06", order = 40, phase = 2,
+      label = L["Orders"], icon = "Interface\\Icons\\INV_Misc_Note_06", order = 40, phase = 2,
       build = build,
       refresh = refresh,
     })

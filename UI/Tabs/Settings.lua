@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- SettingsTab: the Settings tab of the main window. It embeds the addon's AceConfig options
 -- (the groups modules register through ns.FS:RegisterOptions) and adds the same options to
@@ -40,7 +41,7 @@ function SettingsTab:OnEnable()
     local window = ns.FS:GetModule("MainWindow", true)
     if window then
       registered = window:RegisterTab("settings", {
-        label = "Settings", order = 100, phase = 1, build = build, refresh = open_options,
+        label = L["Settings"], order = 100, phase = 1, build = build, refresh = open_options,
       })
     end
   end

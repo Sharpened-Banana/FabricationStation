@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Recipes tab: every recipe every character knows, ranked by Recipes:GetRanked. A filter bar (profession,
 -- character, minimum quality, uses concentration, only profitable), sortable profit and gold/concentration
@@ -31,14 +32,14 @@ local DIM, WARN, GOOD, BAD = "|cff9d9d9d", "|cffffd100", "|cff40ff40", "|cffff40
 -- Left to right. The flexible recipe column takes the width the fixed ones leave over. `sort` names the
 -- GetRanked sortBy a clickable header selects.
 local COLUMNS = {
-  { key = "name", label = "Recipe", flex = true },
-  { key = "character", label = "Character", width = 84 },
-  { key = "quality", label = "Quality", width = 48 },
-  { key = "cost", label = "Cost", width = 104, right = true },
-  { key = "sale", label = "Sale", width = 104, right = true },
-  { key = "profit", label = "Profit", width = 112, right = true, sort = "profit" },
-  { key = "gpc", label = "Gold/conc.", width = 96, right = true, sort = "goldPerConcentration" },
-  { key = "age", label = "Price age", width = 64 },
+  { key = "name", label = L["Recipe"], flex = true },
+  { key = "character", label = L["Character"], width = 84 },
+  { key = "quality", label = L["Quality"], width = 48 },
+  { key = "cost", label = L["Cost"], width = 104, right = true },
+  { key = "sale", label = L["Sale"], width = 104, right = true },
+  { key = "profit", label = L["Profit"], width = 112, right = true, sort = "profit" },
+  { key = "gpc", label = L["Gold/conc."], width = 96, right = true, sort = "goldPerConcentration" },
+  { key = "age", label = L["Price age"], width = 64 },
   { key = "action", label = "", width = 56 },
 }
 local ACTION = #COLUMNS
@@ -176,7 +177,7 @@ end
 ---------------------------------------------------------------------------
 
 local function profession_options()
-  local options, names = { { value = "any", label = "All professions" } }, {}
+  local options, names = { { value = "any", label = L["All professions"] } }, {}
   local scanner = module("Scanner")
   for _, charKey in ipairs(scanner and scanner:GetCharacters() or {}) do
     local record = scanner:GetCharacter(charKey)
@@ -195,7 +196,7 @@ local function profession_options()
 end
 
 local function character_options()
-  local options = { { value = "any", label = "All characters" } }
+  local options = { { value = "any", label = L["All characters"] } }
   local scanner = module("Scanner")
   for _, charKey in ipairs(scanner and scanner:GetCharacters() or {}) do
     options[#options + 1] = { value = charKey, label = short_name(charKey) }
@@ -204,8 +205,8 @@ local function character_options()
 end
 
 local function quality_options()
-  local options = { { value = "any", label = "Any quality" } }
-  for q = 1, MAX_QUALITY do options[#options + 1] = { value = q, label = "Quality " .. q .. "+" } end
+  local options = { { value = "any", label = L["Any quality"] } }
+  for q = 1, MAX_QUALITY do options[#options + 1] = { value = q, label = L["Quality %d+"]:format(q) } end
   return options
 end
 
@@ -247,7 +248,7 @@ local function queue_row(row)
   else
     status = color(BAD, ns.FS.dbIsNewer
       and "Saved data is from a newer version of FabricationStation; the queue is read-only."
-      or "Could not add to the queue")
+      or L["Could not add to the queue"])
   end
   if view then view.status:SetText(status) end
 end
@@ -266,7 +267,7 @@ local function create_row(index)
   end
   local button = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   button:SetHeight(ROW_HEIGHT - 2)
-  button:SetText("Queue")
+  button:SetText(L["Queue"])
   -- SetScript is deliberate: the button is our own and OnClick is its whole job.
   button:SetScript("OnClick", ns.FS:Wrap("RecipesTab:Queue", function() queue_row(row.data) end))
   row.cells[ACTION] = button
@@ -362,7 +363,7 @@ local function refresh()
   view.scanning:SetText(scanning and color(WARN, "Scanning" .. ELLIPSIS) or "")
   if #view.rows == 0 then
     view.empty:SetText(color(DIM, scanning and ("Scanning recipes" .. ELLIPSIS) or
-      "No recipes match. Learn recipes, open each profession once, or loosen the filters."))
+      L["No recipes match. Learn recipes, open each profession once, or loosen the filters."]))
     view.empty:Show()
   else
     view.empty:SetText("")
@@ -465,8 +466,8 @@ local function build(container)
   created.qualityButton = create_cycle_button(bar, 288, 110, quality_options, "minQuality")
   created.scanning = bar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   created.scanning:SetPoint("TOPRIGHT", bar, "TOPRIGHT", 0, -(BAR_TOP + 4))
-  created.concentrationCheck = create_check(bar, 0, "Uses concentration", "usesConcentration")
-  created.profitableCheck = create_check(bar, 170, "Only profitable", "onlyProfitable")
+  created.concentrationCheck = create_check(bar, 0, L["Uses concentration"], "usesConcentration")
+  created.profitableCheck = create_check(bar, 170, L["Only profitable"], "onlyProfitable")
   created.status = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   created.status:SetPoint("TOPRIGHT", bar, "TOPRIGHT", 0, -(BAR_TOP + BAR_ROW + 6))
   created.status:SetJustifyH("RIGHT")
@@ -519,7 +520,7 @@ function RecipesTab:OnEnable()
     local window = module("MainWindow")
     if window then
       registered = window:RegisterTab(TAB_ID, {
-        label = "Recipes", icon = "Interface\\Icons\\INV_Misc_Book_09", order = 20, phase = 1,
+        label = L["Recipes"], icon = "Interface\\Icons\\INV_Misc_Book_09", order = 20, phase = 1,
         build = build,
         refresh = refresh,
       })

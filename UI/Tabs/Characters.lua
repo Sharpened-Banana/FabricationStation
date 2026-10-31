@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Characters tab: every saved character at a glance, from saved data only (design rule 1; no profession window
 -- needed). A header line sums the characters shown ("Characters: N · Gold: <sum> · Knowledge left: <sum> KP", with
@@ -60,16 +61,16 @@ local RESULT_CHARS = 3
 local ICON_SIZE = 14
 local DIM, WARN, ORANGE = "|cff9d9d9d", "|cffffd100", "|cffff8000"
 
-Tab.PLACEHOLDER = "Find reagent\226\128\166"   -- "Find reagent…"
+Tab.PLACEHOLDER = L["Find reagent\226\128\166"]   -- "Find reagent…"
 
 -- The search results grid: Item (flexible), Total, Characters (three names, "+N" badge), Warband.
 Tab.RESULT_COLUMNS = {
-  { key = "item", label = "Item", flex = true },
-  { key = "total", label = "Total", width = 50, right = true,
-    tooltip = "Held by the characters shown and the warband bank (+: a bank or the warband bank was never scanned)" },
-  { key = "chars", label = "Characters", width = 190, badge = true,
-    tooltip = "Who holds it (+N: more characters, in the row tooltip)" },
-  { key = "warband", label = "Warband", width = 80, right = true, tooltip = "Warband bank" },
+  { key = "item", label = L["Item"], flex = true },
+  { key = "total", label = L["Total"], width = 50, right = true,
+    tooltip = L["Held by the characters shown and the warband bank (+: a bank or the warband bank was never scanned)"] },
+  { key = "chars", label = L["Characters"], width = 190, badge = true,
+    tooltip = L["Who holds it (+N: more characters, in the row tooltip)"] },
+  { key = "warband", label = L["Warband"], width = 80, right = true, tooltip = L["Warband bank"] },
 }
 Tab.RESULT_HIDE_ORDER = { "chars" }
 
@@ -182,10 +183,10 @@ function Tab.SearchStatus(query, rows, hiddenShown)
     return text, nil
   end
   if not query:match("^%d+$") and #query < 3 then
-    return "Search: too short", "Type at least 3 letters of a reagent name, or an item ID"
+    return L["Search: too short"], "Type at least 3 letters of a reagent name, or an item ID"
   end
-  return "Search: no items",
-    ('No reagent named "%s" on your visible characters or in the warband bank'):format((query:gsub("|", "||")))
+  return L["Search: no items"],
+    (L['No reagent named "%s" on your visible characters or in the warband bank']):format((query:gsub("|", "||")))
       .. (hiddenShown and " (hidden characters are not searched)" or "")
 end
 
@@ -343,7 +344,7 @@ local function render_detail(frame, row)
   frame.text:SetText(table.concat(row.detailLines, "\n"))
   local button = hide_button(frame)
   button.charKey, button.isHidden = row.key, row.display.hidden
-  button:SetText(row.display.hidden and "Show character" or "Hide character")
+  button:SetText(row.display.hidden and L["Show character"] or L["Hide character"])
   button:Show()
 end
 
@@ -410,12 +411,12 @@ function refresh()
     listen_for_items(false)
     notice = nil
     view.grid.frame:Hide(); view.results.frame:Hide()
-    view.header:SetText("Characters")
+    view.header:SetText(L["Characters"])
     view.headerTooltip = { "Characters", V().OFF_TEXT }
     set_marker(nil)
     view.status:SetText("")
     view.statusText = ""
-    view.showHiddenLabel:SetText("Show hidden")
+    view.showHiddenLabel:SetText(L["Show hidden"])
     view.hiddenCount = nil
     show_empty(V().OFF_TEXT .. ": turn it on in Settings > Modules to see your characters")
     apply_layout()
@@ -432,7 +433,7 @@ function refresh()
   view.header:SetText(header.base)
   view.headerTooltip = header.tooltip
   set_marker(V().CurrentDataMarker())   -- same rule as header.note (the Knowledge build)
-  view.showHiddenLabel:SetText("Show hidden (" .. hiddenCount .. ")")
+  view.showHiddenLabel:SetText(L["Show hidden (%d)"]:format(hiddenCount))
   view.hiddenCount = hiddenCount
   view.showHidden:SetChecked(showHidden)
 
@@ -453,7 +454,7 @@ function refresh()
     view.grid:SetRows(grid_rows(rows, ns.FS:Now()))
     if #rows == 0 then
       show_empty(hiddenCount > 0 and "Every character is hidden: tick Show hidden to see them"
-        or "No characters saved yet: log in on each character once")
+        or L["No characters saved yet: log in on each character once"])
     else
       show_empty(nil)
     end
@@ -523,9 +524,9 @@ local function build_bar(container, created)
   created.showHiddenHit = hover_area(bar, label, function()
     local n = view and view.hiddenCount
     return {
-      n and ("Show hidden (" .. n .. ")") or "Show hidden",
-      "Lists the characters you hid with \"Hide character\" (in a row's detail), marked \"(hidden)\".",
-      "The reagent search, the Planner, the holdings tooltip lines and the knowledge widget always leave them out.",
+      n and ("Show hidden (" .. n .. ")") or L["Show hidden"],
+      L["Lists the characters you hid with \"Hide character\" (in a row's detail), marked \"(hidden)\"."],
+      L["The reagent search, the Planner, the holdings tooltip lines and the knowledge widget always leave them out."],
     }
   end)
 
@@ -597,7 +598,7 @@ function CharactersTab:OnInitialize()
   local window = module("MainWindow")
   if window then
     window:RegisterTab(TAB_ID, {
-      label = "Characters", icon = "Interface\\Icons\\Achievement_Character_Human_Male", order = 70, phase = 3,
+      label = L["Characters"], icon = "Interface\\Icons\\Achievement_Character_Human_Male", order = 70, phase = 3,
       build = build,
       refresh = refresh,
     })

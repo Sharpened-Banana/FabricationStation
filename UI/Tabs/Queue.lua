@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Queue tab: the crafts waiting to be made (real entries, then the computed restock entries), what each
 -- needs and costs, and the actions on them: Shopping List (Auctionator), Clear, Craft Next, a quantity
@@ -31,7 +32,7 @@ local RESTOCK_EDITOR_TOP = 22                                   -- below the pan
 local RESTOCK_LIST_TOP = RESTOCK_EDITOR_TOP + BAR_ROW
 local RESTOCK_HEIGHT = RESTOCK_LIST_TOP + RESTOCK_ROW * RESTOCK_VISIBLE + 6
 local DEFAULT_VIEW_HEIGHT = 400   -- before a scroll frame has a size
-local ELLIPSIS, TIMES, EM_DASH = "\226\128\166", "\195\151", "\226\128\148"
+local ELLIPSIS, TIMES = "\226\128\166", "\195\151"
 local DIM, WARN, BAD = "|cff9d9d9d", "|cffffd100", "|cffff4040"
 local TONES = { good = { 0.25, 1, 0.25 }, bad = { 1, 0.25, 0.25 }, warn = { 1, 0.82, 0 }, plain = { 1, 1, 1 } }
 local READ_ONLY = "Saved data is from a newer version of FabricationStation; the queue is read-only."
@@ -40,12 +41,12 @@ local DAY, HOUR, MINUTE = 86400, 3600, 60
 -- Left to right; the flexible recipe column takes the width the fixed ones leave over. Missing reagents
 -- and the cooldown wait are a second line under each row.
 local COLUMNS = {
-  { key = "name", label = "Recipe", flex = true },
-  { key = "character", label = "Character", width = 80 },
-  { key = "quantity", label = "Qty", width = 84 },
-  { key = "quality", label = "Quality", width = 48 },
-  { key = "concentration", label = "Conc.", width = 40 },
-  { key = "cost", label = "Cost", width = 128, right = true },
+  { key = "name", label = L["Recipe"], flex = true },
+  { key = "character", label = L["Character"], width = 80 },
+  { key = "quantity", label = L["Qty"], width = 84 },
+  { key = "quality", label = L["Quality"], width = 48 },
+  { key = "concentration", label = L["Conc."], width = 40 },
+  { key = "cost", label = L["Cost"], width = 128, right = true },
   { key = "remove", label = "", width = 24 },
 }
 
@@ -131,10 +132,10 @@ end
 -- The display text of one row's cells, by column key.
 function Tab.CellTexts(row)
   local name = row.name
-  if row.isRestock then name = name .. "  " .. color(DIM, "[restock]") end
-  if row.orderID ~= nil then name = name .. "  " .. color(DIM, "[order]") end
-  if row.unreachable then name = name .. "  " .. color(WARN, "[quality unreachable]") end
-  local cost = color(DIM, "no price")
+  if row.isRestock then name = name .. "  " .. color(DIM, L["[restock]"]) end
+  if row.orderID ~= nil then name = name .. "  " .. color(DIM, L["[order]"]) end
+  if row.unreachable then name = name .. "  " .. color(WARN, L["[quality unreachable]"]) end
+  local cost = color(DIM, L["no price"])
   if row.cost ~= nil then
     cost = (row.estimated and "~" or "") .. ns.UI.FormatMoney(row.cost)
     if row.priceAge ~= nil then
@@ -153,31 +154,31 @@ end
 function Tab.StatusText(result, professionName, charName, now)
   local s = type(result) == "table" and result.status or nil
   if s == "crafted" then
-    return result.recipeName and ("Crafting " .. result.recipeName .. ELLIPSIS) or ("Crafting" .. ELLIPSIS)
+    return result.recipeName and L["Crafting %s\226\128\166"]:format(result.recipeName) or L["Crafting\226\128\166"]
   elseif s == "open" then
-    return "Open " .. (professionName or "the profession") .. " on " .. (charName or "that character")
+    return L["Open %s on %s"]:format(professionName or L["the profession"], charName or L["that character"])
   elseif s == "order" then
-    return "Start (claim) the order first: "
-      .. (result.recipeName or (result.orderID ~= nil and ("order #" .. tostring(result.orderID)) or "the order"))
+    return L["Start (claim) the order first: %s"]:format(
+      result.recipeName or (result.orderID ~= nil and L["order #%s"]:format(tostring(result.orderID)) or L["the order"]))
   elseif s == "missing" then
-    return "Missing reagents " .. EM_DASH .. " see Shopping List"
+    return L["Missing reagents \226\128\148 see Shopping List"]
   elseif s == "cooldown" then
-    if type(result.readyAt) ~= "number" then return "Next craft is on cooldown" end
-    return "Next craft ready in " .. Tab.FormatDuration(result.readyAt - (now or ns.FS:Now()))
+    if type(result.readyAt) ~= "number" then return L["Next craft is on cooldown"] end
+    return L["Next craft ready in %s"]:format(Tab.FormatDuration(result.readyAt - (now or ns.FS:Now())))
   elseif s == "busy" then
-    return "Still crafting " .. EM_DASH .. " wait for the current craft to finish"
+    return L["Still crafting \226\128\148 wait for the current craft to finish"]
   elseif s == "empty" then
-    return "Queue is empty"
+    return L["Queue is empty"]
   elseif s == nil then
-    return "The queue gave no answer"
+    return L["The queue gave no answer"]
   end
-  return "Unknown result: " .. tostring(s)
+  return L["Unknown result: %s"]:format(tostring(s))
 end
 
 -- The tooltip lines of a row, or nil when it has none: an entry of a crafting order names the order.
 function Tab.RowTooltip(row)
   if type(row) ~= "table" or row.orderID == nil then return nil end
-  return { "Crafting order #" .. tostring(row.orderID) }
+  return { L["Crafting order #%s"]:format(tostring(row.orderID)) }
 end
 
 local function count_items(n)
@@ -204,19 +205,19 @@ function Tab.ShoppingText(ok, info)
     if skipped > 0 then text = text .. ", " .. count_items(skipped) .. " skipped" end
     return text
   end
-  if info == "noAuctionator" then return "Auctionator not available" end
-  if info == "empty" then return "Nothing to buy: no reagents are missing" end
-  if info == "auctionatorError" then return "Auctionator returned an error; see the error log in Settings" end
-  return "Shopping list failed (" .. tostring(info) .. ")"
+  if info == "noAuctionator" then return L["Auctionator not available"] end
+  if info == "empty" then return L["Nothing to buy: no reagents are missing"] end
+  if info == "auctionatorError" then return L["Auctionator returned an error; see the error log in Settings"] end
+  return L["Shopping list failed (%s)"]:format(tostring(info))
 end
 
 -- The restock editor inputs -> itemID, target; or nil, nil, the problem in words.
 function Tab.ParseRestock(itemText, targetText)
   local itemID = ns.UI.ParseItemID(itemText)
-  if not itemID then return nil, nil, "Enter an item ID or shift-click an item link" end
+  if not itemID then return nil, nil, L["Enter an item ID or shift-click an item link"] end
   local text = type(targetText) == "string" and strtrim(targetText) or ""
   local target = text:match("^%d+$") and tonumber(text) or nil
-  if not target or target < 1 then return nil, nil, "Enter a target of 1 or more" end
+  if not target or target < 1 then return nil, nil, L["Enter a target of 1 or more"] end
   return itemID, target
 end
 
@@ -458,7 +459,7 @@ local function bind_queue_row(row, data, index)
   row.background:SetColorTexture(1, 1, 1, index % 2 == 0 and 0.04 or 0)
   local texts = Tab.CellTexts(data)
   for key, cell in pairs(row.cells) do cell:SetText(texts[key]) end
-  row.missing:SetText(data.missingText ~= "" and ("Missing: " .. data.missingText) or color(DIM, "Reagents on hand"))
+  row.missing:SetText(data.missingText ~= "" and ("Missing: " .. data.missingText) or color(DIM, L["Reagents on hand"]))
   row.ready:SetText(data.readyText ~= "" and color("|cffffd100", data.readyText) or "")
   local editable = not data.isRestock
   for _, control in ipairs({ row.minus, row.plus, row.remove }) do
@@ -508,10 +509,10 @@ local function refresh()
   end
   list_set_rows(view.queue, Tab.BuildRows(entries, costs, missing, readyAt, ns.FS:Now(), results))
   if not queue then
-    view.empty:SetText(color(DIM, "The queue is not available."))
+    view.empty:SetText(color(DIM, L["The queue is not available."]))
     view.empty:Show()
   elseif #view.queue.rows == 0 then
-    view.empty:SetText(color(DIM, "The queue is empty. Queue crafts from the Recipes tab, or set a restock target below."))
+    view.empty:SetText(color(DIM, L["The queue is empty. Queue crafts from the Recipes tab, or set a restock target below."]))
     view.empty:Show()
   else
     view.empty:SetText("")
@@ -546,7 +547,7 @@ end
 local function export_shopping_list()
   local queue = module("Queue")
   if not queue then
-    set_status("The queue is not available", "bad")
+    set_status(L["The queue is not available"], "bad")
     return
   end
   local function show(ok, info)
@@ -634,7 +635,7 @@ local function build_restock_panel(container, created)
   panel:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
   local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   title:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD, -4)
-  title:SetText("Restock targets: keep this many in stock")
+  title:SetText(L["Restock targets: keep this many in stock"])
 
   created.itemEdit = create_edit(panel, PAD + 8, 200)
   local itemHint = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -645,11 +646,11 @@ local function build_restock_panel(container, created)
   created.targetEdit:SetMaxLetters(5)
   local targetLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   targetLabel:SetPoint("RIGHT", created.targetEdit, "LEFT", -8, 0)
-  targetLabel:SetText("Target")
+  targetLabel:SetText(L["Target"])
   created.setButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
   created.setButton:SetSize(60, BAR_ROW - 4)
   created.setButton:SetPoint("LEFT", created.targetEdit, "RIGHT", 10, 0)
-  created.setButton:SetText("Set")
+  created.setButton:SetText(L["Set"])
   created.setButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:Restock", set_restock))
 
   created.restock = new_list(panel, RESTOCK_ROW, RESTOCK_ROW * RESTOCK_VISIBLE, create_restock_row, bind_restock_row, "QueueTab:Scroll")
@@ -672,13 +673,13 @@ local function build(container)
     button:SetText(label)
     return button
   end
-  created.shoppingButton = bar_button(0, 110, "Shopping List")
+  created.shoppingButton = bar_button(0, 110, L["Shopping List"])
   created.shoppingButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:Shopping", export_shopping_list))
   created.clearButton = bar_button(114, 70, "Clear")
   created.clearButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:Clear", function()
     edit_queue(function(queue) queue:Clear() end)
   end))
-  created.craftButton = bar_button(188, 100, "Craft Next")
+  created.craftButton = bar_button(188, 100, L["Craft Next"])
   -- The only reference to the protected action: one craft per click, nothing else runs it.
   created.craftButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:CraftNext", function()
     if read_only() then return end
@@ -723,7 +724,7 @@ function QueueTab:OnEnable()
     local window = module("MainWindow")
     if window then
       registered = window:RegisterTab(TAB_ID, {
-        label = "Queue", icon = "Interface\\Icons\\INV_Misc_Note_01", order = 30, phase = 1,
+        label = L["Queue"], icon = "Interface\\Icons\\INV_Misc_Note_01", order = 30, phase = 1,
         build = build,
         refresh = refresh,
       })

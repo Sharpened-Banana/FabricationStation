@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Planner tab: what to do next across every character, from saved data only (design rule 1; no profession window
 -- needed). A row of section buttons picks one of four sections (the choice is kept in settings.planner.section; a
@@ -73,10 +74,10 @@ local CHECK = "|TInterface\\RaidFrame\\ReadyCheck-Ready:12:12|t"
 local TIMES = "\195\151"   -- "×"
 
 Tab.SECTIONS = {
-  { id = "knowledge", label = "Knowledge", width = 96 },
-  { id = "concentration", label = "Concentration", width = 116 },
-  { id = "spec", label = "Spec advice", width = 100 },
-  { id = "missing", label = "Missing recipes", width = 124 },
+  { id = "knowledge", label = L["Knowledge"], width = 96 },
+  { id = "concentration", label = L["Concentration"], width = 116 },
+  { id = "spec", label = L["Spec advice"], width = 100 },
+  { id = "missing", label = L["Missing recipes"], width = 124 },
 }
 local SECTION_BY_ID = {}
 for _, s in ipairs(Tab.SECTIONS) do SECTION_BY_ID[s.id] = s end
@@ -87,34 +88,34 @@ local TICKING = { knowledge = true, concentration = true }
 -- Concentration: warnings and schedule rows. Recipe is flexible; Character and Profession are anchored from the left
 -- edge, the numbers and the Queue button from the right edge.
 Tab.SCHEDULE_COLUMNS = {
-  { key = "character", label = "Character", width = 110 },
-  { key = "profession", label = "Profession", width = 90 },
-  { key = "recipe", label = "Recipe", flex = true },
-  { key = "crafts", label = "Crafts", width = 40, right = true, tooltip = "Crafts to make with concentration" },
-  { key = "conc", label = "Conc.", width = 50, right = true, tooltip = "Concentration the crafts use" },
-  { key = "gain", label = "Gain", width = 70, right = true,
-    tooltip = "Expected extra gold from crafting them with concentration" },
-  { key = "gpc", label = "Gold/conc", width = 64, right = true, tooltip = "Gold per concentration point" },
-  { key = "caps", label = "Caps in", width = 56, right = true, tooltip = "Time until the concentration is full" },
-  { key = "queue", label = "Queue", width = 52, tooltip = "Add the crafts to the Queue, with concentration" },
+  { key = "character", label = L["Character"], width = 110 },
+  { key = "profession", label = L["Profession"], width = 90 },
+  { key = "recipe", label = L["Recipe"], flex = true },
+  { key = "crafts", label = L["Crafts"], width = 40, right = true, tooltip = L["Crafts to make with concentration"] },
+  { key = "conc", label = L["Conc."], width = 50, right = true, tooltip = L["Concentration the crafts use"] },
+  { key = "gain", label = L["Gain"], width = 70, right = true,
+    tooltip = L["Expected extra gold from crafting them with concentration"] },
+  { key = "gpc", label = L["Gold/conc"], width = 64, right = true, tooltip = L["Gold per concentration point"] },
+  { key = "caps", label = L["Caps in"], width = 56, right = true, tooltip = L["Time until the concentration is full"] },
+  { key = "queue", label = L["Queue"], width = 52, tooltip = L["Add the crafts to the Queue, with concentration"] },
 }
 Tab.SCHEDULE_HIDE_ORDER = { "gpc", "profession", "caps", "conc" }
 
 Tab.SPEC_COLUMNS = {
-  { key = "path", label = "Path", flex = true },
-  { key = "rank", label = "Rank", width = 50, right = true },
-  { key = "points", label = "Points", width = 44, right = true, tooltip = "Knowledge points to the next step" },
-  { key = "gain", label = "Gain", width = 80, right = true,
-    tooltip = "Estimated extra profit from your top recipes after the step" },
-  { key = "perPoint", label = "Per point", width = 70, right = true, tooltip = "Gain per knowledge point" },
-  { key = "affordable", label = "Affordable", width = 70,
-    tooltip = "Affordable: you have enough unspent points for the step" },
+  { key = "path", label = L["Path"], flex = true },
+  { key = "rank", label = L["Rank"], width = 50, right = true },
+  { key = "points", label = L["Points"], width = 44, right = true, tooltip = L["Knowledge points to the next step"] },
+  { key = "gain", label = L["Gain"], width = 80, right = true,
+    tooltip = L["Estimated extra profit from your top recipes after the step"] },
+  { key = "perPoint", label = L["Per point"], width = 70, right = true, tooltip = L["Gain per knowledge point"] },
+  { key = "affordable", label = L["Affordable"], width = 70,
+    tooltip = L["Affordable: you have enough unspent points for the step"] },
 }
 Tab.SPEC_HIDE_ORDER = { "perPoint", "affordable" }
 
 Tab.MISSING_COLUMNS = {
-  { key = "recipe", label = "Recipe", width = 180 },
-  { key = "source", label = "Source", flex = true },
+  { key = "recipe", label = L["Recipe"], width = 180 },
+  { key = "source", label = L["Source"], flex = true },
 }
 
 local view              -- built frames, nil before the tab is built
@@ -183,8 +184,8 @@ local function plural(n, one, many) return whole(n) .. " " .. (n == 1 and one or
 -- Models (pure)
 ---------------------------------------------------------------------------
 
-local CATEGORY_LABELS = { weeklyQuest = "Weekly quest", treatise = "Treatise", treasure = "Treasure", drop = "Drop",
-  darkmoon = "Darkmoon Faire" }
+local CATEGORY_LABELS = { weeklyQuest = L["Weekly quest"], treatise = "Treatise", treasure = "Treasure", drop = "Drop",
+  darkmoon = L["Darkmoon Faire"] }
 local STATE_WORDS = { done = "done", open = "open", closed = "closed (not the faire week)",
   unknown = "unknown (no quest data from this week)" }
 
@@ -272,14 +273,14 @@ function Tab.WarningRow(w, now)
   local code = capped and RED or ORANGE
   local toFull = finite(w.fullAt) and math.max(0, w.fullAt - now) or nil
   local caps = capped and "Full" or CV().FormatDuration(toFull)
-  local text = capped and "Capped: concentration is full" or ("Soon: full in " .. caps)
+  local text = capped and L["Capped: concentration is full"] or ("Soon: full in " .. caps)
   local prof = profession_name(w.skillLineID)
   return {
     key = "warn:" .. tostring(w.charKey) .. ":" .. tostring(w.skillLineID),
     cells = { character = tostring(w.charKey), profession = prof, recipe = color(code, text), caps = color(code, caps) },
     tooltip = { text, tostring(w.charKey) .. " " .. prof,
       "Concentration: " .. (finite(w.value) and whole(w.value) or "?") .. "/" .. (finite(w.max) and whole(w.max) or "?"),
-      capped and "Spend it before more is wasted" or "Spend some before it is full" },
+      capped and L["Spend it before more is wasted"] or L["Spend some before it is full"] },
   }
 end
 
@@ -310,7 +311,7 @@ function Tab.ScheduleRow(r, now)
     tooltip = { name, tostring(r.charKey) .. " " .. prof, "Crafts: " .. crafts .. " (" .. used .. " concentration)",
       "Expected gain: " .. ns.UI.FormatMoney(r.expectedGain),
       "Gold per concentration: " .. ns.UI.FormatMoney(r.goldPerConcentration), capsLine,
-      "Queue adds the crafts with concentration" },
+      L["Queue adds the crafts with concentration"] },
   }
 end
 
@@ -482,7 +483,7 @@ local function knowledge_section(P)
 end
 
 local function concentration_section(P)
-  local out = { rows = {}, footer = "Plan: the crafts that earn the most per concentration point, per character" }
+  local out = { rows = {}, footer = L["Plan: the crafts that earn the most per concentration point, per character"] }
   local now = ns.FS:Now()
   local warnings, warnStatus = P:GetCapWarnings(now)
   local capped, soon = 0, 0
@@ -619,7 +620,7 @@ local function queue_button(frame)
   button:SetPoint("LEFT", frame.cells.queue, "LEFT", 0, 0)
   button:SetPoint("RIGHT", frame.cells.queue, "RIGHT", 0, 0)
   button:SetHeight(QUEUE_BUTTON_HEIGHT)
-  button:SetText("Queue")
+  button:SetText(L["Queue"])
   -- SetScript is deliberate: the button is our own.
   button:SetScript("OnClick", ns.FS:Wrap(SOURCE, function(self) queue_row(self.row) end))
   frame.queueButton = button
@@ -906,7 +907,7 @@ function PlannerTab:OnInitialize()
   local window = module("MainWindow")
   if window then
     window:RegisterTab(TAB_ID, {
-      label = "Planner", icon = "Interface\\Icons\\INV_Misc_Note_01", order = 80, phase = 3,
+      label = L["Planner"], icon = "Interface\\Icons\\INV_Misc_Note_01", order = 80, phase = 3,
       build = build,
       refresh = refresh,
     })

@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Characters tab view model (pure strings and flags; the tab frame is UI/Tabs/Characters.lua): one display row per
 -- AltRow (Alts:GetAltRow / GetOverview), the grid's columns and their hide priority for narrow windows, the cells,
@@ -52,7 +53,7 @@ function V.KnowledgeBreakdown(summary)
     return "No knowledge data for this profession" .. DOT .. first
   end
   local ok = summary.status == "ok"
-  local weekly, oneTime = "Weekly ? (log in on this character this week)", "One-time ?"
+  local weekly, oneTime = L["Weekly ? (log in on this character this week)"], "One-time ?"
   if ok and finite(summary.weeklyLeft) and finite(summary.weeklyTotal) then
     weekly = "Weekly " .. whole(summary.weeklyLeft) .. " of " .. whole(summary.weeklyTotal) .. " left"
   end
@@ -269,23 +270,23 @@ end
 
 -- The Characters grid (ExpandGrid columns): Character (flexible), two profession slots, Gold, Age. About 1320 px
 -- wide in all, so narrow windows hide columns (preflight row 20).
-V.COLUMNS = { { key = "name", label = "Character", flex = true } }
+V.COLUMNS = { { key = "name", label = L["Character"], flex = true } }
 for slot = 1, 2 do
   for _, col in ipairs({
-    { key = "prof", label = "Profession", width = 130, badge = true,
-      tooltip = "Profession and skill (+N: more professions, in the row tooltip)" },
-    { key = "conc", label = "Concentration", width = 120, tooltip = "Concentration now/max · time until full" },
-    { key = "kp", label = "KP", width = 40, right = true, tooltip = "Knowledge points left this week" },
-    { key = "spec", label = "Spec", width = 80, tooltip = "Specialization points spent/max (+unspent)" },
-    { key = "moxie", label = "Moxie", width = 50, right = true },
-    { key = "cds", label = "Cooldowns", width = 80, tooltip = "Cooldowns · ready or time until the next" },
+    { key = "prof", label = L["Profession"], width = 130, badge = true,
+      tooltip = L["Profession and skill (+N: more professions, in the row tooltip)"] },
+    { key = "conc", label = L["Concentration"], width = 120, tooltip = L["Concentration now/max · time until full"] },
+    { key = "kp", label = L["KP"], width = 40, right = true, tooltip = L["Knowledge points left this week"] },
+    { key = "spec", label = L["Spec"], width = 80, tooltip = L["Specialization points spent/max (+unspent)"] },
+    { key = "moxie", label = L["Moxie"], width = 50, right = true },
+    { key = "cds", label = L["Cooldowns"], width = 80, tooltip = L["Cooldowns · ready or time until the next"] },
   }) do
     V.COLUMNS[#V.COLUMNS + 1] = { key = col.key .. slot, label = col.label, width = col.width, right = col.right,
       badge = col.badge, tooltip = col.tooltip and ("Profession " .. slot .. ": " .. col.tooltip) or nil }
   end
 end
-V.COLUMNS[#V.COLUMNS + 1] = { key = "gold", label = "Gold", width = 100, right = true }
-V.COLUMNS[#V.COLUMNS + 1] = { key = "age", label = "Age", width = 70, right = true, tooltip = "Age of the saved data" }
+V.COLUMNS[#V.COLUMNS + 1] = { key = "gold", label = L["Gold"], width = 100, right = true }
+V.COLUMNS[#V.COLUMNS + 1] = { key = "age", label = L["Age"], width = 70, right = true, tooltip = L["Age of the saved data"] }
 
 -- Lowest priority first: slot 2's extras, then slot 2 as a whole, slot 1's Moxie, Cooldowns and Spec, then Gold,
 -- then Age. The Character column keeps at least 120 px (128 px at the 516 px minimum: Profession 1, Concentration
@@ -353,7 +354,7 @@ end
 function V.TooltipLines(row, note)
   if note == nil then note = V.CurrentDataNote() end
   local lines = { tostring(row.charKey or row.name) }
-  if row.hidden then lines[#lines + 1] = "Hidden (shown because \"Show hidden\" is ticked)" end
+  if row.hidden then lines[#lines + 1] = L["Hidden (shown because \"Show hidden\" is ticked)"] end
   lines[#lines + 1] = "Gold: " .. row.gold
   if row.isCurrent then
     lines[#lines + 1] = "Last seen: online"

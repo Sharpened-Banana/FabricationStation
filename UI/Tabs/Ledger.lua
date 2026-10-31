@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Ledger tab: what the player earned crafting (Ledger module), in one scrolling page of four sections:
 --   * Weekly profit for the last WEEKS reset weeks plus their total (Ledger:Weekly): week, income, cost, profit and a
@@ -56,7 +57,7 @@ local OFF_DETAIL = "Turn the Ledger on again in /fs settings > Modules."
 local PARTIAL_DETAIL = "Their cost is not subtracted, so the real profit may be lower than shown."
 
 local TYPE_LABELS = { craft = "craft", sale = "sale", commission = "commission" }
-local TYPE_NAMES = { craft = "Craft (cost record)", sale = "Auction sale", commission = "Order commission" }
+local TYPE_NAMES = { craft = L["Craft (cost record)"], sale = L["Auction sale"], commission = L["Order commission"] }
 
 -- Per section, left to right. The flexible column takes the width the fixed ones leave; the columns before it are
 -- laid out from the left edge, the ones after it from the right edge. `hide` lists the columns dropped, in order,
@@ -64,43 +65,43 @@ local TYPE_NAMES = { craft = "Craft (cost record)", sale = "Auction sale", commi
 local SECTIONS = {
   weekly = {
     columns = {
-      { key = "week", label = "Week", width = 64 },
-      { key = "income", label = "Income", width = 72, right = true },
-      { key = "cost", label = "Cost", width = 72, right = true },
-      { key = "profit", label = "Profit", width = 80, right = true },
+      { key = "week", label = L["Week"], width = 64 },
+      { key = "income", label = L["Income"], width = 72, right = true },
+      { key = "cost", label = L["Cost"], width = 72, right = true },
+      { key = "profit", label = L["Profit"], width = 80, right = true },
       { key = "note", label = "", flex = true },
     },
     hide = { "cost" },
   },
   recipe = {
     columns = {
-      { key = "recipe", label = "Recipe", flex = true },
-      { key = "n", label = "Count", width = 36, right = true },
-      { key = "income", label = "Income", width = 72, right = true },
-      { key = "cost", label = "Cost", width = 72, right = true },
-      { key = "profit", label = "Profit", width = 80, right = true },
+      { key = "recipe", label = L["Recipe"], flex = true },
+      { key = "n", label = L["Count"], width = 36, right = true },
+      { key = "income", label = L["Income"], width = 72, right = true },
+      { key = "cost", label = L["Cost"], width = 72, right = true },
+      { key = "profit", label = L["Profit"], width = 80, right = true },
       { key = "note", label = "", width = 48 },
     },
     hide = { "n", "cost" },
   },
   benchmark = {
     columns = {
-      { key = "recipe", label = "Recipe", flex = true },
+      { key = "recipe", label = L["Recipe"], flex = true },
       { key = "quality", label = "Q", width = 24, right = true },
-      { key = "p25", label = "Low (p25)", width = 64, right = true },
-      { key = "median", label = "Median", width = 64, right = true },
-      { key = "p75", label = "High (p75)", width = 64, right = true },
+      { key = "p25", label = L["Low (p25)"], width = 64, right = true },
+      { key = "median", label = L["Median"], width = 64, right = true },
+      { key = "p75", label = L["High (p75)"], width = 64, right = true },
       { key = "n", label = "n", width = 32, right = true },
     },
     hide = { "p25", "p75" },
   },
   entry = {
     columns = {
-      { key = "date", label = "Date", width = 36 },
-      { key = "type", label = "Type", width = 64 },
-      { key = "item", label = "Item", flex = true },
-      { key = "amount", label = "Amount", width = 72, right = true },
-      { key = "customer", label = "Customer", width = 90 },
+      { key = "date", label = L["Date"], width = 36 },
+      { key = "type", label = L["Type"], width = 64 },
+      { key = "item", label = L["Item"], flex = true },
+      { key = "amount", label = L["Amount"], width = 72, right = true },
+      { key = "customer", label = L["Customer"], width = 90 },
     },
     hide = { "customer", "type" },
   },
@@ -299,40 +300,40 @@ function Tab.DisplayRows(model)
     for _, data in ipairs(list) do add({ kind = "row", section = section, data = data }) end
   end
 
-  add({ kind = "heading", text = ("Weekly profit (last %d reset weeks)"):format(WEEKS) })
+  add({ kind = "heading", text = (L["Weekly profit (last %d reset weeks)"]):format(WEEKS) })
   if model.weekly then
     local list = {}
     for i, row in ipairs(model.weekly.rows) do list[i] = row end
     list[#list + 1] = model.weekly.total
     rows("weekly", list)
   else
-    add({ kind = "note", text = "Week boundary unknown: the game gave no weekly reset time" })
+    add({ kind = "note", text = L["Week boundary unknown: the game gave no weekly reset time"] })
   end
 
   add({ kind = "spacer" })
-  add({ kind = "heading", text = model.weekly and ("Profit by recipe (last %d reset weeks)"):format(WEEKS)
-    or "Profit by recipe (all recorded)" })
+  add({ kind = "heading", text = model.weekly and (L["Profit by recipe (last %d reset weeks)"]):format(WEEKS)
+    or L["Profit by recipe (all recorded)"] })
   if #model.recipes > 0 or model.unattributed then
     local list = {}
     for i, row in ipairs(model.recipes) do list[i] = row end
     if model.unattributed then list[#list + 1] = model.unattributed end
     rows("recipe", list)
   else
-    add({ kind = "note", text = model.weekly and ("No sales or commissions in the last %d reset weeks"):format(WEEKS)
-      or "No sales or commissions yet: only crafts (cost records) are recorded" })
+    add({ kind = "note", text = model.weekly and (L["No sales or commissions in the last %d reset weeks"]):format(WEEKS)
+      or L["No sales or commissions yet: only crafts (cost records) are recorded"] })
   end
 
   add({ kind = "spacer" })
-  add({ kind = "heading", text = "Your tips by recipe and quality" })
+  add({ kind = "heading", text = L["Your tips by recipe and quality"] })
   if #model.benchmarks > 0 then
     rows("benchmark", model.benchmarks)
   else
-    add({ kind = "note", text = ("No tip history yet: %s commissions per recipe and quality are needed")
+    add({ kind = "note", text = (L["No tip history yet: %s commissions per recipe and quality are needed"])
       :format(tostring(model.minSamples or "a few")) })
   end
 
   add({ kind = "spacer" })
-  add({ kind = "heading", text = ("Entries (%d)"):format(#model.entries) })
+  add({ kind = "heading", text = (L["Entries (%d)"]):format(#model.entries) })
   rows("entry", model.entries)
   return items
 end
@@ -410,7 +411,7 @@ function Tab.CellTexts(section, data)
     }
     if section == "weekly" then
       if data.total then
-        cells.week = ("%d weeks"):format(WEEKS)
+        cells.week = (L["%d weeks"]):format(WEEKS)
       elseif data.index == 1 then
         cells.week = "This week"
       else
@@ -422,7 +423,7 @@ function Tab.CellTexts(section, data)
         cells.note = color(DIM, "estimate")
       end
     else
-      cells.recipe = data.unattributed and "Unattributed sales" or recipe_name(data.recipeID)
+      cells.recipe = data.unattributed and L["Unattributed sales"] or recipe_name(data.recipeID)
       cells.n = tostring(count(data.n))
       if count(data.incomplete) > 0 then
         cells.note = color(WARN, "partial")
@@ -473,7 +474,7 @@ local function totals_lines(lines, data)
     lines[#lines + 1] = line(PARTIAL_DETAIL, GOLD)
   end
   if est then
-    lines[#lines + 1] = line(("Estimate: %d with an estimated craft cost"):format(data.estimated), GREY)
+    lines[#lines + 1] = line((L["Estimate: %d with an estimated craft cost"]):format(data.estimated), GREY)
   end
 end
 
@@ -486,15 +487,15 @@ local function entry_lines(lines, e)
   lines[#lines + 1] = line("Amount: " .. full_money(e.amount, e.type == "craft" and e.estimated == true))
   if counts_as_profit(e) then
     if e.recraft then
-      lines[#lines + 1] = line("Cost: not tracked for recrafts", GREY)
+      lines[#lines + 1] = line(L["Cost: not tracked for recrafts"], GREY)
     elseif is_money(e.cost) then
       lines[#lines + 1] = line("Cost: " .. full_money(e.cost, e.estimated == true))
-      if e.incomplete then lines[#lines + 1] = line("Cost is partial: some reagent prices were missing", GOLD) end
+      if e.incomplete then lines[#lines + 1] = line(L["Cost is partial: some reagent prices were missing"], GOLD) end
     else
-      lines[#lines + 1] = line("Cost: unknown (no cost basis)", GOLD)
+      lines[#lines + 1] = line(L["Cost: unknown (no cost basis)"], GOLD)
     end
   elseif e.incomplete then
-    lines[#lines + 1] = line("Cost is partial: some reagent prices were missing", GOLD)
+    lines[#lines + 1] = line(L["Cost is partial: some reagent prices were missing"], GOLD)
   end
   if e.type == "commission" and e.tip ~= nil then lines[#lines + 1] = line("Tip: " .. full_money(e.tip)) end
   if e.customer ~= nil then
@@ -502,14 +503,14 @@ local function entry_lines(lines, e)
   elseif e.buyer ~= nil then
     lines[#lines + 1] = line("Buyer: " .. tostring(e.buyer))
   elseif e.orderType == "npc" then
-    lines[#lines + 1] = line("Customer: Patron (NPC order)")
+    lines[#lines + 1] = line(L["Customer: Patron (NPC order)"])
   end
   if e.quality ~= nil then lines[#lines + 1] = line("Quality: " .. tostring(e.quality), GREY) end
   if type(e.quantity) == "number" and e.quantity ~= 1 then
     lines[#lines + 1] = line("Quantity: " .. tostring(e.quantity), GREY)
   end
   if e.charKey ~= nil then lines[#lines + 1] = line("Character: " .. tostring(e.charKey), GREY) end
-  if e.ambiguous then lines[#lines + 1] = line("Several items share this name; no cost was matched", GREY) end
+  if e.ambiguous then lines[#lines + 1] = line(L["Several items share this name; no cost was matched"], GREY) end
 end
 
 -- A list item's tooltip, as { { text, color = {r, g, b} } }: the full values the compact cells may cut, and why a
@@ -525,15 +526,15 @@ function Tab.TooltipLines(item)
   local data = type(item.data) == "table" and item.data or {}
   if item.section == "weekly" then
     if data.total then
-      lines[1] = line(("Last %d reset weeks"):format(WEEKS))
+      lines[1] = line((L["Last %d reset weeks"]):format(WEEKS))
     else
       lines[1] = line("Week starting " .. date_text(data.weekStart, "%Y-%m-%d %H:%M"))
     end
     totals_lines(lines, data)
   elseif item.section == "recipe" then
     if data.unattributed then
-      lines[1] = line("Unattributed sales")
-      lines[2] = line("Sales whose item could not be matched to a recipe you crafted", GREY)
+      lines[1] = line(L["Unattributed sales"])
+      lines[2] = line(L["Sales whose item could not be matched to a recipe you crafted"], GREY)
     else
       lines[1] = line(recipe_name(data.recipeID))
     end
@@ -545,7 +546,7 @@ function Tab.TooltipLines(item)
     lines[2] = line("Median tip: " .. full_money(data.median))
     lines[3] = line("A quarter of your tips were below " .. full_money(data.p25))
     lines[4] = line("A quarter of your tips were above " .. full_money(data.p75))
-    lines[5] = line(("From %d of your commissions (recrafts not counted)"):format(count(data.n)), GREY)
+    lines[5] = line((L["From %d of your commissions (recrafts not counted)"]):format(count(data.n)), GREY)
   elseif item.section == "entry" then
     entry_lines(lines, data)
   end
@@ -817,7 +818,7 @@ local function status_text(ledger)
 end
 
 local function empty_text(ledger)
-  if not ledger then return "The Ledger is not available." end
+  if not ledger then return L["The Ledger is not available."] end
   return "No sales recorded yet. Commissions from the crafting orders you fulfil and the auction sales you collect "
     .. "from the mailbox show here; crafts are kept as their cost."
 end
@@ -831,9 +832,9 @@ local function refresh()
   view.items = Tab.DisplayRows(model)
 
   if model.count == 0 then
-    view.header:SetText("No entries yet")
+    view.header:SetText(L["No entries yet"])
   else
-    local header = ("%d entries"):format(model.count)
+    local header = (L["%d entries"]):format(model.count)
     if model.newest then header = header .. ", newest " .. ns.UI.FormatAge(now - model.newest) .. " ago" end
     view.header:SetText(header)
   end
@@ -932,7 +933,7 @@ function LedgerTab:OnInitialize()
   local window = module("MainWindow")
   if window then
     window:RegisterTab(TAB_ID, {
-      label = "Ledger", icon = "Interface\\Icons\\INV_Misc_Coin_02", order = 60, phase = 2,
+      label = L["Ledger"], icon = "Interface\\Icons\\INV_Misc_Coin_02", order = 60, phase = 2,
       build = build,
       refresh = refresh,
     })

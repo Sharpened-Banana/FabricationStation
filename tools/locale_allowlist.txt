@@ -1,0 +1,25 @@
+# Strings that are deliberately not routed through ns.L. One entry per line: `file:literal` (that literal in that
+# file is fine) or `file:*` (skip the whole file). Blank lines and lines starting with # are ignored.
+
+# Addon name: a brand, never translated.
+Core/Core.lua:FabricationStation
+UI/Launcher.lua:FabricationStation
+UI/OrdersPanel.lua:FabricationStation
+UI/ProfessionPanel.lua:FabricationStation
+
+# Module names: ids passed to SetModuleEnabled/GetModule, not display text (the label next to them is localized).
+UI/OnboardingWizard.lua:Orders
+UI/OnboardingWizard.lua:Customers
+UI/OnboardingWizard.lua:Ledger
+UI/OnboardingWizard.lua:Alts
+UI/OnboardingWizard.lua:Planner
+UI/OnboardingWizard.lua:Guild
+
+# Pure files: specs load them without Core (so ns.L is absent) or they hold text matched against game data.
+# Math/ and Data/ are outside the scanned paths; the two Modules files are listed so the intent is on record.
+Modules/CraftingData.lua:*
+Modules/PlanCalc.lua:*
+
+# Not localized on purpose, and not flagged by find_literals: Util.LogError / Diagnostics texts, slash command
+# names, saved-data and setting keys, message names, module ids, Auctionator search terms, CSV field names, and
+# Ledger's mail-subject and invoice matching (compared against the client's own text).
