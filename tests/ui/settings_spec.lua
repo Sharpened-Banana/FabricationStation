@@ -71,7 +71,7 @@ describe("Settings tab", function()
     assert.equals(1, #W.config.blizOptions)
     assert.same({ app = "FabricationStation", name = "FabricationStation" }, W.config.blizOptions[1])
     local m = ns.FS:GetModule("SettingsTab"); m:Disable(); m:Enable()
-    assert.equals(1, #W.config.blizOptions); assert.equals(6, #MW:GetTabs())   -- dashboard + recipes + queue + orders + customers + settings, no duplicate
+    assert.equals(1, #W.config.blizOptions); assert.equals(7, #MW:GetTabs())   -- dashboard + recipes + queue + orders + customers + ledger + settings, no duplicate
   end)
   it("keeps the window alive when the options cannot open", function()
     LibStub("AceConfigDialog-3.0").Open = function() error("no dialog") end

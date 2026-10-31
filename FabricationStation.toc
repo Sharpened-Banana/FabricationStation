@@ -44,6 +44,7 @@ UI\Tabs\Recipes.lua
 UI\Tabs\Queue.lua
 UI\Tabs\Orders.lua
 UI\Tabs\Customers.lua
+UI\Tabs\Ledger.lua
 UI\Tabs\Settings.lua
 UI\Launcher.lua
 UI\ProfessionPanel.lua
@@ -51,3 +52,4 @@ UI\RecipeListLabels.lua
 UI\Tooltips.lua
 UI\OrdersPanel.lua
 UI\OrderAlert.lua
+UI\OrdersWidgets.lua
