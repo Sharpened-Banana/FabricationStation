@@ -857,6 +857,33 @@ local function claim_busy()
   return claimInFlight ~= nil
 end
 
+-- GetBestClaimable over the views Claim Best Order chooses from: the live views (GetLiveViews) of `profession` that
+-- have not expired, with that profession's claims remaining. Shared by ClaimBest and GetBestCandidate, so the panel
+-- shows exactly the order the button claims (Task 5 ruling).
+local function best_of_board(self, profession)
+  local claimInfo = C_CraftingOrders.GetOrderClaimInfo(profession)
+  local claim = {
+    claimsRemaining = type(claimInfo) == "table" and claimInfo.claimsRemaining or nil,
+    hasClaimed = false,
+  }
+  local now, candidates = ns.FS:Now(), {}
+  for _, view in ipairs(self:GetLiveViews()) do
+    local fresh = not (type(view.expiresAt) == "number" and view.expiresAt <= now)
+    if fresh and view.profession == profession then candidates[#candidates + 1] = view end
+  end
+  return self:GetBestClaimable(candidates, claim)
+end
+
+-- The order Claim Best Order would claim now, without claiming anything (the panel's best-order line).
+-- -> view, or nil and "disabled" | "noProfession" | "alreadyClaimed" | "none". Reads only.
+function Orders:GetBestCandidate()
+  if not self:IsEnabled() then return nil, "disabled" end
+  local profession = current_profession()
+  if profession == nil then return nil, "noProfession" end
+  if C_CraftingOrders.GetClaimedOrder() ~= nil then return nil, "alreadyClaimed" end
+  return best_of_board(self, profession)
+end
+
 -- Claims the best claimable order (GetBestClaimable) among the live views of the open profession that have not
 -- expired, calling C_CraftingOrders.ClaimOrder at most once. ClaimOrder is protected (HasRestrictions): this runs
 -- only from the "Claim Best Order" button's OnClick (tests/orders/claim_click_only_spec.lua enforces it).
@@ -869,24 +896,14 @@ function Orders:ClaimBest()
   if profession == nil then return nil, "noProfession" end
   if C_CraftingOrders.GetClaimedOrder() ~= nil then return nil, "alreadyClaimed" end
   if claim_busy() then return nil, "busy" end
-  local claimInfo = C_CraftingOrders.GetOrderClaimInfo(profession)
-  local claim = {
-    claimsRemaining = type(claimInfo) == "table" and claimInfo.claimsRemaining or nil,
-    hasClaimed = false,
-  }
-  local now, candidates = ns.FS:Now(), {}
-  for _, view in ipairs(self:GetLiveViews()) do
-    local fresh = not (type(view.expiresAt) == "number" and view.expiresAt <= now)
-    if fresh and view.profession == profession then candidates[#candidates + 1] = view end
-  end
-  local view, reason = self:GetBestClaimable(candidates, claim)
+  local view, reason = best_of_board(self, profession)
   if not view then return nil, reason end
   if not board_order_ids()[view.orderID] then
     live[view.orderID] = nil
     self:SendMessage(ns.Msg.ORDERS_CHANGED)
     return nil, "stale"
   end
-  claimInFlight = { orderID = view.orderID, at = now }
+  claimInFlight = { orderID = view.orderID, at = ns.FS:Now() }
   C_CraftingOrders.ClaimOrder(view.orderID, profession)
   return view
 end

@@ -11,7 +11,8 @@ stds.wow = {
     "ProfessionsRecipeSchematicFormMixin", "Professions", "ScrollBoxListMixin", "TooltipDataProcessor",
     "ButtonFrameTemplate_HidePortrait", "ButtonFrameTemplate_HideButtonBar", "hooksecurefunc", "EventRegistry",
     "debugstack", "debugprofilestop", "geterrorhandler", "date", "time", "wipe", "tinsert", "tremove", "strsplit", "strtrim",
-    "GetInboxInvoiceInfo", "GetInboxHeaderInfo", "TakeInboxMoney", "AutoLootMailItem", "AUCTION_SOLD_MAIL_SUBJECT" },
+    "GetInboxInvoiceInfo", "GetInboxHeaderInfo", "TakeInboxMoney", "AutoLootMailItem", "AUCTION_SOLD_MAIL_SUBJECT",
+    "ScrollUtil" },
 }
 files["Math/"] = { std = "lua51" }
 files["Data/"] = { std = "lua51" }

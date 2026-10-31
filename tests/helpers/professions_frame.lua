@@ -49,12 +49,30 @@
 --                         form.rowReads[name] and any other method (a setter) is recorded in assignedFields.
 --   fontStringsOf(row)    the font strings created through that row's CreateFontString, in creation order
 --
+-- Crafting Orders browse list and order view (phase 2 Task 8):
+-- opts.withoutBrowseFrame  build no OrdersPage.BrowseFrame (and so no order list)
+-- opts.withoutOrderList    build no OrdersPage.BrowseFrame.OrderList.ScrollBox
+-- opts.withoutOrderView    build no OrdersPage.OrderView
+--   browseFrame, orderList, orderScrollBox, orderView  the Blizzard objects (empty proxies, writes recorded)
+--   orderCallbacks[event]  { fn, owner } registered on the order ScrollBox (ScrollUtil.Add*FrameCallback lands here)
+--   setOrderCalls          the orders passed to OrderView:SetOrder, in call order
+--   orderElement(option, browseType?)  a list element as Blizzard inserts it: { option, browseType ("flat" by
+--                         default; a bucket is { option = bucketInfo, browseType = "bucketed" }), pageFrame }
+--   newOrderRow(geometry?) a fake order-list row (a Button; writes recorded as "OrderRow.<key>"). geometry (read-only):
+--                         { left, width, itemRight, textLeft, textWidth }: row:GetLeft/GetRight/GetWidth and
+--                         row.cells[1] (the item-name cell) with GetRight and .Text:GetLeft/GetStringWidth
+--   acquireOrderRow(row, elementData, new?)  the ScrollBox acquires the row for elementData: runs the OnAcquiredFrame
+--                         callbacks as fn(owner, row, elementData, new) and lists the row for ForEachFrame
+--   releaseOrderRow(row)  runs the OnReleasedFrame callbacks as fn(owner, row, elementData) and unlists the row
+--   showBrowse() / hideBrowse()  set BrowseFrame's shown state and run its OnShow / OnHide script chain
+--
 -- Specs get a clean slate from make_world, which removes these globals before installing the stubs.
 
 local RECIPE_SELECTED = "ProfessionsRecipeListMixin.Event.OnRecipeSelected"
 local TRANSACTION_UPDATED = "Professions.TransactionUpdated"
 local ALLOCATIONS_MODIFIED = "AllocationsModified"
 local INITIALIZED_FRAME = "OnInitializedFrame"
+local ACQUIRED_FRAME, RELEASED_FRAME = "OnAcquiredFrame", "OnReleasedFrame"
 local PROFESSIONS_ADDON = "Blizzard_Professions"
 
 local GLOBALS = { "ProfessionsFrame", "ProfessionsRecipeSchematicFormMixin", "Professions", "ScrollBoxListMixin" }
@@ -179,6 +197,35 @@ local function fake_professions_frame(opts)
   rawset(ordersPage, "orderType", opts.orderType or 2)
   rawset(ordersPage, "ShowOrders", function() form.showOrdersCalls = form.showOrdersCalls + 1 end)
   rawset(ordersPage, "ShowBuckets", function() form.showBucketsCalls = form.showBucketsCalls + 1 end)
+  form.orderCallbacks, form.setOrderCalls = {}, {}
+  local orderRows = {}   -- { row, elementData } acquired, in acquisition order
+  if not opts.withoutBrowseFrame then
+    local browse = CreateFrame("Frame", nil, ordersPage)
+    local orderList = CreateFrame("Frame", nil, browse)
+    if not opts.withoutOrderList then
+      local box = CreateFrame("Frame", nil, orderList)
+      function box.RegisterCallback(_, event, fn, owner) add_callback(form.orderCallbacks, event, fn, owner) end
+      function box.UnregisterCallback(_, event, owner) remove_callback(form.orderCallbacks, event, owner) end
+      function box.ForEachFrame(_, fn)
+        for _, entry in ipairs(orderRows) do fn(entry.row, entry.elementData) end
+      end
+      function box.GetFrameLevel() return 5 end
+      form.orderScrollBox = recorded("OrderScrollBox", box)
+      rawset(orderList, "ScrollBox", form.orderScrollBox)
+    end
+    rawset(orderList, "HeaderContainer", CreateFrame("Frame", nil, orderList))
+    form.orderList = recorded("OrderList", orderList)
+    rawset(browse, "OrderList", form.orderList)
+    form.browseFrame = recorded("BrowseFrame", browse)
+    rawset(ordersPage, "BrowseFrame", form.browseFrame)
+  end
+  if not opts.withoutOrderView then
+    local orderView = CreateFrame("Frame", nil, ordersPage)
+    rawset(orderView, "SetOrder", function(_, order) form.setOrderCalls[#form.setOrderCalls + 1] = order end)
+    rawset(orderView, "GetFrameLevel", function() return 4 end)
+    form.orderView = recorded("OrderView", orderView)
+    rawset(ordersPage, "OrderView", form.orderView)
+  end
   form.ordersPage = recorded("OrdersPage", ordersPage)
   rawset(frame, "OrdersPage", form.ordersPage)
   form.craftingPage = recorded("CraftingPage", page)
@@ -188,7 +235,8 @@ local function fake_professions_frame(opts)
   _G.ProfessionsFrame = form.frame
   _G.ProfessionsRecipeSchematicFormMixin = { Event = { AllocationsModified = ALLOCATIONS_MODIFIED } }
   _G.Professions = { CreateCraftingReagent = function(itemID) return { itemID = itemID } end }
-  _G.ScrollBoxListMixin = { Event = { OnInitializedFrame = INITIALIZED_FRAME } }
+  _G.ScrollBoxListMixin = { Event = { OnInitializedFrame = INITIALIZED_FRAME, OnAcquiredFrame = ACQUIRED_FRAME,
+    OnReleasedFrame = RELEASED_FRAME } }
 
   if opts.loaded then
     local previous = C_AddOns.IsAddOnLoaded
@@ -292,6 +340,49 @@ local function fake_professions_frame(opts)
   end
   function form.fontStringsOf(row)
     return rowFontStrings[row] or {}
+  end
+
+  function form.orderElement(option, browseType)
+    return { option = option, browseType = browseType or "flat", pageFrame = form.ordersPage }
+  end
+  function form.newOrderRow(geometry)
+    local target = CreateFrame("Button", nil, form.orderScrollBox)
+    if geometry then
+      local g = geometry
+      rawset(target, "GetLeft", function() return g.left end)
+      rawset(target, "GetRight", function() return g.left and g.width and g.left + g.width end)
+      rawset(target, "GetWidth", function() return g.width end)
+      local text = { GetLeft = function() return g.textLeft end, GetStringWidth = function() return g.textWidth end }
+      rawset(target, "cells", { { GetRight = function() return g.itemRight end, Text = text } })
+    end
+    return recorded("OrderRow", target)
+  end
+  function form.acquireOrderRow(row, elementData, new)
+    local found
+    for _, entry in ipairs(orderRows) do
+      if entry.row == row then entry.elementData = elementData; found = true end
+    end
+    if not found then orderRows[#orderRows + 1] = { row = row, elementData = elementData } end
+    run_callbacks(form.orderCallbacks, ACQUIRED_FRAME, row, elementData, new and true or false)
+  end
+  function form.releaseOrderRow(row)
+    for i = #orderRows, 1, -1 do
+      local entry = orderRows[i]
+      if entry.row == row then
+        table.remove(orderRows, i)
+        run_callbacks(form.orderCallbacks, RELEASED_FRAME, row, entry.elementData)
+      end
+    end
+  end
+  function form.showBrowse()
+    form.browseFrame:Show()
+    local script = form.browseFrame:GetScript("OnShow")
+    if script then script(form.browseFrame) end
+  end
+  function form.hideBrowse()
+    form.browseFrame:Hide()
+    local script = form.browseFrame:GetScript("OnHide")
+    if script then script(form.browseFrame) end
   end
 
   return form

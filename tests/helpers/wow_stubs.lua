@@ -667,6 +667,25 @@ local function install(overrides)
     W.hooks[#W.hooks + 1] = { tbl, name, fn }
   end
 
+  -- ScrollUtil (Blizzard_SharedXML, always loaded): like ScrollUtil.lua, AddAcquiredFrameCallback /
+  -- AddReleasedFrameCallback register callback(owner, frame, elementData[, new]) on the box's OnAcquiredFrame /
+  -- OnReleasedFrame event (ScrollBoxListMixin.Event when a fake Professions frame defined it). A box without
+  -- RegisterCallback (a plain table) is ignored. iterateExisting is not supported.
+  local function scroll_event(key)
+    local mixin = rawget(_G, "ScrollBoxListMixin")
+    return type(mixin) == "table" and type(mixin.Event) == "table" and mixin.Event[key] or key
+  end
+  local function add_scroll_callback(key)
+    return function(scrollBox, callback, owner)
+      if type(scrollBox) ~= "table" or type(scrollBox.RegisterCallback) ~= "function" then return end
+      scrollBox:RegisterCallback(scroll_event(key), function(o, ...) callback(o, ...) end, owner)
+    end
+  end
+  local ScrollUtil = {
+    AddAcquiredFrameCallback = add_scroll_callback("OnAcquiredFrame"),
+    AddReleasedFrameCallback = add_scroll_callback("OnReleasedFrame"),
+  }
+
   local globals = {
     C_TradeSkillUI = {
       GetRecipeSchematic = retNil, GetRecipeInfo = retNil, GetCraftingOperationInfo = retNil,
@@ -716,7 +735,7 @@ local function install(overrides)
     GetInboxInvoiceInfo = retNil, GetInboxHeaderInfo = retNil, TakeInboxMoney = noop, AutoLootMailItem = noop,
     PlaySound = noop,
     SOUNDKIT = { RAID_WARNING = 8959 },
-    ScrollUtil = { AddAcquiredFrameCallback = noop, AddReleasedFrameCallback = noop },
+    ScrollUtil = ScrollUtil,
     LibStub = LibStub,
     ButtonFrameTemplate_HidePortrait = noop,
     ButtonFrameTemplate_HideButtonBar = noop,

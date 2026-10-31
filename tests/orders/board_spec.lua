@@ -201,6 +201,27 @@ describe("Orders board", function()
       O:Disable()
       assert.same({nil, "disabled"}, {O:ClaimBest()}); assert.same({}, claimCalls)
     end)
+    it("GetBestCandidate names the order ClaimBest would claim, without claiming it", function()
+      board = { P2.raw_order({orderID=10, tipAmount=900000}), P2.raw_order({orderID=11}) }
+      O:OnBoardShown(2, board)
+      assert.equal(10, O:GetBestCandidate().orderID); assert.same({}, claimCalls)
+      assert.equal(10, O:ClaimBest().orderID)
+      claimed = P2.raw_order({orderID=10})
+      assert.same({nil, "alreadyClaimed"}, {O:GetBestCandidate()})
+    end)
+    it("GetBestCandidate chooses from ClaimBest's candidates", function()
+      O:OnBoardShown(2, { P2.raw_order() }, 8)   -- seen under another profession
+      assert.same({nil, "none"}, {O:GetBestCandidate()})
+      _G.C_TradeSkillUI.GetChildProfessionInfo = function() return nil end
+      assert.same({nil, "noProfession"}, {O:GetBestCandidate()})
+      _G.C_TradeSkillUI.GetChildProfessionInfo = function() return {profession = 7} end
+      _G.C_CraftingOrders.GetOrderClaimInfo = function() return {claimsRemaining = 0} end
+      O:OnBoardShown(0, { P2.raw_order({orderType=0}) })
+      assert.same({nil, "none"}, {O:GetBestCandidate()})
+      _G.C_CraftingOrders.GetOrderClaimInfo = function() return {claimsRemaining = 1} end
+      assert.equal(777, O:GetBestCandidate().orderID)
+      O:Disable(); assert.same({nil, "disabled"}, {O:GetBestCandidate()}); assert.same({}, claimCalls)
+    end)
   end)
 
   describe("ClaimBest against the board on screen", function()

@@ -346,6 +346,18 @@ describe("wow stubs", function()
       assert.is_nil(ScrollUtil.AddReleasedFrameCallback({}, function() end))
       assert.is_function(C_AddOns.IsAddOnLoaded); assert.is_false(C_AddOns.IsAddOnLoaded("Blizzard_Professions"))
     end)
+    it("ScrollUtil registers frame callbacks on a box the way Blizzard's ScrollUtil does", function()
+      local registered = {}
+      local box = { RegisterCallback = function(_, event, fn, owner) registered[#registered + 1] = { event, fn, owner } end }
+      local owner, seen = {}, {}
+      ScrollUtil.AddAcquiredFrameCallback(box, function(...) seen[#seen + 1] = { ... } end, owner)
+      ScrollUtil.AddReleasedFrameCallback(box, function(...) seen[#seen + 1] = { ... } end, owner)
+      assert.same({ "OnAcquiredFrame", "OnReleasedFrame" }, { registered[1][1], registered[2][1] })
+      assert.equals(owner, registered[1][3])
+      registered[1][2](owner, "row", "data", true)
+      registered[2][2](owner, "row", "data")
+      assert.same({ { owner, "row", "data", true }, { owner, "row", "data" } }, seen)
+    end)
     it("hooksecurefunc runs the hook after the original with the same arguments and records it", function()
       local order = {}
       local tbl = { Do = function() order[#order + 1] = "orig"; return "r1", nil, "r3" end }
