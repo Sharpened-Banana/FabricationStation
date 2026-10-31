@@ -716,6 +716,15 @@ P3-34. **Recipe sources and the generator.** The generator run is done (12.1.5.7
     marked `"unknown"` (AcquireMethod 0, no teaching item) comes from a trainer, discovery, renown or a spec unlock.
     Report it if AcquireMethod means something else.
 
+## Phase 4
+
+P4-1. **Long provider lines in the profession panel.** The panel's provider section (rows added through
+`ProfessionPanel:RegisterLineProvider`; the guild crafters line arrives in a later task) gives each row one line with a
+120 px right column. With a provider that returns a long left text (a long crafter list) and a right text wider than
+120 px, check that each text is cut off on a single line (no second line, no overlap with the next row or the buttons)
+and that hovering the row shows the full text in the tooltip. If the client still wraps, check
+`SetWordWrap(false)` / `SetMaxLines(1)` on the row font strings in `UI/ProfessionPanel.lua`.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

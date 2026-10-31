@@ -450,6 +450,12 @@ local function provider_row_at(section, i)
   row.left:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
   row.left:SetPoint("TOPRIGHT", row.right, "TOPLEFT", -6, 0)
   row.left:SetJustifyH("LEFT")
+  -- Both font strings have a bounded width, so without this a long text wraps to a second line and draws over the
+  -- next row. One line each, cut off at the edge; the row tooltip carries the whole line.
+  for _, fs in ipairs({ row.left, row.right }) do
+    fs:SetWordWrap(false)
+    fs:SetMaxLines(1)
+  end
   frame:SetScript("OnEnter", function(self)
     if not (GameTooltip and row.full) then return end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")

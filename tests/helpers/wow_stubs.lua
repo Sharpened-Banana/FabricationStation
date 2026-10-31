@@ -239,6 +239,13 @@ local function install(overrides)
     function fs:ClearAllPoints() points = {} end
     function fs:SetWidth(w) width = w end
     function fs:GetWidth() return width end
+    -- The fake cannot wrap text; it records the settings so a spec can assert a line was told not to (client default:
+    -- word wrap on, no line limit).
+    local wordWrap, maxLines = true, 0
+    function fs:SetWordWrap(v) wordWrap = v and true or false end
+    function fs:GetWordWrap() return wordWrap end
+    function fs:SetMaxLines(n) maxLines = n end
+    function fs:GetMaxLines() return maxLines end
     return fs
   end
 

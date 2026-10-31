@@ -16,11 +16,10 @@ describe("phase4 extension points", function()
   end)
 
   it("keeps a real ns.L when one exists before Core loads", function()
-    local W = install_wow_stubs()
+    install_wow_stubs()
     local ns = { L = { Known = "Bekannt" } }
     load_addon(ns, "Core/Core.lua")
     assert.are.equal("Bekannt", ns.L.Known)
-    assert.is_truthy(W)
   end)
 
   -- Preflight row 1: "Recipes" is a core module, so the plan's example would not toggle. "Customers" is not.
@@ -149,7 +148,13 @@ describe("phase4 extension points", function()
       P:RegisterLineProvider("a", function() return { { "A very long crafter list", "Alice, Bob, Carol (Q3)" } } end)
       form.selectRecipe({ recipeID = 9001 })
       local row = P:GetView().providerLines.pool[1]
-      assert.is_number(row.right:GetWidth())
+      assert.are.equal(120, row.right:GetWidth())
+      -- both texts stay on one line (the fake cannot wrap; it records the settings)
+      for _, fs in ipairs({ row.left, row.right }) do
+        assert.is_false(fs:GetWordWrap()); assert.are.equal(1, fs:GetMaxLines())
+      end
+      local _, rel, relPoint, x, y = row.left:GetPoint(2)
+      assert.same({ row.right, "TOPLEFT", -6, 0 }, { rel, relPoint, x, y })
       local tip = { lines = {} }
       _G.GameTooltip = { SetOwner = function() end, AddDoubleLine = function(_, l, r) tip.lines[#tip.lines + 1] = { l, r } end,
         Show = function() end, Hide = function() end }
