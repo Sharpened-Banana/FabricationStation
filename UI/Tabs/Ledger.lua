@@ -2,10 +2,14 @@ local _, ns = ...
 
 -- Ledger tab: what the player earned crafting (Ledger module), in one scrolling page of four sections:
 --   * Weekly profit for the last WEEKS reset weeks plus their total (Ledger:Weekly): week, income, cost, profit and a
---     note "partial: <n> without cost basis" when some of the week's sales or commissions had no known cost.
---   * Profit by recipe (Ledger:ByRecipe, best first) and an "Unattributed sales" row (Ledger:Unattributed: sales
---     whose item could not be matched to a recipe), so the rows add up to the weekly totals.
---   * The player's own tips by recipe and quality (Ledger:Benchmark for every recipe and quality of a commission).
+--     note "partial: <n> with missing or partial cost" when some of the week's sales or commissions had no known (or
+--     a partial) cost.
+--   * Profit by recipe over the same WEEKS weeks (Ledger:ByRecipe since the oldest shown week, best first) and an
+--     "Unattributed sales" row (Ledger:Unattributed, same period: sales whose item could not be matched to a recipe),
+--     so the rows add up to the weekly total. When the week boundary is unknown it covers every recorded entry and
+--     says so ("all recorded").
+--   * The player's own tips by recipe and quality (Ledger:Benchmark for every recipe and quality of a commission; a
+--     recipe whose commissions carry no quality gets one all-qualities row).
 --   * Every entry, newest first (Ledger:Query): date, type, item, amount, customer (or AH buyer).
 -- The page is one pooled virtual list in a plain scroll frame, as in the Orders and Queue tabs; each list item is a
 -- heading, a column header, a data row, a note or a spacer, and a pooled row keeps one set of cells per section.
@@ -14,7 +18,8 @@ local _, ns = ...
 -- known cost adds nothing to the cost, so a profit with such entries is partial and the real profit may be LOWER
 -- than shown (its cost is missing, not zero). Such a profit is never shown as exact: the note says "partial" and
 -- the tooltip explains it. A cost that includes an estimated craft cost starts with "~", as does its profit. A
--- recraft commission says "recraft" (its cost is not tracked). Unknown money is "?", never 0g.
+-- recraft commission says "recraft" (its cost is not tracked). Unknown money is "?", never 0g. In the entries list
+-- only a craft's amount (its cost) can be an estimate; a sale's or commission's amount is exact gold.
 --
 -- Width: every section's flexible column (Week note, Recipe, Item) keeps at least MIN_FLEX px; below that its
 -- low-priority columns are hidden in order (Tab.Layout, applied again on every size change). Money cells are compact
@@ -35,7 +40,6 @@ ns.UI.LedgerTab = Tab
 local TAB_ID, SOURCE, REFRESH_SOURCE = "ledger", "Tab:ledger", "LedgerTab"
 local REFRESH_KEY, REFRESH_DELAY = "ledgerTab.refresh", 0.5
 local WEEKS = 8
-local WEEK_SECONDS = 604800   -- as in the Ledger module
 local ROW_HEIGHT, BAR_HEIGHT = 18, 22
 local PAD, GAP = 6, 4
 local MIN_FLEX = 120
@@ -71,7 +75,7 @@ local SECTIONS = {
   recipe = {
     columns = {
       { key = "recipe", label = "Recipe", flex = true },
-      { key = "n", label = "Sales", width = 36, right = true },
+      { key = "n", label = "Count", width = 36, right = true },
       { key = "income", label = "Income", width = 72, right = true },
       { key = "cost", label = "Cost", width = 72, right = true },
       { key = "profit", label = "Profit", width = 80, right = true },
@@ -150,13 +154,13 @@ end
 ---------------------------------------------------------------------------
 
 -- Ledger:ByRecipe's { [recipeID] = {income, cost, profit, n, incomplete} } -> { {recipeID, income, cost, profit, n,
--- incomplete} } (copies), highest profit first; an unknown profit sorts last, equal ones by recipeID.
+-- incomplete, estimated?} } (copies), highest profit first; an unknown profit sorts last, equal ones by recipeID.
 function Tab.RecipeRows(byRecipe)
   local rows = {}
   for recipeID, t in pairs(type(byRecipe) == "table" and byRecipe or {}) do
     if type(t) == "table" then
       rows[#rows + 1] = { recipeID = recipeID, income = t.income, cost = t.cost, profit = t.profit, n = t.n,
-        incomplete = t.incomplete }
+        incomplete = t.incomplete, estimated = t.estimated }
     end
   end
   table.sort(rows, function(a, b)
@@ -170,25 +174,34 @@ end
 
 -- Ledger entries -> { {recipeID, quality, median, p25, p75, n} }: Ledger:Benchmark for every distinct (recipeID,
 -- quality) of a commission, sorted by recipeID, then quality. Pairs without enough samples (Benchmark nil) are
--- skipped. A commission with no recipeID or no numeric quality has no pair (Benchmark(recipeID, nil) would mix every
--- quality into one row), and neither has a recraft (Benchmark leaves recrafts out).
+-- skipped, and so are recrafts (Benchmark leaves them out) and commissions with no recipeID. A commission with no
+-- numeric quality is left out of a recipe that has commissions with one (an all-qualities row would repeat those);
+-- a recipe whose commissions have no quality at all gets one Benchmark(recipeID, nil) row with quality nil (shown
+-- as "-").
 function Tab.BenchmarkRows(entries)
   local ledger = module("Ledger")
   if not ledger then return {} end
-  local seen, pairsList = {}, {}
+  local seen, pairsList, withQuality, noQuality = {}, {}, {}, {}
   for _, e in ipairs(type(entries) == "table" and entries or {}) do
-    if type(e) == "table" and e.type == "commission" and e.recipeID ~= nil and type(e.quality) == "number"
-      and not e.recraft then
-      local key = tostring(e.recipeID) .. ":" .. tostring(e.quality)
-      if not seen[key] then
-        seen[key] = true
-        pairsList[#pairsList + 1] = { recipeID = e.recipeID, quality = e.quality }
+    if type(e) == "table" and e.type == "commission" and e.recipeID ~= nil and not e.recraft then
+      if type(e.quality) == "number" then
+        withQuality[e.recipeID] = true
+        local key = tostring(e.recipeID) .. ":" .. tostring(e.quality)
+        if not seen[key] then
+          seen[key] = true
+          pairsList[#pairsList + 1] = { recipeID = e.recipeID, quality = e.quality }
+        end
+      elseif noQuality[e.recipeID] == nil then
+        noQuality[e.recipeID] = { recipeID = e.recipeID }
       end
     end
   end
+  for recipeID, pair in pairs(noQuality) do
+    if not withQuality[recipeID] then pairsList[#pairsList + 1] = pair end
+  end
   table.sort(pairsList, function(a, b)
     if a.recipeID ~= b.recipeID then return id_less(a.recipeID, b.recipeID) end
-    return a.quality < b.quality
+    return (a.quality or 0) < (b.quality or 0)
   end)
   local rows = {}
   for _, p in ipairs(pairsList) do
@@ -217,25 +230,22 @@ function Tab.Layout(section, width)
   return { hidden = hidden, flex = flex }
 end
 
--- The week row a time falls in, as Ledger:Weekly counts it (1 = the current week; newer times land there too).
-local function week_index(time, current)
-  if time >= current then return 1 end
-  return math.ceil((current - time) / WEEK_SECONDS) + 1
-end
-
 local function copy_totals(t, extra)
-  local row = { income = t.income, cost = t.cost, profit = t.profit, n = t.n, incomplete = t.incomplete, estimated = 0 }
+  local row = { income = t.income, cost = t.cost, profit = t.profit, n = t.n, incomplete = t.incomplete,
+    estimated = t.estimated }
   for k, v in pairs(extra or {}) do row[k] = v end
   return row
 end
 
 -- ledger = the Ledger module (or nil), now = server seconds -> {
 --   available, count = entries, newest = newest entry time|nil, entries = Ledger:Query({}) (live, read-only),
---   weekly = { rows = { {weekStart, income, cost, profit, incomplete, estimated, index} }, total } | nil when the
+--   weekly = { rows = { {weekStart, income, cost, profit, incomplete, estimated?, index} }, total } | nil when the
 --     week boundary is unknown,
---   recipes = RecipeRows with `estimated`, unattributed = totals with `estimated` | nil when there are none,
---   benchmarks = BenchmarkRows, minSamples }.
--- `estimated` counts the sales and commissions whose cost was estimated (they make the cost and profit "~").
+--   since = the oldest shown week's start | nil (unknown week: every entry),
+--   recipes = RecipeRows since `since`, unattributed = Ledger:Unattributed totals since `since` | nil when none,
+--   benchmarks = BenchmarkRows (all entries), minSamples }.
+-- `estimated` (from the Ledger; nil when none) counts the sales and commissions whose cost was estimated (they make
+-- the cost and profit "~").
 function Tab.Model(ledger, now)
   if not ledger then return { available = false, count = 0, entries = {}, recipes = {}, benchmarks = {} } end
   local entries = ledger:Query({})
@@ -249,39 +259,20 @@ function Tab.Model(ledger, now)
     local rows, total = {}, { income = 0, cost = 0, profit = 0, incomplete = 0, estimated = 0, total = true }
     for i, w in ipairs(weekly) do
       rows[i] = copy_totals(w, { weekStart = w.weekStart, index = i })
-      for _, key in ipairs({ "income", "cost", "profit", "incomplete" }) do
+      for _, key in ipairs({ "income", "cost", "profit", "incomplete", "estimated" }) do
         total[key] = total[key] + count(w[key])
       end
     end
     model.weekly = { rows = rows, total = total }
+    model.since = rows[#rows].weekStart
   end
 
-  model.recipes = {}
-  local byID = {}
-  for i, row in ipairs(Tab.RecipeRows(ledger:ByRecipe({}))) do
-    row.estimated = 0
-    model.recipes[i] = row
-    byID[row.recipeID] = row
-  end
-  local unattributed = ledger:Unattributed({})
+  -- The recipe table covers the weeks shown above (every entry when the week boundary is unknown).
+  local filter = { since = model.since }
+  model.recipes = Tab.RecipeRows(ledger:ByRecipe(filter))
+  local unattributed = ledger:Unattributed(filter)
   if type(unattributed) == "table" and count(unattributed.n) > 0 then
     model.unattributed = copy_totals(unattributed, { unattributed = true })
-  end
-
-  -- Estimated costs, counted where Weekly / ByRecipe / Unattributed counted the entry.
-  local current = model.weekly and model.weekly.rows[1].weekStart
-  for _, e in ipairs(entries) do
-    if counts_as_profit(e) and e.estimated then
-      if current and type(e.time) == "number" then
-        local row = model.weekly.rows[week_index(e.time, current)]
-        if row then
-          row.estimated = row.estimated + 1
-          model.weekly.total.estimated = model.weekly.total.estimated + 1
-        end
-      end
-      local target = e.recipeID ~= nil and byID[e.recipeID] or (e.recipeID == nil and model.unattributed) or nil
-      if target then target.estimated = target.estimated + 1 end
-    end
   end
 
   model.benchmarks = Tab.BenchmarkRows(entries)
@@ -312,14 +303,16 @@ function Tab.DisplayRows(model)
   end
 
   add({ kind = "spacer" })
-  add({ kind = "heading", text = "Profit by recipe" })
+  add({ kind = "heading", text = model.weekly and ("Profit by recipe (last %d reset weeks)"):format(WEEKS)
+    or "Profit by recipe (all recorded)" })
   if #model.recipes > 0 or model.unattributed then
     local list = {}
     for i, row in ipairs(model.recipes) do list[i] = row end
     if model.unattributed then list[#list + 1] = model.unattributed end
     rows("recipe", list)
   else
-    add({ kind = "note", text = "No sales or commissions yet: only crafts (cost records) are recorded" })
+    add({ kind = "note", text = model.weekly and ("No sales or commissions in the last %d reset weeks"):format(WEEKS)
+      or "No sales or commissions yet: only crafts (cost records) are recorded" })
   end
 
   add({ kind = "spacer" })
@@ -394,7 +387,7 @@ local function money_cell(copper, signed, estimated)
 end
 
 local function partial_note(incomplete)
-  return ("partial: %d without cost basis"):format(incomplete)
+  return ("partial: %d with missing or partial cost"):format(incomplete)
 end
 
 -- The display text of one data row's cells, by column key.
@@ -434,7 +427,7 @@ function Tab.CellTexts(section, data)
   elseif section == "benchmark" then
     return {
       recipe = recipe_name(data.recipeID),
-      quality = tostring(data.quality or "?"),
+      quality = data.quality ~= nil and tostring(data.quality) or "-",
       p25 = money_cell(data.p25, false, false),
       median = money_cell(data.median, false, false),
       p75 = money_cell(data.p75, false, false),
@@ -445,7 +438,8 @@ function Tab.CellTexts(section, data)
       date = date_text(data.time, "%m-%d"),
       type = type_label(data),
       item = item_name(data),
-      amount = money_cell(data.amount, true, data.estimated == true),
+      -- Only a craft's amount is its (possibly estimated) cost; a sale or commission amount is exact gold.
+      amount = money_cell(data.amount, true, data.type == "craft" and data.estimated == true),
       customer = customer_of(data) or "",
     }
   end
@@ -468,7 +462,7 @@ local function totals_lines(lines, data)
   lines[#lines + 1] = line("Cost: " .. full_money(data.cost, est))
   lines[#lines + 1] = line("Profit: " .. full_money(data.profit, est))
   if count(data.incomplete) > 0 then
-    lines[#lines + 1] = line("Partial: " .. data.incomplete .. " without cost basis", GOLD)
+    lines[#lines + 1] = line("Partial: " .. data.incomplete .. " with missing or partial cost", GOLD)
     lines[#lines + 1] = line(PARTIAL_DETAIL, GOLD)
   end
   if est then
@@ -539,7 +533,8 @@ function Tab.TooltipLines(item)
     lines[#lines + 1] = line("Sales and commissions: " .. tostring(count(data.n)))
     totals_lines(lines, data)
   elseif item.section == "benchmark" then
-    lines[1] = line(("%s (quality %s)"):format(recipe_name(data.recipeID), tostring(data.quality)))
+    local scope = data.quality ~= nil and ("quality " .. tostring(data.quality)) or "all qualities"
+    lines[1] = line(("%s (%s)"):format(recipe_name(data.recipeID), scope))
     lines[2] = line("Median tip: " .. full_money(data.median))
     lines[3] = line("A quarter of your tips were below " .. full_money(data.p25))
     lines[4] = line("A quarter of your tips were above " .. full_money(data.p75))

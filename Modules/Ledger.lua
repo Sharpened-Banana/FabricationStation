@@ -8,8 +8,9 @@ local ADDON_NAME, ns = ...
 -- Profit counts "sale" and "commission" entries only: income = amount, cost = the entry's cost. "craft" entries are
 -- cost-basis records and are left out (counting them would charge a cost twice). An entry whose cost is unknown keeps
 -- cost = nil in the saved data; in a sum it adds nothing to cost but is counted in `incomplete`, as is an entry
--- flagged incomplete (a cost made from partly missing prices). So a profit with incomplete > 0 is "at least" a
--- profit, never a complete one. NPC reward values are shown elsewhere and are never gold income here.
+-- flagged incomplete (a cost made from partly missing prices). So a profit with incomplete > 0 is partial: the real
+-- cost is higher, so the real profit may be lower than shown. NPC reward values are shown elsewhere and are never
+-- gold income here.
 -- Nothing is written while the saved data is from a newer version (ns.FS.dbIsNewer); saved rows are never wiped
 -- (a damaged row is skipped when reading, and kept when pruning).
 local Ledger = ns.FS:NewModule("Ledger", "AceEvent-3.0")
@@ -231,7 +232,8 @@ local function new_totals()
 end
 
 -- Adds a sale or commission to a running total (see the profit rule at the top of this file). A damaged saved
--- entry (amount or cost not an integer) adds nothing for the damaged part but counts in `incomplete`.
+-- entry (amount or cost not an integer) adds nothing for the damaged part but counts in `incomplete`. An entry whose
+-- cost was estimated counts in `estimated` (left nil while there are none).
 local function accumulate(totals, entry)
   local income, cost = entry.amount, entry.cost
   local damaged = false
@@ -242,6 +244,7 @@ local function accumulate(totals, entry)
   totals.profit = totals.income - totals.cost
   if totals.n then totals.n = totals.n + 1 end
   if damaged or cost == nil or entry.incomplete then totals.incomplete = totals.incomplete + 1 end
+  if entry.estimated then totals.estimated = (totals.estimated or 0) + 1 end
 end
 
 local function counts_as_profit(entry)
@@ -249,9 +252,11 @@ local function counts_as_profit(entry)
 end
 
 -- Weekly profit for the last `weeks` reset weeks (default 4), newest first: a row for every week, empty ones
--- included: { weekStart, income, cost, profit, incomplete }. `incomplete` is how many of that week's entries had no
--- known cost, so a non-zero value means the profit is partial. An entry newer than the current week's start lands in
--- the current week; an older one than the window is left out. Empty when the week boundary is unknown.
+-- included: { weekStart, income, cost, profit, incomplete, estimated? }. `incomplete` is how many of that week's
+-- entries had no known (or a partial) cost, so a non-zero value means the profit is partial; `estimated` (nil when
+-- none) is how many had an estimated cost, so the cost and profit are estimates. An entry newer than the current
+-- week's start lands in the current week; an older one than the window is left out. Empty when the week boundary is
+-- unknown.
 function Ledger:Weekly(now, weeks)
   now = number_or(now, ns.FS:Now())
   weeks = math.max(1, math.floor(number_or(weeks, DEFAULT_WEEKS)))
@@ -273,7 +278,8 @@ function Ledger:Weekly(now, weeks)
 end
 
 -- Profit per recipe over the entries that match `filter` (same filter as Query): { [recipeID] = {income, cost,
--- profit, n, incomplete} }. Entries with no recipeID cannot be attributed; Ledger:Unattributed adds them up.
+-- profit, n, incomplete, estimated?} } (incomplete and estimated as in Weekly). Entries with no recipeID cannot be
+-- attributed; Ledger:Unattributed adds them up.
 function Ledger:ByRecipe(filter)
   local result = {}
   for _, entry in ipairs(self:Query(filter)) do

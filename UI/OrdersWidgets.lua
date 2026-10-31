@@ -1,11 +1,13 @@
 local _, ns = ...
 
 -- Two Dashboard widgets for phase 2, registered through 1b's Dashboard:RegisterWidget and filled with its SetLines:
---   * "Open orders" (order 40): the last order board seen (Orders:GetSnapshot): how many orders, how many personal,
---     the best score (with "~" for an estimate), why the others have no score (recraft, conc?, no price, as on the
---     board) and how long ago the board was seen.
---   * "Gold this week" (order 50): this reset week's profit and income (Ledger:Weekly). A week with sales or
---     commissions whose cost is unknown is "partial" (their cost is not subtracted, so the real profit may be lower);
+--   * "Open orders" (order 40): the last order board seen (Orders:GetSnapshot): how many orders were on it, how many
+--     personal, the best score among the orders the filters leave (Orders:Filter, so a hidden order is never "best";
+--     "~" for an estimate), why orders have no score (recraft, conc?, no price, as on the board) and how long ago the
+--     board was seen.
+--   * "Gold this week" (order 50): this reset week's profit and income (Ledger:Weekly; "~" when a cost was
+--     estimated). A week with sales or commissions whose cost is missing or partial is "partial" (that cost is not
+--     subtracted, so the real profit may be lower);
 --     an empty ledger says "No sales recorded yet". While the saved data is read-only the numbers still show, with a
 --     read-only line; a Ledger turned off says so.
 -- Each widget's frame shows all its lines in a tooltip, so a line cut at the dashboard's narrow width can be read.
@@ -98,12 +100,13 @@ function M.UnscoredReasons(orders)
   return out
 end
 
--- Ledger:Weekly(now) (newest first) -> { profit, income, incomplete } of the current week; profit and income are nil
--- when the week is unknown (no rows).
+-- Ledger:Weekly(now) (newest first) -> { profit, income, incomplete, estimated? } of the current week; profit and
+-- income are nil when the week is unknown (no rows); estimated (the count of estimated costs) is nil when none.
 function M.GoldThisWeekModel(weekly)
   local week = type(weekly) == "table" and weekly[1] or nil
   if type(week) ~= "table" then return { incomplete = 0 } end
-  return { profit = week.profit, income = week.income, incomplete = type(week.incomplete) == "number" and week.incomplete or 0 }
+  return { profit = week.profit, income = week.income, estimated = week.estimated,
+    incomplete = type(week.incomplete) == "number" and week.incomplete or 0 }
 end
 
 ---------------------------------------------------------------------------
@@ -120,6 +123,13 @@ local function signed(copper, text)
   return color(copper > 0 and GOOD or BAD, text)
 end
 
+-- The orders the user's filters leave (Orders:Filter), or all of them without the Orders module.
+local function filtered(orders)
+  local O = module("Orders")
+  if O and O.Filter then return O:Filter(orders) end
+  return orders
+end
+
 function M.OpenOrdersLines(snapshot, now)
   local model = M.OpenOrdersModel(snapshot, now)
   if model.age == nil then
@@ -130,9 +140,9 @@ function M.OpenOrdersLines(snapshot, now)
     lines[1] = "No open orders on the last board"
   else
     local personal = ("%d personal"):format(model.personal)
-    lines[1] = ("%d open, %s"):format(model.total, model.personal > 0 and color(GOOD, personal) or personal)
+    lines[1] = ("%d on the board, %s"):format(model.total, model.personal > 0 and color(GOOD, personal) or personal)
     local orders = orders_of(snapshot)
-    local best = M.BestOrder(orders)
+    local best = M.BestOrder(filtered(orders))
     if best then
       lines[#lines + 1] = "Best score: " .. signed(best.score, money(best.score, flags_of(best).estimated))
     else
@@ -152,10 +162,10 @@ function M.OpenOrdersLines(snapshot, now)
   return lines
 end
 
--- True when the ledger holds at least one sale or commission.
+-- True when the ledger holds at least one sale or commission (one pass over the entries).
 local function has_sales(ledger)
-  for _, kind in ipairs({ "commission", "sale" }) do
-    if #ledger:Query({ type = kind }) > 0 then return true end
+  for _, entry in ipairs(ledger:Query({})) do
+    if entry.type == "sale" or entry.type == "commission" then return true end
   end
   return false
 end
@@ -175,9 +185,11 @@ function M.GoldThisWeekLines(ledger, now)
       lines[1] = color(DIM, "Week unknown: the game gave no weekly reset time")
     else
       local partial = model.incomplete > 0
-      lines[1] = "Profit: " .. signed(model.profit, money(model.profit)) .. (partial and color(WARN, " (partial)") or "")
+      local estimated = type(model.estimated) == "number" and model.estimated > 0
+      lines[1] = "Profit: " .. signed(model.profit, money(model.profit, estimated))
+        .. (partial and color(WARN, " (partial)") or "")
       lines[2] = "Income: " .. money(model.income)
-      if partial then lines[3] = color(WARN, ("Partial: %d without cost basis"):format(model.incomplete)) end
+      if partial then lines[3] = color(WARN, ("Partial: %d with missing or partial cost"):format(model.incomplete)) end
     end
   end
   if ns.FS.dbIsNewer then

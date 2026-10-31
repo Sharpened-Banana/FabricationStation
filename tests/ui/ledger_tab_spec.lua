@@ -74,11 +74,12 @@ describe("Ledger tab models", function()
   end)
 
   it("benchmarks every recipe and quality with enough commissions, sorted, leaving recrafts and unknown quality out", function()
+    -- (a recipe with only unknown-quality commissions gets one all-qualities row; see the next spec)
     for _, t in ipairs({ 10, 20, 30 }) do
       L:Add({ type = "commission", amount = t, tip = t, recipeID = 9, quality = 2 })
       L:Add({ type = "commission", amount = t, tip = t, recipeID = 5, quality = 3 })
       L:Add({ type = "commission", amount = t, tip = t, recipeID = 5, quality = 1 })
-      L:Add({ type = "commission", amount = t, tip = t, recipeID = 8 })   -- no quality: no row
+      L:Add({ type = "commission", amount = t, tip = t, recipeID = 5 })   -- no quality on a recipe with qualities: no row
       L:Add({ type = "commission", amount = t, tip = t, recipeID = 6, quality = 3, recraft = true })
     end
     L:Add({ type = "sale", amount = 5, recipeID = 4, quality = 3 })
@@ -87,6 +88,20 @@ describe("Ledger tab models", function()
     for i, r in ipairs(rows) do keys[i] = r.recipeID .. ":" .. r.quality end
     assert.same({ "5:1", "5:3", "9:2" }, keys)
     assert.same({ recipeID = 5, quality = 1, median = 20, p25 = 15, p75 = 25, n = 3 }, rows[1])
+  end)
+
+  it("gives a recipe whose commissions have no quality one all-qualities row, shown as quality -", function()
+    for _, t in ipairs({ 10, 20, 30 }) do
+      L:Add({ type = "commission", amount = t, tip = t, recipeID = 8 })
+      L:Add({ type = "commission", amount = t, tip = t, recipeID = 3, quality = 2 })
+    end
+    L:Add({ type = "commission", amount = 99, tip = 99, recipeID = 7 })   -- too few samples: no row
+    local rows = T.BenchmarkRows(L:Query({}))
+    assert.equal(2, #rows)
+    assert.same({ recipeID = 3, quality = 2, median = 20, p25 = 15, p75 = 25, n = 3 }, rows[1])
+    assert.same({ recipeID = 8, median = 20, p25 = 15, p75 = 25, n = 3 }, rows[2])
+    assert.equal("-", T.CellTexts("benchmark", rows[2]).quality)
+    assert.is_truthy(T.TooltipLines({ kind = "row", section = "benchmark", data = rows[2] })[1].text:find("all qualities", 1, true))
   end)
 
   it("keeps the flexible column of every section at 120 px or more at the 516 px minimum", function()
@@ -113,35 +128,50 @@ describe("Ledger tab models", function()
     L:Add({ type = "sale", amount = 100, cost = 40, estimated = true, time = current - 10 })              -- last week
     L:Add({ type = "commission", amount = 50, recraft = true, recipeID = 6, time = current - WEEK - 5 })  -- recraft
     L:Add({ type = "craft", amount = -200, recipeID = 5, time = current + 5 })                           -- cost record
+    L:Add({ type = "sale", amount = 7777, recipeID = 9, time = current - 8 * WEEK + 1 })                -- before the 8 weeks
+    L:Add({ type = "sale", amount = 8888, time = current - 8 * WEEK + 1 })                              -- the same, unattributed
+    local live = L:Query({})
+    local before = P2.merge({}, live)   -- a deep copy
     local m = T.Model(L, now)
-    assert.equal(5, m.count)
+    assert.equal(7, m.count)
     assert.equal(8, #m.weekly.rows)
     local w1, w2, w3 = m.weekly.rows[1], m.weekly.rows[2], m.weekly.rows[3]
-    assert.same({ current, 1200, 200, 1000, 1, 0 }, { w1.weekStart, w1.income, w1.cost, w1.profit, w1.incomplete, w1.estimated })
+    assert.same({ current, 1200, 200, 1000, 1 }, { w1.weekStart, w1.income, w1.cost, w1.profit, w1.incomplete })
+    assert.is_nil(w1.estimated)
     assert.same({ 100, 40, 60, 0, 1 }, { w2.income, w2.cost, w2.profit, w2.incomplete, w2.estimated })
     assert.same({ 50, 0, 50, 1 }, { w3.income, w3.cost, w3.profit, w3.incomplete })
     local total = m.weekly.total
     assert.same({ 1350, 240, 1110, 2, 1 }, { total.income, total.cost, total.profit, total.incomplete, total.estimated })
-    -- Per recipe, best first, and the unattributed sale on its own row so the totals add up.
+    -- Per recipe over the same 8 weeks, best first, and the unattributed sale on its own row so the totals add up.
+    assert.equal(2, #m.recipes)
     assert.same({ 5, 6 }, { m.recipes[1].recipeID, m.recipes[2].recipeID })
     assert.same({ 1200, 200, 1000, 2, 1 }, { m.recipes[1].income, m.recipes[1].cost, m.recipes[1].profit, m.recipes[1].n, m.recipes[1].incomplete })
     assert.same({ 100, 40, 60, 1, 0, 1 }, { m.unattributed.income, m.unattributed.cost, m.unattributed.profit,
       m.unattributed.n, m.unattributed.incomplete, m.unattributed.estimated })
-    -- Entries newest first, live rows left untouched.
-    assert.equal(5, #m.entries)
+    assert.equal(total.income, m.recipes[1].income + m.recipes[2].income + m.unattributed.income)
+    -- Every entry is listed, newest first, and the saved rows are left exactly as they were.
+    assert.equal(7, #m.entries)
     assert.equal(current + 20, m.entries[1].time)
-    assert.is_nil(L:Query({})[1].estimatedCount)
+    T.DisplayRows(m)
+    for i, row in ipairs(live) do T.CellTexts("entry", row); T.TooltipLines({ kind = "row", section = "entry", data = row }); assert.same(before[i], row) end
+    assert.same(before, L:Query({}))
   end)
 
   it("has no weekly rows when the week boundary is unknown, and no unattributed row without such sales", function()
     _G.C_DateAndTime = {}
     L:Add({ type = "sale", amount = 300, recipeID = 5, cost = 100 })
+    L:Add({ type = "sale", amount = 5, recipeID = 6, cost = 1, time = -5 * WEEK })   -- long ago: still counted
     local m = T.Model(L, 1000)
     assert.is_nil(m.weekly)
     assert.is_nil(m.unattributed)
-    local notes = {}
-    for _, item in ipairs(T.DisplayRows(m)) do if item.kind == "note" then notes[#notes + 1] = item.text end end
+    assert.equal(2, #m.recipes)
+    local notes, headings = {}, {}
+    for _, item in ipairs(T.DisplayRows(m)) do
+      if item.kind == "note" then notes[#notes + 1] = item.text end
+      if item.kind == "heading" then headings[#headings + 1] = item.text end
+    end
     assert.is_truthy(notes[1]:find("Week boundary unknown", 1, true))
+    assert.equal("Profit by recipe (all recorded)", headings[2])
   end)
 
   it("orders the sections: weekly, by recipe, tips, entries", function()
@@ -149,13 +179,13 @@ describe("Ledger tab models", function()
     local items = T.DisplayRows(T.Model(L, 1000))
     local headings = {}
     for _, item in ipairs(items) do if item.kind == "heading" then headings[#headings + 1] = item.text end end
-    assert.same({ "Weekly profit (last 8 reset weeks)", "Profit by recipe", "Your tips by recipe and quality", "Entries (3)" }, headings)
+    assert.same({ "Weekly profit (last 8 reset weeks)", "Profit by recipe (last 8 reset weeks)", "Your tips by recipe and quality", "Entries (3)" }, headings)
     assert.same({}, T.DisplayRows(T.Model(nil, 1000)))
   end)
 
   it("says partial with the count, never shows unknown money as 0, and marks estimates and recrafts", function()
     local weekly = T.CellTexts("weekly", { weekStart = 0, income = 900, cost = 0, profit = 900, incomplete = 2, estimated = 0, index = 1 })
-    assert.equal("partial: 2 without cost basis", plain(weekly.note))
+    assert.equal("partial: 2 with missing or partial cost", plain(weekly.note))
     assert.equal("This week", weekly.week)
     assert.same({ "9s", "0g", "9s" }, { plain(weekly.income), plain(weekly.cost), plain(weekly.profit) })
     local est = T.CellTexts("weekly", { weekStart = 0, income = 50000, cost = 20000, profit = 30000, incomplete = 0, estimated = 1, index = 2 })
@@ -173,6 +203,11 @@ describe("Ledger tab models", function()
     assert.same({ "recraft", "1g", "Bob-Silvermoon", "item:77" }, { recraft.type, plain(recraft.amount), recraft.customer, recraft.item })
     local craft = T.CellTexts("entry", { type = "craft", amount = -25000, time = 0, estimated = true, itemName = "Ore" })
     assert.same({ "craft", "~-3g", "", "Ore" }, { craft.type, plain(craft.amount), craft.customer, craft.item })
+    -- A commission's amount is exact gold even when its cost was estimated: no "~" on it.
+    local estCommission = T.CellTexts("entry", { type = "commission", amount = 25000, time = 0, estimated = true, cost = 100 })
+    assert.equal("2g", plain(estCommission.amount))
+    local estSale = T.CellTexts("entry", { type = "sale", amount = 25000, time = 0, estimated = true, cost = 100 })
+    assert.equal("2g", plain(estSale.amount))
     local npc = T.CellTexts("entry", { type = "commission", amount = 1, time = 0, orderType = "npc" })
     assert.equal("Patron", npc.customer)
     local sale = T.CellTexts("entry", { type = "sale", amount = 5, buyer = "Ann", time = 0 })
@@ -189,7 +224,7 @@ describe("Ledger tab models", function()
     local all = table.concat(texts, "\n")
     assert.is_truthy(all:find("Income: " .. ns.UI.FormatMoney(900), 1, true))
     assert.is_truthy(all:find("Profit: ~" .. ns.UI.FormatMoney(800), 1, true))
-    assert.is_truthy(all:find("Partial: 2 without cost basis", 1, true))
+    assert.is_truthy(all:find("Partial: 2 with missing or partial cost", 1, true))
     assert.is_truthy(all:find("real profit may be lower", 1, true))
     assert.is_nil(all:find("at least", 1, true))
 
@@ -331,11 +366,33 @@ describe("Ledger tab frames", function()
     assert.same({ "LEFT", recipe, "LEFT", 6, 0 }, point(r.cells.recipe, 1))
     assert.same({ "RIGHT", r.cells.n, "LEFT", -4, 0 }, point(r.cells.recipe, 2))
     assert.same({ "RIGHT", recipe, "RIGHT", -6, 0 }, point(r.cells.note))
+    assert.equal("Count", find_row(v, function(item) return item.kind == "header" and item.section == "recipe" end)
+      .groups["recipe:header"].cells.n:GetText())
     -- The header row of a section uses the same layout.
     local header = find_row(v, function(item) return item.kind == "header" and item.section == "recipe" end)
     local h = header.groups["recipe:header"]
     assert.equal("Profit", h.cells.profit:GetText())
     assert.same({ "RIGHT", header, "RIGHT", -6, 0 }, point(h.cells.note))
+  end)
+
+  it("lays a benchmark row out at 516 px: Recipe from the left, the numbers from the right edge", function()
+    for _, t in ipairs({ 10, 20, 30 }) do L:Add({ type = "commission", amount = t, tip = t, recipeID = 5, quality = 3, cost = 1 }) end
+    W.advance(1)
+    local v = open(516)
+    local row = data_row(v, "benchmark")
+    assert.is_not_nil(row)
+    local g = row.groups.benchmark
+    local c = g.cells
+    assert.same({ "LEFT", row, "LEFT", 6, 0 }, point(c.recipe, 1))
+    assert.same({ "RIGHT", c.quality, "LEFT", -4, 0 }, point(c.recipe, 2))
+    assert.same({ "RIGHT", row, "RIGHT", -6, 0 }, point(c.n)); assert.equal(32, c.n:GetWidth())
+    assert.same({ "RIGHT", c.n, "LEFT", -4, 0 }, point(c.p75)); assert.equal(64, c.p75:GetWidth())
+    assert.same({ "RIGHT", c.p75, "LEFT", -4, 0 }, point(c.median))
+    assert.same({ "RIGHT", c.median, "LEFT", -4, 0 }, point(c.p25))
+    assert.same({ "RIGHT", c.p25, "LEFT", -4, 0 }, point(c.quality)); assert.equal(24, c.quality:GetWidth())
+    assert.is_true(c.p25:IsShown())
+    assert.equal(236, v.layouts.benchmark.flex)
+    assert.same({ "3", "20c" }, { c.quality:GetText(), plain(c.median:GetText()) })
   end)
 
   it("shows full values and the partial explanation in a row tooltip", function()
@@ -346,7 +403,7 @@ describe("Ledger tab frames", function()
     assert.is_true(tooltip.shown)
     local all = table.concat(tooltip.lines, "\n")
     assert.is_truthy(all:find("Income: " .. ns.UI.FormatMoney(14000), 1, true))
-    assert.is_truthy(all:find("Partial: 1 without cost basis", 1, true))
+    assert.is_truthy(all:find("Partial: 1 with missing or partial cost", 1, true))
     week:GetScript("OnLeave")(week)
     assert.is_false(tooltip.shown)
   end)
@@ -454,7 +511,7 @@ describe("Orders dashboard widgets", function()
     local lines = line_texts(frames.goldThisWeek)
     assert.equal("Profit: " .. ns.UI.FormatMoney(80000) .. " (partial)", lines[1])
     assert.equal("Income: " .. ns.UI.FormatMoney(100000), lines[2])
-    assert.equal("Partial: 1 without cost basis", lines[3])
+    assert.equal("Partial: 1 with missing or partial cost", lines[3])
     assert.is_nil(frames.goldThisWeek.errorText)
   end)
 
@@ -481,7 +538,7 @@ describe("Orders dashboard widgets", function()
     }
     D:RefreshAll()
     local lines = line_texts(frames.openOrders)
-    assert.equal("4 open, 1 personal", lines[1])
+    assert.equal("4 on the board, 1 personal", lines[1])
     assert.equal("Best score: ~" .. ns.UI.FormatMoney(50000), lines[2])
     assert.equal("Not scored: 1 recraft, 1 conc?, 1 no price", lines[3])
     assert.equal("Seen 10m ago on Me-Silvermoon", lines[4])
@@ -490,6 +547,29 @@ describe("Orders dashboard widgets", function()
     lines = line_texts(frames.openOrders)
     assert.equal("Best score: none", lines[2])
     assert.equal("Not scored: 1 recraft", lines[3])
+  end)
+
+  it("takes the best score from the orders the filters leave", function()
+    local db = ns.FS.db.global.ordersSnapshot
+    db.time, db.charKey = 400, "Me-Silvermoon"
+    db.orders = {
+      [1] = { orderID = 1, orderType = "personal", score = 50000, flags = {} },
+      [2] = { orderID = 2, orderType = "public", score = 20000, flags = {} },
+    }
+    O:Settings().filters.orderTypes.personal = false
+    D:RefreshAll()
+    local lines = line_texts(frames.openOrders)
+    assert.equal("2 on the board, 1 personal", lines[1])
+    assert.equal("Best score: " .. ns.UI.FormatMoney(20000), lines[2])
+    O:Settings().filters.orderTypes.public = false
+    D:RefreshAll()
+    assert.equal("Best score: none", line_texts(frames.openOrders)[2])
+  end)
+
+  it("marks an estimated profit this week with ~", function()
+    L:Add({ type = "commission", amount = 90000, tip = 100000, recipeID = 5, cost = 20000, estimated = true })
+    D:RefreshAll()
+    assert.equal("Profit: ~" .. ns.UI.FormatMoney(70000), line_texts(frames.goldThisWeek)[1])
   end)
 
   it("shows every line in a tooltip on the widget", function()
