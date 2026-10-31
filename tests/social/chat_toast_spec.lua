@@ -255,6 +255,35 @@ describe("ChatToast", function()
     assert.are.equal(1, Toast:VisibleCount())
   end)
 
+  it("a failure inside Show is logged under a log-only source and the registrar keeps working", function()
+    local registrar = ns.FS:GetModule("ChatToasts")
+    local original = Toast.Show
+    Toast.Show = function() error("boom") end
+    send(MATCH)
+    Toast.Show = original
+    local errors = ns.FS.db.global.diagnostics.errors
+    assert.are.equal(1, #errors)
+    assert.are.equal("ChatToast:Match", errors[1].source)
+    assert.is_true(registrar:IsEnabled())
+    send(MATCH)
+    assert.are.equal(1, Toast:VisibleCount())
+  end)
+
+  it("turning ChatScan off hides the toasts that are showing", function()
+    send(MATCH); send(match_n(2))
+    assert.are.equal(2, Toast:VisibleCount())
+    ns.FS:SetModuleEnabled("ChatScan", false)
+    assert.are.equal(0, Toast:VisibleCount())
+    assert.is_true(ns.FS:GetModule("ChatToasts"):IsEnabled())
+  end)
+
+  it("resolves the whisper text through ChatScan's current default", function()
+    ns.L = setmetatable({ ["Hi! I can craft %s. Send me a crafting order?"] = "Hey, I craft %s!" },
+      { __index = function(_, key) return key end })
+    assert.are.equal("Hey, I craft Everforged Gloves!", Toast:WhisperText(match_n(1, { recipes = {
+      { recipeID = 100, name = "Everforged Gloves" } } })))
+  end)
+
   it("ignores a malformed match instead of failing", function()
     local registrar = ns.FS:GetModule("ChatToasts")
     for _, bad in ipairs({ "broken", {}, { sender = "X" }, { sender = "X", recipes = "broken" },
@@ -272,6 +301,7 @@ describe("ChatToast", function()
     send(MATCH)
     click(Toast:GetToasts()[1].ignore)
     assert.are.same(before, ns.FS.db.global.settings.chatScan or {})
+    assert.is_true(ChatScan:IsIgnored("Buyer-Realm"))                    -- ignored for this session only
     ns.FS.dbIsNewer = false
   end)
 end)

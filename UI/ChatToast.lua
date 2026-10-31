@@ -26,7 +26,7 @@ ns.UI.ChatToast = Toast
 
 local L = setmetatable({}, { __index = function(_, key) return ns.L[key] end })
 
-local MODULE = "ChatToasts"
+local MATCH_SOURCE = "ChatToast:Match"
 local CLICK_SOURCE, TOOLTIP_SOURCE = "ChatToast:Click", "ChatToast:Tooltip"
 local TIMER_PREFIX = "chatToast.hide."
 local DEFAULT_TOAST_SECONDS = 30
@@ -101,7 +101,10 @@ end
 -- The text typed into the chat box: the whisper template with the first recipe's link (its name without one).
 function Toast:WhisperText(match)
   local recipe = match.recipes[1]
-  return settings().whisperTemplate:format(recipe.link or recipe_text(recipe))
+  local scan = chat_scan()
+  local template = scan and scan.GetWhisperTemplate and scan:GetWhisperTemplate()
+    or L["Hi! I can craft %s. Send me a crafting order?"]
+  return template:format(recipe.link or recipe_text(recipe))
 end
 
 -- Opens the chat edit box on a whisper to the sender with the template text. Sends nothing, does nothing else.
@@ -263,7 +266,8 @@ end
 ---------------------------------------------------------------------------
 
 function ChatToasts:OnEnable()
-  self:RegisterMessage(ns.Msg.CHATSCAN_MATCH, ns.FS:Wrap(MODULE, function(_, match)
+  -- A log-only source: an error in Show must never turn this core module off.
+  self:RegisterMessage(ns.Msg.CHATSCAN_MATCH, ns.FS:Wrap(MATCH_SOURCE, function(_, match)
     if not ns.FS:IsModuleEnabled("ChatScan") then return end
     Toast:Show(match)
   end))

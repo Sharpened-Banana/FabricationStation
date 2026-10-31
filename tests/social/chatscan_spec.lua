@@ -57,6 +57,7 @@ describe("ChatScan", function()
       IsBlocked = function(_, name) return customers_blocked[name] end,
     })
     ChatScan = ns.FS:GetModule("ChatScan")
+    p4.advance(6)   -- the name index is built from a timer, five seconds after the module was enabled
   end
 
   before_each(function() boot() end)
@@ -278,13 +279,78 @@ describe("ChatScan", function()
     p4.advance(30); assert.are.equal(first, calls)
   end)
 
-  it("keeps working when GetSpellName has no name yet and retries later", function()
+  it("keeps working when GetSpellName has no name yet and retries later, off the chat event", function()
     _G.C_Spell.GetSpellName = function() return nil end
     ChatScan:RebuildIndexes()
     assert.is_nil(say("LF crafter for Everforged Gloves"))
-    _G.C_Spell.GetSpellName = function(id) return id == 100 and "Everforged Gloves" or nil end
+    local calls = 0
+    _G.C_Spell.GetSpellName = function(id) calls = calls + 1; return id == 100 and "Everforged Gloves" or nil end
     p4.advance(61)
+    local before = calls
+    assert.is_nil(say("LF crafter for Everforged Gloves", "Other-Realm"))   -- this line schedules the retry
+    assert.are.equal(before, calls)                                       -- ... and builds nothing itself
+    p4.advance(0)
+    assert.is_true(calls > before)
     assert.truthy(say("LF crafter for Everforged Gloves", "Other-Realm"))
+  end)
+
+  it("builds the name index from a timer after enabling, never inside a chat event", function()
+    local calls = 0
+    boot()
+    ns.FS:SetModuleEnabled("ChatScan", false)
+    local original = _G.C_Spell.GetSpellName
+    _G.C_Spell.GetSpellName = function(id) calls = calls + 1; return original(id) end
+    ns.FS:SetModuleEnabled("ChatScan", true)
+    assert.is_nil(say("LF crafter for Everforged Gloves"))                -- no index yet: nothing is built here
+    assert.are.equal(0, calls)
+    p4.advance(5)                                                          -- the rebuild timer scheduled by OnEnable
+    assert.is_true(calls > 0)
+    assert.truthy(say("LF crafter for Everforged Gloves", "Other-Realm"))
+  end)
+
+  it("arms the gate when enabled and again when Comm stopped it while ChatScan stays on", function()
+    local Gate = ns.Social.Gate
+    ns.FS:SetModuleEnabled("ChatScan", false)
+    Gate:Stop()
+    p4.restriction.chatActive = true
+    ns.FS:SetModuleEnabled("ChatScan", true)
+    assert.are.same({ { true, "restriction" } }, p4.messages("FS_COMM_GATE_CHANGED"))   -- Init announced the lock
+    p4.restriction.chatActive = false
+    Gate:Stop()                                                          -- Guild left its guild: Comm stops the gate
+    p4.restriction.chatActive = true
+    assert.is_nil(say("LF crafter " .. L1))
+    assert.are.same({ { true, "restriction" }, { true, "restriction" } }, p4.messages("FS_COMM_GATE_CHANGED"))
+  end)
+
+  it("reads the settings once per chat line", function()
+    local calls = 0
+    local original = ChatScan.Settings
+    ChatScan.Settings = function(self) calls = calls + 1; return original(self) end
+    assert.truthy(say("LF crafter " .. L1))
+    assert.are.equal(1, calls)
+    ChatScan.Settings = original
+  end)
+
+  it("keeps the newest pairs when too many are remembered (evicts the oldest, never the one just emitted)", function()
+    ChatScan.REMEMBER.prune, ChatScan.REMEMBER.max = 2, 4
+    for i = 1, 6 do assert.truthy(say("LF crafter " .. L1, "Buyer" .. i .. "-Realm")) end
+    assert.is_nil(say("LF crafter " .. L1, "Buyer6-Realm"))             -- the newest is still remembered
+    assert.is_nil(say("LF crafter " .. L1, "Buyer5-Realm"))
+    assert.truthy(say("LF crafter " .. L1, "Buyer1-Realm"))             -- the oldest was evicted
+  end)
+
+  it("emits once per window for a sender reposting every 30 seconds", function()
+    local emitted = 0
+    for t = 0, 690, 30 do
+      if t > 0 then p4.advance(30) end
+      if say("LF crafter " .. L1) then emitted = emitted + 1 end
+    end
+    assert.are.equal(3, emitted)                                          -- at 0, 300 and 600 seconds
+  end)
+
+  it("dedupes 'Buyer' and 'Buyer-Realm' together", function()
+    assert.truthy(say("LF crafter " .. L1, "Buyer"))
+    assert.is_nil(say("LF crafter " .. L1, "Buyer-Realm"))
   end)
 
   it("ignore list: add, remove, normalise, case-insensitive, capped, persisted in the settings", function()
@@ -329,7 +395,8 @@ describe("ChatScan", function()
       assert.are.equal(300, s.dedupeSeconds); assert.are.equal(30, s.toastSeconds)
       assert.is_true(s.sound); assert.is_true(s.nameMatch)
       assert.is_nil(s.enabled)
-      assert.are.equal("Hi! I can craft %s. Send me a crafting order?", s.whisperTemplate)
+      assert.are.equal("", s.whisperTemplate)
+      assert.are.equal("Hi! I can craft %s. Send me a crafting order?", ChatScan:GetWhisperTemplate())
       assert.are.same({}, s.ignore)
       assert.are.equal(s, ns.FS.db.global.settings.chatScan)
     end)
@@ -343,7 +410,7 @@ describe("ChatScan", function()
       assert.are.same({}, fixed.ignore)
       assert.are.equal(300, fixed.dedupeSeconds); assert.are.equal(120, fixed.toastSeconds)
       assert.is_true(fixed.sound); assert.is_true(fixed.nameMatch)
-      assert.are.equal("Hi! I can craft %s. Send me a crafting order?", fixed.whisperTemplate)
+      assert.are.equal("", fixed.whisperTemplate)
       assert.are.same({ "ok phrase" }, fixed.includeAdded)
     end)
 
@@ -357,6 +424,15 @@ describe("ChatScan", function()
       assert.are.equal(#defaults - 1, #s.includeRemoved)
       ChatScan:SetKeywords("include", defaults)
       assert.are.same({}, s.includeAdded); assert.are.same({}, s.includeRemoved)
+    end)
+
+    it("resolves the default whisper text when read, and a valid user template wins", function()
+      assert.are.equal("", ChatScan:Settings().whisperTemplate)
+      ns.L = setmetatable({ ["Hi! I can craft %s. Send me a crafting order?"] = "Hey, I craft %s!" },
+        { __index = function(_, key) return key end })
+      assert.are.equal("Hey, I craft %s!", ChatScan:GetWhisperTemplate())
+      ChatScan:Settings().whisperTemplate = "Mine: %s"
+      assert.are.equal("Mine: %s", ChatScan:GetWhisperTemplate())
     end)
 
     it("shares the merged keyword list until the settings change", function()
@@ -432,10 +508,14 @@ describe("ChatScan", function()
         assert.are.equal("Template must contain %s once", t.validate(nil, bad), bad)
       end
       assert.is_true(t.validate(nil, "100%% sure %s"))
+      assert.are.equal("Hi! I can craft %s. Send me a crafting order?", t.get())
       t.set(nil, "Hello %s!")
       assert.are.equal("Hello %s!", ChatScan:Settings().whisperTemplate)
+      assert.are.equal("Hello %s!", t.get())
       t.set(nil, "broken")
       assert.are.equal("Hello %s!", ChatScan:Settings().whisperTemplate)
+      t.set(nil, "Hi! I can craft %s. Send me a crafting order?")        -- the default text is stored as "" again
+      assert.are.equal("", ChatScan:Settings().whisperTemplate)
     end)
 
     it("disables every setter and writes nothing while the saved data is from a newer version", function()

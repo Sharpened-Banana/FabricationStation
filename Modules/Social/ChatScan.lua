@@ -41,9 +41,12 @@ local MAX_IGNORED = 200
 local MAX_ADDED, MAX_KEYWORD_LENGTH = 60, 40
 local MAX_TEMPLATE = 150
 local MAX_TEXT = 255
-local PRUNE_ABOVE, RESET_ABOVE = 256, 2048   -- remembered (sender, recipe) pairs
 
 local lower, find, gsub = string.lower, string.find, string.gsub
+
+-- Remembered (sender, recipe) pairs: expired ones are dropped above `prune`; above `max` live pairs the oldest are
+-- evicted down to three quarters of `max`.
+ChatScan.REMEMBER = { prune = 256, max = 2048 }
 
 ChatScan.KINDS = { "trade", "services", "general", "guild" }
 ChatScan.DEDUPE_RANGE = { min = 60, max = 1800 }
@@ -61,8 +64,15 @@ ChatScan.SETTINGS_DEFAULTS = {
   toastSeconds = 30,
   sound = true,
   nameMatch = true,
-  whisperTemplate = L["Hi! I can craft %s. Send me a crafting order?"],
+  whisperTemplate = "",   -- "" = the current default text (resolved when read, so a new default reaches everybody)
 }
+
+-- The text typed by the toast's Whisper button: the user's valid template, else the current default.
+function ChatScan:GetWhisperTemplate()
+  local template = self:Settings().whisperTemplate
+  if type(template) == "string" and template ~= "" then return template end
+  return L["Hi! I can craft %s. Send me a crafting order?"]
+end
 
 ChatScan.stats = { seen = 0, skippedSecret = 0, matched = 0, deduped = 0 }
 
@@ -144,6 +154,7 @@ local function valid_template(template)
   return not find(gsub(rest, "%%s", ""), "%", 1, true)
 end
 ChatScan.ValidTemplate = valid_template
+local lastValidTemplate   -- the last template that passed (the per-line settings read skips the pattern work)
 
 local function clamp_number(value, range, default)
   if not is_finite(value) then return default end
@@ -166,7 +177,12 @@ local function fill(target, defaults)
   target.toastSeconds = clamp_number(target.toastSeconds, ChatScan.TOAST_RANGE, defaults.toastSeconds)
   if type(target.sound) ~= "boolean" then target.sound = defaults.sound end
   if type(target.nameMatch) ~= "boolean" then target.nameMatch = defaults.nameMatch end
-  if not valid_template(target.whisperTemplate) then target.whisperTemplate = defaults.whisperTemplate end
+  local template = target.whisperTemplate
+  if type(template) ~= "string" then
+    target.whisperTemplate = ""
+  elseif template ~= "" and template ~= lastValidTemplate then
+    if valid_template(template) then lastValidTemplate = template else target.whisperTemplate = "" end
+  end
   return target
 end
 
@@ -193,10 +209,9 @@ local keywordCache = {}   -- [which] = { added, removed, addedCount, removedCoun
 
 -- The keywords in force for "include" or "exclude": the defaults minus the user's removals, plus the user's additions.
 -- The list is shared until the settings change (every chat line asks for it): treat it as read-only.
-function ChatScan:GetKeywords(which)
+local function keywords_for(settings, which)
   local spec = KEYWORD_SETS[which]
   if not spec then return {} end
-  local settings = self:Settings()
   local addedList, removedList = settings[spec.added], settings[spec.removed]
   local cached = keywordCache[which]
   if cached and cached.added == addedList and cached.removed == removedList and cached.addedCount == #addedList
@@ -218,6 +233,8 @@ function ChatScan:GetKeywords(which)
     removedCount = #removedList, list = out }
   return out
 end
+
+function ChatScan:GetKeywords(which) return keywords_for(self:Settings(), which) end
 
 -- Stores `list` (the keywords wanted) as additions and removals against the defaults. Nothing is stored for an
 -- unknown set. Returns true when it was stored.
@@ -252,15 +269,31 @@ end
 
 local function same_name(a, b) return lower(a) == lower(b) end
 
+-- A set of the normalised, lower-cased ignored names, rebuilt when the list changes (every chat line asks).
+local ignoreVersion = 0
+local ignoreCache = { list = nil, count = -1, version = -1, set = {} }
+
+local function ignore_set(list)
+  local cache = ignoreCache
+  if cache.list ~= list or cache.count ~= #list or cache.version ~= ignoreVersion then
+    local set = {}
+    for _, entry in ipairs(list) do
+      local name = normalized(entry)
+      if name then set[lower(name)] = true end
+    end
+    cache.list, cache.count, cache.version, cache.set = list, #list, ignoreVersion, set
+  end
+  return cache.set
+end
+
+local function ignored_in(settings, nameRealm)
+  local name = normalized(nameRealm)
+  return name ~= nil and ignore_set(settings.ignore)[lower(name)] == true
+end
+
 -- Whether `nameRealm` is on our own ignore list (case-insensitive, "Name" means a name of the player's realm).
 function ChatScan:IsIgnored(nameRealm)
-  local name = normalized(nameRealm)
-  if not name then return false end
-  for _, entry in ipairs(self:Settings().ignore) do
-    local stored = normalized(entry)
-    if stored and same_name(stored, name) then return true end
-  end
-  return false
+  return ignored_in(self:Settings(), nameRealm)
 end
 
 -- Adds a character to the ignore list. -> true when it was added (false: already there, invalid or the list is full).
@@ -270,6 +303,7 @@ function ChatScan:Ignore(nameRealm)
   local list = self:Settings().ignore
   if #list >= MAX_IGNORED then return false end
   list[#list + 1] = name
+  ignoreVersion = ignoreVersion + 1
   return true
 end
 
@@ -282,6 +316,7 @@ function ChatScan:Unignore(nameRealm)
     local stored = normalized(list[i])
     if stored and same_name(stored, name) then
       table.remove(list, i)
+      ignoreVersion = ignoreVersion + 1
       removed = true
     end
   end
@@ -305,11 +340,20 @@ function ChatScan:SetIgnored(names)
   end
   for i = #list, 1, -1 do list[i] = nil end
   for i, name in ipairs(kept) do list[i] = name end
+  ignoreVersion = ignoreVersion + 1
 end
 
 ---------------------------------------------------------------------------
 -- Channels
 ---------------------------------------------------------------------------
+
+-- Channel words are matching data in the client's language: translators give the lower-case channel name.
+local WORD_ORDER = { "services", "trade", "general" }
+local function channel_word(kind)
+  if kind == "services" then return L["services"] end
+  if kind == "trade" then return L["trade"] end
+  return L["general"]
+end
 
 -- "guild" for guild chat; for a channel line the zone channel id map first, then the lower-cased base name, which is
 -- matched against the lower-cased words L["services"], L["trade"] and L["general"] in that order ("Trade (Services)"
@@ -325,11 +369,9 @@ function ChatScan:ClassifyChannel(event, zoneChannelID, channelBaseName)
   end
   if type(channelBaseName) == "string" and channelBaseName ~= "" then
     local name = lower(channelBaseName)
-    -- Channel words are matching data in the client's language: translators give the lower-case channel name.
-    local words = { { "services", L["services"] }, { "trade", L["trade"] }, { "general", L["general"] } }
-    for _, entry in ipairs(words) do
-      local word = lower(entry[2])
-      if word ~= "" and find(name, word, 1, true) then return entry[1] end
+    for _, kind in ipairs(WORD_ORDER) do
+      local word = lower(channel_word(kind))
+      if word ~= "" and find(name, word, 1, true) then return kind end
     end
   end
   return nil
@@ -381,7 +423,7 @@ function ChatScan:RebuildIndexes()
               incomplete = true
             else
               name = lower(name)
-              if char_count(name) >= MIN_NAME_LENGTH and #index < MAX_INDEX then
+              if char_count(name) >= MIN_NAME_LENGTH then
                 index[#index + 1] = { name = name, recipeID = recipeID }
               end
             end
@@ -395,13 +437,29 @@ function ChatScan:RebuildIndexes()
     if a.name ~= b.name then return a.name < b.name end
     return a.recipeID < b.recipeID
   end)
+  for i = #index, MAX_INDEX + 1, -1 do index[i] = nil end   -- the cut is deterministic: the shortest names go
   nameIndex, indexIncomplete, indexBuiltAt = index, incomplete, ns.FS:Now()
   return index
 end
 
+local indexScheduled = false   -- a rebuild timer is pending
+
+-- Builds the index from a timer (never inside a chat event). `force` replaces a pending timer (a trailing debounce:
+-- recipe changes keep postponing it), otherwise a pending timer is left alone.
+function ChatScan:ScheduleIndex(delay, force)
+  if indexScheduled and not force then return end
+  indexScheduled = true
+  ns.FS:Debounce(INDEX_KEY, delay, ns.FS:Wrap(SOURCE, function()
+    indexScheduled = false
+    if self:IsEnabled() then self:RebuildIndexes() end
+  end))
+end
+
+-- The index as it is now (nil before the first build). A missing index, and an incomplete one older than INDEX_RETRY,
+-- are built by a zero-delay timer: the line being handled uses what exists.
 local function get_name_index(self)
   if nameIndex == nil or (indexIncomplete and ns.FS:Now() - indexBuiltAt >= INDEX_RETRY) then
-    return self:RebuildIndexes()
+    self:ScheduleIndex(0)
   end
   return nameIndex
 end
@@ -410,19 +468,31 @@ end
 -- Matching
 ---------------------------------------------------------------------------
 
-local emitted, emittedCount = {}, 0   -- ["sender\0recipeID"] = Now() of the last emitted match
+local emitted, emittedSeq, emittedCount, emittedCounter = {}, {}, 0, 0   -- ["sender\0recipeID"] = Now() / emission number
 
 local function forget_emitted()
-  emitted, emittedCount = {}, 0
+  emitted, emittedSeq, emittedCount = {}, {}, 0
 end
 
+-- Drops the expired pairs; when more than REMEMBER.max are still live the oldest emissions go (down to three
+-- quarters of the maximum), so the pair that was just emitted is always kept.
 local function prune_emitted(now, window)
-  local kept, count = {}, 0
+  local kept, keptSeq, count = {}, {}, 0
   for key, at in pairs(emitted) do
-    if now - at < window then kept[key] = at; count = count + 1 end
+    if now - at < window then kept[key], keptSeq[key], count = at, emittedSeq[key], count + 1 end
   end
-  emitted, emittedCount = kept, count
-  if emittedCount > RESET_ABOVE then forget_emitted() end
+  emitted, emittedSeq, emittedCount = kept, keptSeq, count
+  local limit = ChatScan.REMEMBER.max
+  if count > limit then
+    local keys = {}
+    for key in pairs(emitted) do keys[#keys + 1] = key end
+    table.sort(keys, function(a, b) return emittedSeq[a] < emittedSeq[b] end)
+    local drop = count - math.floor(limit * 0.75)
+    for i = 1, drop do
+      emitted[keys[i]], emittedSeq[keys[i]] = nil, nil
+    end
+    emittedCount = count - drop
+  end
 end
 
 local function friend_ignored(playerName, sender)
@@ -519,7 +589,10 @@ function ChatScan:HandleChat(event, text, playerName, _, _, _, _, zoneChannelID,
   if not self:IsEnabled() then return nil end
   local stats = self.stats
   local gate = ns.Social.Gate
-  if gate and gate:IsLocked() then return nil end
+  if gate then
+    gate:Init()   -- Guild's Comm stops the gate when the player leaves a guild; arming is idempotent and cheap
+    if gate:IsLocked() then return nil end
+  end
   stats.seen = stats.seen + 1
   -- Secret values are asked about before anything else touches them (not even type()).
   if issecret(text) or issecret(playerName) then
@@ -531,13 +604,14 @@ function ChatScan:HandleChat(event, text, playerName, _, _, _, _, zoneChannelID,
   if issecret(lineID) then lineID = nil end
   if type(text) ~= "string" or text == "" or type(playerName) ~= "string" or playerName == "" then return nil end
 
-  local settings = self:Settings()
+  local settings = self:Settings()   -- once per line
   local kind = self:ClassifyChannel(event, zoneChannelID, channelBaseName)
   if not kind or settings.channels[kind] ~= true then return nil end
   local sender = Util.NormalizeName(playerName)
-  if sender == ns.FS:CharKey() or self:IsIgnored(sender) then return nil end
+  if sender == ns.FS:CharKey() or ignored_in(settings, sender) then return nil end
 
-  local parsed = ChatMatcher.Parse(text, { include = self:GetKeywords("include"), exclude = self:GetKeywords("exclude") })
+  local parsed = ChatMatcher.Parse(text, { include = keywords_for(settings, "include"),
+    exclude = keywords_for(settings, "exclude") })
   if not parsed.isRequest then return nil end
   if friend_ignored(playerName, sender) or customer_blocked(sender) then return nil end
 
@@ -563,9 +637,10 @@ function ChatScan:HandleChat(event, text, playerName, _, _, _, _, zoneChannelID,
       name = recipe_name(candidate.recipeID), best = best_character(Recipes, candidate.recipeID, candidate.crafters) }
     local key = sender .. "\0" .. candidate.recipeID
     if emitted[key] == nil then emittedCount = emittedCount + 1 end
-    emitted[key] = now
+    emittedCounter = emittedCounter + 1
+    emitted[key], emittedSeq[key] = now, emittedCounter
   end
-  if emittedCount > PRUNE_ABOVE then prune_emitted(now, window) end
+  if emittedCount > ChatScan.REMEMBER.prune then prune_emitted(now, window) end
   stats.matched = stats.matched + 1
   ns.FS:SendMessage(ns.Msg.CHATSCAN_MATCH, match)
   return match
@@ -584,11 +659,13 @@ function ChatScan:OnEnable()
   self:RegisterEvent("CHAT_MSG_GUILD", onChat)
   self:RegisterMessage(ns.Msg.DATA_CHANGED, ns.FS:Wrap(SOURCE, function(_, _, kind)
     if kind ~= "recipes" then return end
-    nameIndex = nil
     if self:Settings().nameMatch then
-      ns.FS:Debounce(INDEX_KEY, INDEX_DELAY, ns.FS:Wrap(SOURCE, function() self:RebuildIndexes() end))
+      self:ScheduleIndex(INDEX_DELAY, true)
+    else
+      nameIndex = nil
     end
   end))
+  if self:Settings().nameMatch then self:ScheduleIndex(INDEX_DELAY, true) end
 end
 
 function ChatScan:OnDisable()
@@ -597,7 +674,10 @@ function ChatScan:OnDisable()
   ns.FS:CancelDebounce(INDEX_KEY)
   forget_emitted()
   keywordCache = {}
-  nameIndex, indexIncomplete, indexBuiltAt = nil, false, 0
+  nameIndex, indexIncomplete, indexBuiltAt, indexScheduled = nil, false, 0, false
+  -- Toasts of a scanner that is off would still offer Whisper and Ignore for requests it no longer watches.
+  local toasts = ns.UI and ns.UI.ChatToast
+  if toasts and toasts.HideAll then toasts:HideAll() end
 end
 
 ---------------------------------------------------------------------------
@@ -618,13 +698,14 @@ local function kind_labels()
   return { trade = L["Trade"], services = L["Services"], general = L["General"], guild = L["Guild"] }
 end
 
-local function toggle(key, order, name, desc)
+local function toggle(key, order, name, desc, after)
   return {
     type = "toggle", order = order, width = "full", name = name, desc = desc, disabled = read_only,
     get = function() return ChatScan:Settings()[key] end,
     set = function(_, value)
       if read_only() then return end
       ChatScan:Settings()[key] = value and true or false
+      if after then after() end
     end,
   }
 end
@@ -691,18 +772,21 @@ function ChatScan.BuildOptions()
         ChatScan.TOAST_RANGE, 1),
       sound = toggle("sound", 7, L["Play a sound"], L["Plays the whisper sound when a toast appears."]),
       nameMatch = toggle("nameMatch", 8, L["Match recipe names"],
-        L["Also recognise a request that names a recipe you know without linking it."]),
+        L["Also recognise a request that names a recipe you know without linking it."], function()
+          if ChatScan:IsEnabled() and ChatScan:Settings().nameMatch then ChatScan:ScheduleIndex(0) end
+        end),
       whisperTemplate = {
         type = "input", order = 9, width = "full", name = L["Whisper text"], disabled = read_only,
         desc = L["Typed into the chat box when you click Whisper. Must contain %s once; it is replaced by the item link or recipe name."],
-        get = function() return ChatScan:Settings().whisperTemplate end,
+        get = function() return ChatScan:GetWhisperTemplate() end,
         validate = function(_, value)
           if valid_template(value) then return true end
           return L["Template must contain %s once"]
         end,
         set = function(_, value)
           if read_only() or not valid_template(value) then return end
-          ChatScan:Settings().whisperTemplate = value
+          -- The default text is stored as "" so a future default reaches everybody.
+          ChatScan:Settings().whisperTemplate = value == L["Hi! I can craft %s. Send me a crafting order?"] and "" or value
         end,
       },
     },
