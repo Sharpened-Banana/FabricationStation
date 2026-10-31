@@ -5,7 +5,7 @@ ignore = { "211/ADDON_NAME", "212/self" }
 stds.wow = {
   globals = { "FabricationStationDB", "UISpecialFrames" },
   read_globals = { "LibStub", "Auctionator", "C_TradeSkillUI", "C_CraftingOrders", "C_Item", "C_CurrencyInfo",
-    "C_ProfSpecs", "C_Traits", "C_Container", "C_Bank", "C_AddOns", "C_Timer", "Enum", "CreateFrame", "UIParent", "GameTooltip",
+    "C_ProfSpecs", "C_Traits", "C_Container", "C_Bank", "C_AddOns", "C_Timer", "C_DateAndTime", "Enum", "CreateFrame", "UIParent", "GameTooltip",
     "GetServerTime", "GetBuildInfo", "GetMoney", "GetMoneyString", "UnitName", "UnitClass", "GetRealmName",
     "GetNormalizedRealmName", "GetProfessions", "GetProfessionInfo", "GetInventoryItemLink", "ProfessionsFrame",
     "ProfessionsRecipeSchematicFormMixin", "Professions", "ScrollBoxListMixin", "TooltipDataProcessor",

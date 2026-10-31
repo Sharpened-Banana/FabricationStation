@@ -36,6 +36,7 @@ Modules\QueueCraft.lua
 Modules\SelfCheck.lua
 Modules\Customers.lua
 Modules\Orders.lua
+Modules\Ledger.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua
