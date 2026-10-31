@@ -1,0 +1,39 @@
+name: Package and release
+# Tag-triggered: pushing vX.Y.Z (or vX.Y.Z-beta.N / -alpha.N) runs the CI jobs, then packages the addon and uploads
+# it to GitHub, CurseForge, Wago and WoWInterface. A site is skipped when its token or project id is missing, so the
+# workflow already makes a GitHub release before the store projects exist.
+#
+# Repository secrets (referenced by name only): CF_API_TOKEN, WOWI_API_TOKEN, WAGO_API_TOKEN.
+# Repository variables: CF_PROJECT_ID, WOWI_ADDON_ID, WAGO_PROJECT_ID. GITHUB_TOKEN is supplied by Actions.
+on:
+  push:
+    tags: [ 'v*' ]
+permissions:
+  contents: write
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      WOWI_API_TOKEN: ${{ secrets.WOWI_API_TOKEN }}
+      WAGO_API_TOKEN: ${{ secrets.WAGO_API_TOKEN }}
+      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - uses: leafo/gh-actions-lua@v13
+        with: { luaVersion: "5.1.5" }
+      - run: lua tools/check_release.lua "${GITHUB_REF_NAME#v}"
+      - id: ids
+        run: |
+          a=""
+          [ -n "${{ vars.CF_PROJECT_ID }}" ] && a="$a -p ${{ vars.CF_PROJECT_ID }}"
+          [ -n "${{ vars.WOWI_ADDON_ID }}" ] && a="$a -w ${{ vars.WOWI_ADDON_ID }}"
+          [ -n "${{ vars.WAGO_PROJECT_ID }}" ] && a="$a -a ${{ vars.WAGO_PROJECT_ID }}"
+          echo "args=$a" >> "$GITHUB_OUTPUT"
+      - uses: BigWigsMods/packager@v2
+        with:
+          args: ${{ steps.ids.outputs.args }}

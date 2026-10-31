@@ -23,3 +23,7 @@ ignore:
   - research_notes
   - .luacheckrc
   - .busted
+  - .superpowers
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
