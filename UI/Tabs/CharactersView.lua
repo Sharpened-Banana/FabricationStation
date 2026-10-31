@@ -172,6 +172,95 @@ function V.Row(altRow, now)
 end
 
 ---------------------------------------------------------------------------
+-- Detail lines (the area under an opened row)
+---------------------------------------------------------------------------
+
+local GOLD = "|cffffd100"
+
+-- "Fri 14:00" (local clock) for a server time, "?" when unknown or the client has no date().
+local function clock(t)
+  if type(date) ~= "function" or not finite(t) then return "?" end
+  local ok, text = pcall(date, "%a %H:%M", t)
+  return ok and type(text) == "string" and text or "?"
+end
+
+-- A cooldown's recipe name (recipe IDs are spell IDs; C_Spell feature-tested), else "Recipe <id>".
+local function recipe_name(recipeID)
+  local api = type(C_Spell) == "table" and C_Spell.GetSpellName
+  if type(api) == "function" and recipeID ~= nil then
+    local ok, name = pcall(api, recipeID)
+    if ok and type(name) == "string" and name ~= "" then return name end
+  end
+  return "Recipe " .. tostring(recipeID)
+end
+
+local function spec_detail(s, who, now)
+  if type(s) ~= "table" then
+    return "  Spec: no data (open this profession's specializations on " .. who .. ")"
+  end
+  local spent = (finite(s.spent) and finite(s.max)) and (whole(s.spent) .. "/" .. whole(s.max) .. " spent") or "? spent"
+  local currency = type(s.currencyName) == "string" and s.currencyName ~= "" and s.currencyName or "points"
+  local unspent = (finite(s.unspent) and whole(s.unspent) or "?") .. " unspent " .. currency
+  local age = finite(s.time) and ("data " .. ns.UI.FormatAge(now - s.time) .. " old") or "data age unknown"
+  return "  Spec: " .. spent .. DOT .. unspent .. DOT .. age
+end
+
+local function conc_detail(c)
+  if type(c) ~= "table" or not finite(c.now) or not finite(c.max) then return "  Concentration: unknown" end
+  local value = whole(c.now) .. "/" .. whole(c.max)
+  if c.secondsToFull == 0 then return "  Concentration: " .. value .. DOT .. "Full" end
+  if finite(c.secondsToFull) then
+    return "  Concentration: " .. value .. DOT .. "full at " .. clock(c.fullAt) .. " (in "
+      .. V.FormatDuration(c.secondsToFull) .. ")"
+  end
+  return "  Concentration: " .. value .. DOT .. "not full within 14 days"
+end
+
+local function cooldown_detail(cd, now)
+  local state
+  if (finite(cd.readyAt) and cd.readyAt <= now) or (finite(cd.charges) and cd.charges > 0) then
+    state = "ready"
+  elseif finite(cd.readyAt) then
+    state = "ready in " .. V.FormatDuration(cd.readyAt - now) .. " (" .. clock(cd.readyAt) .. ")"
+  else
+    state = "ready time unknown"
+  end
+  if finite(cd.charges) and finite(cd.maxCharges) and cd.maxCharges > 1 then
+    state = state .. DOT .. "charges " .. whole(cd.charges) .. "/" .. whole(cd.maxCharges)
+  end
+  return "  Cooldown: " .. recipe_name(cd.recipeID) .. DOT .. state
+end
+
+-- AltRow (Alts:GetAltRow), now -> the detail lines: per listed profession a gold "<name> <skill>" title, then its
+-- spec (spent/max, unspent with the currency name, data age), knowledge (KnowledgeBreakdown), concentration
+-- (now/max and "full at <weekday HH:MM>" in local time), and each cooldown recipe (C_Spell.GetSpellName) with its
+-- ready time ("Cooldowns: none" without any); then "Older expansions: N (not shown in the grid)", or the empty text
+-- for a character without listed professions. Unknown values are named, never 0.
+function V.DetailLines(altRow, now)
+  altRow = type(altRow) == "table" and altRow or {}
+  now = finite(now) and now or ns.FS:Now()
+  local who = tostring(altRow.name or altRow.charKey)
+  local lines = {}
+  local professions = type(altRow.professions) == "table" and altRow.professions or {}
+  for _, p in ipairs(professions) do
+    lines[#lines + 1] = color(GOLD, (p.name or ("Skill " .. tostring(p.skillLineID))) .. " " .. skill_text(p))
+    lines[#lines + 1] = spec_detail(p.spec, who, now)
+    lines[#lines + 1] = "  Knowledge: " .. V.KnowledgeBreakdown(p.knowledge)
+    lines[#lines + 1] = conc_detail(p.concentration)
+    local cooldowns = type(p.cooldowns) == "table" and p.cooldowns or {}
+    for _, cd in ipairs(cooldowns) do
+      if type(cd) == "table" then lines[#lines + 1] = cooldown_detail(cd, now) end
+    end
+    if #cooldowns == 0 then lines[#lines + 1] = "  Cooldowns: none" end
+  end
+  if finite(altRow.olderProfessions) and altRow.olderProfessions > 0 then
+    lines[#lines + 1] = "Older expansions: " .. whole(altRow.olderProfessions) .. " (not shown in the grid)"
+  end
+  if #professions == 0 then lines[#lines + 1] = V.EMPTY_TEXT end
+  return lines
+end
+
+---------------------------------------------------------------------------
 -- Grid columns
 ---------------------------------------------------------------------------
 

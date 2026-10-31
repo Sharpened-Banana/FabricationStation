@@ -336,4 +336,46 @@ describe("ExpandGrid.New", function()
     grid.headerHits[1]:GetScript("OnEnter")(grid.headerHits[1])
     assert.same({ "Character" }, tooltip.lines)
   end)
+
+  -- [Task 13, Task 12 minor] The detail text's own height wins over the estimate once the client can measure it.
+  it("sizes an open detail by its measured text height (plus the row's detailFooter) when the client reports one", function()
+    local grid = G.New(parent, COLS, {})
+    local function entry(key, kind)
+      for _, e in ipairs(grid.entries) do if e.key == key and e.kind == kind then return e end end
+    end
+    grid:SetRows({ { key = "a", cells = { name = "A" }, detail = "x", detailHeight = 60 }, { key = "b", cells = { name = "B" } } })
+    grid:Toggle("a")
+    assert.equal(60, entry("a", "detail").height)   -- the stub font string cannot measure: the estimate stays
+    local text = grid.detailPool[1].text
+    text.GetStringHeight = function() return 41.5 end
+    grid:Refresh()
+    assert.equal(60, entry("a", "detail").height)   -- no laid-out width yet: an unwrapped height is not trusted
+    text.GetWidth = function() return 488 end
+    grid:Refresh()
+    assert.equal(42 + 4, entry("a", "detail").height)
+    assert.equal(20 + 46, entry("b", "row").top)
+    assert.same({ "TOPLEFT", grid.child, "TOPLEFT", 0, -(20 + 46) }, point(find_row(grid, "b"), 1))
+    -- A footer (room for buttons under the text) is added to the measured height.
+    grid:SetRows({ { key = "a", cells = { name = "A" }, detail = "x", detailHeight = 60, detailFooter = 28 },
+      { key = "b", cells = { name = "B" } } })
+    assert.equal(42 + 4 + 28, entry("a", "detail").height)
+    -- No usable measurement: back to the estimate.
+    text.GetStringHeight = function() return 0 end
+    grid:SetRows({ { key = "a", cells = { name = "A" }, detail = "x", detailHeight = 60 }, { key = "b", cells = { name = "B" } } })
+    grid:Refresh()
+    assert.equal(60, entry("a", "detail").height)
+  end)
+end)
+
+describe("ExpandGrid.WrappedHeight", function()
+  local G
+  before_each(function() G = boot().UI.ExpandGrid end)
+
+  it("counts each line of a multi-line string (split on newlines)", function()
+    assert.equal(2 * 14 + 4, G.WrappedHeight({ "a\nb" }, nil))
+    assert.equal(3 * 14 + 4, G.WrappedHeight({ "a\nb", "c" }, nil))
+    assert.equal(3 * 14 + 4, G.WrappedHeight({ "a\n\nb" }, nil))   -- an empty line still takes a line
+    -- Each part wraps on its own: 100 px leaves (100 - 28) / 6 = 12 characters per line.
+    assert.equal((1 + 2) * 14 + 4, G.WrappedHeight({ "short\n" .. string.rep("x", 20) }, 100))
+  end)
 end)

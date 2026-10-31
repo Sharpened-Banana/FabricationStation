@@ -22,6 +22,11 @@ local _, ns = ...
 -- Everything a hidden or truncated cell held belongs in the row tooltip (grid:SetTooltip); the renderers get the
 -- column layout as a third argument.
 --
+-- Detail heights: row.detailHeight (a number or fn(row, width), usually WrappedHeight's estimate) decides whether a
+-- row opens and how tall its detail is at first. Once a bound detail's text reports its own height
+-- (FontString:GetStringHeight after the renderer set it), that measured height (+ row.detailFooter px, room for
+-- buttons under the text) is used at that width instead, and the entries are rebuilt once.
+--
 -- Handlers (click, hover, scroll, size) run through ns.FS:Wrap(opts.source or "ExpandGrid", ...).
 local Grid = {}
 ns.UI = ns.UI or {}
@@ -70,9 +75,10 @@ function Grid.Layout(rows, expanded, rowHeight, width)
   return out
 end
 
--- lines (strings, colour codes allowed), width = the grid's width, opts = { lineHeight = 14, charWidth = 6,
--- inset = DETAIL_INSET, padding = 4 } -> the detail height that shows every line wrapped at that width (an estimate
--- per character, on the generous side; an unknown width counts one line per string).
+-- lines (strings, colour codes allowed; a string with newlines counts as that many lines), width = the grid's width,
+-- opts = { lineHeight = 14, charWidth = 6, inset = DETAIL_INSET, padding = 4 } -> the detail height that shows every
+-- line wrapped at that width (an estimate per character, on the generous side; an unknown width counts one line per
+-- line of text).
 function Grid.WrappedHeight(lines, width, opts)
   opts = opts or {}
   local lineHeight, charWidth = opts.lineHeight or LINE_HEIGHT, opts.charWidth or CHAR_WIDTH
@@ -81,8 +87,10 @@ function Grid.WrappedHeight(lines, width, opts)
   local count = 0
   for _, line in ipairs(type(lines) == "table" and lines or {}) do
     local text = tostring(line):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
-    local _, chars = text:gsub("[^\128-\191]", "")   -- UTF-8 characters
-    count = count + (perLine and math.max(1, math.ceil(chars / perLine)) or 1)
+    for part in (text .. "\n"):gmatch("([^\n]*)\n") do
+      local _, chars = part:gsub("[^\128-\191]", "")   -- UTF-8 characters
+      count = count + (perLine and math.max(1, math.ceil(chars / perLine)) or 1)
+    end
   end
   return count * lineHeight + (opts.padding or DETAIL_PADDING)
 end
@@ -301,12 +309,32 @@ local function bind_row(grid, frame, entry)
   frame:Show()
 end
 
+-- The detail text's measured height (+ footer) when the client reports a usable one, else nil. A text whose width is
+-- not laid out yet reports its unwrapped height, so it is measured only once it has a width.
+local function measured_height(frame, row)
+  local text = frame.text
+  local okWidth, w = pcall(text.GetWidth, text)
+  if not okWidth or not positive(w) then return nil end
+  local ok, h = pcall(text.GetStringHeight, text)
+  if not ok or not positive(h) then return nil end
+  local footer = positive(row.detailFooter) and row.detailFooter or 0
+  return math.ceil(h) + DETAIL_PADDING + footer
+end
+
 local function bind_detail(grid, frame, entry)
   local row = grid.byKey[entry.key]
   frame.data, frame.entry = row, entry
   place(grid, frame, entry)
   frame.text:SetText("")   -- a reused frame never keeps another row's text
   grid.detailRenderer(frame, row, grid.layout)
+  local h = measured_height(frame, row)
+  if h then
+    grid.measured[entry.key] = { width = grid.width, height = h }
+    if h ~= entry.height then grid.remeasure = true end
+  elseif grid.measured[entry.key] then
+    grid.measured[entry.key] = nil   -- no usable measurement now: back to the estimate
+    grid.remeasure = true
+  end
   frame:Show()
 end
 
@@ -348,7 +376,7 @@ function Grid.New(parent, columns, opts)
   local grid = setmetatable({
     parent = parent, columns = columns, opts = opts, source = opts.source or "ExpandGrid",
     rowHeight = positive(opts.rowHeight) and opts.rowHeight or DEFAULT_ROW_HEIGHT,
-    rows = {}, byKey = {}, expanded = {}, entries = {}, rowPool = {}, detailPool = {},
+    rows = {}, byKey = {}, expanded = {}, measured = {}, entries = {}, rowPool = {}, detailPool = {},
     shownRows = 0, shownDetails = 0, layout = { hidden = {} },
     rowRenderer = default_row_renderer, detailRenderer = default_detail_renderer,
   }, GridMT)
@@ -423,6 +451,9 @@ function GridMethods:SetRows(rows)
       self.byKey[row.key] = row
     end
   end
+  for key in pairs(self.measured) do
+    if self.byKey[key] == nil then self.measured[key] = nil end
+  end
   self:Refresh()
 end
 
@@ -456,12 +487,14 @@ function GridMethods:SetTooltip(fn)
   self.tooltipFn = type(fn) == "function" and fn or nil
 end
 
--- Rebuilds the entries (Layout, at the current width) and their offsets, sizes the scroll child, keeps the scroll
--- position in range and binds the rows in view.
+-- Rebuilds the entries (Layout, at the current width; a detail measured at this width keeps its measured height) and
+-- their offsets, sizes the scroll child, keeps the scroll position in range and binds the rows in view.
 function GridMethods:Refresh()
   local entries = Grid.Layout(self.rows, self.expanded, self.rowHeight, self.width)
   local top, rowIndex = 0, 0
   for _, entry in ipairs(entries) do
+    local m = entry.kind == "detail" and self.measured[entry.key]
+    if m and m.width == self.width then entry.height = m.height end
     entry.top = top
     if entry.kind == "row" then rowIndex = rowIndex + 1 end
     entry.rowIndex = rowIndex
@@ -478,8 +511,10 @@ function GridMethods:Refresh()
   self:Update()
 end
 
--- Binds the entries in view to pooled frames (rows and details from their own pools) and hides the rest.
+-- Binds the entries in view to pooled frames (rows and details from their own pools) and hides the rest. A detail
+-- whose measured height differs from its entry rebuilds the entries once more (never recursively).
 function GridMethods:Update()
+  self.remeasure = nil
   local height = self.scroll:GetHeight()
   if not positive(height) then height = DEFAULT_VIEW_HEIGHT end
   local offset = self.scroll:GetVerticalScroll()
@@ -511,4 +546,10 @@ function GridMethods:Update()
   for i = rows + 1, #self.rowPool do self.rowPool[i].data = nil; self.rowPool[i]:Hide() end
   for i = details + 1, #self.detailPool do self.detailPool[i].data = nil; self.detailPool[i]:Hide() end
   self.shownRows, self.shownDetails = rows, details
+  if self.remeasure and not self.remeasuring then
+    self.remeasuring = true
+    self:Refresh()
+    self.remeasuring = nil
+  end
+  self.remeasure = nil
 end
