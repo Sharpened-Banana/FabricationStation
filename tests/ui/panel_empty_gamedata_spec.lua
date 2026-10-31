@@ -124,6 +124,22 @@ describe("H1-4 profession panel with empty GameData", function()
   end)
 end)
 
+describe("H1-4 GameHeader", function()
+  local M
+  before_each(function() M = make_world({ last = "UI/ProfessionPanel.lua" }).UI.ProfessionPanel end)
+  it("maps the game's operation info, nil without quality fields or for a recipe without qualities", function()
+    local h = M.GameHeader({ craftingQuality = 3, baseSkill = 400, bonusSkill = 20, baseDifficulty = 500,
+      bonusDifficulty = 50, lowerSkillThreshold = 275, upperSkillTreshold = 440, concentrationCost = 12 }, 5, false)
+    assert.same({ source = "game", expectedQuality = 3, skill = 420, difficulty = 550, lowerThreshold = 275,
+      nextThreshold = 440, concentrationCostForAllocation = 12, applyingConcentration = false }, h)
+    assert.is_nil(M.GameHeader({ craftingQuality = 5, baseSkill = 600, lowerSkillThreshold = 550,
+      upperSkillTreshold = 550 }, 5).nextThreshold)
+    assert.is_nil(M.GameHeader({ baseSkill = 1 }, 2))
+    assert.is_nil(M.GameHeader({ craftingQuality = 0, baseSkill = 1, isQualityCraft = false }, 1))
+    assert.is_nil(M.GameHeader(nil, 2))
+  end)
+end)
+
 describe("H1-4 Fix A: equal-weight fallback for ranked slots", function()
   it("gives ranked basic slots weight 1 and leaves single-rank slots at 0; still flagged", function()
     local ns, _, world = make_world({ last = "Modules/Recipes.lua", calibrate = { ["Main-Realm"] = { 9001 } } })

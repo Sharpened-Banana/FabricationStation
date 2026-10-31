@@ -200,7 +200,8 @@ local function concentration_text(r, liveResult, atMax)
 end
 
 -- The game's CraftingOperationInfo for Blizzard's current allocation as a live header (the shape BuildModel takes
--- for liveResult, with source = "game"), or nil when the info lacks the quality fields. skill = baseSkill + bonusSkill,
+-- for liveResult, with source = "game"), or nil when the info lacks the quality fields or is for a recipe without
+-- qualities. skill = baseSkill + bonusSkill,
 -- difficulty = baseDifficulty + bonusDifficulty, lowerThreshold = lowerSkillThreshold, nextThreshold =
 -- upperSkillTreshold (the game's spelling) below maxQuality (nil at max quality), the concentration cost the game
 -- asks for the next quality.
@@ -208,6 +209,8 @@ function M.GameHeader(info, maxQuality, applyingConcentration)
   if type(info) ~= "table" or type(info.craftingQuality) ~= "number" or type(info.baseSkill) ~= "number" then
     return nil
   end
+  -- A recipe without qualities (isQualityCraft false, quality 0): nothing for a quality header to show.
+  if info.isQualityCraft == false or info.craftingQuality < 1 then return nil end
   local quality = info.craftingQuality
   local lower = type(info.lowerSkillThreshold) == "number" and info.lowerSkillThreshold or 0
   local upper = info.upperSkillTreshold

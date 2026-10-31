@@ -862,7 +862,7 @@ function Scanner:OnEnable()
   local scanBank = ns.FS:Wrap("Scanner", function() self:ScanBank(); self:ScanWarband() end)
   local scanWarband = ns.FS:Wrap("Scanner", function() self:ScanWarband() end)
   -- While the bank is open a bag update can be a deposit into (or withdrawal from) a bank or warband tab (12.x bank
-  -- tabs are bags 6-16, and PLAYERBANKSLOTS_CHANGED does not reliably fire for them), so the bank is rescanned too.
+  -- tabs are bags 6-16, and PLAYERBANKSLOTS_CHANGED may not fire for them), so the bank is rescanned too.
   self:RegisterEvent("BAG_UPDATE_DELAYED", function()
     ns.FS:Debounce("scanner.bags", SCAN_DEBOUNCE, scanBags)
     if self.bankOpen then ns.FS:Debounce("scanner.bank", SCAN_DEBOUNCE, scanBank) end
