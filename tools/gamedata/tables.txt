@@ -18,3 +18,6 @@ CraftingQuality
 CurvePoint
 ProfessionExpansion
 CurrencyTypes
+SpellEffect
+ItemEffect
+ItemXItemEffect

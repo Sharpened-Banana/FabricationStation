@@ -187,9 +187,9 @@ describe("tools/gamedata tables and fetch.sh", function()
     return list
   end
 
-  it("lists the 20 source tables, each with a fixture CSV", function()
+  it("lists the 23 source tables, each with a fixture CSV", function()
     local list = tables()
-    assert.equals(20, #list)
+    assert.equals(23, #list)
     for _, t in ipairs(list) do assert.is_truthy(io.open(FIXTURES .. "/" .. t .. ".csv", "r"), "no fixture for " .. t) end
   end)
 
