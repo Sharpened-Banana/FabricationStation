@@ -27,6 +27,7 @@ GuildNative.MIN_INTERVAL = 1     -- seconds between the end of one query and the
 GuildNative.TIMEOUT = 5          -- seconds to wait for the event before giving up on a query
 GuildNative.MAX_CACHED = 500     -- recipes kept per guild (preflight row 43)
 GuildNative.MAX_MEMBERS = 1000   -- members read from one answer
+GuildNative.STALE_WINDOW = 30    -- seconds an answer to our query from another guild is still recognised and dropped
 
 local NEXT_KEY = "guildNative.next"
 local TIMEOUT_KEY = "guildNative.timeout"
@@ -35,6 +36,8 @@ local queue = {}                 -- waiting { skillLineID, recipeID, cb, guildKe
 local inflight                   -- the item whose answer is awaited
 local lastDoneAt                 -- Now() when the previous server query ended
 local waiting = false            -- the NEXT_KEY timer is pending
+local started = {}               -- [recipeID] = { guildKey, at }: our recent queries, to spot a late answer
+local loggedQueryError = false
 
 local function now() return ns.FS:Now() end
 local function guild() return ns.FS:GetModule("Guild", true) end
@@ -114,12 +117,21 @@ local function start(item)
   if GuildNative.IsLocked() then settle(item, nil, "locked"); return false end
   if not GuildNative:IsAvailable() then settle(item, nil, "unavailable"); return false end
   local ok, res = pcall(C_GuildInfo.QueryGuildMembersForRecipe, item.skillLineID, item.recipeID)
+  if not ok and not loggedQueryError then
+    loggedQueryError = true
+    ns.FS:LogError("GuildNative", tostring(res))
+  end
   if not ok or res == nil then
     lastDoneAt = now()
     settle(item, nil, "unavailable")
     return false
   end
   inflight = item
+  local t = now()
+  for id, rec in pairs(started) do
+    if t - rec.at >= GuildNative.STALE_WINDOW then started[id] = nil end
+  end
+  started[item.recipeID] = { guildKey = item.guildKey, at = t }
   ns.FS:Debounce(TIMEOUT_KEY, GuildNative.TIMEOUT, ns.FS:Wrap("GuildNative", function()
     if inflight == item then settle(item, nil, "timeout"); pump() end
   end))
@@ -197,6 +209,17 @@ local function trim(native)
   for i = 1, count - GuildNative.MAX_CACHED do native[list[i].id] = nil end
 end
 
+-- Whether the stored entry already lists exactly these members (a refresh of an unchanged answer is silent).
+local function same_members(entry, members)
+  local old = type(entry) == "table" and entry.members
+  if type(old) ~= "table" or #old ~= #members then return false end
+  for i, m in ipairs(members) do
+    local o = old[i]
+    if type(o) ~= "table" or o.name ~= m.name or o.classFile ~= m.classFile or o.online ~= m.online then return false end
+  end
+  return true
+end
+
 local function read_members(count)
   local members = {}
   for i = 1, math.min(count, GuildNative.MAX_MEMBERS) do
@@ -220,14 +243,19 @@ function GuildNative:OnRecipeKnownByMembers()
   local skillLineID, recipeID, count = GetGuildRecipeInfoPostQuery()
   if is_secret(skillLineID) or is_secret(recipeID) or is_secret(count) then return end
   if type(recipeID) ~= "number" or type(count) ~= "number" then return end
+  -- A late answer to a query we started in another guild must not land in this guild's directory.
+  local mine = started[recipeID]
+  if mine and mine.guildKey ~= key and now() - mine.at < GuildNative.STALE_WINDOW then return end
   local members = read_members(count)
   if writable() then
     local g = guild()
     local dir = g and g:GetDirectory(key)
     if dir then
+      local previous = dir.native[recipeID]
       dir.native[recipeID] = { time = now(), skillLineID = type(skillLineID) == "number" and skillLineID or nil,
         members = copy_members(members) }
       trim(dir.native)
+      if not same_members(previous, members) and g._Changed then g:_Changed() end
     end
   end
   local item = inflight

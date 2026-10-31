@@ -184,6 +184,11 @@ local function changed(self)
   end))
 end
 
+-- Internal hook for GuildNative: stored directory data changed (FS_GUILD_CHANGED, debounced like every other change).
+function Guild:_Changed()
+  changed(self)
+end
+
 -- The cached "Guild Name-Realm" of the current character (nil outside a guild or before the name loaded).
 function Guild:GetGuildKey()
   return self.guildKey

@@ -249,13 +249,83 @@ describe("Social.GuildNative", function()
 
     it("while the saved data is from a newer version, resolves the query but writes nothing", function()
       local res
+      native()[77] = { time = ns.FS:Now(), members = {} }          -- the guild's directory exists before the flip
       GuildNative:Query(171, 4, function(m) res = m end)
+      p4.advance(2)
       ns.FS.dbIsNewer = true
       local snapshot = ns.Util.DeepCopy(ns.FS.db.global, 30)
       answer(171, 4, { { "Bob", "Bob-Realm", "MAGE", true } })
       assert.are.equal("Bob-Realm", res[1].name)
       assert.are.same(snapshot, ns.Util.DeepCopy(ns.FS.db.global, 30))
       assert.is_nil(GuildNative:Get("G-Realm", 4))
+      answer(171, 78, { { "Ann", "Ann-Realm", "PRIEST", false } })   -- a passive capture writes nothing either
+      assert.are.same(snapshot, ns.Util.DeepCopy(ns.FS.db.global, 30))
+    end)
+
+    it("does not cache a late answer in another guild's directory", function()
+      GuildNative:Query(171, 11, function() end)
+      p4.advance(6)                                                    -- timed out
+      p4.guild.key = { "Other", "Realm" }; Guild:OnGuildUpdate()
+      answer(171, 11, { { "Bob", "Bob-Realm", "MAGE", true } })        -- the old guild's late answer
+      assert.is_nil(GuildNative:Get("Other-Realm", 11))
+      assert.is_nil(GuildNative:Get("G-Realm", 11))
+      answer(171, 12, { { "Ann", "Ann-Realm", "PRIEST", false } })     -- Blizzard's own panel query: still captured
+      assert.is_not_nil(GuildNative:Get("Other-Realm", 12))
+      p4.advance(31)
+      answer(171, 11, { { "Bob", "Bob-Realm", "MAGE", true } })        -- long after: just a normal capture
+      assert.is_not_nil(GuildNative:Get("Other-Realm", 11))
+    end)
+
+    it("drops the answer of a query that was in flight when the guild changed", function()
+      GuildNative:Query(171, 13, function() end)
+      p4.guild.key = { "Other", "Realm" }; Guild:OnGuildUpdate()
+      answer(171, 13, { { "Bob", "Bob-Realm", "MAGE", true } })
+      assert.is_nil(GuildNative:Get("Other-Realm", 13))
+    end)
+  end)
+
+  describe("FS_GUILD_CHANGED", function()
+    local function changes()
+      p4.advance(1)
+      return #p4.messages("FS_GUILD_CHANGED")
+    end
+
+    it("follows a passive capture and an answered query, not an unchanged re-capture", function()
+      local base = changes()
+      answer(171, 20, { { "Ann", "Ann-Realm", "PRIEST", false } })
+      assert.are.equal(base + 1, changes())
+      local t = ns.FS:Now()
+      answer(171, 20, { { "Ann", "Ann-Realm", "PRIEST", false } })     -- same members, newer time
+      assert.are.equal(base + 1, changes())
+      assert.are.equal(t, GuildNative:Get("G-Realm", 20).time)
+      answer(171, 20, { { "Ann", "Ann-Realm", "PRIEST", true } })      -- went online
+      assert.are.equal(base + 2, changes())
+      GuildNative:Query(171, 21, function() end)
+      answer(171, 21, { { "Bob", "Bob-Realm", "MAGE", true } })
+      assert.are.equal(base + 3, changes())
+    end)
+
+    it("is debounced to one message for a burst of captures", function()
+      local base = changes()
+      for i = 30, 35 do answer(171, i, {}) end
+      assert.are.equal(base + 1, changes())
+    end)
+  end)
+
+  describe("errors", function()
+    it("logs a throwing query API once and reports unavailable", function()
+      _G.C_GuildInfo.QueryGuildMembersForRecipe = function() error("boom") end
+      local e1, e2
+      GuildNative:Query(171, 1, function(_, e) e1 = e end)
+      p4.advance(1)
+      GuildNative:Query(171, 2, function(_, e) e2 = e end)
+      assert.are.equal("unavailable", e1); assert.are.equal("unavailable", e2)
+      local logged = 0
+      for _, entry in ipairs(ns.FS.db.global.diagnostics.errors) do
+        if entry.source == "GuildNative" then logged = logged + 1 end
+      end
+      assert.are.equal(1, logged)
+      assert.is_true(Guild:IsEnabled())
     end)
   end)
 
@@ -275,7 +345,12 @@ describe("Social.GuildNative", function()
       local e1, e2
       GuildNative:Query(171, 1, function(_, e) e1 = e end)
       GuildNative:Query(171, 2, function(_, e) e2 = e end)
+      local cancelled = {}
+      local original = ns.FS.CancelDebounce
+      ns.FS.CancelDebounce = function(self, key) cancelled[key] = true; return original(self, key) end
       Guild:Disable()
+      ns.FS.CancelDebounce = original
+      assert.is_true(cancelled["guildNative.next"]); assert.is_true(cancelled["guildNative.timeout"])
       assert.are.equal("unavailable", e1); assert.are.equal("unavailable", e2)
       assert.are.same({ events = {}, messages = {} }, W.registrations(Guild))
       p4.advance(60)
