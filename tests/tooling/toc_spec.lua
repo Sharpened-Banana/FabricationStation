@@ -4,9 +4,15 @@ describe("FabricationStation.toc", function()
   it("declares the SavedVariables", function() assert.equals("FabricationStationDB", toc.meta.SavedVariables) end)
   it("soft-depends on Auctionator", function() assert.equals("Auctionator", toc.meta.OptionalDeps) end)
   it("loads embeds.xml first", function() assert.equals("embeds.xml", toc.files[1]) end)
+  -- Phase 4 Task 2: the locale files come right after the libraries and before the first Core file, so every
+  -- later file (in game) finds the real ns.L.
+  it("loads Locales/Locales.xml right after embeds.xml, before Core/Util.lua", function()
+    assert.equals("Locales/Locales.xml", toc.files[2])
+    assert.equals("Core/Util.lua", toc.files[3])
+  end)
   it("lists only files that exist", function()
     for _, f in ipairs(toc.files) do
-      if f ~= "embeds.xml" then assert.is_truthy(io.open(f, "r"), "missing " .. f) end
+      assert.is_truthy(io.open(f, "r"), "missing " .. f)
     end
   end)
   it("lists every addon .lua file under Core, Data, Math, Modules and UI", function()

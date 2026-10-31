@@ -8,6 +8,7 @@
 ## IconTexture: Interface\Icons\Trade_Engineering
 
 embeds.xml
+Locales\Locales.xml
 Core\Util.lua
 Core\Core.lua
 Core\Bus.lua
