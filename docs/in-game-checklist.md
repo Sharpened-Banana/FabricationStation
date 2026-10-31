@@ -191,8 +191,9 @@ Settings > Crafting; module toggles are in Settings > Modules.
     different ranks you do not hold, press Shopping List in the Queue tab, and open Auctionator's Shopping tab.
     Expected: a list named `FabricationStation` with each missing reagent at the right rank (tier) and quantity
     (the term fields used are `searchString`, `isExact`, `quantity`, `tier`). Repeat right after `/reload` with an
-    item whose name the client has not cached: the status line says `N item(s) skipped, try again` and a second
-    press adds it.
+    item whose name the client has not cached: the status line says `Loading item names… the list will appear in
+    Auctionator's Shopping tab (reopen the AH if it's open)` (or `Shopping list updated (N items); loading M item
+    names…`), and moments later, without a second press, `Shopping list updated (N items)`.
 1b-5. **Warband reagents.** With Settings > Crafting > queueUseWarband on and some reagents only in the warband
     bank (not in bags, bank or reagent bank), queue one craft and press Craft Next at the crafting station.
     Expected: the craft starts and uses the warband reagents. If Blizzard refuses it (reagents missing), report
@@ -258,6 +259,10 @@ H1-5. **Held reagents count.** Log in with the rank-2 (or top-rank) reagents of 
     and `FabricationStationDB.global.warband.items[<itemID>]` match where the items are. Also report what
     `/dump C_Item.GetItemCount(<itemID>, true, false, true, true)` says before the bank was ever opened this session
     (the addon relies on it seeing the bank and warband bank everywhere).
+H1-5b. **Shopping list after login.** Right after logging in (item names not cached yet), queue crafts with missing
+    reagents and press Shopping List once. Expected: the status line says the names are loading, then
+    `Shopping list updated (N items)`; at the auction house, Auctionator's Shopping tab has the `FabricationStation`
+    list (close and reopen the AH window if it was already open).
 
 ## Not done here
 

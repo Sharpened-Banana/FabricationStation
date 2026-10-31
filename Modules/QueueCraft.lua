@@ -33,6 +33,9 @@ local PENDING_KEY = "QueueCraft:pending"
 local pending
 -- operationIDs already counted (a multicraft sends several results for one operation).
 local seenOperations, seenCount = {}, 0
+-- The export waiting for item names, or nil: { items = { [itemID] = true } still loading, onRetry = fn|nil }. Session
+-- only; replaced by the next export, dropped by OnDisable.
+local waitingNames
 
 local function recipes() return ns.FS:GetModule("Recipes") end
 local function scanner() return ns.FS:GetModule("Scanner") end
@@ -61,15 +64,42 @@ local function reagent_tiers(entries)
   return tiers
 end
 
+local export
+
+-- GET_ITEM_INFO_RECEIVED(itemID, success): one of the awaited names arrived (or cannot load: success false, the item is
+-- then left out). When none is left the export runs once more (a continuation of the player's click; it waits for
+-- nothing further) and its result goes to the waiting onRetry.
+local function on_item_info(_, itemID)
+  local w = waitingNames
+  if not w or not w.items[itemID] then return end
+  w.items[itemID] = nil
+  if next(w.items) ~= nil then return end
+  waitingNames = nil
+  QueueCraft:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
+  local ok, info = export(false)
+  if w.onRetry then w.onRetry(ok, info) end
+end
+
 -- Sends the queue's missing reagents (every character) to Auctionator as the list "FabricationStation".
--- Returns true, { added, skipped } (skipped: names not cached yet, their load is requested), or false
--- plus "noAuctionator" | "empty" | "auctionatorError". No list is made when every name is still loading.
-function Queue:ExportShoppingList()
+-- Returns true, { added, skipped, loading? } or false plus "noAuctionator" | "empty" | "auctionatorError".
+-- skipped: reagents whose names the client has not cached; their load is requested, and while waiting
+-- (loading = true) the export runs again by itself once every requested name has arrived, creating or updating the
+-- list then and calling onRetry(ok, info) with that result. No list is made now when every name is still loading.
+function Queue:ExportShoppingList(onRetry)
+  -- A new export replaces any earlier one still waiting for names.
+  if waitingNames then
+    waitingNames = nil
+    QueueCraft:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
+  end
+  return export(true, onRetry)
+end
+
+export = function(wait, onRetry)
   local api = prices():AuctionatorAPI()
   if not (api and type(api.ConvertToSearchString) == "function" and type(api.CreateShoppingList) == "function") then
     return false, "noAuctionator"
   end
-  local missing = self:GetMissingReagents(nil)
+  local missing = Queue:GetMissingReagents(nil)
   local itemIDs = {}
   for itemID, n in pairs(missing) do
     if n > 0 then itemIDs[#itemIDs + 1] = itemID end
@@ -77,12 +107,13 @@ function Queue:ExportShoppingList()
   if #itemIDs == 0 then return false, "empty" end
   table.sort(itemIDs)
 
-  local tiers = reagent_tiers(self:GetEntries())
-  local searchStrings, skipped = {}, 0
+  local tiers = reagent_tiers(Queue:GetEntries())
+  local searchStrings, skipped, loading = {}, 0, {}
   for _, itemID in ipairs(itemIDs) do
     local name = C_Item.GetItemNameByID(itemID)
     if type(name) ~= "string" or name == "" then
       skipped = skipped + 1
+      loading[itemID] = true
       C_Item.RequestLoadItemDataByID(itemID)
     else
       local term = { searchString = name, isExact = true, quantity = missing[itemID], tier = tiers[itemID] }
@@ -100,6 +131,11 @@ function Queue:ExportShoppingList()
       ns.FS:LogError("Queue:ShoppingList", "CreateShoppingList: " .. tostring(err))
       return false, "auctionatorError"
     end
+  end
+  if skipped > 0 and wait and QueueCraft:IsEnabled() then
+    waitingNames = { items = loading, onRetry = onRetry }
+    QueueCraft:RegisterEvent("GET_ITEM_INFO_RECEIVED", ns.FS:Wrap("QueueCraft:ShoppingRetry", on_item_info))
+    return true, { added = #searchStrings, skipped = skipped, loading = true }
   end
   return true, { added = #searchStrings, skipped = skipped }
 end
@@ -288,5 +324,6 @@ end
 
 function QueueCraft:OnDisable()
   self:UnregisterAllEvents()
+  waitingNames = nil
   clear_pending()
 end

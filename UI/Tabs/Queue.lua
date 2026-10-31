@@ -174,13 +174,24 @@ local function count_items(n)
   return n .. (n == 1 and " item" or " items")
 end
 
--- One line for an ExportShoppingList result (ok, info).
+local AH_HINT = " in Auctionator's Shopping tab (reopen the AH if it's open)"
+
+-- One line for an ExportShoppingList result (ok, info). info.loading: names are still loading and the list will be
+-- made or updated by itself once they arrive; skipped without loading: names the client could not load.
 function Tab.ShoppingText(ok, info)
   if ok then
-    local added, skipped = type(info) == "table" and info.added or 0, type(info) == "table" and info.skipped or 0
-    if added == 0 and skipped > 0 then return count_items(skipped) .. " skipped, try again" end
+    local t = type(info) == "table" and info or {}
+    local added, skipped = t.added or 0, t.skipped or 0
+    if skipped > 0 and t.loading then
+      if added == 0 then return "Loading item names" .. ELLIPSIS .. " the list will appear" .. AH_HINT end
+      return "Shopping list updated (" .. count_items(added) .. "); loading " .. skipped
+        .. (skipped == 1 and " item name" or " item names") .. ELLIPSIS .. " the list will update" .. AH_HINT
+    end
+    if added == 0 and skipped > 0 then
+      return count_items(skipped) .. " skipped: " .. (skipped == 1 and "its name" or "their names") .. " could not be loaded"
+    end
     local text = "Shopping list updated (" .. count_items(added) .. ")"
-    if skipped > 0 then text = text .. ", " .. count_items(skipped) .. " skipped, try again" end
+    if skipped > 0 then text = text .. ", " .. count_items(skipped) .. " skipped" end
     return text
   end
   if info == "noAuctionator" then return "Auctionator not available" end
@@ -515,8 +526,14 @@ local function export_shopping_list()
     set_status("The queue is not available", "bad")
     return
   end
-  local ok, info = queue:ExportShoppingList()
-  set_status(Tab.ShoppingText(ok, info), (ok and not (type(info) == "table" and info.skipped > 0)) and "good" or "warn")
+  local function show(ok, info)
+    local skipped = type(info) == "table" and info.skipped or 0
+    local tone = not ok and "warn" or (skipped == 0 and "good" or (info.loading and "plain" or "warn"))
+    set_status(Tab.ShoppingText(ok, info), tone)
+  end
+  -- The second call comes later, when the item names the first export waited for have arrived.
+  local ok, info = queue:ExportShoppingList(show)
+  show(ok, info)
 end
 
 local function set_restock()
