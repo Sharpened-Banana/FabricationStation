@@ -191,10 +191,12 @@ function Tab.FooterTooltip(s)
   return lines
 end
 
--- { enabled, guildKey, useNative, available, locked, selected } -> ok, reason|nil: whether "Ask guild" may run.
--- reason: "off" | "noguild" | "native" | "unavailable" | "locked" | "select".
+-- { enabled, readOnly, guildKey, useNative, available, locked, selected } -> ok, reason|nil: whether "Ask guild" may
+-- run. reason: "off" | "readonly" (GuildNative stores no answer while the saved data is from a newer version, so the
+-- tab would show nothing) | "noguild" | "native" | "unavailable" | "locked" | "select".
 function Tab.AskState(s)
   if not s.enabled then return false, "off" end
+  if s.readOnly then return false, "readonly" end
   if not s.guildKey then return false, "noguild" end
   if not s.useNative then return false, "native" end
   if s.available == false then return false, "unavailable" end
@@ -205,6 +207,7 @@ end
 
 local ASK_HINTS = {
   off = L["Guild sync is turned off"],
+  readonly = L["Read-only: the saved data is from a newer version of the addon"],
   noguild = L["Not in a guild"],
   native = L["Turned off in the Guild settings (\"Also use the game's guild recipe list\")"],
   unavailable = L["The game's guild recipe query is not available"],
@@ -256,7 +259,8 @@ local refresh   -- below
 local function ask_state()
   local G = guild()
   local N = ns.Social.GuildNative
-  local state = { enabled = G ~= nil and G:IsEnabled(), selected = view and view.selected or nil }
+  local state = { enabled = G ~= nil and G:IsEnabled(), selected = view and view.selected or nil,
+    readOnly = ns.FS.dbIsNewer == true }
   if state.enabled then
     state.guildKey = G:GetGuildKey()
     state.useNative = G:Settings().useNative == true

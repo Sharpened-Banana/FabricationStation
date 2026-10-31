@@ -239,6 +239,15 @@ local function tab_candidates(dir)
   return byRecipe, lines
 end
 
+-- GetCrafters' rows for one recipe of tab_candidates (only the profiles that list it are scanned).
+local function tab_crafters(ctx, contested, profiles, recipeID)
+  local rows, byName = {}, {}
+  addon_rows(ctx, { profiles = profiles, contested = contested }, recipeID, byName, rows)
+  native_rows(ctx, recipeID, byName, rows)
+  table.sort(rows, crafter_before)
+  return rows
+end
+
 local function lowest(set)
   local best
   for id in pairs(set) do if best == nil or id < best then best = id end end
@@ -283,10 +292,7 @@ function Guild:BuildTabRows(filter)
   local contested = type(dir.contested) == "table" and dir.contested or {}
   for _, recipe in ipairs(recipes) do
     local recipeMatches = text == "" or recipe.name:lower():find(text, 1, true) ~= nil
-    local rows, byName = {}, {}
-    addon_rows(ctx, { profiles = byRecipe[recipe.id], contested = contested }, recipe.id, byName, rows)
-    native_rows(ctx, recipe.id, byName, rows)
-    table.sort(rows, crafter_before)
+    local rows = tab_crafters(ctx, contested, byRecipe[recipe.id], recipe.id)
     local line = skillLineID or lowest(lines[recipe.id])
     for _, crafter in ipairs(rows) do
       if recipeMatches or crafter.name:lower():find(text, 1, true) then
@@ -297,18 +303,23 @@ function Guild:BuildTabRows(filter)
   return out
 end
 
--- The profession lines (skill line IDs, ascending) that the stored profiles and the native cache know recipes for;
--- the Guild tab's profession button cycles through them.
+-- The profession lines (skill line IDs, ascending) with at least one row in the tab under the current settings: the
+-- lines of recipes that have a crafter (own characters, contested copies, members who left and, with useNative off,
+-- the native cache do not count). The Guild tab's profession button cycles through them.
 function Guild:TabSkillLines()
   local out = {}
   if not self:IsEnabled() then return out end
   local dir = peek(self)
   if not dir then return out end
-  local _, lines = tab_candidates(dir)
+  local byRecipe, lines = tab_candidates(dir)
+  local ctx = context(self)
+  local contested = type(dir.contested) == "table" and dir.contested or {}
   local seen = {}
-  for _, set in pairs(lines) do
-    for id in pairs(set) do
-      if not seen[id] then seen[id] = true; out[#out + 1] = id end
+  for recipeID, profiles in pairs(byRecipe) do
+    if next(lines[recipeID]) ~= nil and #tab_crafters(ctx, contested, profiles, recipeID) > 0 then
+      for id in pairs(lines[recipeID]) do
+        if not seen[id] then seen[id] = true; out[#out + 1] = id end
+      end
     end
   end
   table.sort(out)

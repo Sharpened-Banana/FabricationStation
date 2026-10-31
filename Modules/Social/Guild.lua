@@ -439,8 +439,10 @@ local function log_once(source, charKey, text)
 end
 
 -- The wire Profile (Protocol's D table without t, p and h) of one of the account's characters, or nil without current
--- lines. `checkpoint` (optional) runs after each evaluated recipe: the refresh coroutine yields there.
-local function build(self, charKey, checkpoint)
+-- lines. `checkpoint` (optional) runs after each evaluated recipe: the refresh coroutine yields there. `quiet` (the
+-- diagnostic path) touches no counter and writes no log entry: stats.trimmed and the one-time validation log are the
+-- sync's, not the self-test's.
+local function build(self, charKey, checkpoint, quiet)
   local S = scanner()
   local record = S and S:GetCharacter(charKey)
   local lines = current_lines(record)
@@ -468,9 +470,10 @@ local function build(self, charKey, checkpoint)
   end
   local profile = { c = Util.NormalizeName(charKey), ts = now(), lv = quality and "q" or "r", pr = pr }
   local info = fit(profile)
-  if info.trimmed then self.stats.trimmed = self.stats.trimmed + 1 end
+  if info.trimmed and not quiet then self.stats.trimmed = self.stats.trimmed + 1 end
   local ok, code = Protocol.Validate(Protocol.Data(profile))
   if not ok then
+    if quiet then return nil end
     log_once("Guild:Profile", charKey, ("own profile of %s failed validation (%s); not shared"):format(charKey, code))
     return nil
   end
@@ -481,6 +484,26 @@ end
 -- concentration expectedQuality (0 = unknown).
 function Guild:BuildProfile(charKey)
   return (build(self, charKey, nil))
+end
+
+-- The info of an own profile from the last completed refresh ({ wireBytes, trimmed = "quality"|"recipes"|nil }), or nil.
+function Guild:GetOwnInfo(charKey)
+  return own.info[Util.NormalizeName(charKey)]
+end
+
+-- The account character with the most current-expansion recipe ids (what a profile would hold), or nil without any.
+-- Counts ids only (no Evaluate), so it is cheap enough to run in one frame.
+function Guild:LargestOwnCharacter()
+  local S = scanner()
+  local max = ns.Social.Protocol.LIMITS.MAX_RECIPE_ENTRIES
+  local best, bestCount = nil, 0
+  for _, key in ipairs(S and S:GetCharacters() or {}) do
+    local record = S:GetCharacter(key)
+    local n = 0
+    for _, line in ipairs(current_lines(record)) do n = n + #recipe_ids(record.professions[line], max) end
+    if n > bestCount then best, bestCount = key, n end
+  end
+  return best
 end
 
 -- The account's characters this player shares in the current guild: normalized, only characters with at least one
@@ -579,6 +602,40 @@ local function budget()
 end
 
 Guild._BudgetMs = budget      -- shared with GuildDirectory's index ticks
+
+-- The diagnostic build (Guild:SelfTestAsync): one character's profile built in a time-sliced coroutine like the refresh,
+-- driven by an owned C_Timer ticker (Guild._BudgetMs() + debugprofilestop per frame, at least one recipe), without
+-- touching stats.trimmed or the log. callback(profile|nil, info|nil, err|nil) runs once; a new call, the callback and
+-- Guild:OnDisable cancel the previous build. -> true when a build was started.
+local diag = { co = nil, ticker = nil, callback = nil }
+
+local function cancel_diag()
+  if diag.ticker then diag.ticker:Cancel() end
+  diag.co, diag.ticker, diag.callback = nil, nil, nil
+end
+
+local function diag_step()
+  local co, callback = diag.co, diag.callback
+  if not co then return end
+  stepStart, stepBudget, stepCount = type(debugprofilestop) == "function" and debugprofilestop() or 0, budget(), 0
+  local ok, profile, info = coroutine.resume(co)
+  if ok and coroutine.status(co) == "suspended" then return end
+  cancel_diag()
+  if not ok then callback(nil, nil, tostring(profile)) else callback(profile, info) end
+end
+
+function Guild:BuildProfileAsync(charKey, callback)
+  cancel_diag()
+  if type(callback) ~= "function" then return false end
+  diag.callback = callback
+  diag.co = coroutine.create(function() return build(self, charKey, checkpoint, true) end)
+  diag.ticker = C_Timer.NewTicker(0, ns.FS:Wrap("Guild", diag_step))
+  return true
+end
+
+function Guild:IsDiagnosticBuilding()
+  return diag.co ~= nil
+end
 
 local function same_hashes(a, b)
   for k, v in pairs(a) do if b[k] ~= v then return false end end
@@ -1075,6 +1132,7 @@ end
 
 function Guild:OnDisable()
   cancel_refresh()
+  cancel_diag()
   cancel_timers()
   stop_native("unavailable")
   if self._DirectoryDisable then self:_DirectoryDisable() end

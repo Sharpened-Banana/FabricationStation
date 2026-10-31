@@ -231,6 +231,20 @@ describe("Guild tab, settings and diagnostics", function()
       native_members(777, { NATIVE_D }, 2910)
       assert.are.same({ 2906, 2907, 2910 }, Guild:TabSkillLines())
     end)
+
+    it("lists only lines that would produce a row under the current settings", function()
+      native_members(777, { NATIVE_D }, 2910)
+      settings.useNative = false
+      assert.are.same({ 2906, 2907 }, Guild:TabSkillLines())              -- the native-only line is out
+      store("Me-Realm", "Peer-Realm", { recipes = { [900] = { 3, 5 } }, line = 2955 })     -- an own character
+      store("F-Realm", "Peer4-Realm", { recipes = { [901] = { 3, 5 } }, line = 2956 })
+      dir().contested["F-Realm"] = now()                                  -- contested: no addon row
+      p4.guild.exists["Peer5-Realm"] = false
+      store("G2-Realm", "Peer5-Realm", { recipes = { [902] = { 3, 5 } }, line = 2957 })   -- its owner left the guild
+      assert.are.same({ 2906, 2907 }, Guild:TabSkillLines())
+      store("H-Realm", "Peer6-Realm", { recipes = { [903] = { 3, 5 } }, line = 2958 })
+      assert.are.same({ 2906, 2907, 2958 }, Guild:TabSkillLines())
+    end)
   end)
 
   ---------------------------------------------------------------------------
@@ -276,6 +290,7 @@ describe("Guild tab, settings and diagnostics", function()
     it("round-trips the largest own profile", function()
       local r = Guild:SelfTest()
       assert.is_true(r.ok); assert.is_nil(r.err)
+      assert.is_false(r.trimmed)
       assert.is_true(r.wireBytes > 0)
       assert.are.equal(math.ceil(r.wireBytes / 254), r.chunks)
     end)
@@ -290,12 +305,154 @@ describe("Guild tab, settings and diagnostics", function()
       assert.is_true(Guild:SelfTest().wireBytes > small)
     end)
 
-    it("builds the profile when sharing is off", function()
+    it("is cache-only: with sharing off it builds nothing and says there is no profile", function()
       settings.share = false
       Guild:OnPrivacyChanged()
+      local calls = 0
+      ns.FS:GetModule("Recipes").Evaluate = function() calls = calls + 1; return { expectedQuality = 3 } end
       local r = Guild:SelfTest()
-      assert.is_true(r.ok)
-      assert.is_true(r.wireBytes > 0)
+      assert.is_false(r.ok); assert.are.equal("no profile", r.err)
+      assert.are.equal(0, calls)
+      assert.is_false(Guild:IsDiagnosticBuilding())
+    end)
+
+    describe("SelfTestAsync", function()
+      local clock, evaluations, results
+
+      local function many_recipes(n)
+        local recipes = {}
+        for i = 1, n do recipes[6000 + i] = true end
+        return recipes
+      end
+
+      before_each(function()
+        clock, evaluations, results = 0, 0, {}
+        _G.debugprofilestop = function() return clock end
+        ns.FS:GetModule("Recipes").Evaluate = function(_, _, _, o)
+          evaluations = evaluations + 1
+          clock = clock + 3                                           -- 3 ms each: two per recipe, a 4 ms budget
+          return { expectedQuality = o.useConcentration and 5 or 3 }
+        end
+        chars["Alt-Realm"].professions[2906].recipes = many_recipes(6)
+        settings.share = false
+        Guild:OnPrivacyChanged()                                      -- nothing cached: sharing is off
+        evaluations = 0
+      end)
+
+      local restore
+      after_each(function()
+        _G.debugprofilestop = nil
+        if restore then restore(); restore = nil end
+      end)
+
+      -- Takes over C_Timer.NewTicker: the callbacks are run by hand, one per "frame" (the stub clock would run a
+      -- zero-delay ticker to completion inside one advance). Returns the list of { fn, cancelled }.
+      local function manual_tickers()
+        local handles = {}
+        local real = C_Timer.NewTicker
+        C_Timer.NewTicker = function(_, fn)
+          local h = { fn = fn, cancelled = false }
+          function h:Cancel() self.cancelled = true end
+          handles[#handles + 1] = h
+          return h
+        end
+        return handles, function() C_Timer.NewTicker = real end
+      end
+
+      local function start()
+        return Guild:SelfTestAsync(function(r) results[#results + 1] = r end)
+      end
+
+      it("answers at once from the cache, without building", function()
+        settings.share = true
+        Guild:OnPrivacyChanged(); p4.advance(1)
+        evaluations = 0
+        assert.is_false(start())
+        assert.are.equal(1, #results); assert.is_true(results[1].ok)
+        assert.are.equal(0, evaluations)
+      end)
+
+      it("builds only the character with the most recipes, spread over several frames", function()
+        local handles
+        handles, restore = manual_tickers()
+        assert.is_true(start())
+        assert.are.equal(1, #handles)
+        assert.are.same({}, results)
+        assert.is_true(Guild:IsDiagnosticBuilding())
+        local frames = 0
+        while #results == 0 and frames < 50 do
+          local before = evaluations
+          handles[1].fn()
+          frames = frames + 1
+          assert.is_true(evaluations - before <= 2, "frame " .. frames)   -- one recipe (6 ms) spends the 4 ms budget
+        end
+        assert.is_true(frames >= 6, "built in " .. frames .. " frames")
+        assert.are.equal(12, evaluations)                             -- 6 recipes x 2: Alt-Realm, not Me-Realm
+        assert.is_true(results[1].ok)
+        assert.are.equal("Alt-Realm", results[1].charKey)
+        assert.is_false(results[1].trimmed)
+        assert.is_false(Guild:IsDiagnosticBuilding())
+        assert.is_true(handles[1].cancelled)                          -- the ticker stopped itself
+      end)
+
+      it("leaves the sync's counters, log and own profiles alone, and reports a trimmed profile", function()
+        ns.Social.Codec.MAX_WIRE = 220
+        chars["Alt-Realm"].professions[2906].recipes = many_recipes(20)
+        local before = Guild.stats.trimmed
+        start()
+        p4.advance(1); for _ = 1, 100 do if #results == 0 then p4.advance(0.01) end end
+        assert.are.equal(1, #results)
+        assert.is_true(results[1].ok)
+        assert.is_true(results[1].trimmed)
+        assert.is_true(results[1].wireBytes <= 220)
+        assert.are.equal(before, Guild.stats.trimmed)
+        assert.are.same({}, ns.FS.db.global.diagnostics.errors)
+        assert.are.same({}, Guild:GetOwnHashes())
+        assert.is_nil(Guild:GetOwnProfile("Alt-Realm"))
+      end)
+
+      it("a new call replaces the build in progress", function()
+        local handles
+        local first = {}
+        handles, restore = manual_tickers()
+        Guild:SelfTestAsync(function(r) first[#first + 1] = r end)
+        handles[1].fn()
+        start()
+        assert.is_true(handles[1].cancelled)
+        handles[1].fn()                                               -- a stale tick does nothing
+        for _ = 1, 50 do if #results == 0 then handles[2].fn() end end
+        assert.are.same({}, first)
+        assert.are.equal(1, #results)
+      end)
+
+      it("is cancelled when Guild is turned off", function()
+        local handles
+        handles, restore = manual_tickers()
+        start()
+        handles[1].fn()
+        Guild:Disable()
+        assert.is_false(Guild:IsDiagnosticBuilding())
+        assert.is_true(handles[1].cancelled)
+        local seen = evaluations
+        handles[1].fn()
+        p4.advance(2)
+        assert.are.same({}, results)
+        assert.are.equal(seen, evaluations)
+      end)
+
+      it("fails with 'no profile' without a character that has recipes", function()
+        chars["Me-Realm"].professions = {}
+        chars["Alt-Realm"].professions = {}
+        assert.is_false(start())
+        assert.are.equal("no profile", results[1].err)
+      end)
+
+      it("/fs guild selftest says it is building, then prints the result", function()
+        ns.FS:HandleSlash("guild selftest")
+        assert.truthy(printed():find("building", 1, true))
+        for _ = 1, 100 do if not printed():find("selftest ok", 1, true) then p4.advance(0.01) end end
+        assert.truthy(printed():find("guild selftest ok: Alt-Realm", 1, true))
+      end)
     end)
 
     it("sends one chunk up to 255 bytes and ceil(bytes / 254) above", function()
@@ -716,6 +873,21 @@ describe("Guild tab, settings and diagnostics", function()
         assert.are.equal(0, p4.guild.queryCount)
         v.askButton:GetScript("OnClick")(v.askButton)                  -- a click anyway asks nothing
         assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("is disabled while the saved data is from a newer version (no answer would be stored)", function()
+        local v = open()
+        click(row_frame(v.grid, 5))
+        ns.FS.dbIsNewer = true
+        refresh_now()
+        assert.is_false(v.askButton:IsEnabled())
+        hover(v.askButton)
+        assert.truthy(table.concat(tooltip.lines, "\n"):find("Read-only", 1, true))
+        v.askButton:GetScript("OnClick")(v.askButton)
+        assert.are.equal(0, p4.guild.queryCount)
+        assert.truthy(v.status:GetText():find("Read-only", 1, true))
+        assert.are.same({ false, "readonly" }, { ns.UI.GuildTab.AskState({ enabled = true, readOnly = true,
+          guildKey = "G-Realm", useNative = true, selected = {} }) })
       end)
 
       it("queries the selected recipe and shows the answer", function()

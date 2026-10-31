@@ -115,3 +115,6 @@ L["sharing off"] = true
 L["turned off"] = true
 L["unavailable"] = true
 L["usage: /fs guild [selftest]"] = true
+L["(trimmed to fit: a profile is at the size limit)"] = true
+L["Read-only: the saved data is from a newer version of the addon"] = true
+L["guild selftest: building the profile, one moment..."] = true

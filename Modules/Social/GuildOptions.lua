@@ -64,59 +64,74 @@ local function chunks_for(bytes)
   return math.ceil(bytes / CHUNK_BYTES)
 end
 
--- The own profiles the sync would send: the last completed refresh, else (sharing off, or the refresh has not finished)
--- one built now for every character of the account, so the check works with sharing turned off.
-local function candidate_profiles(self)
-  local S = ns.FS:GetModule("Scanner", true)
-  local keys = S and S:GetCharacters() or {}
-  local out = {}
-  for _, key in ipairs(keys) do
-    local profile = self:GetOwnProfile(key)
-    if profile then out[#out + 1] = profile end
-  end
-  if #out > 0 then return out end
-  for _, key in ipairs(keys) do
-    local profile = self:BuildProfile(key)
-    if profile then out[#out + 1] = profile end
-  end
-  return out
-end
-
--- Builds the largest own profile, puts it through Protocol.Wire and Protocol.Unwire and compares it with the original.
--- -> { ok, wireBytes, chunks, charKey|nil, err|nil }: wireBytes is the size of the wire text (header included), chunks
--- = 1 up to 255 bytes and ceil(wireBytes / 254) above (what AceComm sends). err: "no codec" (no C_EncodingUtil),
--- "no profile" (no character has a current-expansion profession), "encode", a decode code from Unwire, "invalid (...)"
--- or "mismatch". Building a profile can take a moment (one Recipes:Evaluate per recipe) when none was built yet.
-function Guild:SelfTest()
-  local Protocol, Codec = ns.Social.Protocol, ns.Social.Codec
-  local result = { ok = false, wireBytes = 0, chunks = 0 }
-  if not Codec.IsAvailable() then
-    result.err = "no codec"
+-- Puts one profile through Protocol.Wire and Protocol.Unwire and compares it with the original. -> the SelfTest result.
+-- info = the build info ({ trimmed }) of that profile.
+local function check(profile, info)
+  local Protocol = ns.Social.Protocol
+  local result = { ok = false, wireBytes = 0, chunks = 0, trimmed = info ~= nil and info.trimmed ~= nil,
+    charKey = profile.c }
+  local text = Protocol.Wire(Protocol.Data(profile))
+  if not text then
+    result.err = "encode"
     return result
   end
-  local best, bestText
-  for _, profile in ipairs(candidate_profiles(self)) do
-    local text = Protocol.Wire(Protocol.Data(profile))
-    if text and (not bestText or #text > #bestText) then best, bestText = profile, text end
-  end
-  if not best then
-    result.err = "no profile"
-    return result
-  end
-  result.charKey = best.c
-  result.wireBytes = #bestText
-  result.chunks = chunks_for(#bestText)
-  local sent = Protocol.Data(best)
-  local back, _, code = Protocol.Unwire(bestText)
+  result.wireBytes = #text
+  result.chunks = chunks_for(#text)
+  local back, _, code = Protocol.Unwire(text)
   if not back then
     result.err = tostring(code or "decode")
-  elseif not same(sent, back) then
+  elseif not same(Protocol.Data(profile), back) then
     result.err = "mismatch"
   else
     local valid, why = Protocol.Validate(back)
     if valid then result.ok = true else result.err = "invalid (" .. tostring(why) .. ")" end
   end
   return result
+end
+
+local function failure(err)
+  return { ok = false, wireBytes = 0, chunks = 0, trimmed = false, err = err }
+end
+
+-- Synchronous and cache-only: the largest of the own profiles the sync already built (the last completed refresh)
+-- goes through Protocol.Wire and Protocol.Unwire and is compared with the original.
+-- -> { ok, wireBytes, chunks, trimmed, charKey?, err? }: wireBytes is the size of the wire text (header included),
+-- chunks = 1 up to 255 bytes and ceil(wireBytes / 254) above (what AceComm sends), trimmed = the profile only fits
+-- Codec.MAX_WIRE because the builder dropped quality or recipes (so wireBytes alone cannot show it hit the limit). err:
+-- "no codec" (no C_EncodingUtil), "no profile" (nothing built: sharing off, not in a guild, Guild off, read-only or the
+-- rebuild still running; use SelfTestAsync), "encode", a decode code from Unwire, "invalid (...)" or "mismatch".
+-- Builds nothing, so it cannot stall the client.
+function Guild:SelfTest()
+  if not ns.Social.Codec.IsAvailable() then return failure("no codec") end
+  local S = ns.FS:GetModule("Scanner", true)
+  local best, bestInfo, bestSize
+  for _, key in ipairs(S and S:GetCharacters() or {}) do
+    local profile = self:GetOwnProfile(key)
+    if profile then
+      local text = ns.Social.Protocol.Wire(ns.Social.Protocol.Data(profile))
+      if text and (not bestSize or #text > bestSize) then best, bestInfo, bestSize = profile, self:GetOwnInfo(key), #text end
+    end
+  end
+  if not best then return failure("no profile") end
+  return check(best, bestInfo)
+end
+
+-- Like SelfTest, but when nothing is cached builds the ONE account character with the most current-expansion recipes in
+-- the background (time-sliced like the refresh, without touching Guild.stats or the log), then calls callback(result).
+-- callback also runs at once (before this returns) when the answer needs no build. A new call, and disabling Guild,
+-- cancel a build in progress. -> true when a build was started (the callback comes later).
+function Guild:SelfTestAsync(callback)
+  local cached = self:SelfTest()
+  if cached.err ~= "no profile" then callback(cached); return false end
+  local key = self:LargestOwnCharacter()
+  if not key then callback(cached); return false end
+  return self:BuildProfileAsync(key, function(profile, info, err)
+    if not profile then
+      callback(failure(err or "build failed"))
+    else
+      callback(check(profile, info))
+    end
+  end)
 end
 
 ---------------------------------------------------------------------------
@@ -139,8 +154,7 @@ local function print_status()
   end
 end
 
-local function print_selftest()
-  local r = Guild:SelfTest()
+local function print_selftest_result(r)
   local text
   if r.ok then
     text = L["guild selftest ok: %s, %d bytes on the wire, %d chunks"]:format(Util.EscapePipes(r.charKey or ""),
@@ -149,10 +163,15 @@ local function print_selftest()
     text = L["guild selftest FAILED: %s"]:format(tostring(r.err))
     if r.wireBytes > 0 then text = text .. L[" (%d bytes)"]:format(r.wireBytes) end
   end
+  if r.trimmed then text = text .. " " .. L["(trimmed to fit: a profile is at the size limit)"] end
   if r.wireBytes > WIRE_CHECK_BYTES then
     text = text .. " " .. L["above the %d byte check, please report this"]:format(WIRE_CHECK_BYTES)
   end
   say(text)
+end
+
+local function print_selftest()
+  if Guild:SelfTestAsync(print_selftest_result) then say(L["guild selftest: building the profile, one moment..."]) end
 end
 
 ns.FS:RegisterSlash("guild", function(rest)

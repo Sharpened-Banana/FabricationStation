@@ -809,8 +809,9 @@ P4-13. **Guild tab self-test and wire size (Task 9, two characters in one guild,
 character with the most recipes run `/fs guild selftest`. Expected: `guild selftest ok: <char>, <N> bytes on the wire, <M> chunks`
 with N at most 12000 (the in-game threshold; the line adds "above the 12000 byte check" otherwise). Record N and M for
 the largest profile in the commit message or here. The hard limit is `Codec.MAX_WIRE` (16384): raise it only if a real
-profile exceeds it. Also run it with sharing turned off (Guild settings): it still reports `ok`, because it builds the
-profile itself. `/fs guild` prints the sync status, counts and session stats; check them against the Guild tab footer.
+profile exceeds it. Also run it with sharing turned off (Guild settings): it still reports `ok`, because it builds the largest
+profile itself (it prints "building the profile" first and the result a moment later; the build is spread over several
+frames, so check there is no hitch while it runs). `/fs guild` prints the sync status, counts and session stats; check them against the Guild tab footer.
 
 P4-14. **Guild tab lists the other account's crafters.** Log in on the second account in the same guild (this build on
 both). Within 30 s of its login the first account's Guild tab (`/fs tab guild`) lists the second account's crafters:
