@@ -463,11 +463,13 @@ Run P3-1 to P3-6 in one session.
 P3-1. **Character 1: knowledge and spec.** On character 1, open each of its professions once (wait 2 s after each
     opens) and open the Specializations page once. Then finish one weekly knowledge source you have not done this
     week (the trainer's weekly quest, or a weekly treasure). Wait a few seconds and open `/fs tab characters`.
-    Expected: character 1 is listed first, marked `•`, in its class colour; its knowledge count went down by that
-    source's points compared with before; the spec points match the unspent points in Blizzard's specialization UI.
+    Expected: character 1 is listed first, marked `•`, in its class colour; its KP count went down by that source's
+    points compared with before; the `(+N)` in its Spec cell (`spent/max (+unspent)`) equals the unspent points in
+    Blizzard's specialization UI.
 P3-2. **Character 2.** Log in character 2 (different professions), open each of its professions once, then log back
     to character 1 and open `/fs tab characters`. Expected: character 2's row shows its professions, knowledge and
-    concentration, and its Age is the time since you logged out of it (character 1 reads `online`). Planner >
+    concentration, and its Age is the time since you logged in on it (the addon records a login, not a logout, so
+    after 30 minutes played on character 2 its Age reads at least `30m`); character 1 reads `online`. Planner >
     Knowledge has rows for both characters' Midnight professions.
 P3-3. **Addon off.** Disable FabricationStation in the AddOns list and `/reload`. Expected: Blizzard's Professions
     frame (recipe list, Specializations page, crafting orders) and item tooltips look and work exactly as without
@@ -494,8 +496,9 @@ P3-6. **Spec advice hitch check.** On a character with many learned recipes (a h
 ### Acceptance run, continued: tabs, tooltips and widget (plan Tasks 8-15)
 
 P3-7. **Characters tab.** `/fs tab characters`. Expected: every saved character is listed, the logged-in one first
-    with `•`, names in class colours; the header sums read sensibly, and hovering the header and the status line
-    shows their tooltips. Click a row: its detail opens under it with spec, knowledge, concentration
+    with `•`, names in class colours; the header sums read sensibly, and hovering the header shows its tooltip (the
+    status line under it stays empty until you search or hide a character; hovering it then shows the whole text).
+    Click a row: its detail opens under it with spec, knowledge, concentration
     (`full at <weekday HH:MM>`, your local time) and cooldown recipe names; the text is not cut off and the
     `Hide character` button sits below it. Click the row again: the detail closes. The mouse wheel scrolls, and
     hovering a row shows a tooltip with every value. An em dash `—` and `·` show as characters, not boxes.
@@ -505,14 +508,15 @@ P3-8. **Minimum width.** Drag the main window to its smallest width on the Chara
     buttons and pickers do not overlap, and the values of hidden columns appear in the row tooltip. Widen it again:
     the columns come back.
 P3-9. **Reagent search.** Type `ore` in the `Find reagent…` box. Expected: about 0.3 s after you stop typing, the grid
-    is replaced by results with item icons (not `|T…|t` text), `+N` when more characters hold an item, and Warband
-    `not scanned` on an account whose warband bank was never opened. Clear the box (also with the box's own clear
-    button): the grid comes back at once. The box keeps its placeholder text and clear button.
+    is replaced by results with item icons (not `|T…|t` text), `+N` when more than three characters hold an item, and
+    a number in the Warband column (the game's own warband-bank count, `0` when it holds none; `not scanned` shows
+    only when the game cannot count the warband bank and it was never opened). Clear the box (also with the box's
+    own clear button): the grid comes back at once. The box keeps its placeholder text and clear button.
 P3-10. **Hide a character.** Open an alt's detail and press `Hide character`. Expected: it leaves the grid, the
     Planner and the Dashboard widget. Tick `Show hidden (1)`: it is listed marked `(hidden)`; `Show character`
     brings it back. Hide it again and `/reload`: it stays hidden.
-P3-11. **Alts off.** Turn Alts off in Settings > Modules. Expected: the Characters tab says `Alts is turned off` (with
-    how to turn it on), and so does the Planner. Turn it back on.
+P3-11. **Alts off.** Turn Alts off in Settings > Modules. Expected: the Characters tab says `Alts is turned off: turn
+    it on in Settings > Modules to see your characters`, and the Planner says `Alts is turned off`. Turn it back on.
 P3-12. **Planner sections.** `/fs tab planner`. Expected: the four section buttons (Knowledge, Concentration, Spec
     advice, Missing recipes) switch sections and the shown one stays highlighted (if it does not look selected,
     report it). `/reload` reopens the last section.
@@ -523,7 +527,8 @@ P3-13. **Planner Knowledge.** Expected: one row per character and Midnight profe
     KP and its state. The footer reads `Knowledge data: build 70575 · Weekly reset in …` and the reset time matches
     the in-game weekly reset; hovering it says where the knowledge data comes from. On a client build other than
     70575 an orange `Old data` marker shows at the footer's left (not cut off at minimum width) and its tooltip starts
-    `Game data build <X> is outdated`; the Characters tab shows the same marker. With the shipped data, the Missing
+    `Game data build 70575 is outdated` (the knowledge data's build; the next line names your game build); the
+    Characters tab shows the same marker. With the shipped data, the Missing
     recipes footer starts `Recipe sources: not generated ·`.
 P3-14. **Planner Concentration.** Expected: a full pool shows a red `Capped: concentration is full` row; with
     Settings > Planner > "Hours before full to warn" raised to cover a filling pool, that pool shows an orange
@@ -534,16 +539,22 @@ P3-14. **Planner Concentration.** Expected: a full pool shows a red `Capped: con
     hovering it shows the whole text.
 P3-15. **Planner Spec advice.** Expected: the character and profession buttons cycle through characters with a
     Midnight profession. On a character whose Specializations page was never opened it says
-    `Open this profession's specializations on <Name-Realm> to load spec data`. With the shipped data it says
-    `Spec effect data not in this GameData build (…)`.
+    `Open this profession's specializations on <Name> to load spec data` (`<Name>` is the character name alone, no
+    realm). On a character with spec data but no profitable priced recipe in that profession it says
+    `No profitable recipes for <Name> in this profession yet: check prices or open the profession`. Otherwise, with
+    the shipped data, it says `Spec effect data not in this GameData build (…)`.
 P3-16. **Planner Missing recipes.** After opening a Midnight profession, the list shows that character's unlearned
-    recipes with readable source text (no `|c` or `|T` codes); a `Recipe item: <name>` entry shows the item name
-    after a moment. Turn Planner off in Settings > Modules: the tab says `Planner is turned off`. Turn it back on.
+    recipes with readable source text (no `|c` or `|T` codes); a recipe the game gives no source text for reads
+    `Unknown — open the profession on any character to load sources`. With the shipped data no entry reads
+    `Recipe item: …` (that needs a generated RecipeSources table, P3-34; then such an entry shows `item:<id>` briefly
+    and the item name after a moment). Turn Planner off in Settings > Modules: the tab says
+    `Planner is turned off: turn it on in Settings > Modules to see the plan`. Turn it back on.
 P3-17. **Holdings in item tooltips.** Hover a reagent that this character and an alt both hold (an ore, for example).
     Expected: the tooltip ends with one line per character (same-realm characters by short name, for example
     `Aria  15 (bags 5, bank 10)`; an alt whose data is over 7 days old adds `<N>d old`; an alt whose bank was never
-    scanned shows `5+ (bags 5, bank ?)`), then `Warband bank N` and `Total N` (`N+ (warband not scanned)` only when
-    the game cannot count the warband bank). Move a stack between bags and bank (bank open) and hover again: the
+    scanned shows `5+ (bags 5, bank ?)`), then `Warband bank N` (only when the warband bank holds some) and
+    `Total N` (`N+` when a listed bank was never scanned; ` (warband not scanned)` is added only when the game cannot
+    count the warband bank and it was never opened). Move a stack between bags and bank (bank open) and hover again: the
     counts follow without `/reload`; this character's numbers match its bags and bank right after moving a stack
     even without opening the bank. Report whether the warband count is there before you opened the warband bank
     this session. Hover an item nobody holds: no holdings lines. Turn off Settings > Characters > "Show what your
@@ -556,14 +567,16 @@ P3-18. **Item search from chat.** `/dump FS:GetModule("Alts"):FindItems("ore")`.
 P3-19. **Concentration warning in chat.** With an alt whose concentration is full (or with Settings > Planner > "Hours
     before full to warn" high enough to cover a pool), log out and back in (a `/reload` deliberately prints
     nothing). Expected: about 10 s after the loading screen, chat shows
-    `FabricationStation: <Name-Realm> <Profession>: concentration is full` (or `... concentration full in <N>h`)
-    once; a second loading screen (a portal or an instance) prints nothing more. With Settings > Planner > "Warn in
-    chat when concentration is about to be full" off, a new login prints nothing.
-P3-20. **Dashboard widget.** Expected: the Dashboard shows "Knowledge left this week" after "Gold this week"; it
-    updates within a second of turning in a weekly knowledge quest, and hiding a character on the Characters tab
-    removes its line. Hovering it lists every line plus `Click to open the Planner`; a left click opens the Planner.
-    At the smallest window a cut line still shows its `<n> KP` count. With Alts or Planner turned off, the widget
-    says `Alts is turned off` / `Planner is turned off` when the Dashboard is shown again.
+    `FabricationStation: <Name-Realm> <Profession>: concentration is full` (or
+    `... concentration full in <duration>`, for example `full in 5h 12m` or `full in 2d 4h`) once; a second loading
+    screen (a portal or an instance) prints nothing more. With Settings > Planner > "Warn in chat when concentration
+    is about to be full" off, a new login prints nothing.
+P3-20. **Dashboard widget.** Expected: the Dashboard shows "Knowledge left this week" after "Gold this week"; with
+    the Dashboard open it updates a few seconds after you turn in a weekly knowledge quest (about 3 s: the quest
+    flags are read 2 s after the last quest or currency event, then the widget redraws 0.5 s later), and hiding a
+    character on the Characters tab removes its line. Hovering it lists every line plus `Click to open the Planner`;
+    a left click opens the Planner. At the smallest window a cut line still shows its `<n> KP` count. With Alts or
+    Planner turned off, the widget says `Alts is turned off` / `Planner is turned off` when the Dashboard is shown again.
 P3-21. **Planner from chat.** `/dump FS:GetModule("Planner"):GetKnowledgeChecklist()`. Expected: one row per character
     and Midnight profession (no older-expansion lines, no hidden characters), each `summary.weeklyLeft` equal to the
     Characters tab's knowledge for that profession. After the Recipes scan has finished (a few seconds after login),
@@ -595,11 +608,16 @@ P3-23. **Darkmoon Faire window.** During a faire week, confirm it opened at 00:0
 P3-24. **Skill line IDs.** On a Midnight crafter with the profession open, `/dump C_TradeSkillUI.GetChildProfessionInfo().professionID`.
     Expected: the ID listed at the top of this section for that profession, and the same number is a key under
     `/dump FabricationStationDB.global.characters["<Name-Realm>"].professions`.
-P3-25. **Spec points and ranks.** On a profession with spec points, compare `spent` from
-    `/dump FS:GetModule("Alts"):GetSpecSnapshot("<Name-Realm>", <id>)` with `spent` from
-    `/dump C_Traits.GetTreeCurrencyInfo(C_ProfSpecs.GetConfigIDForSkillLine(<id>), C_ProfSpecs.GetSpecTabIDsForSkillLine(<id>)[1], false)`.
-    Report both numbers: if they differ by the number of unlocked paths, the unlock point is free and the addon must
-    count display ranks. In the same snapshot, one path's `rank` must equal the number Blizzard's specialization UI
+P3-25. **Spec points and ranks.** On a profession with spec points, note `spent` from
+    `/dump FS:GetModule("Alts"):GetSpecSnapshot("<Name-Realm>", <id>)` (the addon's sum of the raw ranks of every
+    path on every specialization tab) and print the game's numbers for every tab, with `<id>` replaced in the line:
+    `/run local id=<id> local c=C_ProfSpecs.GetConfigIDForSkillLine(id) for _,t in ipairs(C_ProfSpecs.GetSpecTabIDsForSkillLine(id)) do local i=(C_Traits.GetTreeCurrencyInfo(c,t,false) or {})[1] print(t,i and i.spent,i and i.quantity) end`
+    (one line per tab: tab ID, spent, unspent). If the tabs report different `spent` values, compare the snapshot's
+    `spent` with their sum; if every tab reports the same value, compare it with that value. Report the snapshot's
+    `spent`, every printed line and the number of paths you have unlocked: only if the compared numbers differ by
+    exactly the number of unlocked paths is the unlock point free (the addon then has to count display ranks; we change
+    that in code, not you). Do not change anything for a difference that does not match that rule; just report it.
+    In the same snapshot, one path's `rank` must equal the number Blizzard's specialization UI
     shows for it, and one perk's entry in that path's `perkRanks` must equal the rank at which the UI shows it
     unlocking (report it if it is one higher). The path names (`paths[<pathID>].name`) must match the names in the
     specialization UI; report any that read `Path <id>`.
@@ -611,7 +629,8 @@ P3-26. **Recipe list APIs.** (a) `/dump #C_TradeSkillUI.GetAllRecipeIDs()` print
     `/dump FabricationStationDB.global.recipeCatalog[<id>][<recipeID>]`: the stored text has the same words with no
     `|c`, `|r`, `|T`, `|A`, `|H` or `|n` codes left. Report any other escape code you see in the game's text.
 P3-27. **Knowledge flags.** With a profession open, run `/run FS:GetModule("Alts"):DebugKnowledge()`. Expected: one line
-    per knowledge source of this character's professions, `<questID>=true` for exactly the sources you finished
+    per knowledge source of this character's professions, `FabricationStation: <source id> <questID>=true|false ...`
+    (every quest of the source), with `<questID>=true` for exactly the sources you finished
     (this week for weekly ones, ever for one-time ones). Also, for three sources you finished this week (for example
     your trainer's weekly quest, 93690-93696 or 93697-93714; your treatise, 95127-95138; a weekly treasure,
     93528-93543), `/dump C_QuestLog.IsQuestFlaggedCompleted(<questID>)` prints `true`, and for one you have not done it
@@ -620,7 +639,8 @@ P3-28. **First crafts and the recipe catalog.** With a profession open,
     `/dump FabricationStationDB.global.characters["<Name-Realm>"].planning[<id>].firstCraftsPending` equals the number
     of learned recipes that show the first-craft bonus marker in the recipe list, and
     `/dump FabricationStationDB.global.recipeCatalog[<id>]` lists every Midnight recipe of that profession (learned or
-    not) with readable source text. `/dump FS:GetModule("Planner"):GetMissingRecipes("<Name-Realm>", <id>)` lists
+    not) with readable source text (`sourceText` is `""` where the game gives none, usually for learned recipes).
+    `/dump FS:GetModule("Planner"):GetMissingRecipes("<Name-Realm>", <id>)` lists
     exactly the recipes the profession window's unlearned filter shows; for an alt with the same profession, recipes
     that alt knows are left out even though the catalog was filled on another character.
 P3-29. **Overview row.** `/dump FS:GetModule("Alts"):GetAltRow("<Name-Realm>")` for the logged-in character.
