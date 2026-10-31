@@ -98,7 +98,9 @@ end
 --   * a line in Knowledge.variants is listed;
 --   * a line with a concentration or spec snapshot (only the open child line gets those) is listed too, unless a listed
 --     variant line of the character has the same base profession (parentSkillLineID; the variant's `base` when the
---     record has none). The variant IDs are hand-authored and unverified, so a wrong Midnight ID must not hide a real
+--     record has none). The variant IDs are hand-authored (skill_lines.csv), but the generated ProfessionLines table
+--     now confirms the 11 of them (2906, 2907, 2909, 2910, 2912-2918) as expansion 11 (the table also lists 2908, which
+--     is not a variant; it has no 2911). Should a client build ever change an ID, a wrong Midnight ID must not hide a real
 --     profession or its concentration pool (such a line has no sources: "noData"), while an older expansion's line
 --     that kept a snapshot stays an older profession next to its matched Midnight line. Without Knowledge data every
 --     line with a snapshot is listed;

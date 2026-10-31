@@ -310,7 +310,7 @@ describe("Planner spec advice adapters", function()
     assert.equal(300 + 4300, planner(e):GetSpecAdvice("Aria-Silvermoon", 2907)[1].gain)   -- 5300-5000, 5300-1000
   end)
 
-  it("real adapters on the shipped empty tables: unknown gains, status ok, no evaluation", function()
+  it("real adapters on empty tables: unknown gains, status ok, no evaluation", function()
     local asked = 0
     local e = env({ evaluate = function() asked = asked + 1; return { profit = 1 } end })
     local rows, status = planner(e):GetSpecAdvice("Aria-Silvermoon", 2907)

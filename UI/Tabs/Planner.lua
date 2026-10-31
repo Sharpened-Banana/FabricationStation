@@ -252,7 +252,7 @@ function Tab.KnowledgeFooter()
 end
 
 -- -> text, tooltip for the Missing recipes footer; "Recipe sources: not generated · " first while the RecipeSources
--- table has no build (the checked-in table is generated --empty).
+-- table has no build (the checked-in table is generated; this covers a build that has not been generated yet).
 function Tab.MissingFooter()
   local base = "Recipe lists fill in when you open the profession on any character"
   local build = ns.GameData.Get("RecipeSources") ~= nil and ns.GameData.TableBuild("RecipeSources") or nil

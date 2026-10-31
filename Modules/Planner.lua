@@ -134,7 +134,7 @@ end
 ---------------------------------------------------------------------------
 
 -- The generated RecipeSources entries of a line ({} when the table is undefined, empty or damaged; the checked-in
--- table is generated --empty while wago.tools is unreachable).
+-- table is generated, but a build that has not been generated yet leaves it empty and this path covers that).
 local function generated_sources(skillLineID)
   local t = ns.GameData.Get("RecipeSources")
   local by = type(t) == "table" and t.bySkillLine

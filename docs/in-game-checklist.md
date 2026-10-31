@@ -16,8 +16,8 @@ General, Prices, Modules and Diagnostics.
   after a `/reload`) into a reply, next to the check number. A bare "pass" or "fail" is enough for visual checks.
 - For any failure, add the BugSack error text and what you did just before it.
 - Check 5 produces a file: commit it as `tests/fixtures/captures/<generated name>.lua` (the golden capture).
-- Check 6 and check 15 produce edits to `Data/GameData_Manual.lua`; send the IDs and the build number, or commit
-  the edit yourself.
+- Check 6 compares the shipped Moxie IDs in `Data/GameData_Manual.lua` with the game; send any ID that is wrong, or
+  commit the edit yourself. Check 15 only produces edits when you regenerate for a newer client build.
 - Note any check you skipped and why.
 
 ## A. Install and basic behaviour (plan checks 1-3)
@@ -50,8 +50,9 @@ General, Prices, Modules and Diagnostics.
    `/fabstation capture` (the same command under the addon's own name).
 6. **Moxie currencies.** Run
    `/run for i=1,C_CurrencyInfo.GetCurrencyListSize() do local c=C_CurrencyInfo.GetCurrencyListInfo(i) if c.name:find("Moxie") then print(c.name, C_CurrencyInfo.GetCurrencyListLink(i)) end end`.
-   Map each currency ID from the link to its profession's child skillLineID in `Data/GameData_Manual.lua`, and
-   cross-check against the generator's candidates (`MoxieCurrency candidates:` in the `generate.lua` output).
+   The Moxie IDs are already filled in `Data/GameData_Manual.lua`; this check verifies them. Take each currency ID
+   from the link and compare it with the table: each ID must sit under its profession's child skillLineID. Send
+   any ID that differs, or any Moxie currency the table does not have.
 7. **Bank snapshot.** Open the bank, then run `/dump FabricationStationDB.global.warband.time ~= nil`.
    Expected: `true`. Close the bank, move an item between bags, and confirm the bank counts are unchanged.
 
@@ -69,7 +70,8 @@ General, Prices, Modules and Diagnostics.
 9. **GameData joins.** Check one finishing reagent's GameData effect against its in-game tooltip, and one
    reagent's `rank` against `C_TradeSkillUI.GetItemReagentQualityByItemInfo`. These verify the
    `CraftingReagentEffect.ProfessionEffectID` join (WoWDBDefs marks it a guess) and `rank = OrderIndex + 1`.
-   Fix `tools/gamedata/transforms.lua` and its test if either is wrong. (Needs real generated data; see check 15.)
+   Fix `tools/gamedata/transforms.lua` and its test if either is wrong. (The shipped data is real generated data, so
+   this can run now.)
 
 ## E. Extra checks from code review
 
@@ -119,9 +121,9 @@ General, Prices, Modules and Diagnostics.
       smaller and then much larger. The options tree and its right-hand panel must follow the new size
       each time (no options cut off at the old edge, no empty band left where the old size ended).
     - GameData status is not in the window chrome. It appears in two places in the Settings tab, with the
-      same text in both, and before real data is generated it must say `GameData not generated` (all
-      strings in check 15): Settings > General (second line, after the minimap checkbox), and
-      Settings > Diagnostics (first line).
+      same text in both, and on a 70688 client it must say `GameData: build 70688, up to date` (on a newer client
+      `GameData is outdated: data build 70688, game build <yours>`; all strings in check 15): Settings > General
+      (second line, after the minimap checkbox), and Settings > Diagnostics (first line).
 
 ### Diagnostics and scanner state
 
@@ -146,8 +148,9 @@ General, Prices, Modules and Diagnostics.
 15. **Generate real GameData.** On your machine, follow
     [`tools/gamedata/README.md`](../tools/gamedata/README.md): `bash tools/gamedata/fetch.sh <version.build>`,
     `lua tools/gamedata/generate.lua --build <version.build> --cache tools/gamedata/cache/<version.build> --out Data`,
-    then `busted && luacheck .`. Then bump the build number in `Data/GameData_Manual.lua` to match (for
-    `12.1.5.70575` the number is `70575`) and fill its Moxie currency IDs (check 6) against the printed candidates.
+    then `busted && luacheck .`. Then bump the build number in `Data/GameData_Manual.lua` and `Data/OrderRewards.lua`
+    to match (for `12.1.5.70688` the number is `70688`) and re-check its Moxie currency IDs (check 6) against the
+    printed candidates.
     `/reload` and read the status line in the Settings tab. Settings > General (second line) and
     Settings > Diagnostics (first line) show the same text; a difference between the two is a failure.
     The shipped data was generated for `12.1.5.70688` on 2026-10-31 (Moxie IDs filled), so on that client build
@@ -236,14 +239,16 @@ Settings > Crafting; module toggles are in Settings > Modules.
 
 ### Self-check and data
 
-1b-13. **Self-check.** With selfCheck on and a calibrated recipe selected, change reagent ranks. Before real GameData:
-    report the panel's check line. After real GameData (check 15): expected `Math check: OK` while you change ranks.
+1b-13. **Self-check.** With selfCheck on and a calibrated recipe selected, change reagent ranks. Real GameData ships
+    (the GameData status line is check 15, in section E under "GameData"): expected `Math check: OK` while you change ranks.
     Also compare a few game thresholds with difficulty × the GameData fraction (they must agree to 1e-6) and confirm
     the game's `concentrationCost` is a whole number:
     `/dump C_TradeSkillUI.GetCraftingOperationInfo(<recipeID>, {}, nil, false)`.
-1b-14. **Empty GameData.** With the shipped placeholder GameData (before check 15), expected: every result in the
+1b-14. **Empty GameData** (optional; the shipped GameData is real, so this needs a local empty build). Run
+    `lua tools/gamedata/generate.lua --empty --out Data` on your machine, `/reload`, and expect: every result in the
     Recipes tab, panel, Queue tab ("~" cost) and recipe-list labels ("~") is marked as an estimate, and there are no
-    Lua errors on the first window open, the first scan and the first tooltip.
+    Lua errors on the first window open, the first scan and the first tooltip. Then restore the real data with
+    `git checkout Data` and `/reload`.
 1b-15. **Read-only saved data.** Make the saved data look newer: in the SavedVariables file set
     `FabricationStationDB.global.schemaVersion` above the current one (back up the file first), then log in. Expected:
     every queue button (Add to Queue, Clear, quantity, Remove, restock) says the queue is read-only, Calibrate (select
@@ -252,13 +257,15 @@ Settings > Crafting; module toggles are in Settings > Modules.
 
 ## Hotfix H1 re-checks (after the first in-game test)
 
-Run these with the shipped (empty) GameData, as installed.
+Run these with the shipped GameData (real data for build 70688).
 
-H1-4. **Panel quality with empty GameData.** Select a quality recipe and fill every quality slot with its top rank.
+H1-4. **Panel quality.** Select a quality recipe and fill every quality slot with its top rank.
     Expected: the panel's first line reads `Quality: Q<n> (game)` with the same quality, skill and next-threshold as
-    Blizzard's quality meter, and the concentration line matches Blizzard's concentration cost. The per-quality rows
-    under `Cheapest reagents per quality (estimate)` list every reachable quality (two or more rows for a recipe
-    whose top quality is reachable), not only Q1.
+    Blizzard's quality meter, and the concentration line matches Blizzard's concentration cost. The header shows the
+    game's numbers (`(game)`) while the profession window is open. The per-quality rows (what-ifs worked out by the
+    addon's own math) sit under `Cheapest reagents per quality`; the header reads `(estimate)` only for a recipe the
+    addon has not calibrated yet (open the profession once first). They list every reachable quality (two or more
+    rows for a recipe whose top quality is reachable), not only Q1.
 H1-4b. **Panel quality fallback.** Select a quality recipe and fill its quality slots so that Blizzard's quality meter
     shows a quality below the recipe's maximum with no next threshold shown (for example a recipe whose next quality
     needs more skill than any reagent mix gives). Expected: the panel's first line is `Quality: Q<n>` **without**
@@ -451,10 +458,10 @@ skill line ID: 2906 Alchemy, 2907 Blacksmithing, 2909 Enchanting, 2910 Engineeri
 The Characters tab is `/fs tab characters` and the Planner tab is `/fs tab planner`. Settings > Characters and
 Settings > Planner hold the phase-3 options; Settings > Modules has the Alts and Planner switches.
 
-The knowledge table ships from hand-authored data (`tools/gamedata/sources/knowledge_sources.csv`, every row marked
-unverified), and the recipe-source and spec-effect tables are not generated yet. So some numbers can be wrong
-(P3-24 to P3-31 find them), recipe sources often read "Unknown", and Spec advice says its data is missing. Those are
-the expected degraded states, not failures.
+The knowledge table ships from hand-authored data (`tools/gamedata/sources/knowledge_sources.csv`, rows marked
+unverified where they are), while the recipe-source and spec-effect tables are generated (build 70688), so Spec advice
+ranks paths. Some knowledge numbers can still be wrong (P3-24 to P3-31 find them), and a recipe source can read
+"Unknown" when the table and the game give none. Those are the expected degraded states, not failures.
 
 ### Acceptance run (plan Task 16 Steps 2-3)
 
@@ -552,9 +559,9 @@ P3-15. **Planner Spec advice.** Expected: the character and profession buttons c
     unknown does it say `Spec effect data not in this GameData build (70688)`.
 P3-16. **Planner Missing recipes.** After opening a Midnight profession, the list shows that character's unlearned
     recipes with readable source text (no `|c` or `|T` codes); a recipe the game gives no source text for reads
-    `Unknown — open the profession on any character to load sources`. With the shipped data no entry reads
-    `Recipe item: …` (that needs a generated RecipeSources table, P3-34; then such an entry shows `item:<id>` briefly
-    and the item name after a moment). Turn Planner off in Settings > Modules: the tab says
+    `Unknown — open the profession on any character to load sources`. With the shipped data (291 Midnight recipes
+    have kind item) an entry can read `Recipe item: …`; it shows `item:<id>` briefly and the item name after a moment.
+    Turn Planner off in Settings > Modules: the tab says
     `Planner is turned off: turn it on in Settings > Modules to see the plan`. Turn it back on.
 P3-17. **Holdings in item tooltips.** Hover a reagent that this character and an alt both hold (an ore, for example).
     Expected: the tooltip ends with one line per character (same-realm characters by short name, for example
@@ -655,7 +662,7 @@ P3-29. **Overview row.** `/dump FS:GetModule("Alts"):GetAltRow("<Name-Realm>")` 
     Expected: `professions` lists only the Midnight lines (older expansions are counted in `olderProfessions`), each
     profession's `concentration.now` and `.max` match the profession window, `concentration.fullAt` is roughly when it
     will be full, and `knowledge.weeklyLeft` matches what you still have to do this week.
-P3-30. **Spec effect data** (needs a generated SpecEntryEffects table, not the shipped empty one; skip until then).
+P3-30. **Spec effect data** (the shipped SpecEntryEffects table is generated, so this can run now).
     On a profession with spec points, hover the next rank of one path in the specialization UI and compare its bonus
     with `/dump FS:GetModule("Planner"):_nodeBonus("<Name-Realm>", <id>, <pathID>, r, r + 1)` (r = the displayed
     rank). Report whether the game's amount is per rank or cumulative, whether a perk's bonus is counted exactly when
@@ -667,8 +674,13 @@ P3-30. **Spec effect data** (needs a generated SpecEntryEffects table, not the s
 ### Knowledge data checks
 
 These check the hand-authored rows of `tools/gamedata/sources/knowledge_sources.csv`. Send corrections as
-"profession, quest ID, item ID, points"; after editing the CSV, regenerate with
-`lua tools/gamedata/gen_phase3.lua --empty --build 12.1.5.70575 --out Data`.
+"profession, quest ID, item ID, points"; after editing the CSV, regenerate with the real commands for your build
+(`--empty` would blank RecipeSources and re-stamp the build, so do not use it here). On your machine, with luajit:
+`bash tools/gamedata/fetch.sh <version.build>`, then
+`luajit tools/gamedata/generate.lua --build <version.build> --cache tools/gamedata/cache/<version.build> --out Data` and
+`luajit tools/gamedata/gen_phase3.lua --build <version.build> --cache tools/gamedata/cache/<version.build> --out Data`
+(see `tools/gamedata/README.md`). For a new build, also bump the build number in `Data/GameData_Manual.lua` and
+`Data/OrderRewards.lua`, then run `busted && luacheck .`.
 
 P3-31. **Point values.** Read the "Knowledge" amount in the item tooltip (or the points gained) for: the Alchemy weekly
     item 263454 (table: 1, quest 93690; guides say both 1 and 2), the Engineering weekly item 263456 (table: 1, quest
@@ -690,10 +702,8 @@ P3-33. **Books.** After buying or using each book you have, check that its quest
     quest ID in game (find it with `/dump C_QuestLog.IsQuestFlaggedCompleted(<candidate>)` before and after, or from
     the quest-completed chat message), and the points it gave. AllTheThings' `CharacterItemDB` can suggest candidate
     IDs, but only your in-game reading goes into the table.
-P3-34. **Recipe sources and the generator** (when wago.tools is reachable; on your machine). Run
-    `bash tools/gamedata/fetch.sh <version.build>` and
-    `lua tools/gamedata/gen_phase3.lua --build <version.build> --cache tools/gamedata/cache/<version.build> --out Data`.
-    Check that `head -1 tools/gamedata/cache/<version.build>/SpellEffect.csv` names `EffectMiscValue[0]` or
+P3-34. **Recipe sources and the generator.** The generator run is done (12.1.5.70688, 2026-10-31); only the
+    spot-checks remain (to regenerate for another build, see the commands above P3-31). Check that `head -1 tools/gamedata/cache/<version.build>/SpellEffect.csv` names `EffectMiscValue[0]` or
     `EffectMiscValue_0`, that SpellEffect.Effect 36 is LEARN_SPELL and 16 is QUEST_COMPLETE (a known recipe item
     comes out kind `"item"` with its itemID, and the Blacksmithing weekly item 263455 completes quest 93691 with no
     cross-check warning). The first run is expected to print cross-check warnings for the grouped drop rows that carry
@@ -706,7 +716,7 @@ P3-34. **Recipe sources and the generator** (when wago.tools is reachable; on yo
 
 ## Not done here
 
-`Data/GameData_Manual.lua` (Moxie IDs and build) and `tests/fixtures/captures/` are intentionally untouched;
-they need your in-game results from checks 5, 6 and 15. The phase-3 knowledge CSV
+`tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in
+`Data/GameData_Manual.lua` are filled (check 6 verifies them). The phase-3 knowledge CSV
 (`tools/gamedata/sources/knowledge_sources.csv`) is also left as authored: its rows change only from your P3-31 to
 P3-33 readings.
