@@ -361,6 +361,42 @@ describe("Alts overview", function()
       assert.same({ 2999, 500, 1000 }, { found.skillLineID, found.value, found.max })
     end)
 
+    -- Fix round 1, ruling 3: an older expansion's line that kept a snapshot stays older next to its Midnight line.
+    it("a snapshot line sharing its base profession with a listed variant line stays an older profession", function()
+      char(ns, "Cato-Silvermoon").professions = {
+        [2907] = { name = "Midnight Blacksmithing", skill = 1, maxSkill = 100, recipes = {}, time = NOW,
+          parentSkillLineID = 164 },
+        [2872] = { name = "Khaz Algar Blacksmithing", skill = 100, maxSkill = 100, recipes = {}, time = NOW,
+          parentSkillLineID = 164,
+          concentration = { currencyID = 3000, value = 10, max = 1000, time = NOW, perCycle = 1, cycleSeconds = 360 } },
+      }
+      local c = A:GetAltRow("Cato-Silvermoon", NOW)
+      assert.same({ { 2907 }, 1 }, { lines(c), c.olderProfessions })
+      for _, p in ipairs(A:GetPools(NOW)) do assert.are_not.equal(2872, p.skillLineID) end
+    end)
+
+    it("without parentSkillLineID on the variant record its Knowledge base is used", function()
+      char(ns, "Cato-Silvermoon").professions = {
+        [2907] = { name = "Midnight Blacksmithing", skill = 1, maxSkill = 100, recipes = {}, time = NOW },
+        [2872] = { name = "Khaz Algar Blacksmithing", skill = 100, maxSkill = 100, recipes = {}, time = NOW,
+          parentSkillLineID = 164, spec = { configID = 1, unspent = 0, tabs = {}, paths = {}, perks = {}, time = NOW } },
+      }
+      local c = A:GetAltRow("Cato-Silvermoon", NOW)
+      assert.same({ { 2907 }, 1 }, { lines(c), c.olderProfessions })
+    end)
+
+    it("a snapshot line of another base profession is still listed next to a variant line", function()
+      char(ns, "Cato-Silvermoon").professions = {
+        [2907] = { name = "Midnight Blacksmithing", skill = 1, maxSkill = 100, recipes = {}, time = NOW,
+          parentSkillLineID = 164 },
+        [2999] = { name = "Midnight Tailoring", skill = 20, maxSkill = 100, recipes = {}, time = NOW,
+          parentSkillLineID = 197,
+          concentration = { currencyID = 3260, value = 500, max = 1000, time = NOW, perCycle = 1, cycleSeconds = 360 } },
+      }
+      local c = A:GetAltRow("Cato-Silvermoon", NOW)
+      assert.same({ { 2907, 2999 }, 0 }, { lines(c), c.olderProfessions })
+    end)
+
     it("a line missing from Knowledge.variants is listed when it has only a spec snapshot", function()
       char(ns, "Cato-Silvermoon").professions = {
         [2999] = { name = "Midnight Tailoring", skill = 20, maxSkill = 100, recipes = {}, time = NOW,

@@ -94,18 +94,36 @@ local function hidden_set()
 end
 
 -- The character's listed profession lines (sorted) and how many other (older-expansion) records it has. Dropped
--- records count nowhere (1a: consumers skip them). A line is listed when it is a Knowledge variant or when its record
--- has a concentration or spec snapshot (only the open child line gets those, so this keeps the current expansion's
--- lines). Preflight rows 9 and 10. The snapshot rule also applies with Knowledge data: the variant IDs are
--- hand-authored and unverified, so a wrong ID must not hide a real profession or its concentration pool; such a line
--- has no Knowledge sources and its summary is "noData".
+-- records count nowhere (1a: consumers skip them). Preflight rows 9 and 10:
+--   * a line in Knowledge.variants is listed;
+--   * a line with a concentration or spec snapshot (only the open child line gets those) is listed too, unless a listed
+--     variant line of the character has the same base profession (parentSkillLineID; the variant's `base` when the
+--     record has none). The variant IDs are hand-authored and unverified, so a wrong Midnight ID must not hide a real
+--     profession or its concentration pool (such a line has no sources: "noData"), while an older expansion's line
+--     that kept a snapshot stays an older profession next to its matched Midnight line. Without Knowledge data every
+--     line with a snapshot is listed;
+--   * every other record counts in `older`.
 local function listed_lines(c)
   local v, out, older = variants(), {}, 0
-  for line, p in pairs(type(c.professions) == "table" and c.professions or {}) do
+  local profs = type(c.professions) == "table" and c.professions or {}
+  local parents, candidates = {}, {}
+  for line, p in pairs(profs) do
     if type(p) == "table" and not p.dropped then
-      local listed = (v ~= nil and v[line] ~= nil) or type(p.concentration) == "table" or type(p.spec) == "table"
-      if listed then out[#out + 1] = line else older = older + 1 end
+      if v and v[line] ~= nil then
+        out[#out + 1] = line
+        local parent = p.parentSkillLineID
+        if parent == nil and type(v[line]) == "table" then parent = v[line].base end
+        if parent ~= nil then parents[parent] = true end
+      elseif type(p.concentration) == "table" or type(p.spec) == "table" then
+        candidates[#candidates + 1] = line
+      else
+        older = older + 1
+      end
     end
+  end
+  for _, line in ipairs(candidates) do
+    local parent = profs[line].parentSkillLineID
+    if parent ~= nil and parents[parent] then older = older + 1 else out[#out + 1] = line end
   end
   table.sort(out)
   return out, older
@@ -281,9 +299,11 @@ function Alts:GetAltRow(charKey, now)
 end
 
 -- Character keys in overview order: the logged-in character first, then lastSeen desc (unknown last), then charKey.
-local function ordered_keys(includeHidden)
+-- hidden: the hidden set when the caller already has it (saves a Settings() read).
+local function ordered_keys(includeHidden, hidden)
   local S = scanner()
-  local current, hidden, keys, seen = ns.FS:CharKey(), hidden_set(), {}, {}
+  local current, keys, seen = ns.FS:CharKey(), {}, {}
+  hidden = hidden or hidden_set()
   for _, charKey in ipairs(S and S:GetCharacters() or {}) do
     local c = S:GetCharacter(charKey)
     if type(charKey) == "string" and type(c) == "table" and (includeHidden or not hidden[charKey]) then
@@ -342,7 +362,7 @@ end
 -- Reagent locations: holdings, item search and tooltip lines
 ---------------------------------------------------------------------------
 
-local FIND_MIN_CHARS, FIND_MAX_RESULTS = 3, 50
+local FIND_MIN_CHARS, FIND_MAX_RESULTS, FIND_MAX_REQUESTS = 3, 50, 50
 
 local requestedNames = {}   -- [itemID] = true once C_Item.RequestLoadItemDataByID was asked for it (per session)
 
@@ -353,10 +373,22 @@ local function item_name(itemID)
   if type(name) == "string" and name ~= "" and accessible(name) then return name end
 end
 
+-- Asks the client to load the item's name once per session; true when it asked now.
 local function request_name(itemID)
-  if requestedNames[itemID] then return end
+  if requestedNames[itemID] then return false end
   requestedNames[itemID] = true
   try(type(C_Item) == "table" and C_Item.RequestLoadItemDataByID, itemID)
+  return true
+end
+
+-- The game's count of itemID in the logged-in character's bags only (C_Item.GetItemCount(itemID, includeBank,
+-- includeUses, includeReagentBank, includeAccountBank) with everything off); nil when the function is missing, fails
+-- or gives an unreadable value.
+local function live_bags(itemID)
+  local fn = type(C_Item) == "table" and C_Item.GetItemCount
+  if type(fn) ~= "function" then return nil end
+  local ok, n = pcall(fn, itemID, false, false, false, false)
+  if ok and is_number(n) and accessible(n) then return n end
 end
 
 -- db.global.warband (1a's public layout), or nil when the warband bank was never scanned (no snapshot time).
@@ -366,31 +398,88 @@ local function warband_snapshot()
   if type(w) == "table" and is_number(w.time) then return w end
 end
 
-local function holdings(itemID, now, settings)
+-- Everything one holdings read needs, built once per GetHoldings/FindItems/HoldingsLines call (one Settings() read,
+-- one character sort, one warband lookup).
+local function holdings_ctx(settings, now)
+  local hidden = type(settings.hidden) == "table" and settings.hidden or {}
+  return { now = now, staleDays = settings.staleDays, me = ns.FS:CharKey(), keys = ordered_keys(false, hidden),
+    warband = warband_snapshot() }
+end
+
+local function is_stale(age, ctx) return age == nil or age > ctx.staleDays * DAY end
+
+-- A character's entry from its 1a snapshot (Scanner:GetItemCount(itemID, charKey); not its .total, which includes
+-- the warband). bank is nil (unknown) while the bank was never scanned (itemsTime.bank not a number). The age is the
+-- oldest snapshot behind a non-zero part (itemsTime.bags / itemsTime.bank, each falling back to lastSeen).
+local function snapshot_entry(S, itemID, charKey, ctx)
+  local c = character(charKey)
+  local counts = S:GetItemCount(itemID, charKey)
+  if not (c and type(counts) == "table") then return nil end
+  local times = type(c.itemsTime) == "table" and c.itemsTime or {}
+  local lastSeen = is_number(c.lastSeen) and c.lastSeen or nil
+  local bankTime = is_number(times.bank) and times.bank or nil
+  local bags, reagentBank = count(counts.bags), count(counts.reagentBank)
+  local bank = bankTime and count(counts.bank) or nil
+  local total = bags + (bank or 0) + reagentBank
+  if total <= 0 then return nil end
+  local oldest
+  local function seen(t)
+    if t and (oldest == nil or t < oldest) then oldest = t end
+  end
+  if bags > 0 then seen(is_number(times.bags) and times.bags or lastSeen) end
+  if (bank or 0) > 0 or reagentBank > 0 then seen(bankTime or lastSeen) end
+  local age = oldest and ctx.now - oldest or nil
+  return { charKey = charKey, bags = bags, bank = bank, reagentBank = reagentBank, total = total,
+    dataAgeSeconds = age, stale = is_stale(age, ctx) }
+end
+
+-- The logged-in character's entry from the game's own counts (hotfix H1): total = Scanner:GetOwnedCount(itemID, me,
+-- false), bags from C_Item.GetItemCount, bank = the rest. Returns entry|nil, handled: handled is false when a live
+-- call gave nothing (the caller then uses the snapshot); entry is nil when the character holds none.
+local function live_entry(S, itemID, liveBags, ctx)
+  if liveBags == nil or type(S.GetOwnedCount) ~= "function" then return nil, false end
+  local total = S:GetOwnedCount(itemID, ctx.me, false)
+  if not is_number(total) then return nil, false end
+  total = math.max(total, liveBags)
+  if total <= 0 then return nil, true end
+  return { charKey = ctx.me, bags = liveBags, bank = total - liveBags, reagentBank = 0, total = total,
+    dataAgeSeconds = 0, stale = false, live = true }, true
+end
+
+-- The warband count and its age: the game's own (Scanner:GetWarbandCount, age 0) while the live count answers, else
+-- the snapshot read directly (not through an all-characters GetItemCount), else nil, nil (never scanned).
+local function warband_count(S, itemID, liveBags, ctx)
+  if liveBags ~= nil and type(S.GetWarbandCount) == "function" then
+    local n = S:GetWarbandCount(itemID)
+    if is_number(n) then return n, 0 end
+  end
+  local w = ctx.warband
+  if w then return count(type(w.items) == "table" and w.items[itemID] or nil), ctx.now - w.time end
+  return nil, nil
+end
+
+local function holdings(itemID, ctx, withName)
   local S = scanner()
-  local row = { itemID = itemID, name = item_name(itemID), total = 0, warband = nil, chars = {} }
+  local row = { itemID = itemID, name = withName and item_name(itemID) or nil, total = 0, chars = {},
+    partial = false }
   if not S then return row end
-  local current = ns.FS:CharKey()
-  for _, charKey in ipairs(ordered_keys(false)) do
-    local c = S:GetItemCount(itemID, charKey)
-    if type(c) == "table" then
-      -- Not c.total: with a charKey, 1a's GetItemCount adds the warband count to it.
-      local bags, bank, reagentBank = count(c.bags), count(c.bank), count(c.reagentBank)
-      local total = bags + bank + reagentBank
-      if total > 0 then
-        local seen = character(charKey).lastSeen
-        local age = is_number(seen) and now - seen or nil
-        row.chars[#row.chars + 1] = { charKey = charKey, bags = bags, bank = bank, reagentBank = reagentBank,
-          total = total, dataAgeSeconds = age,
-          stale = charKey ~= current and (age == nil or age > settings.staleDays * DAY) }
-        row.total = row.total + total
-      end
+  local liveBags = live_bags(itemID)
+  for _, charKey in ipairs(ctx.keys) do
+    local entry, handled
+    if charKey == ctx.me then entry, handled = live_entry(S, itemID, liveBags, ctx) end
+    if not handled then entry = snapshot_entry(S, itemID, charKey, ctx) end
+    if entry then
+      row.chars[#row.chars + 1] = entry
+      row.total = row.total + entry.total
+      if entry.bank == nil then row.partial = true end
     end
   end
-  if warband_snapshot() then
-    local all = S:GetItemCount(itemID, nil)
-    row.warband = type(all) == "table" and count(all.warband) or 0
+  row.warband, row.warbandAgeSeconds = warband_count(S, itemID, liveBags, ctx)
+  if row.warband then
+    row.warbandStale = is_stale(row.warbandAgeSeconds, ctx)
     row.total = row.total + row.warband
+  else
+    row.partial = true
   end
   table.sort(row.chars, function(a, b)
     if a.total ~= b.total then return a.total > b.total end
@@ -399,31 +488,35 @@ local function holdings(itemID, now, settings)
   return row
 end
 
--- ItemLocationRow = { itemID, name|nil, total, warband|nil, chars = { { charKey, bags, bank, reagentBank, total,
--- dataAgeSeconds|nil, stale } } } for the visible (not hidden) characters holding the item, from 1a's Scanner
--- snapshots. A character's total is bags + bank + reagent bank; characters holding none are left out; chars are
--- sorted by total desc, then charKey. warband is nil while the warband bank was never scanned (unknown, not 0);
--- total = Σ chars (+ warband when known). dataAgeSeconds = now - lastSeen; stale as AltRow.flags.stale, but never for
--- the logged-in character (its lastSeen is written only at login). nil for a non-number itemID.
+-- ItemLocationRow = { itemID, name|nil, total, warband|nil, warbandAgeSeconds|nil, warbandStale|nil, partial,
+-- chars = { { charKey, bags, bank|nil, reagentBank, total, dataAgeSeconds|nil, stale, live? } } } for the visible
+-- (not hidden) characters holding the item. The logged-in character's counts are the game's own (hotfix H1:
+-- Scanner:GetOwnedCount + C_Item.GetItemCount; age 0, never stale), falling back to its snapshot; other characters'
+-- come from 1a's snapshots (bags + bank + reagent bank; bank nil while never scanned; age = the oldest snapshot behind
+-- a non-zero part; stale as AltRow.flags.stale). Characters holding none are left out; chars sorted by total desc,
+-- then charKey. warband: the game's own while it answers, else the snapshot, else nil (never scanned; unknown, not
+-- 0). total = Σ chars (+ warband when known); partial = some listed bank or the warband is unknown. nil for a
+-- non-number itemID.
 function Alts:GetHoldings(itemID)
   if not is_number(itemID) then return nil end
-  return holdings(itemID, ns.FS:Now(), self:Settings())
+  return holdings(itemID, holdings_ctx(self:Settings(), ns.FS:Now()), true)
 end
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 
--- { ItemLocationRow } for a query: a number or numeric string is that itemID; otherwise text of at least 3 characters
+-- { ItemLocationRow } for a query: a number or all-digit string is that itemID; otherwise text of at least 3 characters
 -- is matched (case-insensitive, plain text) against the names of every item a visible character or the warband bank
--- has a record of. Names the client has not cached are skipped and requested once per session. Only items with a
--- total > 0, sorted by name (then itemID), at most 50.
+-- has a record of. Names the client has not cached are skipped and requested once per session, at most 50 requests
+-- per call. Only items with a total > 0, sorted by name (then itemID), at most 50. A view calling this on typed text
+-- debounces it.
 function Alts:FindItems(query)
-  local now, settings = ns.FS:Now(), self:Settings()
+  local ctx = holdings_ctx(self:Settings(), ns.FS:Now())
   if type(query) == "string" then
     query = trim(query)
     if query:match("^%d+$") then query = tonumber(query) end
   end
   if is_number(query) then
-    local row = holdings(query, now, settings)
+    local row = holdings(query, ctx, true)
     if row.total > 0 then
       if not row.name then request_name(query) end
       return { row }
@@ -438,20 +531,22 @@ function Alts:FindItems(query)
       ids[#ids + 1] = itemID
     end
   end
-  for _, charKey in ipairs(ordered_keys(false)) do
+  for _, charKey in ipairs(ctx.keys) do
     local items = character(charKey).items
     for itemID in pairs(type(items) == "table" and items or {}) do add(itemID) end
   end
   local g = ns.FS.db and ns.FS.db.global
   local w = g and type(g.warband) == "table" and g.warband.items
   for itemID in pairs(type(w) == "table" and w or {}) do add(itemID) end
-  local out = {}
+  table.sort(ids)   -- a stable order for the request cap
+  local out, requests = {}, 0
   for _, itemID in ipairs(ids) do
     local name = item_name(itemID)
     if not name then
-      request_name(itemID)
+      if requests < FIND_MAX_REQUESTS and request_name(itemID) then requests = requests + 1 end
     elseif name:lower():find(needle, 1, true) then
-      local row = holdings(itemID, now, settings)
+      local row = holdings(itemID, ctx, false)
+      row.name = name
       if row.total > 0 then out[#out + 1] = row end
     end
   end
@@ -470,37 +565,56 @@ local function format_age(seconds)
   return tostring(math.floor(seconds / DAY)) .. "d"
 end
 
+local function realm_of(charKey) return charKey:match("^[^%-]*%-(.*)$") end
+
+-- "Aria" for a character on the logged-in character's realm, "Name-Realm" otherwise (as 1b's crafters line).
+local function display_name(charKey, ctx)
+  local realm = realm_of(charKey)
+  if realm and realm == realm_of(ctx.me) then return charKey:match("^([^%-]*)") end
+  return charKey
+end
+
 local function holding_text(entry)
   local parts = {}
   if entry.bags > 0 then parts[#parts + 1] = "bags " .. entry.bags end
-  if entry.bank > 0 then parts[#parts + 1] = "bank " .. entry.bank end
+  if entry.bank == nil then
+    parts[#parts + 1] = "bank ?"
+  elseif entry.bank > 0 then
+    parts[#parts + 1] = "bank " .. entry.bank
+  end
   if entry.reagentBank > 0 then parts[#parts + 1] = "reagent bank " .. entry.reagentBank end
   if entry.stale then
     parts[#parts + 1] = entry.dataAgeSeconds and (format_age(entry.dataAgeSeconds) .. " old") or "age unknown"
   end
-  return entry.total .. " (" .. table.concat(parts, ", ") .. ")"
+  return entry.total .. (entry.bank == nil and "+" or "") .. " (" .. table.concat(parts, ", ") .. ")"
 end
 
--- Tooltip lines { {left, right} } for the item: one per visible character holding it ("15 (bags 5, bank 10)", the
--- non-zero parts; stale data adds "<age> old" or "age unknown"), at most tooltipMaxChars of them and then
--- { "+K more", "" }; then the warband bank (when it holds some, or "not scanned" while unknown) and the total. {}
--- when nobody holds the item or the tooltipHoldings setting is off.
+-- Tooltip lines { {left, right} } for the item: one per visible character holding it (left: the short name on the
+-- logged-in character's realm; right: "15 (bags 5, bank 10)", the non-zero parts; a bank never scanned makes it
+-- "5+ (bags 5, bank ?)"; stale data adds "<age> old" or "age unknown"), at most tooltipMaxChars of them and then
+-- { "+K more", "" }; then { "Warband bank", "7" } when it holds some ("7 (<age> old)" when that snapshot is stale);
+-- then the total, with "+" when a listed part is unknown and " (warband not scanned)" while the warband is unknown
+-- (no separate line for that). {} when nobody is known to hold the item or the tooltipHoldings setting is off. Item
+-- names are not fetched: this runs on every tooltip.
 function Alts:HoldingsLines(itemID)
   local settings = self:Settings()
   if not settings.tooltipHoldings or not is_number(itemID) then return {} end
-  local row = holdings(itemID, ns.FS:Now(), settings)
+  local ctx = holdings_ctx(settings, ns.FS:Now())
+  local row = holdings(itemID, ctx, false)
   if row.total <= 0 then return {} end
   local lines, shown = {}, math.min(#row.chars, settings.tooltipMaxChars)
   for i = 1, shown do
-    lines[#lines + 1] = { row.chars[i].charKey, holding_text(row.chars[i]) }
+    lines[#lines + 1] = { display_name(row.chars[i].charKey, ctx), holding_text(row.chars[i]) }
   end
   if #row.chars > shown then lines[#lines + 1] = { "+" .. (#row.chars - shown) .. " more", "" } end
-  if row.warband == nil then
-    lines[#lines + 1] = { "Warband bank", "not scanned" }
-  elseif row.warband > 0 then
-    lines[#lines + 1] = { "Warband bank", tostring(row.warband) }
+  if row.warband and row.warband > 0 then
+    local text = tostring(row.warband)
+    if row.warbandStale then text = text .. " (" .. format_age(row.warbandAgeSeconds) .. " old)" end
+    lines[#lines + 1] = { "Warband bank", text }
   end
-  lines[#lines + 1] = { "Total", tostring(row.total) }
+  local total = tostring(row.total) .. (row.partial and "+" or "")
+  if row.warband == nil then total = total .. " (warband not scanned)" end
+  lines[#lines + 1] = { "Total", total }
   return lines
 end
 

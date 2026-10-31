@@ -5,7 +5,9 @@
 -- opts.files, with fake Scanner/Recipes/Tooltips/Dashboard/MainWindow modules in place of the real ones; defines the
 -- fixture Knowledge table (opts.knowledge = false leaves it undefined), boots, then seeds db.global with the fixture
 -- characters (Aria, Bren, Cato on Silvermoon; the logged-in character is Aria-Silvermoon; Aria also carries an
--- older-expansion record, 2822), the warband bank and an empty recipeCatalog. Every call builds a fresh world.
+-- older-expansion record, 2822; Aria and Bren have bag/bank snapshot times, Cato none), the warband bank and an
+-- empty recipeCatalog. Every call builds a fresh world. The fake Scanner also has hotfix H1's GetOwnedCount and
+-- GetWarbandCount (live C_Item.GetItemCount for the logged-in character; the default stub answers 0).
 --   opts.now           clock (default NOW)
 --   opts.professionOpen false = fake Scanner:IsProfessionOpen() answers false
 --   opts.schematics    { [recipeID] = schematic } for Scanner:GetSchematic
@@ -87,7 +89,7 @@ function P3.characters()
           time = NOW - 60 },
       },
       items = { [2001] = { bags = 5, bank = 10, reagentBank = 0 } },
-      itemsTime = {},
+      itemsTime = { bags = NOW - 60, bank = NOW - 3600 },   -- [phase 3 Task 8]
       knowledgeWeekly = { time = NOW - 60, quests = { [93691] = true } },
       planning = { [2907] = { pathNames = { [1] = "Path 1", [2] = "Path 2", [3] = "Path 3" }, firstCraftsPending = 2,
         time = NOW - 60 } },
@@ -102,7 +104,7 @@ function P3.characters()
         },
       },
       items = { [2001] = { bags = 0, bank = 0, reagentBank = 3 } },
-      itemsTime = {},
+      itemsTime = { bags = NOW - 10 * DAY, bank = NOW - 10 * DAY },   -- [phase 3 Task 8]
       knowledgeWeekly = { time = NOW - 864000, quests = { [93700] = true } },
     },
     ["Cato-Silvermoon"] = {
@@ -146,6 +148,30 @@ local function fake_scanner(ns, opts)
     out.warband = g and g.warband and g.warband.items and g.warband.items[itemID] or 0
     out.total = out.bags + out.bank + out.reagentBank + out.warband
     return out
+  end
+  -- Hotfix H1 semantics: the logged-in character's count is the game's own C_Item.GetItemCount(itemID, true, false,
+  -- true, includeWarband) when it answers (a number), else the snapshots; the warband is (with - without the account
+  -- bank) when both live calls answer, else the snapshot.
+  local function live_count(itemID, includeWarband)
+    local fn = type(C_Item) == "table" and C_Item.GetItemCount
+    if type(fn) ~= "function" then return nil end
+    local ok, n = pcall(fn, itemID, true, false, true, includeWarband and true or false)
+    if ok and type(n) == "number" then return n end
+  end
+  function S.GetOwnedCount(_, itemID, charKey, includeWarband)
+    local me = ns.FS:CharKey()
+    charKey = charKey or me
+    if charKey == me then
+      local n = live_count(itemID, includeWarband)
+      if n then return n end
+    end
+    local c = S.GetItemCount(nil, itemID, charKey)
+    return c.bags + c.bank + c.reagentBank + (includeWarband and c.warband or 0)
+  end
+  function S.GetWarbandCount(_, itemID)
+    local all, own = live_count(itemID, true), live_count(itemID, false)
+    if all and own then return math.max(0, all - own) end
+    return S.GetItemCount(nil, itemID, nil).warband
   end
   -- 1a's real step projection (preflight row 11): capped only when max > 0.
   function S.ProjectConcentration(_, charKey, skillLineID, atTime)
