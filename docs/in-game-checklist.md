@@ -268,7 +268,8 @@ H1-5. **Held reagents count.** Log in with the rank-2 (or top-rank) reagents of 
 H1-5b. **Shopping list after login.** Right after logging in (item names not cached yet), queue crafts with missing
     reagents and press Shopping List once. Expected: the status line says the names are loading, then
     `Shopping list updated (N items)`; at the auction house, Auctionator's Shopping tab has the `FabricationStation`
-    list (close and reopen the AH window if it was already open).
+    list (close and reopen the AH window if it was already open). If the status stays on loading, press Shopping List
+    once more; report whether that second press was needed.
 H1-6. **Row labels and long names.** Scroll a recipe list with long names, craftable counts (`[3]`) and locked recipes.
     Expected: no profit label overlaps a name or count; rows whose name runs close to the right edge show no label;
     a locked recipe's lock icon is never covered; short rows keep their labels after scrolling and collapsing a
