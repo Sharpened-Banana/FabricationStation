@@ -15,8 +15,10 @@ local ADDON_NAME, ns = ...
 -- ScrollUtil.AddInitializedFrameCallback / AddReleasedFrameCallback on the ScrollBox, and HookScript OnShow / OnHide on
 -- the BrowseFrame. The row layout is measured read-only (zero-touch, as in RecipeListLabels): the item-name cell's
 -- right edge and the end of its text (GetRight / GetLeft / GetStringWidth), once Blizzard has filled the row
--- (OnInitializedFrame). The cell strip sits at the right of the item-name column and gives way to the name (H1-6):
--- the profit cell goes first, then the whole strip; our cells never cover Blizzard's item name.
+-- (OnInitializedFrame), and again in a re-fit pass on the next frame (1a's Debounce, coalesced) after rows were
+-- initialised or item data arrived while the list is on screen, since Blizzard can write the name after our callback.
+-- The cell strip sits at the right of the item-name column and gives way to the name (H1-6): the profit cell goes
+-- first, then the whole strip; our cells never cover Blizzard's item name.
 --
 -- Claiming (design rule 3): Orders:ClaimBest (C_CraftingOrders.ClaimOrder is HasRestrictions) is called only as a
 -- direct call inside the Claim Best Order button's OnClick handler (tests/orders/claim_click_only_spec.lua enforces
@@ -265,6 +267,13 @@ local function read_number(obj, method)
   return nil
 end
 
+-- Whether a Blizzard frame is on screen (read only).
+local function is_visible(frame)
+  if type(frame) ~= "table" or type(frame.IsVisible) ~= "function" then return false end
+  local ok, visible = pcall(frame.IsVisible, frame)
+  return ok and visible and true or false
+end
+
 local function set_shown(region, shown)
   if shown then region:Show() else region:Hide() end
 end
@@ -325,6 +334,8 @@ local rowsBox          -- the order list's ScrollBox
 local container        -- our clipping container over it
 local rowsOwner = {}   -- owner token of our ScrollBox callbacks
 local cells = setmetatable({}, { __mode = "k" })  -- [Blizzard row] = our cell set
+local REFIT_KEY = "ordersRowAddons.refit"
+local apply_fit, schedule_refit   -- defined with the re-fit pass below
 
 -- The orderID a list element holds: nil for a bucket (grouped by recipe) or anything else.
 local function order_id_of(elementData)
@@ -470,6 +481,56 @@ local function hide_all_cells()
   for _, c in pairs(cells) do c.frame:Hide() end
 end
 
+-- Fits a row's strip to Blizzard's item name as it is now (see fit) and shows the parts that have room.
+function apply_fit(c, row)
+  c.fit = fit(c, row, c.blocked)
+  c.warnShown = c.blocked == true and c.fit ~= "none"
+  set_shown(c.warn, c.warnShown)
+  c.profit:ClearAllPoints()
+  c.profit:SetPoint("RIGHT", c.strip, "RIGHT", -(CORE_WIDTH + CELL_GAP + (c.warnShown and WARN_SLOT or 0)), 0)
+  set_shown(c.profit, c.fit == "all")
+  set_shown(c.strip, c.fit ~= "none")
+end
+
+-- Re-fit pass (fit only; values and tint stay): over the ScrollBox's current frames, so a released row is never
+-- touched. Our OnInitializedFrame callback can run before Blizzard's table builder writes the item name (callbacks
+-- of different owners run in no fixed order), and an uncached name arrives later, so a row measured at
+-- initialisation may have seen a stale or empty name. The pass runs on the next frame, coalesced through 1a's
+-- Debounce, after rows were initialised and whenever item data arrives while the list is on screen.
+local function refit_rows()
+  if not (rowsBox and type(rowsBox.ForEachFrame) == "function") then return end
+  rowsBox:ForEachFrame(function(row)
+    local c = cells[row]
+    if c and c.frame:IsShown() then apply_fit(c, row) end
+  end)
+end
+
+local refitPass = ns.FS:Wrap(ROWS, function()
+  if RowAddons:IsEnabled() then refit_rows() end
+end)
+
+function schedule_refit()
+  ns.FS:Debounce(REFIT_KEY, 0, refitPass)
+end
+
+-- ITEM_DATA_LOAD_RESULT / GET_ITEM_INFO_RECEIVED are listened to only while the cells are attached and the order list
+-- is on screen (the ScrollBox's OnShow / OnHide), and never while the module is off.
+local ITEM_EVENTS = { "ITEM_DATA_LOAD_RESULT", "GET_ITEM_INFO_RECEIVED" }
+local listening = false
+
+local function listen_for_items(on)
+  on = on and RowAddons:IsEnabled() or false
+  if on == listening then return end
+  listening = on
+  for _, event in ipairs(ITEM_EVENTS) do
+    if on then
+      RowAddons:RegisterEvent(event, function() M.Guard(ROWS, schedule_refit) end)
+    else
+      RowAddons:UnregisterEvent(event)
+    end
+  end
+end
+
 -- Shows the cells of one row for its element, or hides them when it holds no order or the order is not scored.
 -- Runs once Blizzard has filled the row (OnInitializedFrame), so a recycled row is measured with its new item name.
 local function show_row(row, elementData)
@@ -507,15 +568,11 @@ local function show_row(row, elementData)
   end
   set_shown(c.add, M.QueueEntry(view) ~= nil and ns.FS:GetModule("Queue", true) ~= nil)
 
-  local blocked = model.highlight == "blocked"
-  c.fit = fit(c, row, blocked)
-  c.warnShown = blocked and c.fit ~= "none"
-  set_shown(c.warn, c.warnShown)
-  c.profit:ClearAllPoints()
-  c.profit:SetPoint("RIGHT", c.strip, "RIGHT", -(CORE_WIDTH + CELL_GAP + (c.warnShown and WARN_SLOT or 0)), 0)
-  set_shown(c.profit, c.fit == "all")
-  set_shown(c.strip, c.fit ~= "none")
+  c.blocked = model.highlight == "blocked"
+  apply_fit(c, row)
   c.frame:Show()
+  -- Blizzard may write the name after us (callback order between owners is not fixed; uncached names come later).
+  schedule_refit()
 end
 
 -- Every row on screen again (and only those): hides all cells, then shows the ScrollBox's current rows.
@@ -529,6 +586,7 @@ end
 local function attach_rows(self)
   if rowsAttached then
     refresh_rows()
+    listen_for_items(is_visible(rowsBox))
     return
   end
   local page = child(ProfessionsFrame, "OrdersPage")
@@ -539,7 +597,7 @@ local function attach_rows(self)
     return hook_target_missing(self, ROWS, "ProfessionsFrame.OrdersPage.ShowBuckets")
   end
   local box = child(child(child(page, "BrowseFrame"), "OrderList"), "ScrollBox")
-  if not box then
+  if not (box and type(box.HookScript) == "function") then
     return hook_target_missing(self, ROWS, "ProfessionsFrame.OrdersPage.BrowseFrame.OrderList.ScrollBox")
   end
   local util = ScrollUtil
@@ -564,8 +622,16 @@ local function attach_rows(self)
   util.AddInitializedFrameCallback(box, function(_, row, elementData) M.Guard(ROWS, show_row, row, elementData) end,
     rowsOwner)
   util.AddReleasedFrameCallback(box, function(_, row) M.Guard(ROWS, hide_row, row) end, rowsOwner)
+  box:HookScript("OnShow", function() M.Guard(ROWS, listen_for_items, true) end)
+  box:HookScript("OnHide", function()
+    M.Guard(ROWS, function()
+      listen_for_items(false)
+      ns.FS:CancelDebounce(REFIT_KEY)
+    end)
+  end)
   rowsAttached = true
   refresh_rows()
+  listen_for_items(is_visible(box))
 end
 
 function RowAddons:AttachIfReady()
@@ -587,6 +653,8 @@ function RowAddons:OnEnable()
 end
 
 function RowAddons:OnDisable()
+  listen_for_items(false)
+  ns.FS:CancelDebounce(REFIT_KEY)
   hide_all_cells()
 end
 
@@ -630,6 +698,7 @@ local function filters()
 end
 
 local waitingItem      -- itemID the best line waits for (GET_ITEM_INFO_RECEIVED), or nil
+local failedItems = {} -- [itemID] = true: its data failed to load this session; shown as the ID, not asked again
 local requesting       -- true while our RequestLoadItemDataByID call runs
 local refresh_side
 
@@ -639,11 +708,12 @@ local function stop_waiting()
   SidePanel:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
 end
 
--- GET_ITEM_INFO_RECEIVED(itemID, success): the awaited item's data arrived (or cannot load: success false); the wait
--- ends either way. The event is synchronous and can fire inside RequestLoadItemDataByID: the refresh in progress then
+-- GET_ITEM_INFO_RECEIVED(itemID, success): the awaited item's data arrived, or cannot load (success false: remembered
+-- for the session, so the ID is shown without asking again); the wait ends either way. The event is synchronous and can fire inside RequestLoadItemDataByID: the refresh in progress then
 -- reads the link itself.
-local function on_item_info(_, itemID)
+local function on_item_info(_, itemID, success)
   if waitingItem == nil or itemID ~= waitingItem then return end
+  if success == false then failedItems[itemID] = true end
   stop_waiting()
   if not requesting then refresh_side() end
 end
@@ -659,7 +729,7 @@ local function best_item_text(itemID)
     return link
   end
   local api = C_Item
-  if waitingItem ~= itemID and itemID ~= nil and type(api) == "table"
+  if waitingItem ~= itemID and itemID ~= nil and not failedItems[itemID] and type(api) == "table"
     and type(api.RequestLoadItemDataByID) == "function" then
     stop_waiting()
     waitingItem = itemID
@@ -818,12 +888,6 @@ end
 
 local function browse_frame()
   return child(child(ProfessionsFrame, "OrdersPage"), "BrowseFrame")
-end
-
-local function is_visible(frame)
-  if type(frame) ~= "table" or type(frame.IsVisible) ~= "function" then return false end
-  local ok, visible = pcall(frame.IsVisible, frame)
-  return ok and visible and true or false
 end
 
 -- Hooks the BrowseFrame's OnShow / OnHide once and shows the panel when the order list is already on screen (also
