@@ -188,27 +188,39 @@ describe("CharactersView", function()
     assert.equal("Characters: 0 · Gold: -- · Knowledge left: ? KP", V.Header({}).text)
   end)
 
-  it("marks knowledge totals from an outdated data build", function()
-    local S = { build = 70575, missing = false, outdated = true, mismatched = {} }
-    assert.equal("data build 70575 (outdated)", V.DataBuildNote(S))
-    assert.equal("data build 70575 (outdated)",
-      V.DataBuildNote({ build = 70575, missing = true, outdated = false, mismatched = { "Knowledge" } }))
-    assert.is_nil(V.DataBuildNote({ build = 70575, missing = true, outdated = false, mismatched = { "Spec" } }))
-    assert.is_nil(V.DataBuildNote({ build = nil, missing = true, outdated = true, mismatched = {} }))
-    assert.is_nil(V.DataBuildNote(nil))
+  -- [Task 14 fix round 1] The note and the marker compare the Knowledge table's own build with the client build: other
+  -- tables (ungenerated RecipeSources, SpecEntryEffects from another build) never mark knowledge data as old.
+  it("marks knowledge totals from an outdated Knowledge build", function()
+    assert.equal("data build 70575 (outdated)", V.DataBuildNote(70575, 70700))
+    assert.is_nil(V.DataBuildNote(70575, 70575))
+    assert.is_nil(V.DataBuildNote(nil, 70700))                -- not generated: counts already show "?"
+    assert.is_nil(V.DataBuildNote(70575, nil))                -- unknown client build
     assert.is_nil(V.CurrentDataNote())                        -- stubs: client 70575, Knowledge 70575
   end)
 
   -- Task 14 (Task 13 minor): one marker wording for the Characters and Planner tabs, without "Outdated: … (outdated)".
   it("words the outdated-data marker once", function()
-    local m = V.DataMarker({ build = 70575, missing = false, outdated = true, mismatched = {} })
     assert.same({ label = "Old data", tooltip = { "Game data build 70575 is outdated",
-      "Knowledge sources and counts come from that game build; the game has changed since, so they may be wrong." } }, m)
-    assert.is_nil(V.DataMarker({ build = 70575, missing = false, outdated = false, mismatched = {} }))
-    assert.is_nil(V.DataMarker(nil))
+      "Knowledge sources and counts come from game build 70575; this is game build 70700, so they may be wrong." } },
+      V.DataMarker(70575, 70700))
+    assert.is_nil(V.DataMarker(70575, 70575))
+    assert.is_nil(V.DataMarker(nil, 70700))
     assert.is_nil(V.CurrentDataMarker())
     local ns2 = boot({ GetBuildInfo = function() return "12.2.0", "70700", "Nov 1 2026", 120200 end })
     assert.equal("Game data build 70575 is outdated", ns2.UI.CharactersView.CurrentDataMarker().tooltip[1])
+  end)
+
+  it("reads only the Knowledge table's build for the note and the marker", function()
+    -- Most tables from another build (GameData status outdated) and an ungenerated RecipeSources: knowledge is current.
+    for i = 1, 6 do ns.GameData.Define("Other" .. i, 70500, {}) end
+    ns.GameData.Define("RecipeSources", nil, { bySkillLine = {} })
+    local status = ns.FS:GameDataStatus()
+    assert.is_true(status.outdated); assert.is_true(status.missing)
+    assert.is_nil(V.CurrentDataNote()); assert.is_nil(V.CurrentDataMarker())
+    -- An ungenerated Knowledge table is never "old" (it is "not generated"), even on another client build.
+    local ns2 = boot({ GetBuildInfo = function() return "12.2.0", "70700", "Nov 1 2026", 120200 end })
+    ns2.GameData.Define("Knowledge", nil, ns2.GameData.Get("Knowledge"))
+    assert.is_nil(ns2.UI.CharactersView.CurrentDataMarker()); assert.is_nil(ns2.UI.CharactersView.CurrentDataNote())
   end)
 
   it("puts the outdated marker on the header knowledge sum and in its tooltip", function()

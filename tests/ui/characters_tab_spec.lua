@@ -521,7 +521,7 @@ describe("Characters tab", function()
       assert.equal("Characters: 3 \194\183 Gold: 1,234g \194\183 Knowledge left: 5 KP", v.header:GetText())
       v.outdatedHit:GetScript("OnEnter")(v.outdatedHit)
       assert.same({ "Game data build 70575 is outdated",
-        "Knowledge sources and counts come from that game build; the game has changed since, so they may be wrong." },
+        "Knowledge sources and counts come from game build 70575; this is game build 70700, so they may be wrong." },
         tooltip.lines)
       assert.is_true(v.outdatedHit:IsShown())
       resize(900)

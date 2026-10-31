@@ -207,24 +207,33 @@ describe("Planner tab", function()
         "  Weekly quest: Smith's Notes" .. DOT .. "2/2 KP" .. DOT .. "done" .. DOT .. "Turn in at the forge",
         "  First crafts: 2 pending",
       }
-      assert.same(expected, ns.UI.PlannerTab.KnowledgeDetailLines(PL:GetKnowledgeChecklist()[2]))
+      assert.same(expected, ns.UI.PlannerTab.KnowledgeDetailLines(PL:GetKnowledgeChecklist()[2],
+        { [263455] = "Smith's Notes" }))
       assert.equal(table.concat(expected, "\n"), grid.detailPool[1].text:GetText())
+    end)
+
+    -- Fix round 1: the detail model reads no API and requests nothing (the section builder resolves the names).
+    it("builds the detail lines from the given names only", function()
+      local row = PL:GetKnowledgeChecklist()[2]
+      _G.C_Item.GetItemNameByID = function() error("the model read the item API") end
+      _G.C_Item.RequestLoadItemDataByID = function() error("the model requested an item") end
+      local lines = ns.UI.PlannerTab.KnowledgeDetailLines(row)
+      assert.equal("  Weekly quest: item:263455" .. DOT .. "2/2 KP" .. DOT .. "done", lines[5])
     end)
 
     it("names unknown states and missing data in the detail, never 0", function()
       local T = ns.UI.PlannerTab
       ns.FS.db.global.characters["Aria-Silvermoon"].knowledgeWeekly = {}
-      local lines = T.KnowledgeDetailLines(PL:GetKnowledgeChecklist()[2])
+      local lines = T.KnowledgeDetailLines(PL:GetKnowledgeChecklist()[2], {})
       assert.equal("  Treasure: ?/2 KP" .. DOT .. "unknown (no quest data from this week)", lines[3])
       assert.same({ "|cffffd100Aria-Silvermoon Alchemy|r",
         "  No knowledge data for this profession in this GameData build" },
         T.KnowledgeDetailLines({ charKey = "Aria-Silvermoon", name = "Alchemy", summary = { status = "noData" },
           states = {} }))
-      -- An uncached item shows its id.
+      -- An item without a known name shows its id.
       ns.FS.db.global.characters["Aria-Silvermoon"].knowledgeWeekly = { time = NOW, quests = {} }
-      _G.C_Item.GetItemNameByID = function() return nil end
       assert.equal("  Weekly quest: item:263455" .. DOT .. "0/2 KP" .. DOT .. "open",
-        T.KnowledgeDetailLines(PL:GetKnowledgeChecklist()[1])[5])
+        T.KnowledgeDetailLines(PL:GetKnowledgeChecklist()[1], {})[5])
     end)
 
     it("asks for an uncached item name once and refreshes when it arrives, listening only while one is pending", function()
@@ -232,6 +241,8 @@ describe("Planner tab", function()
       _G.C_Item.GetItemNameByID = function(id) return names[id] end
       _G.C_Item.RequestLoadItemDataByID = function(id) requested[#requested + 1] = id end
       local v = open()
+      local tab = ns.FS:GetModule("PlannerTab")
+      assert.is_true(tab:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
       click(row_frame(v.grids.knowledge, "Aria-Silvermoon:2907"))
       assert.truthy(v.grids.knowledge.detailPool[1].text:GetText():find("item:263455", 1, true))
       reg.planner.refresh(container)
@@ -244,36 +255,54 @@ describe("Planner tab", function()
       W.advance(0.5)
       assert.same({ "planner" }, refreshed)
       assert.truthy(v.grids.knowledge.detailPool[1].text:GetText():find("Smith's Notes", 1, true))
-      -- Nothing pending any more: the event is no longer listened to.
-      refreshed = {}
-      W.fire("GET_ITEM_INFO_RECEIVED", 1, true)
-      W.advance(0.5)
-      assert.same({}, refreshed)
-      -- Hidden: not listened to either, even with a name pending.
+      -- Nothing pending any more: the event is no longer registered.
+      assert.is_false(tab:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+      -- Pending again, then hidden: unregistered even with a name pending.
       names[263455] = nil
       reg.planner.refresh(container)
+      assert.is_true(tab:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
       container:GetScript("OnHide")(container)
-      W.fire("GET_ITEM_INFO_RECEIVED", 263455, true)
-      W.advance(0.5)
-      assert.same({}, refreshed)
+      assert.is_false(tab:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
       assert.same({ 263455 }, requested)
     end)
 
-    it("shows the data build and the weekly reset in the footer", function()
-      ns.FS.GameDataStatus = function() return { build = 70575, missing = false, outdated = false, mismatched = {} }, 70575 end
+    -- Fix round 1: only the Knowledge table's own build counts (GameData.TableBuild), never 1a's status.missing.
+    it("names the Knowledge table's own build in the footer", function()
       local v = open()
+      assert.is_true(ns.FS:GameDataStatus().missing)   -- the 1a tables are ungenerated in this environment
       assert.equal("Knowledge data: build 70575" .. DOT .. "Weekly reset in 4d 3h", v.footer:GetText())
       hover(v.footerHit)
-      assert.same({ "Knowledge data: build 70575" .. DOT .. "Weekly reset in 4d 3h", "GameData: build 70575, up to date" },
-        tooltip.lines)
+      assert.same({ "Knowledge data: build 70575" .. DOT .. "Weekly reset in 4d 3h",
+        "Knowledge sources come from GameData build 70575" }, tooltip.lines)
       assert.is_false(v.marker:IsShown())
-      ns.FS.GameDataStatus = function() return { build = 70575, missing = true, outdated = false, mismatched = {} }, 70575 end
-      reg.planner.refresh(container)
-      assert.equal("Knowledge data: not generated" .. DOT .. "Weekly reset in 4d 3h", v.footer:GetText())
       -- Without the reset API the reset part is left out.
       _G.C_DateAndTime.GetSecondsUntilWeeklyReset = nil
       reg.planner.refresh(container)
-      assert.equal("Knowledge data: not generated", v.footer:GetText())
+      assert.equal("Knowledge data: build 70575", v.footer:GetText())
+    end)
+
+    it("says 'not generated' when the Knowledge table has no build or is missing", function()
+      ns.GameData.Define("Knowledge", nil, ns.GameData.Get("Knowledge"))
+      local v = open()
+      assert.equal("Knowledge data: not generated" .. DOT .. "Weekly reset in 4d 3h", v.footer:GetText())
+      hover(v.footerHit)
+      assert.same({ "Knowledge data: not generated" .. DOT .. "Weekly reset in 4d 3h",
+        "No knowledge data in this GameData: knowledge counts show as ?" }, tooltip.lines)
+      assert.is_false(v.marker:IsShown())
+      boot({ wow = { GetBuildInfo = function() return "12.2.0", "70700", "Nov 1 2026", 120200 end } })
+      ns.GameData.Define("Knowledge", nil, ns.GameData.Get("Knowledge"))
+      v = open()
+      assert.equal("Knowledge data: not generated" .. DOT .. "Weekly reset in 4d 3h", v.footer:GetText())
+      assert.is_false(v.marker:IsShown())   -- not generated is not "old"
+    end)
+
+    it("marks only an outdated Knowledge build, not other tables' builds", function()
+      for i = 1, 6 do ns.GameData.Define("Other" .. i, 70500, {}) end
+      ns.GameData.Define("RecipeSources", nil, { bySkillLine = {} })
+      assert.is_true(ns.FS:GameDataStatus().outdated)
+      local v = open()
+      assert.is_false(v.marker:IsShown())
+      assert.equal("Knowledge data: build 70575" .. DOT .. "Weekly reset in 4d 3h", v.footer:GetText())
     end)
 
     it("puts an 'Old data' marker in its own region at the start of the footer while the data build is outdated", function()
@@ -285,8 +314,11 @@ describe("Planner tab", function()
       assert.same({ "TOPLEFT", v.footerBar, "TOPLEFT", 76, 0 }, point(v.footer))
       assert.equal(504 - 76, v.footer:GetWidth())
       hover(v.markerHit)
-      assert.equal("Game data build 70575 is outdated", tooltip.lines[1])
-      assert.equal(2, #tooltip.lines)
+      assert.same({ "Game data build 70575 is outdated",
+        "Knowledge sources and counts come from game build 70575; this is game build 70700, so they may be wrong." },
+        tooltip.lines)
+      hover(v.footerHit)
+      assert.equal("Knowledge sources come from GameData build 70575 (this is game build 70700)", tooltip.lines[2])
       -- Other sections show no marker.
       select(v, "missing")
       assert.is_false(v.marker:IsShown()); assert.is_false(v.markerHit:IsShown())
@@ -371,6 +403,10 @@ describe("Planner tab", function()
       select(v, "concentration")
       assert.same({ "warn:Bren-Silvermoon:2912" }, shown_keys(v.grids.concentration))
       assert.equal("Nothing to schedule: no concentration pool has a priced recipe", plain(v.empty:GetText()))
+      -- Under rows: on its own line above the footer, the grid ends above it (never scrolled out of view).
+      assert.same({ "BOTTOMLEFT", container, "BOTTOMLEFT", 10, 24 }, point(v.empty, 1))
+      assert.same({ "BOTTOMRIGHT", container, "BOTTOMRIGHT", -10, 24 }, point(v.empty, 2))
+      assert.same({ "BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 42 }, point(v.grids.concentration.frame, 2))
       ns.FS:GetModule("Recipes"):Disable()
       reg.planner.refresh(container)
       assert.equal("Recipes is turned off", plain(v.empty:GetText()))
@@ -378,6 +414,9 @@ describe("Planner tab", function()
       reg.planner.refresh(container)
       assert.same({}, shown_keys(v.grids.concentration))
       assert.equal("Alts is turned off", plain(v.empty:GetText()))
+      -- No rows: under the grid header, the grid down to the footer.
+      assert.same({ "TOPLEFT", container, "TOPLEFT", 10, -82 }, point(v.empty, 1))
+      assert.same({ "BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 22 }, point(v.grids.concentration.frame, 2))
     end)
   end)
 
@@ -476,6 +515,24 @@ describe("Planner tab", function()
       assert.same({ "Axe", "Source: Recipe item: Plans: Axe", "Recipe ID 1005" }, tooltip.lines)
     end)
 
+    it("says in the footer when the recipe sources are not generated", function()
+      local v = open()
+      select(v, "missing")
+      local text = "Recipe sources: not generated" .. DOT
+        .. "Recipe lists fill in when you open the profession on any character"
+      assert.equal(text, v.footer:GetText())
+      hover(v.footerHit)
+      assert.same({ text, "Without generated recipe sources, only recipes a character has seen in the profession window "
+        .. "are listed, and a source the game did not describe shows as Unknown" }, tooltip.lines)
+      ns.GameData.Define("RecipeSources", 70575, ns.GameData.Get("RecipeSources"))
+      reg.planner.refresh(container)
+      text = "Recipe lists fill in when you open the profession on any character"
+      assert.equal(text, v.footer:GetText())
+      hover(v.footerHit)
+      assert.same({ text, "Recipe sources come from GameData build 70575; the game's own source text wins once a "
+        .. "character has seen the recipe" }, tooltip.lines)
+    end)
+
     it("shows the getter's status for the selected character", function()
       local v = open()
       select(v, "missing")
@@ -486,6 +543,26 @@ describe("Planner tab", function()
         [1005] = true, [1007] = true }
       click(v.charButton)
       assert.equal("Aria knows every listed recipe of this profession", plain(v.empty:GetText()))
+    end)
+
+    -- Fix round 1: every getter status renders its PlannerView message through the tab, in place of rows.
+    it("renders each getter status through the tab", function()
+      local v = open()
+      for _, case in ipairs({
+        { "spec", "GetSpecAdvice", "noRecipes",
+          "No profitable recipes for Aria in this profession yet: check prices or open the profession" },
+        { "spec", "GetSpecAdvice", "noProfession", "Aria does not have this profession" },
+        { "spec", "GetSpecAdvice", "hidden", "Hidden: Aria is hidden on the Characters tab" },
+        { "missing", "GetMissingRecipes", "noProfession", "Aria does not have this profession" },
+        { "missing", "GetMissingRecipes", "noData", "No recipe list yet: open this profession on any character" },
+        { "missing", "GetMissingRecipes", "hidden", "Hidden: Aria is hidden on the Characters tab" },
+      }) do
+        PL[case[2]] = function() return {}, case[3] end
+        select(v, case[1])
+        assert.equal(case[4], plain(v.empty:GetText()), case[1] .. " " .. case[3])
+        assert.is_true(v.empty:IsShown())
+        assert.same({}, shown_keys(v.grids[case[1]]))
+      end
     end)
 
     it("says the pickers have nothing to offer while no character has a listed profession", function()
@@ -516,6 +593,20 @@ describe("Planner tab", function()
       refreshed = {}
       W.advance(120)
       assert.same({}, refreshed)
+    end)
+
+    it("ticks only on the Knowledge and Concentration sections", function()
+      local v = open()
+      select(v, "spec")
+      refreshed = {}
+      W.advance(120)
+      assert.same({}, refreshed)
+      select(v, "missing")
+      W.advance(120)
+      assert.same({}, refreshed)
+      select(v, "concentration")
+      W.advance(60)
+      assert.same({ "planner" }, refreshed)
     end)
 
     it("cancels pending work and stops listening when turned off", function()

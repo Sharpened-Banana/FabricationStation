@@ -8,8 +8,9 @@ local _, ns = ...
 --                    character and Midnight profession the points earned/total of each source category (a check icon
 --                    when done, "closed" for the Darkmoon Faire outside its week, "?" when unknown), first crafts and
 --                    points left. A row opens a detail listing each source with its item name, points, state and
---                    hint. The footer names the knowledge data build and the time to the weekly reset, after an
---                    "Old data" marker in its own fixed region while the data build is outdated.
+--                    hint. The footer names the Knowledge table's own build (GameData.TableBuild; "not generated"
+--                    without one) and the time to the weekly reset, after an "Old data" marker in its own fixed region
+--                    while that build differs from the game's (CharactersView.CurrentDataMarker).
 --   Concentration    Planner:GetCapWarnings as banner rows (red "Capped", orange "Soon"), then Planner:GetSchedule:
 --                    character, profession, recipe, crafts, concentration used, expected gain (compact; the full value
 --                    in the tooltip), gold per concentration point and the time to full. Each schedule row has a
@@ -20,16 +21,18 @@ local _, ns = ...
 --                    "Affordable" tag. The advice is computed only while this section is shown, only for the picked
 --                    pair, and only from refresh (a click, a section change, or MainWindow:RefreshTab after the
 --                    debounce below), never inside a message handler (preflight row 30, Task 11 carry).
---   Missing recipes  Planner:GetMissingRecipes for the picked pair: recipe name and where it comes from.
+--   Missing recipes  Planner:GetMissingRecipes for the picked pair: recipe name and where it comes from; the footer
+--                    says when the RecipeSources table is not generated.
 --
 -- Every getter status other than "ok" shows PlannerView's one message for it (design rule 6: unknown data is named,
 -- never shown as 0); "ok" without rows shows PlannerView.EmptyText. While the Planner module is off the tab says so
 -- instead of showing a section (the getters themselves answer while it is off).
 --
 -- Refresh: MainWindow refreshes the tab on every select; while it is shown, FS_ALTS_CHANGED and FS_RECIPES_CHANGED
--- ask MainWindow:RefreshTab after a 0.5 s debounce, and a one-minute tick keeps reset and fill times moving
--- (cancelled when the tab hides). Item names the client has not cached yet (knowledge items, recipe items) are
--- requested once and shown as "item:<id>" meanwhile; GET_ITEM_INFO_RECEIVED for one of them refreshes the same way
+-- ask MainWindow:RefreshTab after a 0.5 s debounce, and on Knowledge and Concentration a one-minute tick keeps reset
+-- and fill times moving (cancelled when the tab hides or another section is shown). Item names the client has not
+-- cached yet (knowledge items, recipe items) are requested once by the section builders and shown as "item:<id>"
+-- meanwhile; GET_ITEM_INFO_RECEIVED for one of them refreshes the same way
 -- (registered by refresh only while such a name is shown; dropped when the tab hides). OnDisable cancels everything
 -- pending, and no timer starts while the registrar is off. Narrow windows hide the lower-priority columns (ExpandGrid.ColumnLayout); every value stays in the row tooltip.
 --
@@ -61,6 +64,9 @@ local GRID_BOTTOM = FOOTER_HEIGHT + 2 * FOOTER_BOTTOM                           
 -- The outdated-data marker ("Old data"): its own fixed region at the start of the footer, so a narrow window can cut
 -- only the footer text's tail, never the marker (Task 13 rule).
 local MARKER_WIDTH, MARKER_GAP = 70, 6
+-- A message under rows (e.g. an empty plan under the cap warnings) gets its own line above the footer, so a list that
+-- overflows the view never scrolls it away.
+local MESSAGE_LINE = 20
 local QUEUE_BUTTON_HEIGHT = 18
 local RED, ORANGE, DIM, WARN, GOLD = "|cffff4040", "|cffff8000", "|cff9d9d9d", "|cffffd100", "|cffffd100"
 local CHECK = "|TInterface\\RaidFrame\\ReadyCheck-Ready:12:12|t"
@@ -69,12 +75,14 @@ local TIMES = "\195\151"   -- "×"
 Tab.SECTIONS = {
   { id = "knowledge", label = "Knowledge", width = 96 },
   { id = "concentration", label = "Concentration", width = 116 },
-  { id = "spec", label = "Spec advice", width = 100, pickers = true },
-  { id = "missing", label = "Missing recipes", width = 124, pickers = true },
+  { id = "spec", label = "Spec advice", width = 100 },
+  { id = "missing", label = "Missing recipes", width = 124 },
 }
 local SECTION_BY_ID = {}
 for _, s in ipairs(Tab.SECTIONS) do SECTION_BY_ID[s.id] = s end
 Tab.DEFAULT_SECTION = "knowledge"
+-- Sections whose text moves with time (reset countdown, time to full): only these keep the one-minute tick.
+local TICKING = { knowledge = true, concentration = true }
 
 -- Concentration: warnings and schedule rows. Recipe is flexible; Character and Profession are anchored from the left
 -- edge, the numbers and the Queue button from the right edge.
@@ -180,12 +188,14 @@ local CATEGORY_LABELS = { weeklyQuest = "Weekly quest", treatise = "Treatise", t
 local STATE_WORDS = { done = "done", open = "open", closed = "closed (not the faire week)",
   unknown = "unknown (no quest data from this week)" }
 
--- Checklist row (Planner:GetKnowledgeChecklist) -> the detail lines: a gold "<charKey> <profession>" title, then one
--- line per source in data order, "  <Category>: [<item name> · ]<earned>/<total> KP · <state>[ · <hint>]" (an
--- uncached item as "item:<id>", an unknown state as "?/<total>"), then "  First crafts: N pending" when known. A
--- profession without sources says there is no knowledge data for it.
-function Tab.KnowledgeDetailLines(row)
+-- Checklist row (Planner:GetKnowledgeChecklist), names = { [itemID] = item name } (resolved by the caller; this
+-- model reads no API) -> the detail lines: a gold "<charKey> <profession>" title, then one line per source in data
+-- order, "  <Category>: [<item name> · ]<earned>/<total> KP · <state>[ · <hint>]" (an item without a name as
+-- "item:<id>", an unknown state as "?/<total>"), then "  First crafts: N pending" when known. A profession without
+-- sources says there is no knowledge data for it.
+function Tab.KnowledgeDetailLines(row, names)
   row = type(row) == "table" and row or {}
+  names = type(names) == "table" and names or {}
   local summary = type(row.summary) == "table" and row.summary or {}
   local states = type(row.states) == "table" and row.states or {}
   local lines = { color(GOLD, tostring(row.charKey) .. " " .. tostring(row.name or profession_name(row.skillLineID))) }
@@ -196,7 +206,7 @@ function Tab.KnowledgeDetailLines(row)
       local source = type(st.source) == "table" and st.source or {}
       local label = source.reset == "once" and "One-time" or CATEGORY_LABELS[source.category]
         or tostring(source.category or "Source")
-      local name = finite(source.itemID) and (item_name(source.itemID) or ("item:" .. whole(source.itemID))) or nil
+      local name = finite(source.itemID) and (names[source.itemID] or ("item:" .. whole(source.itemID))) or nil
       local earned = (st.status ~= "unknown" and finite(st.earned)) and whole(st.earned) or "?"
       local total = finite(st.total) and whole(st.total) or "?"
       local parts = {
@@ -222,20 +232,37 @@ local function seconds_until_reset()
   return nil
 end
 
--- -> text, tooltip: "Knowledge data: build <Planner:GameDataBuild()>[ · Weekly reset in <duration>]" ("not generated"
--- in place of the build while 1a's GameData status says a table is missing); the tooltip adds Core's status text
--- (the line Settings shows; preflight row 38).
+-- -> text, tooltip: "Knowledge data: build <kb>[ · Weekly reset in <duration>]", kb = the Knowledge table's own build
+-- (ViewUtil.knowledgeBuild: GameData.TableBuild("Knowledge")), "not generated" while that table is missing or has no
+-- build. Other tables never change it (fix round 1: 1a's status.missing is not about knowledge). The tooltip says
+-- where the knowledge data comes from.
 function Tab.KnowledgeFooter()
-  local status = ns.FS:GameDataStatus()
-  local P = module("Planner")
-  local build
-  if P and P.GameDataBuild then build = P:GameDataBuild() else build = ns.GameData.Build() end
-  local data = (type(status) ~= "table" or status.missing or not finite(build)) and "not generated"
-    or ("build " .. whole(build))
-  local text = "Knowledge data: " .. data
+  local kb, client = U.knowledgeBuild(), U.clientBuild()
+  local text = "Knowledge data: " .. (kb and ("build " .. whole(kb)) or "not generated")
   local reset = seconds_until_reset()
   if reset then text = text .. DOT .. "Weekly reset in " .. CV().FormatDuration(reset) end
-  return text, { text, ns.FS:GameDataStatusText() }
+  local about
+  if not kb then
+    about = "No knowledge data in this GameData: knowledge counts show as ?"
+  else
+    about = "Knowledge sources come from GameData build " .. whole(kb)
+    if client and client ~= kb then about = about .. " (this is game build " .. whole(client) .. ")" end
+  end
+  return text, { text, about }
+end
+
+-- -> text, tooltip for the Missing recipes footer; "Recipe sources: not generated · " first while the RecipeSources
+-- table has no build (the checked-in table is generated --empty).
+function Tab.MissingFooter()
+  local base = "Recipe lists fill in when you open the profession on any character"
+  local build = ns.GameData.Get("RecipeSources") ~= nil and ns.GameData.TableBuild("RecipeSources") or nil
+  if not finite(build) then
+    local text = "Recipe sources: not generated" .. DOT .. base
+    return text, { text, "Without generated recipe sources, only recipes a character has seen in the profession "
+      .. "window are listed, and a source the game did not describe shows as Unknown" }
+  end
+  return base, { base, "Recipe sources come from GameData build " .. whole(build)
+    .. "; the game's own source text wins once a character has seen the recipe" }
 end
 
 -- Pool + status (Planner:GetCapWarnings), now -> a grid row: the warning across Recipe ("Capped: concentration is
@@ -429,7 +456,12 @@ local function knowledge_section(P)
     local model = PV().KnowledgeCells(r)
     local cells = {}
     for key, text in pairs(model.cells) do cells[key] = model.done[key] and (text .. " " .. CHECK) or text end
-    local lines = Tab.KnowledgeDetailLines(r)
+    local names = {}
+    for _, st in ipairs(type(r.states) == "table" and r.states or {}) do
+      local itemID = type(st.source) == "table" and st.source.itemID or nil
+      if finite(itemID) and names[itemID] == nil then names[itemID] = item_name(itemID) end
+    end
+    local lines = Tab.KnowledgeDetailLines(r, names)
     out.rows[#out.rows + 1] = {
       key = tostring(r.charKey) .. ":" .. tostring(r.skillLineID), cells = cells,
       tooltip = PV().KnowledgeTooltipLines(r), detailLines = lines, detail = table.concat(lines, "\n"),
@@ -520,7 +552,8 @@ local function spec_section(P)
 end
 
 local function missing_section(P)
-  local out = { rows = {}, footer = "Recipe lists fill in when you open the profession on any character" }
+  local out = { rows = {} }
+  out.footer, out.footerTooltip = Tab.MissingFooter()
   local alt, prof = picked_pair(out)
   if not alt then return out end
   local rows, status = P:GetMissingRecipes(alt.charKey, prof.skillLineID)
@@ -654,12 +687,23 @@ local function set_pickers(p)
   end
 end
 
--- The empty text sits under the rows the grid shows (warnings above an empty plan), else under the grid header.
-local function show_empty(text, rowsAbove)
+-- The message for the section, or nil. Without rows it sits under the grid header and the grid reaches the footer;
+-- under rows (cap warnings above an empty plan) it takes its own line above the footer and the grid ends above that
+-- line, so a list that overflows never scrolls it out of view.
+local function show_empty(grid, text, rows)
+  local below = text ~= nil and (rows or 0) > 0
+  grid.frame:ClearAllPoints()
+  grid.frame:SetPoint("TOPLEFT", view.container, "TOPLEFT", 0, -GRID_TOP)
+  grid.frame:SetPoint("BOTTOMRIGHT", view.container, "BOTTOMRIGHT", 0, GRID_BOTTOM + (below and MESSAGE_LINE or 0))
   view.empty:ClearAllPoints()
-  local top = GRID_TOP + Grid().HEADER_HEIGHT + 8 + (rowsAbove or 0) * view.rowHeight
-  view.empty:SetPoint("TOPLEFT", view.container, "TOPLEFT", PAD + 4, -top)
-  view.empty:SetPoint("TOPRIGHT", view.container, "TOPRIGHT", -PAD - 4, -top)
+  if below then
+    view.empty:SetPoint("BOTTOMLEFT", view.container, "BOTTOMLEFT", PAD + 4, GRID_BOTTOM + 2)
+    view.empty:SetPoint("BOTTOMRIGHT", view.container, "BOTTOMRIGHT", -PAD - 4, GRID_BOTTOM + 2)
+  else
+    local top = GRID_TOP + Grid().HEADER_HEIGHT + 8
+    view.empty:SetPoint("TOPLEFT", view.container, "TOPLEFT", PAD + 4, -top)
+    view.empty:SetPoint("TOPRIGHT", view.container, "TOPRIGHT", -PAD - 4, -top)
+  end
   if text then
     view.empty:SetText(color(DIM, text))
     view.empty:Show()
@@ -685,7 +729,8 @@ function refresh()
     set_marker(nil)
     view.status:SetText(""); view.statusTooltip = nil
     view.footer:SetText(""); view.footerTooltip = nil
-    show_empty(PV().StatusText("plannerOff") .. ": turn it on in Settings > Modules to see the plan")
+    ns.FS:CancelDebounce(TICK_KEY)
+    show_empty(view.grids[section], PV().StatusText("plannerOff") .. ": turn it on in Settings > Modules to see the plan")
     apply_layout()
     return
   end
@@ -702,10 +747,15 @@ function refresh()
   view.statusTooltip = notice and { notice } or out.statusTooltip or (status ~= "" and { status } or nil)
   view.footer:SetText(out.footer or "")
   view.footerTooltip = out.footerTooltip or (out.footer and { out.footer } or nil)
-  show_empty(out.empty, #out.rows)
+  show_empty(grid, out.empty, #out.rows)
   apply_layout()
-  -- The next tick (reset and fill times) while the tab stays shown; RefreshTab does nothing once it is hidden.
-  if live() then ns.FS:Debounce(TICK_KEY, TICK_SECONDS, refreshLater) end
+  -- The next tick (reset and fill times; Knowledge and Concentration only) while the tab stays shown; RefreshTab does
+  -- nothing once it is hidden.
+  if live() and TICKING[section] then
+    ns.FS:Debounce(TICK_KEY, TICK_SECONDS, refreshLater)
+  else
+    ns.FS:CancelDebounce(TICK_KEY)
+  end
 end
 
 ---------------------------------------------------------------------------
@@ -813,7 +863,6 @@ local function build(container)
     missing = new_grid(container, Tab.MISSING_COLUMNS),
   }
   created.grids.concentration:SetRowRenderer(render_schedule_row)
-  created.rowHeight = created.grids.knowledge.rowHeight
 
   local empty = container:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   empty:SetJustifyH("LEFT")

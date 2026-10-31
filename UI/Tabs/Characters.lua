@@ -431,7 +431,7 @@ function refresh()
   local header = V().Header(rows)
   view.header:SetText(header.base)
   view.headerTooltip = header.tooltip
-  set_marker(header.note and V().CurrentDataMarker() or nil)
+  set_marker(V().CurrentDataMarker())   -- same rule as header.note (the Knowledge build)
   view.showHiddenLabel:SetText("Show hidden (" .. hiddenCount .. ")")
   view.hiddenCount = hiddenCount
   view.showHidden:SetChecked(showHidden)

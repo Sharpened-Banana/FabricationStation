@@ -378,40 +378,37 @@ end
 -- Header, data build, off state
 ---------------------------------------------------------------------------
 
--- GameData.Status(clientBuild) -> "data build 70575 (outdated)" when the data is from another game build (outdated)
--- or the Knowledge table's build differs from the others (mismatched); nil otherwise, also without a stamped build
--- (missing Knowledge data already shows as "?").
-function V.DataBuildNote(status)
-  if type(status) ~= "table" or not finite(status.build) then return nil end
-  local stale = status.outdated == true
-  for _, name in ipairs(type(status.mismatched) == "table" and status.mismatched or {}) do
-    if name == "Knowledge" then stale = true end
-  end
-  if not stale then return nil end
-  return "data build " .. whole(status.build) .. " (outdated)"
+-- knowledgeBuild (the Knowledge table's own build, ViewUtil.knowledgeBuild), clientBuild -> "data build 70575
+-- (outdated)" when both are known and differ; nil otherwise, also for an ungenerated Knowledge table (its counts
+-- already show as "?"). [Task 14 fix round 1] Other tables (an ungenerated RecipeSources, SpecEntryEffects from
+-- another build) never mark knowledge data as old.
+function V.DataBuildNote(knowledgeBuild, clientBuild)
+  if not finite(knowledgeBuild) or not finite(clientBuild) or knowledgeBuild == clientBuild then return nil end
+  return "data build " .. whole(knowledgeBuild) .. " (outdated)"
 end
 
--- DataBuildNote for this session's game build (Core's FS:GameDataStatus, the same status Settings shows), or nil.
+-- DataBuildNote for this session: the Knowledge table's build and the game build (Core's FS:GameDataStatus), or nil.
 function V.CurrentDataNote()
-  return V.DataBuildNote((ns.FS:GameDataStatus()))
+  return V.DataBuildNote(U.knowledgeBuild(), U.clientBuild())
 end
 
 V.MARKER_LABEL = "Old data"
 
 -- The outdated-data marker the Characters and Planner tabs show in their own fixed region (Task 14 wording):
--- GameData.Status -> { label = "Old data", tooltip = { "Game data build X is outdated", why } } when DataBuildNote
--- has a note (same rule), else nil.
-function V.DataMarker(status)
-  if not V.DataBuildNote(status) then return nil end
+-- knowledgeBuild, clientBuild -> { label = "Old data", tooltip = { "Game data build X is outdated", why } } under the
+-- DataBuildNote rule, else nil.
+function V.DataMarker(knowledgeBuild, clientBuild)
+  if not V.DataBuildNote(knowledgeBuild, clientBuild) then return nil end
   return { label = V.MARKER_LABEL, tooltip = {
-    "Game data build " .. whole(status.build) .. " is outdated",
-    "Knowledge sources and counts come from that game build; the game has changed since, so they may be wrong.",
+    "Game data build " .. whole(knowledgeBuild) .. " is outdated",
+    "Knowledge sources and counts come from game build " .. whole(knowledgeBuild) .. "; this is game build "
+      .. whole(clientBuild) .. ", so they may be wrong.",
   } }
 end
 
--- DataMarker for this session's game build, or nil.
+-- DataMarker for this session, or nil.
 function V.CurrentDataMarker()
-  return V.DataMarker((ns.FS:GameDataStatus()))
+  return V.DataMarker(U.knowledgeBuild(), U.clientBuild())
 end
 
 -- { AltRow } (the rows the grid shows) -> { text, base, note|nil, tooltip = { line } }:

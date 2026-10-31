@@ -21,6 +21,11 @@ function GameData.Get(name)
   return tables[name]
 end
 
+-- The build a single table was defined with; nil for an ungenerated (nil build) or undefined table.
+function GameData.TableBuild(name)
+  return builds[name]
+end
+
 local function sortedNames()
   local names = {}
   for name in pairs(tables) do names[#names + 1] = name end

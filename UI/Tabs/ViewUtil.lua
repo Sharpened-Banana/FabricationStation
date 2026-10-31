@@ -32,3 +32,17 @@ function U.compactMoney(copper)
   if text then return text end
   return ns.UI.FormatMoney(copper)
 end
+
+-- [Task 14 fix round 1] The Knowledge table's own build (GameData.TableBuild), or nil while it is undefined or
+-- ungenerated; other tables (RecipeSources, SpecEntryEffects, the 1a tables) never change what it says.
+function U.knowledgeBuild()
+  if ns.GameData.Get("Knowledge") == nil then return nil end
+  local build = ns.GameData.TableBuild("Knowledge")
+  return U.finite(build) and build or nil
+end
+
+-- This session's game build (Core's FS:GameDataStatus, from GetBuildInfo), or nil.
+function U.clientBuild()
+  local _, build = ns.FS:GameDataStatus()
+  return U.finite(build) and build or nil
+end
