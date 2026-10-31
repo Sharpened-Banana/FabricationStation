@@ -166,6 +166,21 @@ describe("Customers tags/links/search/export", function()
     end)
   end)
 
+  describe("BlockedNames", function()
+    it("lists every member of a group with a blocked member, and agrees with IsBlocked", function()
+      assert.same({}, C:BlockedNames())
+      C:Link("Alt-Silvermoon", "Bob-Silvermoon"); C:Link("Alt2-Silvermoon", "Alt-Silvermoon")
+      C:SetTag("Alt2-Silvermoon", "blocked", true); C:SetTag("Solo-Silvermoon", "blocked", true)
+      C:SetNote("Fine-Silvermoon", "ok")
+      local names = C:BlockedNames()
+      assert.same({ ["Bob-Silvermoon"] = true, ["Alt-Silvermoon"] = true, ["Alt2-Silvermoon"] = true,
+        ["Solo-Silvermoon"] = true }, names)
+      for name in pairs(ns.FS.db.global.customers) do assert.equal(C:IsBlocked(name), names[name] == true, name) end
+      ns.FS.db = nil
+      assert.same({}, C:BlockedNames())
+    end)
+  end)
+
   describe("IsBlocked", function()
     it("is false for a plain, unblocked or unknown customer", function()
       assert.is_false(C:IsBlocked("Bob")); assert.is_false(C:IsBlocked(nil)); assert.is_false(C:IsBlocked(""))

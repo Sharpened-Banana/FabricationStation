@@ -337,8 +337,9 @@ end
 
 -- Per-character scoring context: ctx = { charKey, now, bestGPCFor = fn(recipeID) -> copper per concentration point
 -- or nil when unknown (that recipe's profession, Ruling P2), concentrationFor = fn(recipeID) -> points|nil (the profession's
--- concentration projected to now; nil without a snapshot) }. Both are memoised per skill line, so build one context
--- per board refresh and score every order with it.
+-- concentration projected to now; nil without a snapshot), blockedNames = fn() -> { [nameRealm] = true } | nil
+-- (Customers:BlockedNames, asked once per context; nil without it) }. All are memoised (per skill line, per context),
+-- so build one context per board refresh and score every order with it.
 function Orders:BuildContext(charKey)
   local now = ns.FS:Now()
   local gpcBySkill, concBySkill = {}, {}
@@ -358,6 +359,14 @@ function Orders:BuildContext(charKey)
     end
     return concBySkill[skillLineID].value
   end
+  local blockedSet
+  function ctx.blockedNames()
+    if blockedSet == nil then
+      local customers = ns.FS:GetModule("Customers", true)
+      blockedSet = customers and customers.BlockedNames and customers:BlockedNames() or false
+    end
+    return blockedSet or nil
+  end
   return ctx
 end
 
@@ -369,8 +378,12 @@ local function gpc_for(ctx, recipeID)
   return type(rate) == "number" and math.max(0, rate) or nil
 end
 
-local function blocked(input)
+-- Group-aware (an alt of a blocked main is blocked): the context's BlockedNames set when it has one, else one
+-- Customers:IsBlocked call (a context without blockedNames, e.g. a test's plain table).
+local function blocked(input, ctx)
   if input.orderType == "npc" or input.customer == nil then return false end
+  local set = ctx.blockedNames and ctx.blockedNames()
+  if set then return set[input.customer] == true end
   local customers = ns.FS:GetModule("Customers", true)
   return customers ~= nil and customers.IsBlocked ~= nil and customers:IsBlocked(input.customer) == true
 end
@@ -469,7 +482,7 @@ function Orders:ScoreInput(input, ctx)
     and input.expiresAt - ctx.now < number_or(settings.expiringSoonSeconds, self.SETTINGS_DEFAULTS.expiringSoonSeconds) then
     risks[#risks + 1] = "expiringSoon"
   end
-  if blocked(input) then risks[#risks + 1] = "blockedCustomer" end
+  if blocked(input, ctx) then risks[#risks + 1] = "blockedCustomer" end
 
   return {
     orderID = input.orderID,

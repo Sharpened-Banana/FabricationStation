@@ -253,6 +253,29 @@ function Customers:IsBlocked(nameRealm)
   return false
 end
 
+-- { [nameRealm] = true } for every saved customer whose linked group has a member with the "blocked" tag: the same
+-- answer as IsBlocked for each of them, built in one pass over the records (each Root walked once). A name with no
+-- record is not in it (IsBlocked is false for it too). Reads only; a new table per call.
+function Customers:BlockedNames()
+  local list = view()
+  local out = {}
+  if not list then return out end
+  local rootOf, blockedRoots = {}, {}
+  for name, record in pairs(list) do
+    if type(name) == "string" then
+      local root = self:Root(name)
+      rootOf[name] = root
+      if type(record) == "table" and type(record.tags) == "table" and record.tags.blocked then
+        blockedRoots[root] = true
+      end
+    end
+  end
+  for name, root in pairs(rootOf) do
+    if blockedRoots[root] then out[name] = true end
+  end
+  return out
+end
+
 -- Makes `alt` an alt of `main`: alt.linkedTo = Root(main). Returns true, or false plus "self" (same character),
 -- "cycle" (main already hangs below alt), "invalid" (a missing name) or "readonly" (newer saved data). Linking
 -- what is already linked changes nothing. Both records are created when missing.

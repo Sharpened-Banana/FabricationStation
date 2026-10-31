@@ -379,3 +379,33 @@ describe("Orders filters and best claim", function()
     assert.same({nil, "none"}, {O:GetBestClaimable({}, {claimsRemaining=3})})
   end)
 end)
+
+describe("Orders scoring with the real Customers module", function()
+  local ns, O, C
+  before_each(function()
+    ns = P2.boot()
+    P2.fake_module(ns, "Recipes", { Evaluate = function() return { expectedQuality = 3, reagentCost = 1000, flags = {} } end })
+    P2.fake_module(ns, "Prices", { Get = function() return {} end })
+    P2.load(ns, {"Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua"})
+    O, C = ns.FS:GetModule("Orders"), ns.FS:GetModule("Customers")
+    C:Link("Alt-Silvermoon", "Main-Silvermoon"); C:SetTag("Main-Silvermoon", "blocked", true)
+    for i = 1, 20 do C:SetNote("Cust" .. i .. "-Silvermoon", "n") end
+  end)
+  it("looks the blocked customers up once per context, and still flags a customer blocked through its main", function()
+    local groups, lists = 0, 0
+    local getGroup, blockedNames = C.GetGroup, C.BlockedNames
+    C.GetGroup = function(...) groups = groups + 1; return getGroup(...) end
+    C.BlockedNames = function(...) lists = lists + 1; return blockedNames(...) end
+    local ctx = O:BuildContext("Me-Silvermoon")
+    local flagged = {}
+    for i = 1, 20 do
+      local name = i == 7 and "Alt-Silvermoon" or ("Cust" .. i .. "-Silvermoon")
+      local v = O:ScoreInput({ orderID = i, orderType = "personal", recipeID = 1, minQuality = 0, tipAmount = 5000,
+        consortiumCut = 0, reagentState = "all", customer = name, provided = {}, rewards = {} }, ctx)
+      for _, r in ipairs(v.risks) do if r == "blockedCustomer" then flagged[#flagged + 1] = i end end
+    end
+    assert.same({ 7 }, flagged)
+    assert.is_true(groups + lists <= 1)
+    C.GetGroup, C.BlockedNames = getGroup, blockedNames
+  end)
+end)
