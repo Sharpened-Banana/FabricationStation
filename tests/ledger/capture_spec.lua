@@ -151,6 +151,28 @@ describe("Ledger capture", function()
       L:OnOrderFulfilled("FS_ORDER_FULFILLED", {orderID=5, recipeID=4444, time=1000})
       assert.equal(0, #L:Query({type="commission"})); assert.is_true(L:IsEnabled())
     end)
+    it("marks a commission incomplete when one of its crafts could not be recorded", function()
+      claimed = {orderID=777, provided={}}
+      craft(777)                       -- recorded: 30000
+      price[100] = math.huge
+      craft(777)                       -- not a finite cost: skipped
+      price[100] = 10000
+      L:OnOrderFulfilled("FS_ORDER_FULFILLED", {orderID=777, recipeID=4444, tip=1000, commission=900, time=1000})
+      local c = L:Query({type="commission"})[1]
+      assert.equal(30000, c.cost); assert.is_true(c.incomplete)
+      L:OnOrderFulfilled("FS_ORDER_FULFILLED", {orderID=5, recipeID=4444, tip=1000, commission=900, time=1000})
+      assert.is_nil(L:Query({type="commission"})[1].incomplete)   -- another order is not affected
+    end)
+    it("drops the pending craft when the player's craft cast is interrupted", function()
+      L:OnCraftRecipe(4444, 5, { {reagent={itemID=100}, quantity=3, dataSlotIndex=1} }, nil, nil, false)
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", {itemID=211111, quantity=1, hyperlink=LINK, operationID=1})
+      W.fire("UNIT_SPELLCAST_INTERRUPTED", "target", "Cast-1", 4444)   -- not the player
+      W.fire("UNIT_SPELLCAST_INTERRUPTED", "player", "Cast-2", 1234)   -- another spell
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", {itemID=211111, quantity=1, hyperlink=LINK, operationID=2})
+      W.fire("UNIT_SPELLCAST_INTERRUPTED", "player", "Cast-3", 4444)
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", {itemID=211111, quantity=1, hyperlink=LINK, operationID=3})
+      assert.equal(2, #L:Query({type="craft"}))
+    end)
     it("rounds a fractional cost to whole copper", function()
       price[100] = 3333.4
       craft(nil)   -- 3 * 3333.4 + 2 * 5000 - 3333.4 = 16666.8
@@ -195,13 +217,31 @@ describe("Ledger capture", function()
       L:OnCraftResult("TRADE_SKILL_ITEM_CRAFTED_RESULT", {itemID=211111, quantity=1, hyperlink=LINK, operationID=1, isEnchant=true})
       assert.equal(0, #L:Query({type="craft"}))
     end)
-    it("ignores a craft and the commission of a recraft order", function()
+    it("ignores a recraft order's craft and records its commission with no cost", function()
       claimed = {orderID=888, isRecraft=true, provided={}}
       craft(888)
+      assert.equal(0, #L:Query({type="craft"}))
       C_TradeSkillUI.RecraftRecipeForOrder(999, "Item-2", {}, nil, false)
       L:OnOrderFulfilled("FS_ORDER_FULFILLED", {orderID=888, recipeID=4444, tip=1000, commission=900, time=1000})
       L:OnOrderFulfilled("FS_ORDER_FULFILLED", {orderID=999, recipeID=4444, tip=1000, commission=900, time=1000})
-      assert.equal(0, #L:Query({}))
+      local c = L:Query({type="commission"})
+      assert.equal(2, #c)
+      for _, e in ipairs(c) do assert.is_true(e.recraft); assert.is_nil(e.cost); assert.equal(900, e.amount) end
+      assert.equal(2, L:Weekly(1000, 1)[1].incomplete)
+    end)
+    it("takes isRecraft from the FulfilledOrder, ignoring any craft entries of that order", function()
+      claimed = {orderID=777, provided={}}
+      craft(777)   -- a fresh-craft entry (say, from before a reload); the order is still a recraft
+      ns.FS:SendMessage("FS_ORDER_FULFILLED", {orderID=777, recipeID=4444, tip=1000, commission=900, time=1000, isRecraft=true})
+      local c = L:Query({type="commission"})[1]
+      assert.is_true(c.recraft); assert.is_nil(c.cost)
+    end)
+    it("leaves recraft commissions out of the tip benchmark", function()
+      for i, tip in ipairs({100, 200, 300}) do
+        L:OnOrderFulfilled("FS_ORDER_FULFILLED", {orderID=i, recipeID=4444, quality=3, tip=tip, commission=tip, time=1000})
+      end
+      L:OnOrderFulfilled("FS_ORDER_FULFILLED", {orderID=9, recipeID=4444, quality=3, tip=900000, commission=900000, time=1000, isRecraft=true})
+      assert.same({median=200, p25=150, p75=250, n=3}, L:Benchmark(4444, 3))
     end)
   end)
 

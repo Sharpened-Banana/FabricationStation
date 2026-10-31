@@ -3,7 +3,7 @@ local ADDON_NAME, ns = ...
 -- Ledger: what the player earned and spent crafting. db.global.ledger = { entries = { LedgerEntry }, costBasis, nameIndex }
 -- (entries is a 1a default; costBasis and nameIndex belong to the capture code and are created when first used).
 -- LedgerEntry = { time, type = "craft"|"sale"|"commission", amount (integer copper, negative for craft), charKey,
--- recipeID?, quality?, quantity?, cost?, incomplete?, customer?, tip?, ... }.
+-- recipeID?, quality?, quantity?, cost?, incomplete?, customer?, tip?, recraft?, ... }.
 --
 -- Profit counts "sale" and "commission" entries only: income = amount, cost = the entry's cost. "craft" entries are
 -- cost-basis records and are left out (counting them would charge a cost twice). An entry whose cost is unknown keeps
@@ -314,13 +314,13 @@ end
 
 -- What this recipe's commissions have tipped: { median, p25, p75, n } of the gross `tip` of the player's
 -- commission entries for the recipe (`quality` nil = all qualities). Entries with no known (or a negative) tip are
--- not samples.
+-- not samples, and neither are recraft commissions (recraft = true: a recraft is not the fresh craft benchmarked).
 -- Nil when there are fewer than the benchmarkMinSamples setting.
 function Ledger:Benchmark(recipeID, quality)
   local tips = {}
   for _, saved in ipairs(each_saved()) do
     local entry = saved.entry
-    if entry.type == "commission" and entry.recipeID == recipeID
+    if entry.type == "commission" and entry.recipeID == recipeID and not entry.recraft
       and (quality == nil or entry.quality == quality) and is_integer(entry.tip) and entry.tip >= 0 then
       tips[#tips + 1] = entry.tip
     end
@@ -343,14 +343,19 @@ end
 -- Ruling P3: recrafts and enchants on existing items are not tracked by the Ledger in phase 2. They do not go
 -- through CraftRecipe (Blizzard calls RecraftRecipe, RecraftRecipeForOrder or CraftEnchant), so their hooks only
 -- drop the pending craft (a result after them is not charged to an earlier, unfinished multi-cast craft), an
--- enchant result (data.isEnchant) is ignored, and a recraft order records neither a craft nor its commission.
+-- enchant result (data.isEnchant) is ignored, and a recraft order records no craft. Its commission is real gold, so
+-- it is recorded with recraft = true and cost = nil (counted in `incomplete`, left out of Benchmark). A recraft order
+-- is known from FulfilledOrder.isRecraft, else from the RecraftRecipeForOrder hook or the claimed order (session).
 -- Salvage is no fresh craft either and is handled the same way.
+-- An interrupted cast (the player's UNIT_SPELLCAST_INTERRUPTED for the pending recipe) drops the pending craft: the
+-- rest of a multi-cast craft never comes.
 -- Every amount is rounded to whole copper here (Ledger:Add raises for anything else); a cost that is not a finite
 -- number is skipped and logged once, so a hook never turns the Ledger off.
 
 local pendingCraft      -- { recipeID, craftingReagents, orderID, provided, castsLeft } from the last CraftRecipe
 local lastCraft         -- { operationID, entry, fedBasis, itemID }: the last recorded craft (kept after pendingCraft)
 local untrackedOrders = {}  -- [orderID] = true: recraft orders (Ruling P3), for this session
+local skippedOrderCrafts = {}  -- [orderID] = true: an order craft whose cost could not be recorded (session)
 local seenMail = {}         -- [signature] = true: mail money already recorded this session
 local loggedOnce = {}
 
@@ -586,6 +591,7 @@ function Ledger:OnCraftResult(_, data)
   local cost, incomplete, estimated =
     self:CostOfCraft(craft.recipeID, craft.craftingReagents, craft.provided, data.resourcesReturned)
   if cost == nil then
+    if craft.orderID ~= nil then skippedOrderCrafts[craft.orderID] = true end
     log_once("craftCost", "craft cost of recipe " .. tostring(craft.recipeID) .. " is not a number; craft not recorded")
     return
   end
@@ -607,19 +613,28 @@ function Ledger:OnCraftResult(_, data)
     and { operationID = operationID, entry = stored, fedBasis = fedBasis, itemID = data.itemID } or nil
 end
 
+-- The player's UNIT_SPELLCAST_INTERRUPTED(unit, castGUID, spellID): an interrupted cast of the pending recipe (or of
+-- an unnamed spell) drops the pending craft. Recipe IDs are the craft spells' IDs.
+function Ledger:OnSpellcastInterrupted(_, unit, _, spellID)
+  if not pendingCraft or unit ~= "player" then return end
+  if spellID == nil or spellID == pendingCraft.recipeID then pendingCraft = nil end
+end
+
 -- ns.Msg.ORDER_FULFILLED(fulfilled): records the commission. Its cost is what this order's craft entries cost
--- (nil when there are none); an incomplete or estimated craft makes the commission so too.
+-- (nil when there are none); an incomplete, estimated or unrecorded (skipped) craft makes the commission
+-- incomplete or estimated too, even with a partial cost. A recraft order's commission has recraft = true and no cost.
 function Ledger:OnOrderFulfilled(_, fulfilled)
   if type(fulfilled) ~= "table" then return end
   local orderID = fulfilled.orderID
-  if fulfilled.isRecraft or (orderID ~= nil and untrackedOrders[orderID]) then return end  -- Ruling P3
+  local recraft = fulfilled.isRecraft == true or (orderID ~= nil and untrackedOrders[orderID] == true)
   local amount = to_copper(fulfilled.commission)
   if amount == nil then
     log_once("commission", "commission of order " .. tostring(orderID) .. " is unknown; not recorded")
     return
   end
   local cost, incomplete, estimated = nil, false, false
-  if orderID ~= nil then
+  if orderID ~= nil and not recraft then
+    incomplete = skippedOrderCrafts[orderID] == true
     for _, entry in ipairs(self:Query({ type = "craft" })) do
       if entry.ref == orderID and is_integer(entry.amount) then
         cost = (cost or 0) - entry.amount
@@ -632,7 +647,8 @@ function Ledger:OnOrderFulfilled(_, fulfilled)
     type = "commission", amount = amount, tip = fulfilled.tip, recipeID = fulfilled.recipeID,
     itemID = fulfilled.itemID, quality = fulfilled.quality, customer = fulfilled.customer,
     orderType = fulfilled.orderType, ref = orderID, rewardsValue = fulfilled.rewardsValue, cost = cost,
-    incomplete = incomplete or nil, estimated = estimated or nil, time = fulfilled.time, charKey = fulfilled.charKey,
+    incomplete = incomplete or nil, estimated = estimated or nil, recraft = recraft or nil, time = fulfilled.time,
+    charKey = fulfilled.charKey,
   })
 end
 
@@ -699,6 +715,7 @@ function Ledger:OnEnable()
   local function wrap(fn) return ns.FS:Wrap("Ledger", fn) end
   wrap(function() self:Prune(ns.FS:Now()) end)()
   self:RegisterEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", wrap(function(event, data) self:OnCraftResult(event, data) end))
+  self:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED", wrap(function(...) self:OnSpellcastInterrupted(...) end))
   self:RegisterMessage(ns.Msg.ORDER_FULFILLED, wrap(function(message, fulfilled)
     self:OnOrderFulfilled(message, fulfilled)
   end))
@@ -720,7 +737,7 @@ function Ledger:OnEnable()
   wrap(function()
     -- A post-hook only: FabricationStation calls CraftRecipe nowhere but Queue:CraftNext (tests/queue/craft_spec.lua
     -- allows exactly this line).
-    hooksecurefunc(C_TradeSkillUI, "CraftRecipe", body(function(...) self:OnCraftRecipe(...) end))
+    hook(C_TradeSkillUI, "CraftRecipe", function(...) self:OnCraftRecipe(...) end)
     hook(C_TradeSkillUI, "RecraftRecipe", function() self:OnUntrackedCraft() end)
     hook(C_TradeSkillUI, "RecraftRecipeForOrder", function(orderID) self:OnUntrackedCraft(orderID) end)
     hook(C_TradeSkillUI, "CraftEnchant", function() self:OnUntrackedCraft() end)

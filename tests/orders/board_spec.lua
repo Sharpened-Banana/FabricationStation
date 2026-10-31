@@ -60,6 +60,17 @@ describe("Orders board", function()
     assert.spy(O.SendMessage).was.called_with(O, "FS_ORDER_FULFILLED", {orderID=777, orderType="personal", customer="Bob-Silvermoon",
       recipeID=4444, itemID=211111, quality=3, tip=500000, consortiumCut=50000, commission=450000, rewards={}, rewardsValue=0, time=1000, charKey="Me-Silvermoon"})
   end)
+  it("marks a recraft order's FulfilledOrder with isRecraft", function()
+    claimed = P2.raw_order({isRecraft = true})
+    spy.on(O, "SendMessage")
+    O:OnFulfillClicked(777, "", 7)
+    O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+    local sent
+    for _, call in ipairs(O.SendMessage.calls) do
+      if call.vals[2] == "FS_ORDER_FULFILLED" then sent = call.vals[3] end
+    end
+    assert.is_true(sent.isRecraft)
+  end)
   it("detects personal order arrivals after a baseline", function()
     local t = {profession=7, professionName="Tailoring"}
     assert.same({}, O:UpdatePersonalCounts({P2.merge(t, {numPersonalOrders=1})}))   -- first sighting is the baseline

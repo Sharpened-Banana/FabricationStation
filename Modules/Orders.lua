@@ -950,6 +950,7 @@ function Orders:OnFulfillClicked(orderID, _, _)
     commission = type(tip) == "number" and tip - number_or(input.consortiumCut, 0) or nil,
     rewards = rewards,
     rewardsValue = rewardsValue,
+    isRecraft = input.isRecraft == true or nil,   -- the Ledger records a recraft's commission without a cost
   } }
 end
 
