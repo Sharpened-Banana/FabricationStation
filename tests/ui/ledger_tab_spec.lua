@@ -131,7 +131,7 @@ describe("Ledger tab models", function()
     L:Add({ type = "sale", amount = 7777, recipeID = 9, time = current - 8 * WEEK + 1 })                -- before the 8 weeks
     L:Add({ type = "sale", amount = 8888, time = current - 8 * WEEK + 1 })                              -- the same, unattributed
     local live = L:Query({})
-    local before = P2.merge({}, live)   -- a deep copy
+    local before = P2.merge(live, {})   -- a deep copy (merge copies its first argument)
     local m = T.Model(L, now)
     assert.equal(7, m.count)
     assert.equal(8, #m.weekly.rows)
@@ -155,6 +155,23 @@ describe("Ledger tab models", function()
     T.DisplayRows(m)
     for i, row in ipairs(live) do T.CellTexts("entry", row); T.TooltipLines({ kind = "row", section = "entry", data = row }); assert.same(before[i], row) end
     assert.same(before, L:Query({}))
+  end)
+
+  it("counts an entry at exactly the oldest shown week's start in both tables, and one a second earlier in neither", function()
+    local now = 1000
+    local since = now + 100 - WEEK - 7 * WEEK
+    L:Add({ type = "sale", amount = 100, cost = 10, recipeID = 5, time = since })
+    L:Add({ type = "sale", amount = 200, cost = 20, time = since })
+    L:Add({ type = "sale", amount = 4000, cost = 1, recipeID = 5, time = since - 1 })
+    L:Add({ type = "sale", amount = 8000, cost = 1, time = since - 1 })
+    local m = T.Model(L, now)
+    assert.equal(since, m.since)
+    assert.equal(since, m.weekly.rows[8].weekStart)
+    assert.same({ 300, 30 }, { m.weekly.rows[8].income, m.weekly.rows[8].cost })
+    assert.same({ 300, 30, 0 }, { m.weekly.total.income, m.weekly.total.cost, m.weekly.total.incomplete })
+    assert.equal(1, #m.recipes)
+    assert.same({ 5, 100, 10, 1 }, { m.recipes[1].recipeID, m.recipes[1].income, m.recipes[1].cost, m.recipes[1].n })
+    assert.same({ 200, 20, 1 }, { m.unattributed.income, m.unattributed.cost, m.unattributed.n })
   end)
 
   it("has no weekly rows when the week boundary is unknown, and no unattributed row without such sales", function()
