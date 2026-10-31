@@ -1,0 +1,7 @@
+### Task 0: Phase 2 residuals (before phase 3 Task 1)
+
+**Files:** Modify `Modules/Orders.lua`, `Modules/Queue.lua`; tests in the existing `tests/orders/*_spec.lua` and `tests/queue/queue_spec.lua` (or new focused spec files beside them).
+
+1. `Orders:OnEnable` sends `ns.Msg.ORDERS_CHANGED` at its end, so after the Orders module is turned back on the board's row cells (hidden while Orders is off) reappear and the Orders tab's "Orders off" notice clears without waiting for the next ShowOrders. Spec: disable Orders → re-enable → ORDERS_CHANGED observed; with the OrdersPanel/Orders tab loaded, cells shown and the off notice cleared.
+2. `Queue` also registers Blizzard's `CRAFTINGORDERS_FULFILL_ORDER_RESPONSE(result, orderID)`; when `result == Enum.CraftingOrderResult.Ok` (0) it runs the same removal as the existing FS_ORDER_FULFILLED handler (Modules/Queue.lua ~381-403): remove real entries with that orderID, one QUEUE_CHANGED, nothing written while dbIsNewer. Must be idempotent with FS_ORDER_FULFILLED (second one finds nothing, sends no second QUEUE_CHANGED). Use the same log-only SafeCall source style ("Queue:OrderFulfilled") — Queue is a core module. Unregister in OnDisable if Queue has one. Specs: response Ok removes; non-Ok result does nothing; response + FS_ORDER_FULFILLED → one removal, one QUEUE_CHANGED; with the Orders module disabled the response still removes; dbIsNewer writes nothing.
+3. Update the interface contract line describing order-entry removal to mention both triggers.
