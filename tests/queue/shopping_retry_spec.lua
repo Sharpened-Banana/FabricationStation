@@ -60,6 +60,46 @@ describe("H1-5b shopping list waits for item names", function()
     assert.same({ true, { added = 2, skipped = 1 } }, retried)
   end)
 
+  it("makes the list at once when the client answers a name while it is requested (synchronous event)", function()
+    local disk = { [1001] = "Ore", [2001] = "Dust", [3001] = "Flux" }
+    C_Item.RequestLoadItemDataByID = function(itemID)
+      world.loadRequests[#world.loadRequests + 1] = itemID
+      world.names[itemID] = disk[itemID]
+      W.fire("GET_ITEM_INFO_RECEIVED", itemID, true)
+    end
+    local retried
+    local ok, info = Q:ExportShoppingList(function(...) retried = { ... } end)
+    assert.is_true(ok); assert.same({ added = 3, skipped = 0 }, info)
+    assert.equals(1, #rec.lists); assert.equals(3, #rec.lists[1].searchStrings)
+    assert.is_nil(retried)
+  end)
+
+  it("waits only for the names the client did not answer at once", function()
+    C_Item.RequestLoadItemDataByID = function(itemID)
+      world.loadRequests[#world.loadRequests + 1] = itemID
+      if itemID ~= 3001 then
+        world.names[itemID] = itemID == 1001 and "Ore" or "Dust"
+        W.fire("GET_ITEM_INFO_RECEIVED", itemID, true)
+      end
+    end
+    local retried
+    local ok, info = Q:ExportShoppingList(function(...) retried = { ... } end)
+    assert.is_true(ok); assert.same({ added = 2, skipped = 1, loading = true }, info)
+    assert.equals(1, #rec.lists)
+    arrive(3001, "Flux")
+    assert.equals(2, #rec.lists); assert.same({ true, { added = 3, skipped = 0 } }, retried)
+  end)
+
+  it("drops a name that is cached by the time it is requested (no event)", function()
+    C_Item.RequestLoadItemDataByID = function(itemID)
+      world.loadRequests[#world.loadRequests + 1] = itemID
+      world.names[itemID] = "Name" .. itemID
+    end
+    local ok, info = Q:ExportShoppingList()
+    assert.is_true(ok); assert.same({ added = 3, skipped = 0 }, info)
+    assert.equals(1, #rec.lists)
+  end)
+
   it("stops waiting when QueueCraft is turned off", function()
     Q:ExportShoppingList()
     ns.FS:GetModule("QueueCraft"):Disable()
@@ -77,8 +117,8 @@ describe("H1-5b shopping list waits for item names", function()
     it("says the list will appear, then that it was made", function()
       local view = QT:GetView()
       view.shoppingButton:GetScript("OnClick")(view.shoppingButton)
-      assert.equals("Loading item names" .. ELLIPSIS
-        .. " the list will appear in Auctionator's Shopping tab (reopen the AH if it's open)", view.status:GetText())
+      assert.equals("Loading item names" .. ELLIPSIS .. " the list will appear in Auctionator's Shopping tab (reopen the"
+        .. " AH if it's open); press again if it doesn't appear", view.status:GetText())
       arrive(1001, "Ore"); arrive(2001, "Dust"); arrive(3001, "Flux")
       assert.equals("Shopping list updated (3 items)", view.status:GetText())
     end)
@@ -87,7 +127,8 @@ describe("H1-5b shopping list waits for item names", function()
   it("says what a partial export did, and what is still loading", function()
     local T = ns.UI.QueueTab
     assert.equals("Shopping list updated (2 items); loading 1 item name" .. ELLIPSIS
-      .. " the list will update in Auctionator's Shopping tab (reopen the AH if it's open)",
+      .. " the list will update in Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't"
+      .. " appear",
       T.ShoppingText(true, { added = 2, skipped = 1, loading = true }))
     assert.equals("Shopping list updated (2 items), 1 item skipped", T.ShoppingText(true, { added = 2, skipped = 1 }))
     assert.equals("1 item skipped: its name could not be loaded", T.ShoppingText(true, { added = 0, skipped = 1 }))

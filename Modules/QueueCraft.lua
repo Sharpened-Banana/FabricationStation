@@ -73,7 +73,8 @@ local function on_item_info(_, itemID)
   local w = waitingNames
   if not w or not w.items[itemID] then return end
   w.items[itemID] = nil
-  if next(w.items) ~= nil then return end
+  -- Fired synchronously inside RequestLoadItemDataByID: the export in progress picks the name up itself.
+  if w.requesting or next(w.items) ~= nil then return end
   waitingNames = nil
   QueueCraft:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
   local ok, info = export(false)
@@ -107,19 +108,54 @@ export = function(wait, onRetry)
   if #itemIDs == 0 then return false, "empty" end
   table.sort(itemIDs)
 
-  local tiers = reagent_tiers(Queue:GetEntries())
-  local searchStrings, skipped, loading = {}, 0, {}
-  for _, itemID in ipairs(itemIDs) do
+  local function name_of(itemID)
     local name = C_Item.GetItemNameByID(itemID)
-    if type(name) ~= "string" or name == "" then
+    if type(name) == "string" and name ~= "" then return name end
+    return nil
+  end
+
+  -- Uncached names are requested. GET_ITEM_INFO_RECEIVED is a synchronous event: a name the client has on disk can
+  -- arrive inside RequestLoadItemDataByID, so the wait is set up (and the event registered) before the requests,
+  -- and every name that has arrived by the end of them is dropped from the wait.
+  local uncached = {}
+  for _, itemID in ipairs(itemIDs) do
+    if not name_of(itemID) then uncached[#uncached + 1] = itemID end
+  end
+  local w
+  if #uncached > 0 and wait and QueueCraft:IsEnabled() then
+    w = { items = {}, onRetry = onRetry, requesting = true }
+    for _, itemID in ipairs(uncached) do w.items[itemID] = true end
+    waitingNames = w
+    QueueCraft:RegisterEvent("GET_ITEM_INFO_RECEIVED", ns.FS:Wrap("QueueCraft:ShoppingRetry", on_item_info))
+  end
+  for _, itemID in ipairs(uncached) do C_Item.RequestLoadItemDataByID(itemID) end
+  local function stop_waiting()
+    if w and waitingNames == w then
+      waitingNames = nil
+      QueueCraft:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
+    end
+    w = nil
+  end
+  if w then
+    w.requesting = false
+    for itemID in pairs(w.items) do
+      if name_of(itemID) then w.items[itemID] = nil end
+    end
+    if next(w.items) == nil then stop_waiting() end
+  end
+
+  local tiers = reagent_tiers(Queue:GetEntries())
+  local searchStrings, skipped = {}, 0
+  for _, itemID in ipairs(itemIDs) do
+    local name = name_of(itemID)
+    if not name then
       skipped = skipped + 1
-      loading[itemID] = true
-      C_Item.RequestLoadItemDataByID(itemID)
     else
       local term = { searchString = name, isExact = true, quantity = missing[itemID], tier = tiers[itemID] }
       local ok, result = pcall(api.ConvertToSearchString, CALLER_ID, term)
       if not ok or type(result) ~= "string" then
         ns.FS:LogError("Queue:ShoppingList", "ConvertToSearchString: " .. tostring(result))
+        stop_waiting()
         return false, "auctionatorError"
       end
       searchStrings[#searchStrings + 1] = result
@@ -129,12 +165,11 @@ export = function(wait, onRetry)
     local ok, err = pcall(api.CreateShoppingList, CALLER_ID, LIST_NAME, searchStrings)
     if not ok then
       ns.FS:LogError("Queue:ShoppingList", "CreateShoppingList: " .. tostring(err))
+      stop_waiting()
       return false, "auctionatorError"
     end
   end
-  if skipped > 0 and wait and QueueCraft:IsEnabled() then
-    waitingNames = { items = loading, onRetry = onRetry }
-    QueueCraft:RegisterEvent("GET_ITEM_INFO_RECEIVED", ns.FS:Wrap("QueueCraft:ShoppingRetry", on_item_info))
+  if w and waitingNames == w then
     return true, { added = #searchStrings, skipped = skipped, loading = true }
   end
   return true, { added = #searchStrings, skipped = skipped }

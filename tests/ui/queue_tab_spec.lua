@@ -119,7 +119,7 @@ describe("Queue tab", function()
       assert.equals("Shopping list updated (4 items)", Tab.ShoppingText(true, { added = 4, skipped = 0 }))
       assert.equals("Shopping list updated (3 items), 2 items skipped", Tab.ShoppingText(true, { added = 3, skipped = 2 }))
       assert.equals("2 items skipped: their names could not be loaded", Tab.ShoppingText(true, { added = 0, skipped = 2 }))
-      assert.equals("Loading item names\226\128\166 the list will appear in Auctionator's Shopping tab (reopen the AH if it's open)",
+      assert.equals("Loading item names\226\128\166 the list will appear in Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear",
         Tab.ShoppingText(true, { added = 0, skipped = 2, loading = true }))
       assert.equals("Auctionator not available", Tab.ShoppingText(false, "noAuctionator"))
       assert.is_truthy(Tab.ShoppingText(false, "empty"):find("Nothing", 1, true))

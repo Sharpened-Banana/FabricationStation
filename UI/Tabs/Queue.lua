@@ -174,7 +174,7 @@ local function count_items(n)
   return n .. (n == 1 and " item" or " items")
 end
 
-local AH_HINT = " in Auctionator's Shopping tab (reopen the AH if it's open)"
+local AH_HINT = " in Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear"
 
 -- One line for an ExportShoppingList result (ok, info). info.loading: names are still loading and the list will be
 -- made or updated by itself once they arrive; skipped without loading: names the client could not load.
