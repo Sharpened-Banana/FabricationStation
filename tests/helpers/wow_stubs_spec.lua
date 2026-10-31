@@ -353,6 +353,11 @@ describe("wow stubs", function()
       assert.is_nil(ScrollUtil.AddInitializedFrameCallback({}, function() end))
       assert.is_function(C_AddOns.IsAddOnLoaded); assert.is_false(C_AddOns.IsAddOnLoaded("Blizzard_Professions"))
     end)
+    it("provides safe phase-3 defaults for quests, spells, the calendar and the region", function()
+      assert.is_false(C_QuestLog.IsQuestFlaggedCompleted(93691)); assert.is_nil(C_Spell.GetSpellName(77))
+      assert.is_nil(C_DateAndTime.GetCurrentCalendarTime()); assert.equals(1, GetCurrentRegion())
+      assert.is_nil(rawget(_G, "canaccessvalue"))   -- feature-tested by the addon, so left absent
+    end)
     it("ScrollUtil registers frame callbacks on a box the way Blizzard's ScrollUtil does", function()
       local registered = {}
       local box = { RegisterCallback = function(_, event, fn, owner) registered[#registered + 1] = { event, fn, owner } end }

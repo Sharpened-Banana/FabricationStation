@@ -12,7 +12,7 @@ stds.wow = {
     "ButtonFrameTemplate_HidePortrait", "ButtonFrameTemplate_HideButtonBar", "hooksecurefunc", "EventRegistry",
     "debugstack", "debugprofilestop", "geterrorhandler", "date", "time", "wipe", "tinsert", "tremove", "strsplit", "strtrim",
     "GetInboxInvoiceInfo", "GetInboxHeaderInfo", "TakeInboxMoney", "AutoLootMailItem", "AUCTION_SOLD_MAIL_SUBJECT",
-    "ScrollUtil", "PlaySound", "SOUNDKIT" },
+    "ScrollUtil", "PlaySound", "SOUNDKIT", "C_QuestLog", "C_Spell", "GetCurrentRegion", "canaccessvalue" },
 }
 files["Math/"] = { std = "lua51" }
 files["Data/"] = { std = "lua51" }

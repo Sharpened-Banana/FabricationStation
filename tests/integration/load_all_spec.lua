@@ -5,7 +5,9 @@ describe("whole addon", function()
     for _, name in ipairs({ "Scanner", "Prices", "Diagnostics", "Recipes", "MainWindow", "SettingsTab", "Launcher",
       -- phase 2
       "Customers", "Orders", "Ledger", "OrdersRowAddons", "OrdersSidePanel", "OrderViewWarning", "OrderAlert",
-      "OrdersTab", "CustomersTab", "LedgerTab", "OrdersWidgets" }) do
+      "OrdersTab", "CustomersTab", "LedgerTab", "OrdersWidgets",
+      -- phase 3
+      "Alts" }) do
       assert.is_true(ns.FS:GetModule(name):IsEnabled(), name)
     end
     assert.same({}, ns.FS.db.global.diagnostics.errors)
@@ -17,7 +19,7 @@ describe("whole addon", function()
   it("registers the slash aliases", function() assert.is_truthy(W.slash.fs); assert.is_truthy(W.slash.fabstation) end)
   it("exposes the option groups", function()
     local args = ns.FS:GetOptionsTable().args
-    for _, k in ipairs({ "general", "prices", "crafting", "orders", "modules", "diagnostics" }) do
+    for _, k in ipairs({ "general", "prices", "crafting", "orders", "alts", "modules", "diagnostics" }) do
       assert.is_truthy(args[k], k)
     end
   end)

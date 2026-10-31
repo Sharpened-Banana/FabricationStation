@@ -15,3 +15,9 @@ make_world = require("crafting_world")
 
 -- Fake Blizzard_Professions frames (see professions_frame.lua).
 fake_professions_frame = require("professions_frame")
+
+-- Phase-3 fixture environment (see phase3_fakes.lua): phase3_env(opts) -> ns, env, W; NOW and WS clock constants.
+local P3 = require("tests.helpers.phase3_fakes")
+phase3_env = P3.phase3_env
+NOW = P3.NOW
+WS = P3.WS

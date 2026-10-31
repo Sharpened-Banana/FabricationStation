@@ -40,6 +40,8 @@ Modules\Customers.lua
 Modules\Orders.lua
 Modules\Ledger.lua
 Modules\PlanCalc.lua
+Modules\Alts.lua
+Modules\AltsCollector.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua

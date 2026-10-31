@@ -721,7 +721,11 @@ local function install(overrides)
       ClaimOrder = retNil, FulfillOrder = retNil, GetClaimedOrder = retNil, GetCrafterOrders = emptyList,
       GetCraftingOrderTime = retZero, GetPersonalOrdersInfo = emptyList, GetOrderClaimInfo = retNil,
     },
-    C_DateAndTime = { GetSecondsUntilWeeklyReset = retZero },
+    C_DateAndTime = { GetSecondsUntilWeeklyReset = retZero, GetCurrentCalendarTime = retNil },
+    -- phase 3 (preflight row 14): safe defaults so full loads boot Alts/Planner without errors.
+    C_QuestLog = { IsQuestFlaggedCompleted = retFalse },
+    C_Spell = { GetSpellName = retNil },
+    GetCurrentRegion = function() return 1 end,
     C_Item = { GetItemCount = retZero, GetItemNameByID = retNil, RequestLoadItemDataByID = noop },
     C_CurrencyInfo = {
       GetCurrencyInfo = retNil, GetCurrencyListInfo = retNil, GetCurrencyListLink = retNil,
