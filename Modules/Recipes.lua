@@ -192,6 +192,28 @@ local function total_skill(info)
   return info.baseSkill + (info.bonusSkill or 0)
 end
 
+-- A fraction cut to 12 significant digits (the game's thresholds are whole skill points over the difficulty).
+local function fraction(x)
+  return tonumber(string.format("%.12g", x))
+end
+
+-- Records into `out` ([tier index] = fraction of the difficulty; tier index i is the threshold of quality i + 1)
+-- the thresholds one operation info reports: lowerSkillThreshold starts its craftingQuality, upperSkillTreshold
+-- (sic, the game's field name) starts the next one. Nothing for a missing or non-positive value, a quality outside
+-- 1..maxQuality or a missing difficulty.
+local function collect_thresholds(out, info, maxQuality)
+  local q = info.craftingQuality
+  local difficulty = (info.baseDifficulty or 0) + (info.bonusDifficulty or 0)
+  if type(q) ~= "number" or type(maxQuality) ~= "number" or difficulty <= 0 then return end
+  local lower, upper = info.lowerSkillThreshold, info.upperSkillTreshold
+  if q > 1 and q <= maxQuality and type(lower) == "number" and lower > 0 then
+    out[q - 1] = fraction(lower / difficulty)
+  end
+  if q >= 1 and q < maxQuality and type(upper) == "number" and upper > 0 then
+    out[q] = fraction(upper / difficulty)
+  end
+end
+
 local DAY = 86400
 
 local function older_than(time, now, days)
@@ -204,14 +226,18 @@ local function same_values(a, b)
     or a.craftingDataID ~= b.craftingDataID then
     return false
   end
-  local sa, sb = type(a.stats) == "table" and a.stats or {}, type(b.stats) == "table" and b.stats or {}
-  for k, v in pairs(sa) do if sb[k] ~= v then return false end end
-  for k, v in pairs(sb) do if sa[k] ~= v then return false end end
+  for _, key in ipairs({ "stats", "thresholdFractions" }) do
+    local ta, tb = type(a[key]) == "table" and a[key] or {}, type(b[key]) == "table" and b[key] or {}
+    for k, v in pairs(ta) do if tb[k] ~= v then return false end end
+    for k, v in pairs(tb) do if ta[k] ~= v then return false end end
+  end
   return true
 end
 
 -- Calibrates recipeID for the current character from two live operation infos without
--- concentration: no reagents, and every quality slot at its top rank. Returns the CalibRecord, or
+-- concentration: no reagents, and every quality slot at its top rank. thresholdFractions keeps the quality
+-- thresholds both infos report, as fractions of the difficulty by tier index (nil when they report none); Evaluate
+-- uses them before GameData's and the defaults. Returns the CalibRecord, or
 -- nil when the recipe has no schematic or live data is unavailable (profession window closed).
 -- The record is stored unless the saved data is from a newer version (then it is only returned). The
 -- character's data stamp is bumped only when results can change: no previous record, a stored value
@@ -226,11 +252,14 @@ function Recipes:Calibrate(recipeID)
 
   local baseSkill = total_skill(empty)
   local maxReagentSkill
+  local thresholds = {}
+  collect_thresholds(thresholds, empty, schematic.maxQuality)
   local allocation = top_rank_allocation(schematic)
   if #allocation > 0 then
     local top = S:GetLiveOperationInfo(recipeID, allocation, false)
     if not top or type(top.baseSkill) ~= "number" then return nil end
     maxReagentSkill = total_skill(top) - baseSkill
+    collect_thresholds(thresholds, top, schematic.maxQuality)
   end
 
   local record = {
@@ -240,6 +269,7 @@ function Recipes:Calibrate(recipeID)
     maxReagentSkill = maxReagentSkill,
     craftingDataID = empty.craftingDataID or schematic.craftingDataID,
     stats = ns.Math.Stats.ParseBonusStats(empty.bonusStats, self.STAT_NAMES),
+    thresholdFractions = next(thresholds) ~= nil and thresholds or nil,
   }
   -- Newer saved data: the record is returned but not stored, so GetCalibration will not return it.
   if not writable() then return record end
@@ -438,8 +468,9 @@ local function evaluate(recipeID, charKey, o, schematic)
   local calib = ctx.calib
   -- A recipe with qualities (maxQuality > 1; 0, 1 and nil mean none) is an estimate when it has no thresholds
   -- (an unsupported maxQuality predicts quality 1 whatever the skill: never present that as real), or when
-  -- default thresholds stand in because GameData lacks the recipe's. A ranked basic slot without a GameData weight
-  -- (input.missingWeights) adds no skill whatever its rank: an estimate too.
+  -- default thresholds stand in because GameData and the calibration lack the recipe's (or some tiers of them:
+  -- input.thresholdsEstimated). A ranked basic slot without a GameData weight (input.missingWeights) is weighted
+  -- equally with the others: an estimate too.
   local hasQualities = (input.maxQuality or 1) > 1
   local noThresholds = hasQualities
     and ns.Math.Quality.Thresholds(input.maxQuality, input.baseDifficulty or 0, input.thresholdFractions) == nil
@@ -451,7 +482,8 @@ local function evaluate(recipeID, charKey, o, schematic)
     stalePrice = stalePrice,
     staleData = calib == nil or older_than(calib.time, now, days) or older_than(char and char.lastSeen, now, days),
     unknownRecipe = not ctx.known,
-    estimated = calib == nil or noThresholds or defaultThresholds or input.missingWeights == true,
+    estimated = calib == nil or noThresholds or defaultThresholds or input.missingWeights == true
+      or input.thresholdsEstimated == true,
     unreachableTarget = mathFlags.unreachableTarget == true,
     unknownOptional = mathFlags.unknownOptional == true,
   }

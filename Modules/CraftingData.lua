@@ -63,6 +63,36 @@ function CraftingData.ThresholdFractions(gd, craftingDataID, maxQuality)
   return fractions
 end
 
+-- Thresholds for tiers 2..maxQuality as ascending fractions, from the calibration's measured fractions
+-- (calibrated = { [tier index] = fraction }, possibly partial), else GameData's `fractions`, else Math's defaults.
+-- Returns fractions|nil, estimated: nil when nothing was measured and GameData has none (Math's defaults then stand
+-- in); estimated = true when the defaults filled a tier the calibration did not measure.
+function CraftingData.MergeThresholds(calibrated, fractions, maxQuality)
+  if type(maxQuality) ~= "number" or maxQuality < 2 then return fractions, false end
+  local any = false
+  if type(calibrated) == "table" then
+    for i = 1, maxQuality - 1 do
+      if type(calibrated[i]) == "number" then any = true end
+    end
+  end
+  if not any then return fractions, false end
+  local defaults = ns.Math and ns.Math.Quality and ns.Math.Quality.THRESHOLD_FRACTIONS[maxQuality] or EMPTY
+  local out, estimated = {}, false
+  for i = 1, maxQuality - 1 do
+    local f = calibrated[i]
+    if type(f) ~= "number" then
+      f = fractions and fractions[i]
+      if type(f) ~= "number" then
+        f = defaults[i]
+        estimated = true
+      end
+    end
+    if type(f) ~= "number" then return fractions, false end
+    out[i] = f
+  end
+  return out, estimated
+end
+
 -- The schematic's own craftingDataID, else the one GameData lists for its first output item.
 function CraftingData.CraftingDataIDFor(gd, schematic)
   if not schematic then return nil end
@@ -154,8 +184,10 @@ end
 -- usable item, which then is in the allocation, the cost, missing reagents and CraftRecipe's reagents),
 -- noResourcefulness = true (resourcefulness saves basic reagents only) and singleItem = true (one item fills the
 -- whole quantity: the game rejects mixed items in a modifying slot). Their items' stats are not applied.
--- missingWeights = true when a basic slot offers two or more ranks but GameData has no weight for it (the
--- ranks then add no skill: the result is an estimate).
+-- missingWeights = true when a basic slot offers two or more ranks but GameData has no weight for it: such a slot
+-- gets weight 1 (equal weights), and the result is an estimate.
+-- thresholdFractions: the calibration's measured fractions (calib.thresholdFractions, by tier index) first, then
+-- GameData's, then Math's defaults (see MergeThresholds); thresholdsEstimated = true when defaults filled a tier.
 -- optionals: with optionalItemIDs (a list, possibly empty), every item of every other optional and finishing
 -- slot with its OptionalStats and price, so EvaluateAllocation(input, allocation, optionalItemIDs) can pick the
 -- selected ones; without, none (EvaluateCraft applies every listed optional).
@@ -179,7 +211,12 @@ function CraftingData.BuildInput(gd, args)
           provided = provided[itemID] or 0 }
       end
       local weight = basic and CraftingData.ReagentWeight(gd, reagents[1]) or 0
-      if basic and #reagents >= 2 and weight <= 0 then missingWeights = true end
+      -- No GameData weight for a ranked slot: equal weights (1) stand in, so the measured reagent skill still
+      -- counts. Only ranked slots: weighting a single-rank slot would dilute the skill the ranks add.
+      if basic and #reagents >= 2 and weight <= 0 then
+        missingWeights = true
+        weight = 1
+      end
       slots[#slots + 1] = { slotIndex = slot.slotIndex, quantity = slot.quantity or 0, weight = weight, items = items,
         noResourcefulness = (not basic) or nil, singleItem = (not basic) or nil }
     elseif args.optionalItemIDs and (slot.kind == "optional" or slot.kind == "finishing") then
@@ -194,6 +231,9 @@ function CraftingData.BuildInput(gd, args)
     end
   end
 
+  local thresholdFractions, thresholdsEstimated = CraftingData.MergeThresholds(calib and calib.thresholdFractions,
+    CraftingData.ThresholdFractions(gd, craftingDataID, maxQuality), maxQuality)
+
   local stats = {}
   for k, v in pairs(calib and calib.stats or EMPTY) do stats[k] = v end
   local outputPrices = {}
@@ -204,7 +244,8 @@ function CraftingData.BuildInput(gd, args)
     baseDifficulty = calib and calib.baseDifficulty or schematic.baseDifficulty,
     baseSkill = calib and calib.baseSkill or args.professionSkill,
     maxReagentSkill = calib and calib.maxReagentSkill or nil,
-    thresholdFractions = CraftingData.ThresholdFractions(gd, craftingDataID, maxQuality),
+    thresholdFractions = thresholdFractions,
+    thresholdsEstimated = thresholdsEstimated,
     slots = slots,
     missingWeights = missingWeights,
     optionals = optionals,

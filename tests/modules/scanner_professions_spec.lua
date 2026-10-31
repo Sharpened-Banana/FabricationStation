@@ -58,6 +58,13 @@ describe("Scanner professions", function()
     C_TradeSkillUI.GetCraftingOperationInfo = function() error("x") end; assert.is_nil(Scanner:GetLiveOperationInfo(1001, {}, false))
     _G.ProfessionsFrame = nil; assert.is_nil(Scanner:GetLiveOperationInfo(1001, {}, false))
   end)
+  it("adds the selected optional and finishing reagents to the live operation info (H1-4)", function()
+    local got; C_TradeSkillUI.GetCraftingOperationInfo = function(_, r) got = r; return { quality = 1 } end
+    Scanner:GetLiveOperationInfo(1001, { { slotIndex = 1, itemID = 2002, quantity = 5 } }, false, { 5001, 4001, 9999 })
+    assert.same({ { reagent = { itemID = 2002 }, dataSlotIndex = 1, quantity = 5 },
+      { reagent = { itemID = 5001 }, dataSlotIndex = 3, quantity = 1 },
+      { reagent = { itemID = 4001 }, dataSlotIndex = 2, quantity = 1 } }, got)
+  end)
   it("records character basics on login", function()
     local c = Scanner:GetCharacter(K); assert.equals("MAGE", c.class); assert.equals(W.now, c.lastSeen); assert.same({ K }, Scanner:GetCharacters())
   end)

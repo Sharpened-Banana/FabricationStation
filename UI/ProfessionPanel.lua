@@ -67,7 +67,8 @@ local hooked         -- the ProfessionsFrame and CraftingPage OnShow/OnHide hook
 local attachedForm   -- the schematic form the AllocationsModified callback is registered on
 local recipeID       -- the selected recipe
 local result         -- Recipes:Evaluate for it (the optimiser)
-local live           -- Recipes:PredictLive for Blizzard's current allocation
+local live           -- the live header: the game's numbers (M.GameHeader) for Blizzard's current allocation, else
+                     -- Recipes:PredictLive's Math prediction for it
 local model          -- the last BuildModel output shown
 local target         -- target quality for Evaluate and Add to Queue; nil = best
 local useConcentration = false
@@ -198,13 +199,46 @@ local function concentration_text(r, liveResult, atMax)
   return "Concentration: " .. math.floor(cost + 0.5)
 end
 
--- result = RecipeResult (the optimiser: per-quality rows and the breakdown); liveResult = PredictLive's MathResult
--- for Blizzard's current allocation (plus applyingConcentration = Blizzard's concentration toggle), or nil. The
--- header, the bar and the concentration line describe liveResult when given, else result. barFill = (skill - lowerThreshold) / (nextThreshold - lowerThreshold), 1 at max quality
--- (no next threshold), 0 without a skill.
+-- The game's CraftingOperationInfo for Blizzard's current allocation as a live header (the shape BuildModel takes
+-- for liveResult, with source = "game"), or nil when the info lacks the quality fields. skill = baseSkill + bonusSkill,
+-- difficulty = baseDifficulty + bonusDifficulty, lowerThreshold = lowerSkillThreshold, nextThreshold =
+-- upperSkillTreshold (the game's spelling) below maxQuality (nil at max quality), the concentration cost the game
+-- asks for the next quality.
+function M.GameHeader(info, maxQuality, applyingConcentration)
+  if type(info) ~= "table" or type(info.craftingQuality) ~= "number" or type(info.baseSkill) ~= "number" then
+    return nil
+  end
+  local quality = info.craftingQuality
+  local lower = type(info.lowerSkillThreshold) == "number" and info.lowerSkillThreshold or 0
+  local upper = info.upperSkillTreshold
+  local atMax = (type(maxQuality) == "number" and quality >= maxQuality) or type(upper) ~= "number" or upper <= lower
+  local difficulty
+  if type(info.baseDifficulty) == "number" then difficulty = info.baseDifficulty + (info.bonusDifficulty or 0) end
+  return {
+    source = "game",
+    expectedQuality = quality,
+    skill = info.baseSkill + (info.bonusSkill or 0),
+    difficulty = difficulty,
+    lowerThreshold = lower,
+    nextThreshold = not atMax and upper or nil,
+    concentrationCostForAllocation = type(info.concentrationCost) == "number" and info.concentrationCost or nil,
+    applyingConcentration = applyingConcentration and true or false,
+  }
+end
+
+-- result = RecipeResult (the optimiser: per-quality rows and the breakdown); liveResult = the live header for
+-- Blizzard's current allocation, or nil: the game's numbers (GameHeader, source = "game") while the profession window
+-- answers, else PredictLive's MathResult (plus applyingConcentration = Blizzard's concentration toggle). The
+-- header, the bar and the concentration line describe liveResult when given, else result. headerSource says whose
+-- numbers the header shows: "game", "estimate" (Math, result.flags.estimated) or "math"; the quality line says it too
+-- ("Quality: Q2 (game)", "Predicted quality: Q2 (estimate)"). The per-quality rows are always Math's what-ifs; their
+-- header (qualityHeaderText) says "(estimate)" when the result is one. barFill = (skill - lowerThreshold) /
+-- (nextThreshold - lowerThreshold), 1 at max quality (no next threshold), 0 without a skill.
 function M.BuildModel(r, liveResult)
   r = type(r) == "table" and r or {}
   local src = liveResult or r
+  local estimated = type(r.flags) == "table" and r.flags.estimated == true
+  local headerSource = (liveResult and liveResult.source == "game") and "game" or (estimated and "estimate" or "math")
   local skill, difficulty = src.skill, src.difficulty
   local lower, nextThreshold = src.lowerThreshold, src.nextThreshold
   local atMax = type(skill) == "number" and nextThreshold == nil
@@ -224,9 +258,18 @@ function M.BuildModel(r, liveResult)
     end
   end
   local flagsText = flags_text(r)
+  local qualityLabel = headerSource == "game" and "Quality: " or "Predicted quality: "
+  local qualityText = qualityLabel .. (type(src.expectedQuality) == "number" and ("Q" .. src.expectedQuality) or "--")
+    .. (liveResult and liveResult.applyingConcentration and " (concentration)" or "")
+  if headerSource == "game" then
+    qualityText = qualityText .. " (game)"
+  elseif headerSource == "estimate" and type(src.expectedQuality) == "number" then
+    qualityText = qualityText .. " (estimate)"
+  end
   return {
-    qualityText = "Predicted quality: " .. (type(src.expectedQuality) == "number" and ("Q" .. src.expectedQuality) or "--")
-      .. (liveResult and liveResult.applyingConcentration and " (concentration)" or ""),
+    qualityText = qualityText,
+    headerSource = headerSource,
+    qualityHeaderText = "Cheapest reagents per quality" .. (estimated and " (estimate)" or ""),
     skill = skill, difficulty = difficulty, lowerThreshold = lower, nextThreshold = nextThreshold,
     barFill = barFill, skillToNext = skillToNext, skillText = skillText,
     concentrationText = concentration_text(r, liveResult, atMax),
@@ -344,6 +387,7 @@ local function render()
   view.concentration:SetText(model.concentrationText)
   view.flags:SetText(model.flagsText)
   set_tone(view.flags, model.flagsTone)
+  view.qualityHeader:SetText(model.qualityHeaderText)
   if view.applyEnabled then view.applyNote:SetText(""); view.applyNote:Hide()
   else view.applyNote:SetText(M.APPLY_OFF_NOTE); view.applyNote:Show() end
 
@@ -377,8 +421,10 @@ local function eval_opts()
   return { targetQuality = target, useConcentration = useConcentration }
 end
 
--- The live prediction for Blizzard's current allocation: nil without a transaction, and nil while the transaction is
--- for another recipe (CraftingPage can re-initialise after our OnRecipeSelected callback ran).
+-- The live header for Blizzard's current allocation: nil without a transaction, and nil while the transaction is
+-- for another recipe (CraftingPage can re-initialise after our OnRecipeSelected callback ran). The game's own numbers
+-- (Scanner:GetLiveOperationInfo for the allocation and the selected optional reagents) win while the profession
+-- window answers; otherwise the Math prediction stands in.
 local function update_live()
   live = nil
   local t = recipeID and transaction()
@@ -387,6 +433,11 @@ local function update_live()
   local recipes = module("Recipes")
   local allocation, optionalItemIDs = recipes:FromCraftingReagentInfo(recipeID, t:CreateCraftingReagentInfoTbl())
   local concentrating = t.IsApplyingConcentration and t:IsApplyingConcentration() and true or false
+  local scanner = module("Scanner")
+  local info = scanner and scanner:GetLiveOperationInfo(recipeID, allocation, concentrating, optionalItemIDs)
+  local schematic = scanner and scanner:GetSchematic(recipeID)
+  live = M.GameHeader(info, schematic and schematic.maxQuality, concentrating)
+  if live then return end
   live = recipes:PredictLive(recipeID, allocation, optionalItemIDs, concentrating)
   -- PredictLive builds a fresh table each call: marking it does not touch shared state.
   if live then live.applyingConcentration = concentrating end

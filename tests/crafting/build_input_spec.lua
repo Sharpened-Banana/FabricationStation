@@ -80,7 +80,10 @@ describe("CraftingData.BuildInput", function()
     for _, name in ipairs({ "ReagentQuality", "ReagentCategories", "OptionalReagents", "CraftingData",
       "ItemCraftingData", "QualityThresholds", "ConcentrationCurves" }) do gd.Define(name, nil, {}) end
     local input = CD.BuildInput(gd, { schematic = schematic, professionSkill = 500, prices = world.priceValues() })
-    assert.equals(0, input.slots[1].weight); assert.is_nil(input.thresholdFractions); assert.is_nil(input.concentration.curve)
+    -- Ranked slots fall back to equal weights (H1-4), the single-rank slot stays 0.
+    assert.same({ 1, 1, 0 }, { input.slots[1].weight, input.slots[2].weight, input.slots[3].weight })
+    assert.is_true(input.missingWeights)
+    assert.is_nil(input.thresholdFractions); assert.is_nil(input.concentration.curve)
     assert.has_no.errors(function() ns.Math.Profit.EvaluateCraft(input) end)
   end)
 
@@ -127,10 +130,10 @@ describe("CraftingData.BuildInput", function()
   end)
 
   describe("missing reagent weights", function()
-    it("flags a basic slot with two or more ranks but no GameData weight", function()
+    it("flags a basic slot with two or more ranks but no GameData weight, and weights it 1", function()
       gd.Define("ReagentQuality", 70575, { [2001] = { rank = 1, categoryID = 2 }, [2002] = { rank = 2, categoryID = 2 } })
       local input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = world.priceValues() })
-      assert.equals(0, input.slots[1].weight); assert.is_true(input.missingWeights)
+      assert.equals(1, input.slots[1].weight); assert.equals(32, input.slots[2].weight); assert.is_true(input.missingWeights)
     end)
     it("does not flag single-rank slots", function()
       local input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = world.priceValues() })

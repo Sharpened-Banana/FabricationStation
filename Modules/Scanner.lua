@@ -498,13 +498,40 @@ function Scanner:ToCraftingReagentInfo(recipeID, allocation)
   return out
 end
 
-function Scanner:GetLiveOperationInfo(recipeID, allocation, applyConcentration)
+-- Reagent infos for optional/finishing itemIDs (not part of the allocation): each goes into the first not yet used
+-- optional or finishing slot of the schematic that lists it, with that slot's quantity. Unknown items are skipped.
+local function optional_infos(schematic, optionalItemIDs)
+  local out, used = {}, {}
+  for _, itemID in ipairs(optionalItemIDs or {}) do
+    for _, slot in ipairs(schematic.reagentSlots or {}) do
+      if not used[slot] and (slot.kind == "optional" or slot.kind == "finishing") and slot.required ~= true
+        and slot.dataSlotIndex ~= nil then
+        local listed = false
+        for _, id in ipairs(type(slot.reagents) == "table" and slot.reagents or {}) do
+          if id == itemID then listed = true end
+        end
+        if listed then
+          used[slot] = true
+          out[#out + 1] = { reagent = { itemID = itemID }, dataSlotIndex = slot.dataSlotIndex, quantity = slot.quantity or 1 }
+          break
+        end
+      end
+    end
+  end
+  return out
+end
+
+-- The game's CraftingOperationInfo for `allocation` (plus the optional/finishing itemIDs, when given) on the current
+-- character, or nil while the recipe's profession window is closed or the call fails.
+function Scanner:GetLiveOperationInfo(recipeID, allocation, applyConcentration, optionalItemIDs)
   local line = recipe_line(recipeID)
   if not line or not self:IsProfessionOpen(line) then return nil end
-  if not self:GetSchematic(recipeID) then return nil end
+  local schematic = self:GetSchematic(recipeID)
+  if not schematic then return nil end
   local ok, info = pcall(function()
-    return C_TradeSkillUI.GetCraftingOperationInfo(recipeID, self:ToCraftingReagentInfo(recipeID, allocation), nil,
-      applyConcentration and true or false)
+    local infos = self:ToCraftingReagentInfo(recipeID, allocation)
+    for _, extra in ipairs(optional_infos(schematic, optionalItemIDs)) do infos[#infos + 1] = extra end
+    return C_TradeSkillUI.GetCraftingOperationInfo(recipeID, infos, nil, applyConcentration and true or false)
   end)
   if ok then return info end
   return nil

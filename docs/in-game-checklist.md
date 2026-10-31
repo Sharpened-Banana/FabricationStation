@@ -241,6 +241,16 @@ Settings > Crafting; module toggles are in Settings > Modules.
     a recipe) does not persist (`/dump FabricationStationDB.global.recipeCalib` unchanged after `/reload`), and
     restoring the backup brings everything back.
 
+## Hotfix H1 re-checks (after the first in-game test)
+
+Run these with the shipped (empty) GameData, as installed.
+
+H1-4. **Panel quality with empty GameData.** Select a quality recipe and fill every quality slot with its top rank.
+    Expected: the panel's first line reads `Quality: Q<n> (game)` with the same quality, skill and next-threshold as
+    Blizzard's quality meter, and the concentration line matches Blizzard's concentration cost. The per-quality rows
+    under `Cheapest reagents per quality (estimate)` list every reachable quality (two or more rows for a recipe
+    whose top quality is reachable), not only Q1.
+
 ## Not done here
 
 `Data/GameData_Manual.lua` (Moxie IDs and build) and `tests/fixtures/captures/` are intentionally untouched;
