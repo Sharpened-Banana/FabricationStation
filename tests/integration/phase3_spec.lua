@@ -189,6 +189,122 @@ describe("phase 3 integration", function()
     end
   end)
 
+  -- [Phase 3 final M5] The bursty game events behind those messages: item names arriving (up to 50 after one search),
+  -- quest and currency updates (alts.flags) and the profession list updating (alts.prof).
+  describe("game event storms", function()
+    local function assert_each_key_once(spy)
+      for key, n in pairs(spy.fired) do
+        assert.is_true(n <= 1, key .. " ran " .. n .. " times")
+      end
+    end
+
+    local function settle(W) for _ = 1, 30 do W.advance(1) end end
+
+    local function count(W, name)
+      local n = 0
+      for _, m in ipairs(W.messages) do if m[1] == name then n = n + 1 end end
+      return n
+    end
+
+    it("GET_ITEM_INFO_RECEIVED x50 during a Characters search refreshes the tab once", function()
+      local W, ns, spy, refreshes = world()
+      ns.FS:GetModule("MainWindow"):Show("characters"); W.advance(1)
+      local tab = ns.FS:GetModule("CharactersTab")
+      local box = tab:GetView().search
+      box.GetText = function() return "ore" end
+      box:GetScript("OnTextChanged")(box, true)
+      W.advance(1)   -- the 0.3 s search debounce: the search is shown and item names are listened for
+      assert.is_true(tab:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+      spy.reset(); clear(refreshes)
+      for itemID = 1, 50 do W.fire("GET_ITEM_INFO_RECEIVED", 7000 + itemID, true) end
+      settle(W)
+      assert_each_key_once(spy)
+      assert.equal(1, spy.fired["charactersTab.refresh"])
+      assert.equal(1, refreshes.characters)
+      assert_clean(ns, W)
+    end)
+
+    it("GET_ITEM_INFO_RECEIVED x50 while Planner > Missing recipes waits for item names refreshes the tab once",
+      function()
+        local W, ns, spy, refreshes = world()
+        local g = ns.FS.db.global
+        local bren = g.characters["Bren-Silvermoon"].professions[2912]
+        bren.time = P3.NOW - 60   -- scanned, so its missing recipes are listed
+        local sources = {}
+        for i = 1, 50 do sources[7000 + i] = { kind = "item", itemID = 8000 + i } end
+        ns.GameData.Define("RecipeSources", 70575, { bySkillLine = { [2912] = sources } })
+        ns.FS:GetModule("Planner"):Settings().section = "missing"
+        ns.FS:GetModule("MainWindow"):Show("planner"); W.advance(1)
+        local tab = ns.FS:GetModule("PlannerTab")
+        assert.equal("Bren-Silvermoon", tab:GetView().pickers.alt.charKey)
+        assert.is_true(tab:IsEventRegistered("GET_ITEM_INFO_RECEIVED"))
+        spy.reset(); clear(refreshes)
+        for i = 1, 50 do W.fire("GET_ITEM_INFO_RECEIVED", 8000 + i, true) end
+        settle(W)
+        assert_each_key_once(spy)
+        assert.equal(1, spy.fired["plannerTab.refresh"])
+        assert.equal(1, refreshes.planner)
+        assert_clean(ns, W)
+      end)
+
+    it("QUEST_LOG_UPDATE x50 + CURRENCY_DISPLAY_UPDATE x50: one alts.flags run, one write, one FS_ALTS_CHANGED",
+      function()
+        local W, ns, spy = world()
+        local Alts = ns.FS:GetModule("Alts")
+        local record = ns.FS.db.global.characters["Aria-Silvermoon"]
+        local collect, runs, writes = Alts.CollectKnowledgeFlags, 0, 0
+        Alts.CollectKnowledgeFlags = function(self, ...)
+          runs = runs + 1
+          local before = record.knowledgeWeekly
+          collect(self, ...)
+          if record.knowledgeWeekly ~= before then writes = writes + 1 end
+        end
+        spy.reset(); W.messages = {}
+        for _ = 1, 50 do
+          W.fire("QUEST_LOG_UPDATE")
+          W.fire("CURRENCY_DISPLAY_UPDATE", 3256, 400, 1)
+        end
+        settle(W)
+        assert_each_key_once(spy)
+        assert.equal(1, spy.fired["alts.flags"])
+        assert.same({ 1, 1 }, { runs, writes })
+        assert.equal(1, count(W, "FS_ALTS_CHANGED"))
+        assert_clean(ns, W)
+      end)
+
+    -- The open profession also makes Scanner rescan and announce (relayed as a second FS_ALTS_CHANGED), so the
+    -- storm is compared with a single event, as the logged-in FS_DATA_CHANGED case above does.
+    it("TRADE_SKILL_LIST_UPDATE x50 with the profession open: one alts.prof run, no more work than one event",
+      function()
+        finally(function() _G.ProfessionsFrame = nil end)
+        local function run(times)
+          local W, ns, spy, refreshes = world()
+          local Alts = ns.FS:GetModule("Alts")
+          _G.ProfessionsFrame = { IsShown = function() return true end }
+          _G.C_TradeSkillUI.IsTradeSkillReady = function() return true end
+          _G.C_TradeSkillUI.GetAllRecipeIDs = function() return { 9001 } end
+          _G.C_TradeSkillUI.GetProfessionInfoByRecipeID = function() return { professionID = 2907 } end
+          _G.C_TradeSkillUI.GetRecipeInfo = function(id) return { recipeID = id, name = "Ore Bar", learned = true } end
+          assert.is_true(ns.FS:GetModule("Scanner"):IsProfessionOpen())
+          local collect, runs = Alts.CollectOpenProfession, 0
+          Alts.CollectOpenProfession = function(self, ...) runs = runs + 1; return collect(self, ...) end
+          ns.FS:GetModule("MainWindow"):Show("dashboard"); W.advance(1)
+          spy.reset(); clear(refreshes)
+          for _ = 1, times do W.fire("TRADE_SKILL_LIST_UPDATE") end
+          settle(W)
+          assert.equal(1, spy.fired["alts.prof"])
+          assert.equal(1, runs)
+          assert.equal("Ore Bar", ns.FS.db.global.recipeCatalog[2907][9001].name)   -- the open profession was read
+          assert_clean(ns, W)
+          return spy.fired, refreshes
+        end
+        local oneFired, oneRefreshes = run(1)
+        local fired, refreshes = run(50)
+        assert.same(oneFired, fired)
+        assert.same(oneRefreshes, refreshes)
+      end)
+  end)
+
   describe("disable and re-enable", function()
     it("Alts and Planner leave no events, messages or debounces behind, and come back with the same registrations",
       function()
