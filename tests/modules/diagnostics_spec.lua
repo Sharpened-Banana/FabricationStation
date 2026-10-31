@@ -146,7 +146,9 @@ describe("Diagnostics", function()
     end)
     it("prints the success line", function()
       ns.FS:HandleSlash("capture")
-      assert.equals("FabricationStation: captured Bar (#1). /reload to write it to disk.", W.printed[#W.printed])
+      -- H1-8: names the file the capture lands in.
+      assert.equals("FabricationStation: captured Bar (#1) \226\128\148 /reload, then see "
+        .. "WTF/Account/<account>/SavedVariables/FabricationStation.lua", W.printed[#W.printed])
     end)
     it("prints the noRecipe line", function()
       ProfessionsFrame.CraftingPage.SchematicForm.GetRecipeInfo = function() return nil end; ns.FS:HandleSlash("capture")

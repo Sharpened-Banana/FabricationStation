@@ -40,6 +40,12 @@ General, Prices, Modules and Diagnostics.
 5. **Golden capture.** Select a quality recipe and run `/fs capture`, then `/reload`, then
    `lua tools/export_captures.lua "<WTF>/Account/<ACCOUNT>/SavedVariables/FabricationStation.lua"`.
    Expected: one file in `tests/fixtures/captures/`. Commit it as the first golden fixture.
+   Where the file is: SavedVariables are account-wide, so the file is
+   `_retail_/WTF/Account/<ACCOUNT>/SavedVariables/FabricationStation.lua` (not under a realm or character folder).
+   `<ACCOUNT>` is your account folder's name, which can be a number such as `12345678#1`; with several, pick the
+   one whose `SavedVariables` folder was modified last. The game writes the file only on `/reload`, logout or exit,
+   so it does not exist (or holds the old data) until then. If another addon has taken `/fs`, use
+   `/fabstation capture` (the same command under the addon's own name).
 6. **Moxie currencies.** Run
    `/run for i=1,C_CurrencyInfo.GetCurrencyListSize() do local c=C_CurrencyInfo.GetCurrencyListInfo(i) if c.name:find("Moxie") then print(c.name, C_CurrencyInfo.GetCurrencyListLink(i)) end end`.
    Map each currency ID from the link to its profession's child skillLineID in `Data/GameData_Manual.lua`, and
@@ -123,7 +129,7 @@ General, Prices, Modules and Diagnostics.
     unchanged (that is the message for a hidden crafting page, so it also covers the Orders page). Switch to
     the Crafting Orders page and run it again: same message, same count. Then go to the crafting (Recipes)
     page, select a recipe and run `/fs capture`. Expected: chat prints
-    `FabricationStation: captured <recipe name> (#<id>). /reload to write it to disk.` and
+    `FabricationStation: captured <recipe name> (#<id>) — /reload, then see WTF/Account/<account>/SavedVariables/FabricationStation.lua` and
     `/dump #FabricationStationDB.global.captures.list` is the baseline plus one.
 14. **Concentration snapshot.** On a profession with concentration, craft (or use) something that spends some,
     then run
@@ -267,6 +273,9 @@ H1-6. **Row labels and long names.** Scroll a recipe list with long names, craft
     Expected: no profit label overlaps a name or count; rows whose name runs close to the right edge show no label;
     a locked recipe's lock icon is never covered; short rows keep their labels after scrolling and collapsing a
     category.
+H1-8. **Capture file.** Run `/fs capture` (or `/fabstation capture`) on a selected recipe. Expected: the chat line names
+    `WTF/Account/<account>/SavedVariables/FabricationStation.lua`; after `/reload` that file contains the capture
+    (see check 5 for finding the account folder).
 
 ## Not done here
 

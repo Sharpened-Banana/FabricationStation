@@ -277,7 +277,10 @@ local function slash_capture()
     print(("FabricationStation: captured %s (#%d) for this session only; saved data is from a newer version, so it is not written to disk.")
       :format(tostring(capture.recipeName), capture.id))
   else
-    print(("FabricationStation: captured %s (#%d). /reload to write it to disk."):format(tostring(capture.recipeName), capture.id))
+    -- SavedVariables are account-wide and written on /reload or logout; the account folder can be a number like
+    -- 12345678#1.
+    print(("FabricationStation: captured %s (#%d) \226\128\148 /reload, then see "
+      .. "WTF/Account/<account>/SavedVariables/FabricationStation.lua"):format(tostring(capture.recipeName), capture.id))
   end
 end
 
