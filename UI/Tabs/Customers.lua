@@ -1,0 +1,1181 @@
+local _, ns = ...
+
+-- Customers tab: the players the player has crafted orders for (Customers module). A search box filters through
+-- Customers:Search as the text changes; the list shows Name, Orders, Tips, Last seen and Tags per customer group:
+-- alts linked to a main show once, under the main (their orders and tips are counted there), and only groups with
+-- at least one order are listed. Below the list a detail pane shows the selected character: the order history
+-- (date, item, quality, tip; a main's history includes its alts' orders), a notes box saved when it loses focus,
+-- VIP and Blocked check buttons, a custom tag field with removable tag chips, a "Linked to" box with Link and Unlink,
+-- and the other characters of its group (from Customers:GetGroup; a click selects one, so an alt can be unlinked).
+-- Export opens an own dialog with a read-only, pre-selected box holding Customers:Export of the listed groups.
+--
+-- Every change goes through the Customers setters (SetNote, SetTag, Link, Unlink), which write nothing while the
+-- saved data is from a newer version; the tab then says the data is read-only. FS_CUSTOMERS_CHANGED refreshes the
+-- whole list, debounced, through MainWindow:RefreshTab (a no-op unless the tab is shown).
+--
+-- Width: the Name column keeps at least MIN_NAME px; when the window is too narrow Tags is hidden first, then
+-- Orders (Tab.Layout, applied again on every size change). Tips are compact ("1,234g"); the row tooltip carries the
+-- full values, the tags, the alts and the note. The detail pane keeps a fixed-width right column (notes, tags,
+-- link) and gives the rest to the history.
+--
+-- ns.UI.OrdersPanel (CompactMoney) loads after this file, so it is looked up at call time, like every module.
+local CustomersTab = ns.FS:NewModule("CustomersTab", "AceEvent-3.0")
+CustomersTab.coreModule = true
+
+local Tab = {}
+ns.UI = ns.UI or {}
+ns.UI.CustomersTab = Tab
+
+local TAB_ID, SOURCE, REFRESH_SOURCE = "customers", "Tab:customers", "CustomersTab"
+local REFRESH_KEY, REFRESH_DELAY = "customersTab.refresh", 0.3
+local STATUS_SECONDS = 6
+local ROW_HEIGHT, HEADER_HEIGHT, BAR_HEIGHT, HISTORY_ROW, CHIP_HEIGHT = 20, 18, 26, 16, 18
+local PAD, GAP = 6, 4
+local MIN_NAME = 120
+local DETAIL_HEIGHT, RIGHT_WIDTH, GROUP_LABEL_WIDTH = 196, 260, 46
+local MAX_SEARCH, MAX_NOTE, MAX_TAG, MAX_NAME = 40, 500, 24, 48
+local DEFAULT_VIEW_HEIGHT = 200   -- before a scroll frame has a size
+local DIALOG_NAME = "FabricationStationCustomersExport"
+local DIM, WARN, GOOD, BAD = "|cff9d9d9d", "|cffffd100", "|cff40ff40", "|cffff4040"
+local TONES = { good = GOOD, warn = WARN, bad = BAD }
+local WHITE, GREY, GOLD, RED = { 1, 1, 1 }, { 0.62, 0.62, 0.62 }, { 1, 0.82, 0 }, { 1, 0.25, 0.25 }
+local SELECTED_TINT = { 0.25, 0.5, 1, 0.3 }
+
+local READ_ONLY = "Saved data is from a newer version of the addon (read-only); nothing was changed"
+local LINK_ERRORS = {
+  empty = "Type the main character's name first",
+  self = "A character cannot be its own alt",
+  cycle = "%s is already linked below %s; unlink it first",
+  invalid = "That is not a character name",
+  readonly = READ_ONLY,
+}
+
+-- Left to right. Name takes the width the fixed columns leave; they are laid out from the right edge.
+local COLUMNS = {
+  { key = "name", label = "Name", flex = true },
+  { key = "orders", label = "Orders", width = 44, right = true },
+  { key = "tips", label = "Tips", width = 64, right = true },
+  { key = "lastSeen", label = "Last seen", width = 56, right = true },
+  { key = "tags", label = "Tags", width = 130 },
+}
+local HIDE_ORDER = { "tags", "orders" }   -- dropped in this order when Name would get under MIN_NAME
+
+-- The detail pane's order history: Date, Item (flexible), Quality, Tip.
+local HISTORY_COLUMNS = {
+  { key = "date", label = "Date", width = 48 },
+  { key = "item", label = "Item", flex = true },
+  { key = "quality", label = "Q", width = 22, right = true },
+  { key = "tip", label = "Tip", width = 50, right = true },
+}
+
+local view            -- built frames and the displayed rows, nil before the tab is built
+local selected        -- nameRealm shown in the detail pane, or nil
+local searchText = ""
+local status, statusAt
+local requested = {}  -- [itemID] = true while its data is requested, "done" after; asked once per session
+
+local function module(name)
+  return ns.FS:GetModule(name, true)
+end
+
+local function color(code, text)
+  return code .. text .. "|r"
+end
+
+local function is_money(v)
+  return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge
+end
+
+-- The first `limit` characters of `text` (UTF-8 aware, so a character is never cut in half).
+local function cut_characters(text, limit)
+  local count = 0
+  for i = 1, #text do
+    local byte = text:byte(i)
+    if byte < 0x80 or byte >= 0xC0 then
+      count = count + 1
+      if count > limit then return text:sub(1, i - 1) end
+    end
+  end
+  return text
+end
+
+-- Trimmed, at most `limit` characters; "" for anything that is not a string.
+local function clean(text, limit)
+  if type(text) ~= "string" then return "" end
+  return strtrim(cut_characters(strtrim(text), limit))
+end
+
+local function money_text(copper, compact)
+  if not is_money(copper) then return "no price" end
+  local panel = ns.UI.OrdersPanel
+  if compact and panel and panel.CompactMoney then return panel.CompactMoney(copper) or "no price" end
+  return ns.UI.FormatMoney(copper)
+end
+
+local function sorted_tags(tags)
+  local out = {}
+  for tag, on in pairs(type(tags) == "table" and tags or {}) do
+    if on and type(tag) == "string" then out[#out + 1] = tag end
+  end
+  table.sort(out)
+  return out
+end
+
+---------------------------------------------------------------------------
+-- Models (pure apart from reading the Customers module)
+---------------------------------------------------------------------------
+
+-- records -> { { nameRealm, orders = count, tipsTotal, lastSeen, tagsText, linkedTo, alts } }; tagsText is the
+-- sorted tags joined with ", ". alts (a group's other characters) is set only when there are any.
+function Tab.ListModel(records)
+  local rows = {}
+  for _, record in ipairs(type(records) == "table" and records or {}) do
+    if type(record) == "table" then
+      rows[#rows + 1] = {
+        nameRealm = record.nameRealm,
+        orders = type(record.orders) == "table" and #record.orders or 0,
+        tipsTotal = record.tipsTotal,
+        lastSeen = record.lastSeen,
+        tagsText = table.concat(sorted_tags(record.tags), ", "),
+        linkedTo = record.linkedTo,
+        alts = type(record.alts) == "number" and record.alts > 0 and record.alts or nil,
+      }
+    end
+  end
+  return rows
+end
+
+-- The customer groups the search text finds (Customers:Search; a match on an alt finds its main), as merged
+-- records: { nameRealm = main, members = { main, alts sorted }, alts = #alts, orders = every member's orders,
+-- tipsTotal = sum, lastSeen = latest, tags = the main's tags plus "blocked" when anyone in the group is blocked }.
+-- Groups without orders are left out. Newest lastSeen first, then by name.
+function Tab.Groups(text)
+  local C = module("Customers")
+  if not C then return {} end
+  local members = {}
+  for _, record in ipairs(C:Search("")) do
+    local name = record.nameRealm
+    local root = type(name) == "string" and C:Root(name) or nil
+    if root then
+      members[root] = members[root] or {}
+      if name ~= root then table.insert(members[root], name) end
+    end
+  end
+  local seen, groups = {}, {}
+  for _, record in ipairs(C:Search(text)) do
+    local root = type(record.nameRealm) == "string" and C:Root(record.nameRealm) or nil
+    if root and not seen[root] then
+      seen[root] = true
+      local alts = members[root] or {}
+      table.sort(alts)
+      local names = { root }
+      for _, alt in ipairs(alts) do names[#names + 1] = alt end
+      local merged = { nameRealm = root, members = names, alts = #alts, orders = {}, tipsTotal = 0, tags = {} }
+      local blocked = false
+      for _, name in ipairs(names) do
+        local r = C:Get(name)
+        if r then
+          if type(r.tags) == "table" and r.tags.blocked then blocked = true end
+          for _, o in ipairs(type(r.orders) == "table" and r.orders or {}) do
+            if type(o) == "table" then merged.orders[#merged.orders + 1] = o end
+          end
+          if is_money(r.tipsTotal) then merged.tipsTotal = merged.tipsTotal + r.tipsTotal end
+          if type(r.lastSeen) == "number" and (merged.lastSeen == nil or r.lastSeen > merged.lastSeen) then
+            merged.lastSeen = r.lastSeen
+          end
+        end
+      end
+      local main = C:Get(root)
+      for _, tag in ipairs(sorted_tags(main and main.tags)) do merged.tags[tag] = true end
+      -- The same group Customers:IsBlocked checks (members came from Root, as GetGroup's do), without its per-group
+      -- scan of every record.
+      if blocked then merged.tags.blocked = true end
+      if #merged.orders > 0 then groups[#groups + 1] = merged end
+    end
+  end
+  table.sort(groups, function(a, b)
+    local x, y = a.lastSeen or 0, b.lastSeen or 0
+    if x ~= y then return x > y end
+    return a.nameRealm < b.nameRealm
+  end)
+  return groups
+end
+
+-- Typed "Linked to" text -> nameRealm (through Customers:NormalizeName), or nil, "empty" for blank input.
+function Tab.LinkInput(text)
+  local C = module("Customers")
+  local name = C and C:NormalizeName(clean(text, MAX_NAME)) or nil
+  if not name then return nil, "empty" end
+  return name
+end
+
+-- Links `alt` below the typed main: true, or false plus LinkInput's or Customers:Link's error.
+function Tab.Link(alt, text)
+  local main, err = Tab.LinkInput(text)
+  if not main then return false, err end
+  local C = module("Customers")
+  if not C then return false, "invalid" end
+  return C:Link(alt, main)
+end
+
+-- A character's order history, newest first: { orderID, time, item = itemID, quality, tip, commission, orderType,
+-- who } where who names the alt for an alt's order in a main's history (nil for the character's own orders). A
+-- main's history includes its alts' orders; an alt's history is its own.
+function Tab.HistoryRows(nameRealm)
+  local C = module("Customers")
+  if not C or not C:Get(nameRealm) then return {} end
+  local names = C:Root(nameRealm) == nameRealm and C:GetGroup(nameRealm) or { nameRealm }
+  local rows = {}
+  for _, name in ipairs(names) do
+    local r = C:Get(name)
+    for _, o in ipairs(r and type(r.orders) == "table" and r.orders or {}) do
+      if type(o) == "table" then
+        rows[#rows + 1] = { orderID = o.orderID, time = o.time, item = o.itemID, quality = o.quality, tip = o.tip,
+          commission = o.commission, orderType = o.orderType, who = name ~= nameRealm and name or nil }
+      end
+    end
+  end
+  table.sort(rows, function(a, b)
+    local x, y = type(a.time) == "number" and a.time or -1, type(b.time) == "number" and b.time or -1
+    if x ~= y then return x > y end
+    return tostring(a.orderID) < tostring(b.orderID)
+  end)
+  return rows
+end
+
+-- Content width -> { hidden = { [columnKey] = true }, name = Name column width|nil }. An unknown width (not laid
+-- out yet) hides nothing.
+function Tab.Layout(width)
+  local hidden = {}
+  if type(width) ~= "number" or width <= 0 then return { hidden = hidden } end
+  local used = 2 * PAD + (#COLUMNS - 1) * GAP
+  local widths = {}
+  for _, col in ipairs(COLUMNS) do
+    if col.width then used = used + col.width; widths[col.key] = col.width end
+  end
+  local name = width - used
+  for _, key in ipairs(HIDE_ORDER) do
+    if name >= MIN_NAME then break end
+    hidden[key] = true
+    name = name + widths[key] + GAP
+  end
+  return { hidden = hidden, name = name }
+end
+
+-- The display text of one list row's cells, by column key (now = server seconds).
+function Tab.CellTexts(row, now)
+  local name = tostring(row.nameRealm)
+  if row.alts then name = name .. " (+" .. row.alts .. ")" end
+  local lastSeen = "never"
+  if type(row.lastSeen) == "number" then lastSeen = ns.UI.FormatAge(math.max(0, now - row.lastSeen)) end
+  return {
+    name = name,
+    orders = tostring(row.orders or 0),
+    tips = money_text(row.tipsTotal, true),
+    lastSeen = lastSeen,
+    tags = row.tagsText or "",
+  }
+end
+
+local function item_name(itemID)
+  if itemID == nil then return "--" end
+  local api = C_Item
+  local name = type(api) == "table" and type(api.GetItemNameByID) == "function" and api.GetItemNameByID(itemID) or nil
+  if type(name) == "string" and name ~= "" then return name end
+  return "item:" .. tostring(itemID)
+end
+
+local function date_text(time, format)
+  if type(time) ~= "number" then return "--" end
+  return date(format, time)
+end
+
+local function history_cells(row)
+  local item = item_name(row.item)
+  if row.who then item = item .. color(DIM, " (" .. row.who .. ")") end
+  return {
+    date = date_text(row.time, "%y-%m-%d"),
+    item = item,
+    quality = type(row.quality) == "number" and ("Q" .. row.quality) or "--",
+    tip = money_text(row.tip, true),
+  }
+end
+
+---------------------------------------------------------------------------
+-- Status and refresh
+---------------------------------------------------------------------------
+
+local function request_refresh()
+  local window = module("MainWindow")
+  if window and window.RefreshTab then window:RefreshTab(TAB_ID) end
+end
+
+local refreshLater = ns.FS:Wrap(REFRESH_SOURCE, request_refresh)
+
+local function schedule_refresh()
+  ns.FS:Debounce(REFRESH_KEY, REFRESH_DELAY, refreshLater)
+end
+
+local function set_status(message, tone)
+  status, statusAt = color(TONES[tone] or "", message), ns.FS:Now()
+  if view then view.status:SetText(status) end
+end
+
+local function clear_status()
+  status, statusAt = nil, nil
+  if view then view.status:SetText("") end
+end
+
+-- After a setter returned false: says so when that was because the saved data is read-only.
+local function report_unchanged()
+  if ns.FS.dbIsNewer then set_status(READ_ONLY, "bad") end
+end
+
+-- Asks the client once per session for an item it has not cached; GET_ITEM_INFO_RECEIVED then refreshes the tab.
+local function request_item(itemID)
+  local api = C_Item
+  if itemID == nil or requested[itemID] or type(api) ~= "table" then return end
+  if type(api.GetItemNameByID) == "function" and api.GetItemNameByID(itemID) then return end
+  if type(api.RequestLoadItemDataByID) ~= "function" then return end
+  requested[itemID] = true
+  pcall(api.RequestLoadItemDataByID, itemID)
+end
+
+local function on_item_info(_, itemID)
+  if requested[itemID] ~= true then return end
+  requested[itemID] = "done"
+  schedule_refresh()
+end
+
+---------------------------------------------------------------------------
+-- Actions
+---------------------------------------------------------------------------
+
+-- Saves the notes box for the character it shows (when the text changed).
+local function save_note()
+  if not view then return end
+  local owner, C = view.detail.noteOwner, module("Customers")
+  if not owner or not C then return end
+  local text = clean(view.detail.notes:GetText(), MAX_NOTE)
+  local record = C:Get(owner)
+  local current = record and type(record.notes) == "string" and record.notes or ""
+  if text == current then return end
+  if not C:SetNote(owner, text) then report_unchanged() end
+end
+
+local refresh
+
+local function select_customer(name)
+  if not view then return end
+  local d = view.detail
+  save_note()
+  d.noteOwner = nil
+  d.notes:ClearFocus()
+  d.linkEdit:ClearFocus()
+  d.tagEdit:ClearFocus()
+  if name ~= selected then d.tagEdit:SetText("") end
+  selected = name
+  refresh()
+end
+
+local function toggle_tag(tag)
+  local C = module("Customers")
+  if not (C and selected) then return end
+  local record = C:Get(selected)
+  local has = record and type(record.tags) == "table" and record.tags[tag] and true or false
+  if not C:SetTag(selected, tag, not has) then report_unchanged() end
+  refresh()
+end
+
+local function add_tag()
+  local C, box = module("Customers"), view.detail.tagEdit
+  local tag = clean(box:GetText(), MAX_TAG)
+  if not (C and selected) or tag == "" then return end
+  -- A tag the customer already has changes nothing and is not an error.
+  if C:SetTag(selected, tag, true) or not ns.FS.dbIsNewer then
+    box:SetText("")
+  else
+    report_unchanged()
+  end
+  box:ClearFocus()
+  refresh()
+end
+
+local function remove_tag(tag)
+  local C = module("Customers")
+  if not (C and selected and tag) then return end
+  if not C:SetTag(selected, tag, false) then report_unchanged() end
+  refresh()
+end
+
+local function do_link()
+  if not selected then return end
+  local box = view.detail.linkEdit
+  local ok, err = Tab.Link(selected, box:GetText())
+  box:ClearFocus()
+  if ok then
+    local C = module("Customers")
+    set_status(("%s is now an alt of %s"):format(selected, C and C:Root(selected) or "?"), "good")
+    view.detail.linkFor = nil   -- show the stored link
+  else
+    local message = LINK_ERRORS[err] or ("Could not link (" .. tostring(err) .. ")")
+    if err == "cycle" then message = message:format(tostring(Tab.LinkInput(box:GetText())), selected) end
+    set_status(message, err == "readonly" and "bad" or "warn")
+  end
+  refresh()
+end
+
+local function do_unlink()
+  local C = module("Customers")
+  if not (C and selected) then return end
+  if C:Unlink(selected) then
+    set_status(selected .. " is no longer linked", "good")
+    view.detail.linkFor = nil
+  else
+    report_unchanged()
+  end
+  refresh()
+end
+
+---------------------------------------------------------------------------
+-- Tooltips
+---------------------------------------------------------------------------
+
+local function show_lines(owner, lines)
+  if type(GameTooltip) ~= "table" then return end
+  GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+  for i, line in ipairs(lines) do
+    local c = line.color or WHITE
+    if i == 1 then
+      GameTooltip:SetText(line.text, c[1], c[2], c[3])
+    else
+      GameTooltip:AddLine(line.text, c[1], c[2], c[3], true)
+    end
+  end
+  GameTooltip:Show()
+end
+
+local function hide_tooltip()
+  if type(GameTooltip) == "table" then GameTooltip:Hide() end
+end
+
+-- A list row's tooltip: the name, full tips, orders, last seen date, tags, alts and the note.
+local function row_tooltip(owner)
+  local row, group = owner.data, owner.group
+  if not row then return end
+  local lines = { { text = tostring(row.nameRealm) } }
+  lines[#lines + 1] = { text = "Orders: " .. tostring(row.orders or 0) }
+  lines[#lines + 1] = { text = "Tips: " .. money_text(row.tipsTotal, false) }
+  lines[#lines + 1] = { text = "Last seen: " .. date_text(row.lastSeen, "%Y-%m-%d %H:%M") }
+  if row.tagsText ~= "" then
+    local blocked = group and group.tags.blocked
+    lines[#lines + 1] = { text = "Tags: " .. row.tagsText, color = blocked and RED or GOLD }
+  end
+  if group and #group.members > 1 then
+    lines[#lines + 1] = { text = "Alts: " .. table.concat(group.members, ", ", 2), color = GREY }
+  end
+  local C = module("Customers")
+  local record = C and C:Get(row.nameRealm)
+  if record and type(record.notes) == "string" and record.notes ~= "" then
+    lines[#lines + 1] = { text = record.notes, color = GREY }
+  end
+  lines[#lines + 1] = { text = "Click to show the orders, notes, tags and alts", color = GREY }
+  show_lines(owner, lines)
+end
+
+local TYPE_LABELS = { public = "Public", guild = "Guild", personal = "Personal", npc = "NPC" }
+
+local function history_tooltip(owner)
+  local row = owner.data
+  if not row then return end
+  local lines = { { text = item_name(row.item) } }
+  lines[#lines + 1] = { text = "Fulfilled: " .. date_text(row.time, "%Y-%m-%d %H:%M") }
+  if row.who then lines[#lines + 1] = { text = "Customer: " .. row.who } end
+  if type(row.quality) == "number" then lines[#lines + 1] = { text = "Quality: " .. row.quality } end
+  lines[#lines + 1] = { text = "Tip: " .. money_text(row.tip, false) }
+  if is_money(row.commission) then lines[#lines + 1] = { text = "Commission: " .. ns.UI.FormatMoney(row.commission) } end
+  if row.orderType ~= nil then
+    lines[#lines + 1] = { text = "Order: " .. (TYPE_LABELS[row.orderType] or tostring(row.orderType)), color = GREY }
+  end
+  show_lines(owner, lines)
+end
+
+local function text_tooltip(text)
+  return function(owner) show_lines(owner, { { text = text } }) end
+end
+
+---------------------------------------------------------------------------
+-- Columns and pooled lists
+---------------------------------------------------------------------------
+
+-- Anchors cells (by column index) in parent: the columns before the flexible one from the left edge rightwards, the
+-- ones after it from the right edge leftwards, and the flexible one between them. Hidden columns are hidden and left
+-- out of the chain; the others are shown.
+local function place_cells(parent, cells, columns, hidden, pad)
+  local flexIndex
+  for i, col in ipairs(columns) do if col.flex then flexIndex = i end end
+  local function shown(i)
+    if hidden[columns[i].key] then cells[i]:Hide(); return false end
+    cells[i]:Show()
+    return true
+  end
+  local left
+  for i = 1, flexIndex - 1 do
+    local cell = cells[i]
+    cell:ClearAllPoints()
+    if shown(i) then
+      if left then cell:SetPoint("LEFT", left, "RIGHT", GAP, 0) else cell:SetPoint("LEFT", parent, "LEFT", pad, 0) end
+      cell:SetWidth(columns[i].width)
+      left = cell
+    end
+  end
+  local right
+  for i = #columns, flexIndex + 1, -1 do
+    local cell = cells[i]
+    cell:ClearAllPoints()
+    if shown(i) then
+      if right then cell:SetPoint("RIGHT", right, "LEFT", -GAP, 0) else cell:SetPoint("RIGHT", parent, "RIGHT", -pad, 0) end
+      cell:SetWidth(columns[i].width)
+      right = cell
+    end
+  end
+  local flex = cells[flexIndex]
+  flex:ClearAllPoints()
+  if left then flex:SetPoint("LEFT", left, "RIGHT", GAP, 0) else flex:SetPoint("LEFT", parent, "LEFT", pad, 0) end
+  if right then flex:SetPoint("RIGHT", right, "LEFT", -GAP, 0) else flex:SetPoint("RIGHT", parent, "RIGHT", -pad, 0) end
+end
+
+-- Binds the pooled rows to the part of the list in view.
+local function list_update(list)
+  local height = list.scroll:GetHeight()
+  if type(height) ~= "number" or height <= 0 then height = DEFAULT_VIEW_HEIGHT end
+  local offset = list.scroll:GetVerticalScroll()
+  if type(offset) ~= "number" then offset = 0 end
+  local first = math.floor(offset / list.rowHeight) + 1
+  local slots = math.ceil(height / list.rowHeight) + 1
+  local used = 0
+  for slot = 1, slots do
+    local index = first + slot - 1
+    local data = list.rows[index]
+    if not data then break end
+    local row = list.pool[slot]
+    if not row then
+      row = list.createRow(list)
+      list.pool[slot] = row
+    end
+    row.data = data
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT", list.child, "TOPLEFT", 0, -(index - 1) * list.rowHeight)
+    row:SetPoint("TOPRIGHT", list.child, "TOPRIGHT", 0, -(index - 1) * list.rowHeight)
+    list.bindRow(row, data, index)
+    row:Show()
+    used = slot
+  end
+  for slot = used + 1, #list.pool do
+    list.pool[slot].data = nil
+    list.pool[slot]:Hide()
+  end
+  list.shown = used
+end
+
+-- Sets the scroll child's height for the rows and keeps the offset in range, then binds the rows.
+local function list_refresh(list)
+  local total = #list.rows * list.rowHeight
+  list.child:SetHeight(math.max(total, 1))
+  local viewHeight = list.scroll:GetHeight()
+  if type(viewHeight) == "number" and viewHeight > 0 then
+    local offset = list.scroll:GetVerticalScroll()
+    local limit = math.max(0, total - viewHeight)
+    if type(offset) == "number" and offset > limit then list.scroll:SetVerticalScroll(limit) end
+  end
+  list_update(list)
+end
+
+local function new_list(parent, rowHeight, createRow, bindRow)
+  local scroll = CreateFrame("ScrollFrame", nil, parent)
+  local child = CreateFrame("Frame", nil, scroll)
+  child:SetSize(1, 1)
+  scroll:SetScrollChild(child)
+  scroll:EnableMouseWheel(true)
+  local list = { scroll = scroll, child = child, rows = {}, pool = {}, shown = 0, rowHeight = rowHeight,
+    createRow = createRow, bindRow = bindRow }
+  scroll:SetScript("OnMouseWheel", ns.FS:Wrap(SOURCE, function(s, delta)
+    local range = s:GetVerticalScrollRange() or 0
+    local position = s:GetVerticalScroll() or 0
+    s:SetVerticalScroll(math.max(0, math.min(range, position - delta * rowHeight * 3)))
+  end))
+  scroll:SetScript("OnVerticalScroll", ns.FS:Wrap(SOURCE, function() list_update(list) end))
+  scroll:HookScript("OnSizeChanged", function(_, width)
+    if width and width > 0 then child:SetWidth(width) end
+    ns.FS:SafeCall(SOURCE, list_update, list)
+  end)
+  local width = scroll:GetWidth()
+  if width and width > 0 then child:SetWidth(width) end
+  return list
+end
+
+local function create_cells(row, columns)
+  row.cells, row.placed = {}, {}
+  for i, col in ipairs(columns) do
+    local cell = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    cell:SetJustifyH(col.right and "RIGHT" or "LEFT")
+    cell:SetWordWrap(false)
+    row.cells[col.key] = cell
+    row.placed[i] = cell
+  end
+end
+
+local function create_customer_row(list)
+  local row = CreateFrame("Button", nil, list.child)
+  row:SetHeight(ROW_HEIGHT)
+  row.background = row:CreateTexture(nil, "BACKGROUND")
+  row.background:SetAllPoints(row)
+  create_cells(row, COLUMNS)
+  place_cells(row, row.placed, COLUMNS, view.layout and view.layout.hidden or {}, PAD)
+  -- SetScript is deliberate: the row is our own.
+  row:SetScript("OnClick", ns.FS:Wrap(SOURCE, function(self)
+    if self.data then select_customer(self.data.nameRealm) end
+  end))
+  row:SetScript("OnEnter", ns.FS:Wrap(SOURCE, row_tooltip))
+  row:SetScript("OnLeave", hide_tooltip)
+  return row
+end
+
+local function bind_customer_row(row, data, index)
+  row.group = view.groups[index]
+  row.selected = selected ~= nil and data.nameRealm == selected or nil
+  if row.selected then
+    row.background:SetColorTexture(SELECTED_TINT[1], SELECTED_TINT[2], SELECTED_TINT[3], SELECTED_TINT[4])
+  else
+    row.background:SetColorTexture(1, 1, 1, index % 2 == 0 and 0.04 or 0)
+  end
+  local texts = Tab.CellTexts(data, ns.FS:Now())
+  local tags = row.group and row.group.tags or {}
+  if tags.blocked then
+    texts.name = color(BAD, texts.name)
+  elseif tags.VIP then
+    texts.name = color(WARN, texts.name)
+  end
+  for key, cell in pairs(row.cells) do cell:SetText(texts[key]) end
+end
+
+local function create_history_row(list)
+  local row = CreateFrame("Frame", nil, list.child)
+  row:SetHeight(HISTORY_ROW)
+  row:EnableMouse(true)
+  row.background = row:CreateTexture(nil, "BACKGROUND")
+  row.background:SetAllPoints(row)
+  create_cells(row, HISTORY_COLUMNS)
+  place_cells(row, row.placed, HISTORY_COLUMNS, {}, 2)
+  row:SetScript("OnEnter", ns.FS:Wrap(SOURCE, history_tooltip))
+  row:SetScript("OnLeave", hide_tooltip)
+  return row
+end
+
+local function bind_history_row(row, data, index)
+  row.background:SetColorTexture(1, 1, 1, index % 2 == 0 and 0.04 or 0)
+  request_item(data.item)
+  local texts = history_cells(data)
+  for key, cell in pairs(row.cells) do cell:SetText(texts[key]) end
+end
+
+local function layout_key(hidden)
+  local keys = {}
+  for _, key in ipairs(HIDE_ORDER) do if hidden[key] then keys[#keys + 1] = key end end
+  return table.concat(keys, ",")
+end
+
+-- Lays the list columns out for the container's width (header and every pooled row) when the hidden set changed.
+local function apply_layout()
+  if not view then return end
+  local layout = Tab.Layout(view.container:GetWidth())
+  view.layout = layout
+  local key = layout_key(layout.hidden)
+  if key == view.layoutKey then return end
+  view.layoutKey = key
+  place_cells(view.headerBar, view.headers, COLUMNS, layout.hidden, PAD)
+  for _, row in ipairs(view.list.pool) do place_cells(row, row.placed, COLUMNS, layout.hidden, PAD) end
+end
+
+-- Chips (own buttons) flowed left to right from (left, top) over up to `lines` lines of `width` px; the ones that do
+-- not fit are hidden. Returns the number shown.
+local function flow_chips(parent, chips, count, width, lines, left, top)
+  local x, line, shown = 0, 0, 0
+  for i = 1, #chips do
+    local chip = chips[i]
+    chip:ClearAllPoints()
+    if i > count then
+      chip:Hide()
+    else
+      local fs = chip.GetFontString and chip:GetFontString()
+      local textWidth = fs and fs.GetStringWidth and fs:GetStringWidth()
+      if type(textWidth) ~= "number" then textWidth = #(chip.label or "") * 6 end
+      local w = math.min(width, textWidth + 16)
+      if x > 0 and x + w > width then x, line = 0, line + 1 end
+      if line >= lines then
+        chip:Hide()
+      else
+        chip:SetWidth(w)
+        chip:SetPoint("TOPLEFT", parent, "TOPLEFT", left + x, -(top + line * (CHIP_HEIGHT + 2)))
+        chip:Show()
+        x = x + w + GAP
+        shown = shown + 1
+      end
+    end
+  end
+  return shown
+end
+
+local function new_chip(parent, onClick, onEnter)
+  local chip = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  chip:SetHeight(CHIP_HEIGHT)
+  if chip.SetNormalFontObject then chip:SetNormalFontObject("GameFontHighlightSmall") end
+  chip:SetScript("OnClick", ns.FS:Wrap(SOURCE, onClick))
+  chip:SetScript("OnEnter", ns.FS:Wrap(SOURCE, onEnter))
+  chip:SetScript("OnLeave", hide_tooltip)
+  return chip
+end
+
+local function chip_at(d, key, parent, index, onClick, onEnter)
+  local chips = d[key]
+  chips[index] = chips[index] or new_chip(parent, onClick, onEnter)
+  return chips[index]
+end
+
+---------------------------------------------------------------------------
+-- Detail pane
+---------------------------------------------------------------------------
+
+local function refresh_detail()
+  local d = view.detail
+  local C = module("Customers")
+  local record = C and selected and C:Get(selected) or nil
+  if not record then
+    if selected then selected = nil end
+    d.noteOwner, d.detailFor = nil, nil
+    d.body:Hide()
+    d.hint:Show()
+    return
+  end
+  d.body:Show()
+  d.hint:Hide()
+  local changed = d.detailFor ~= selected
+  d.detailFor = selected
+
+  local root = C:Root(selected)
+  d.title:SetText(root ~= selected and ("%s (alt of %s)"):format(selected, root) or selected)
+
+  d.history.rows = Tab.HistoryRows(selected)
+  list_refresh(d.history)
+  if #d.history.rows == 0 then d.historyEmpty:Show() else d.historyEmpty:Hide() end
+
+  local tags = type(record.tags) == "table" and record.tags or {}
+  d.vip:SetChecked(tags.VIP and true or false)
+  d.blocked:SetChecked(tags.blocked and true or false)
+
+  -- Never overwrite text the player is typing.
+  if changed or not d.notes:HasFocus() then
+    d.notes:SetText(type(record.notes) == "string" and record.notes or "")
+    d.noteOwner = selected
+  end
+  local linked = type(record.linkedTo) == "string" and record.linkedTo or nil
+  if changed or d.linkFor ~= selected then
+    d.linkEdit:SetText(linked or "")
+    d.linkFor = selected
+  end
+  if linked then d.unlink:Enable() else d.unlink:Disable() end
+
+  -- Custom tag chips (VIP and Blocked have their check buttons).
+  local custom = {}
+  for _, tag in ipairs(sorted_tags(tags)) do
+    if tag ~= "VIP" and tag ~= "blocked" then custom[#custom + 1] = tag end
+  end
+  for i, tag in ipairs(custom) do
+    local chip = chip_at(d, "chips", d.right, i, function(self) remove_tag(self.tag) end,
+      text_tooltip("Click to remove this tag"))
+    chip.tag, chip.label = tag, tag .. " x"
+    chip:SetText(chip.label)
+  end
+  d.chipsShown = flow_chips(d.right, d.chips, #custom, RIGHT_WIDTH, 2, 0, d.chipsTop)
+
+  -- The other characters of the group; a click selects one.
+  local others = {}
+  for _, name in ipairs(C:GetGroup(selected)) do
+    if name ~= selected then others[#others + 1] = name end
+  end
+  for i, name in ipairs(others) do
+    local chip = chip_at(d, "group", d.groupBar, i, function(self) select_customer(self.name) end,
+      text_tooltip("Click to show this character"))
+    chip.name, chip.label = name, name == root and (name .. " (main)") or name
+    chip:SetText(chip.label)
+  end
+  d.groupLabel:SetText(#others > 0 and "Group:" or color(DIM, "No linked characters"))
+  local groupWidth = (d.groupBar:GetWidth() or 0) - GROUP_LABEL_WIDTH
+  if groupWidth <= 0 then groupWidth = 200 end
+  d.groupShown = flow_chips(d.groupBar, d.group, #others, groupWidth, 1, GROUP_LABEL_WIDTH, 0)
+end
+
+---------------------------------------------------------------------------
+-- Refresh
+---------------------------------------------------------------------------
+
+function refresh()
+  if not view then return end
+  if statusAt ~= nil and ns.FS:Now() - statusAt >= STATUS_SECONDS then clear_status() end
+  view.groups = Tab.Groups(searchText)
+  view.list.rows = Tab.ListModel(view.groups)
+  if #view.list.rows == 0 then
+    local text = searchText ~= "" and ('No customer matches "%s".'):format(searchText)
+      or "Customers appear here after you fulfil a crafting order for another player."
+    view.empty:SetText(color(DIM, text))
+    view.empty:Show()
+  else
+    view.empty:SetText("")
+    view.empty:Hide()
+  end
+  view.status:SetText(status or "")
+  apply_layout()
+  list_refresh(view.list)
+  refresh_detail()
+end
+
+---------------------------------------------------------------------------
+-- Export dialog
+---------------------------------------------------------------------------
+
+local BACKDROP = {
+  bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+  edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+  tile = true, tileSize = 32, edgeSize = 32,
+  insets = { left = 11, right = 12, top = 12, bottom = 11 },
+}
+
+local function create_dialog()
+  local f = CreateFrame("Frame", DIALOG_NAME, UIParent, "BackdropTemplate")
+  f:SetSize(520, 340)
+  f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+  f:SetFrameStrata("DIALOG")
+  f:SetToplevel(true)
+  f:EnableMouse(true)
+  if f.SetBackdrop then f:SetBackdrop(BACKDROP) end
+  local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  title:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -18)
+  title:SetPoint("TOPRIGHT", f, "TOPRIGHT", -40, -18)
+  title:SetJustifyH("LEFT")
+  title:SetText("Customers (CSV): press Ctrl+C to copy")
+  local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+  close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
+  close:SetScript("OnClick", function() f:Hide() end)
+
+  local scroll = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
+  scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -42)
+  scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -38, 18)
+  local edit = CreateFrame("EditBox", nil, scroll)
+  edit:SetMultiLine(true)
+  edit:SetAutoFocus(false)
+  edit:SetFontObject("ChatFontNormal")
+  edit:SetWidth(460)
+  scroll:SetScrollChild(edit)
+  local dialog = { frame = f, edit = edit, scroll = scroll, title = title, text = "" }
+  -- Read-only: anything typed puts the export back and selects it again.
+  edit:SetScript("OnTextChanged", ns.FS:Wrap(SOURCE, function(self, userInput)
+    if userInput then
+      self:SetText(dialog.text)
+      self:HighlightText()
+    end
+  end))
+  edit:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
+  edit:SetScript("OnEscapePressed", function(self)
+    self:ClearFocus()
+    f:Hide()
+  end)
+  f:Hide()
+
+  local registered = false
+  for _, name in ipairs(UISpecialFrames) do
+    if name == DIALOG_NAME then registered = true; break end
+  end
+  if not registered then tinsert(UISpecialFrames, DIALOG_NAME) end
+  return dialog
+end
+
+-- Opens the export dialog with Customers:Export of the listed groups (each main, then its alts).
+local function open_export()
+  local C = module("Customers")
+  if not (view and C) then return end
+  local names = {}
+  for _, group in ipairs(view.groups or {}) do
+    for _, name in ipairs(group.members) do names[#names + 1] = name end
+  end
+  view.dialog = view.dialog or create_dialog()
+  local dialog = view.dialog
+  dialog.text = C:Export(names)
+  dialog.edit:SetText(dialog.text)
+  dialog.frame:Show()
+  dialog.edit:SetFocus()
+  dialog.edit:HighlightText()
+end
+
+---------------------------------------------------------------------------
+-- Build
+---------------------------------------------------------------------------
+
+local function create_edit(parent, width, maxLetters, onEnter)
+  local box = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+  box:SetSize(width, 20)
+  box:SetAutoFocus(false)
+  box:SetMaxLetters(maxLetters)
+  box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+  if onEnter then box:SetScript("OnEnterPressed", ns.FS:Wrap(SOURCE, onEnter)) end
+  return box
+end
+
+local function create_button(parent, label, width, onClick)
+  local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  button:SetSize(width, 22)
+  button:SetText(label)
+  button:SetScript("OnClick", ns.FS:Wrap(SOURCE, onClick))
+  return button
+end
+
+local function create_check(parent, label, x, y, tag)
+  local button = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+  button:SetSize(24, 24)
+  button:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+  local text = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  text:SetPoint("LEFT", button, "RIGHT", 2, 0)
+  text:SetText(label)
+  button.label = text
+  button:SetScript("OnClick", ns.FS:Wrap(SOURCE, function() toggle_tag(tag) end))
+  return button
+end
+
+-- The multi-line notes box: an own edit box in an own scroll frame that follows the cursor.
+local function create_notes(parent, top, height)
+  local frame = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+  frame:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -top)
+  frame:SetSize(RIGHT_WIDTH, height)
+  if frame.SetBackdrop then
+    frame:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8",
+      edgeSize = 1 })
+    frame:SetBackdropColor(0, 0, 0, 0.4)
+    frame:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
+  end
+  local scroll = CreateFrame("ScrollFrame", nil, frame)
+  scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 4, -3)
+  scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -4, 3)
+  local edit = CreateFrame("EditBox", nil, scroll)
+  edit:SetMultiLine(true)
+  edit:SetAutoFocus(false)
+  edit:SetMaxLetters(MAX_NOTE)
+  edit:SetFontObject("GameFontHighlightSmall")
+  edit:SetWidth(RIGHT_WIDTH - 8)
+  scroll:SetScrollChild(edit)
+  scroll:EnableMouseWheel(true)
+  scroll:SetScript("OnMouseWheel", function(s, delta)
+    local range = s:GetVerticalScrollRange() or 0
+    s:SetVerticalScroll(math.max(0, math.min(range, (s:GetVerticalScroll() or 0) - delta * 12)))
+  end)
+  edit:SetScript("OnCursorChanged", function(_, _, y, _, h)
+    local offset, visible = scroll:GetVerticalScroll() or 0, scroll:GetHeight() or 0
+    y = -(y or 0)
+    if y < offset then
+      scroll:SetVerticalScroll(y)
+    elseif visible > 0 and y + (h or 0) > offset + visible then
+      scroll:SetVerticalScroll(y + (h or 0) - visible)
+    end
+  end)
+  edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+  edit:SetScript("OnEditFocusLost", ns.FS:Wrap(SOURCE, save_note))
+  frame:EnableMouse(true)
+  frame:SetScript("OnMouseDown", function() edit:SetFocus() end)
+  return edit
+end
+
+local function build_detail(container)
+  local d = { chips = {}, group = {}, chipsShown = 0, groupShown = 0 }
+  local pane = CreateFrame("Frame", nil, container)
+  pane:SetPoint("BOTTOMLEFT", container, "BOTTOMLEFT", PAD, 0)
+  pane:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", -PAD, 0)
+  pane:SetHeight(DETAIL_HEIGHT)
+  local line = pane:CreateTexture(nil, "ARTWORK")
+  line:SetPoint("TOPLEFT", pane, "TOPLEFT", 0, 2)
+  line:SetPoint("TOPRIGHT", pane, "TOPRIGHT", 0, 2)
+  line:SetHeight(1)
+  line:SetColorTexture(1, 1, 1, 0.15)
+  d.pane = pane
+
+  d.hint = pane:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  d.hint:SetPoint("TOPLEFT", pane, "TOPLEFT", 4, -10)
+  d.hint:SetPoint("TOPRIGHT", pane, "TOPRIGHT", -4, -10)
+  d.hint:SetJustifyH("LEFT")
+  d.hint:SetText(color(DIM, "Select a customer to see the orders, notes, tags and linked characters."))
+
+  local body = CreateFrame("Frame", nil, pane)
+  body:SetAllPoints(pane)
+  d.body = body
+
+  -- Right column (fixed width): VIP/Blocked, notes, tags, link.
+  local right = CreateFrame("Frame", nil, body)
+  right:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, -4)
+  right:SetPoint("BOTTOMRIGHT", body, "BOTTOMRIGHT", 0, 0)
+  right:SetWidth(RIGHT_WIDTH)
+  d.right = right
+  d.vip = create_check(right, "VIP", 0, 0, "VIP")
+  d.blocked = create_check(right, "Blocked", 70, 0, "blocked")
+  local notesLabel = right:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  notesLabel:SetPoint("TOPLEFT", right, "TOPLEFT", 0, -26)
+  notesLabel:SetText("Notes (saved when you click elsewhere)")
+  d.notes = create_notes(right, 40, 52)
+  d.tagEdit = create_edit(right, 160, MAX_TAG, add_tag)
+  d.tagEdit:SetPoint("TOPLEFT", right, "TOPLEFT", 6, -98)
+  d.tagAdd = create_button(right, "Add tag", 70, add_tag)
+  d.tagAdd:SetPoint("LEFT", d.tagEdit, "RIGHT", GAP + 2, 0)
+  d.chipsTop = 122
+  local linkLabel = right:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  linkLabel:SetPoint("TOPLEFT", right, "TOPLEFT", 0, -168)
+  linkLabel:SetWidth(54)
+  linkLabel:SetJustifyH("LEFT")
+  linkLabel:SetText("Linked to")
+  d.linkEdit = create_edit(right, 86, MAX_NAME, do_link)
+  d.linkEdit:SetPoint("TOPLEFT", right, "TOPLEFT", 60, -164)
+  d.link = create_button(right, "Link", 46, do_link)
+  d.link:SetPoint("LEFT", d.linkEdit, "RIGHT", GAP, 0)
+  d.unlink = create_button(right, "Unlink", 56, do_unlink)
+  d.unlink:SetPoint("LEFT", d.link, "RIGHT", GAP, 0)
+  d.linkEdit:SetScript("OnEnter", ns.FS:Wrap(SOURCE,
+    text_tooltip("Type the name of the main character this one is an alt of (Name or Name-Realm)")))
+  d.linkEdit:SetScript("OnLeave", hide_tooltip)
+
+  -- Left column (the rest): title, order history, the group.
+  local left = CreateFrame("Frame", nil, body)
+  left:SetPoint("TOPLEFT", body, "TOPLEFT", 0, -4)
+  left:SetPoint("BOTTOMRIGHT", right, "BOTTOMLEFT", -2 * PAD, 0)
+  d.left = left
+  d.title = left:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  d.title:SetPoint("TOPLEFT", left, "TOPLEFT", 0, -2)
+  d.title:SetPoint("TOPRIGHT", left, "TOPRIGHT", 0, -2)
+  d.title:SetJustifyH("LEFT")
+  d.title:SetWordWrap(false)
+  d.history = new_list(left, HISTORY_ROW, create_history_row, bind_history_row)
+  d.history.scroll:SetPoint("TOPLEFT", left, "TOPLEFT", 0, -22)
+  d.history.scroll:SetPoint("BOTTOMRIGHT", left, "BOTTOMRIGHT", 0, CHIP_HEIGHT + 6)
+  d.historyEmpty = left:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  d.historyEmpty:SetPoint("TOPLEFT", left, "TOPLEFT", 2, -24)
+  d.historyEmpty:SetText(color(DIM, "No orders recorded for this character."))
+  d.historyEmpty:Hide()
+  d.groupBar = CreateFrame("Frame", nil, left)
+  d.groupBar:SetPoint("BOTTOMLEFT", left, "BOTTOMLEFT", 0, 2)
+  d.groupBar:SetPoint("BOTTOMRIGHT", left, "BOTTOMRIGHT", 0, 2)
+  d.groupBar:SetHeight(CHIP_HEIGHT)
+  d.groupLabel = d.groupBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  d.groupLabel:SetPoint("LEFT", d.groupBar, "LEFT", 0, 0)
+
+  body:Hide()
+  return d
+end
+
+local function create_headers(container, top)
+  local bar = CreateFrame("Frame", nil, container)
+  bar:SetHeight(HEADER_HEIGHT)
+  bar:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -top)
+  bar:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, -top)
+  local headers = {}
+  for i, col in ipairs(COLUMNS) do
+    local text = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    text:SetHeight(HEADER_HEIGHT)
+    text:SetJustifyH(col.right and "RIGHT" or "LEFT")
+    text:SetWordWrap(false)
+    text:SetText(col.label)
+    headers[i] = text
+  end
+  return bar, headers
+end
+
+local function build(container)
+  local created = { container = container }
+
+  local bar = CreateFrame("Frame", nil, container)
+  bar:SetPoint("TOPLEFT", container, "TOPLEFT", PAD, 0)
+  bar:SetPoint("TOPRIGHT", container, "TOPRIGHT", -PAD, 0)
+  bar:SetHeight(BAR_HEIGHT)
+  local searchLabel = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  searchLabel:SetPoint("LEFT", bar, "LEFT", 0, 0)
+  searchLabel:SetText("Search")
+  created.search = create_edit(bar, 150, MAX_SEARCH)
+  created.search:SetPoint("LEFT", bar, "LEFT", 50, 0)
+  created.search:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+  created.search:SetScript("OnTextChanged", ns.FS:Wrap(SOURCE, function(self)
+    local text = self:GetText()
+    searchText = type(text) == "string" and text or ""
+    refresh()
+  end))
+  created.exportButton = create_button(bar, "Export", 70, open_export)
+  created.exportButton:SetPoint("RIGHT", bar, "RIGHT", 0, 0)
+  created.status = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  created.status:SetPoint("LEFT", created.search, "RIGHT", 8, 0)
+  created.status:SetPoint("RIGHT", created.exportButton, "LEFT", -8, 0)
+  created.status:SetJustifyH("RIGHT")
+  created.status:SetWordWrap(false)
+
+  local headersTop = BAR_HEIGHT + 2
+  created.headerBar, created.headers = create_headers(container, headersTop)
+  local listTop = headersTop + HEADER_HEIGHT + 2
+
+  created.list = new_list(container, ROW_HEIGHT, create_customer_row, bind_customer_row)
+  created.list.scroll:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -listTop)
+  created.list.scroll:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, DETAIL_HEIGHT + 6)
+
+  created.empty = container:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  created.empty:SetPoint("TOPLEFT", container, "TOPLEFT", PAD + 4, -(listTop + 8))
+  created.empty:SetPoint("TOPRIGHT", container, "TOPRIGHT", -PAD - 4, -(listTop + 8))
+  created.empty:SetJustifyH("LEFT")
+  created.empty:Hide()
+
+  created.detail = build_detail(container)
+
+  view = created
+  apply_layout()
+  -- Columns and the group chips follow the window's width.
+  container:HookScript("OnSizeChanged", ns.FS:Wrap(SOURCE, function()
+    apply_layout()
+    refresh_detail()
+  end))
+  -- Reselecting the tab starts without the last action's status line.
+  container:HookScript("OnShow", ns.FS:Wrap(SOURCE, clear_status))
+  container:HookScript("OnHide", ns.FS:Wrap(SOURCE, save_note))
+end
+
+---------------------------------------------------------------------------
+-- Lifecycle
+---------------------------------------------------------------------------
+
+-- Test and diagnostics access: the built view (nil before the tab is built).
+function CustomersTab:GetView()
+  return view
+end
+
+function CustomersTab:OnInitialize()
+  local window = module("MainWindow")
+  if window then
+    window:RegisterTab(TAB_ID, {
+      label = "Customers", icon = "Interface\\Icons\\INV_Misc_GroupNeedMore", order = 50, phase = 2,
+      build = build,
+      refresh = refresh,
+    })
+  end
+end
+
+function CustomersTab:OnEnable()
+  -- One refresh of the whole list follows REFRESH_DELAY after the last change of a burst; MainWindow only
+  -- refreshes a selected, visible tab.
+  self:RegisterMessage(ns.Msg.CUSTOMERS_CHANGED, ns.FS:Wrap(REFRESH_SOURCE, schedule_refresh))
+  self:RegisterEvent("GET_ITEM_INFO_RECEIVED", ns.FS:Wrap(REFRESH_SOURCE, on_item_info))
+end
+
+function CustomersTab:OnDisable()
+  self:UnregisterAllMessages()
+  self:UnregisterAllEvents()
+  ns.FS:CancelDebounce(REFRESH_KEY)
+  if view and view.dialog then view.dialog.frame:Hide() end
+end
