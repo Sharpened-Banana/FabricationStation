@@ -122,8 +122,11 @@ describe("tools/gamedata/generate.lua", function()
   end)
 
   it("the checked-in Data files load as one complete build", function()
-    local ns = load_files({}, { "Data/GameData.lua", "Data/GameData_Professions.lua", "Data/GameData_Reagents.lua",
-      "Data/GameData_Difficulty.lua", "Data/GameData_Spec.lua", "Data/GameData_Manual.lua" })
+    local paths = {}
+    for _, f in ipairs(require("toc").read_toc("FabricationStation.toc").files) do
+      if f:match("^Data/.*%.lua$") then paths[#paths + 1] = f end
+    end
+    local ns = load_files({}, paths)
     for _, name in ipairs(DEFINES) do
       local t = ns.GameData.Get(name)
       assert.is_table(t); assert.is_not_nil(next(t), name .. " is empty")

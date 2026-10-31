@@ -12,4 +12,4 @@ local ADDON_NAME, ns = ...
 -- Rewards missing here are still valued (Moxie by 1a's MoxieCurrency table or by name, items by price), and the
 -- ones that cannot be valued are counted in db.global.ordersUnknownRewards for this list.
 -- The build is the same literal as Data/GameData_Manual.lua; a nil build would make GameData report data missing.
-ns.GameData.Define("OrderRewards", 70575, { items = {}, currencies = {} })
+ns.GameData.Define("OrderRewards", 70688, { items = {}, currencies = {} })
