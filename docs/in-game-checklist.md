@@ -499,8 +499,9 @@ P3-7. **Characters tab.** `/fs tab characters`. Expected: every saved character 
     with `•`, names in class colours; the header sums read sensibly, and hovering the header shows its tooltip (the
     status line under it stays empty until you search or hide a character; hovering it then shows the whole text).
     Click a row: its detail opens under it with spec, knowledge, concentration
-    (`full at <weekday HH:MM>`, your local time) and cooldown recipe names; the text is not cut off and the
-    `Hide character` button sits below it. Click the row again: the detail closes. The mouse wheel scrolls, and
+    (`full at <weekday HH:MM>`, your local time; report it if a pool below max reads `fill time unknown (no
+    regeneration data)` here or `?` after the value in the grid: the game then gave no regeneration rate) and cooldown
+    recipe names; the text is not cut off and the `Hide character` button sits below it. Click the row again: the detail closes. The mouse wheel scrolls, and
     hovering a row shows a tooltip with every value. An em dash `—` and `·` show as characters, not boxes.
 P3-8. **Minimum width.** Drag the main window to its smallest width on the Characters tab and on each Planner section.
     Expected: lower-priority columns disappear (the Character column keeps a readable width, no text overlaps), a
