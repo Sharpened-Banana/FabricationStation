@@ -73,6 +73,7 @@ end
 for _, key in ipairs(HIDE_ORDER) do HIDEABLE[key] = true end
 
 local view            -- built frames and the displayed rows, nil before the tab is built
+local OFF_NOTICE = "Orders off: the board is not captured"
 local status          -- one line of feedback after an Add to Queue click (with its colour code)
 local statusAt        -- ns.FS:Now() when it was set
 local requested = {}  -- [itemID] = true while its data is requested, "done" after; asked once per session
@@ -296,6 +297,13 @@ local function schedule_refresh()
   ns.FS:Debounce(REFRESH_KEY, REFRESH_DELAY, refreshLater)
 end
 
+-- The status line while Orders is off (and no action message is showing): the saved board is shown, but nothing new
+-- is captured or rescored.
+local function off_text(O)
+  if O and O.IsEnabled and not O:IsEnabled() then return color(WARN, OFF_NOTICE) end
+  return ""
+end
+
 local function set_status(message, tone)
   status, statusAt = color(TONES[tone] or "", message), ns.FS:Now()
   if view then view.status:SetText(status) end
@@ -303,7 +311,7 @@ end
 
 local function clear_status()
   status, statusAt = nil, nil
-  if view then view.status:SetText("") end
+  if view then view.status:SetText(off_text(module("Orders"))) end
 end
 
 -- Add to Queue: the order as it is now (live, else saved) through the board's own path.
@@ -542,7 +550,7 @@ local function refresh()
     view.empty:SetText("")
     view.empty:Hide()
   end
-  view.status:SetText(status or "")
+  view.status:SetText(status or off_text(O))
   apply_layout()
   local total = #view.rows * ROW_HEIGHT
   view.child:SetHeight(math.max(total, 1))

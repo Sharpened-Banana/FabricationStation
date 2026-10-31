@@ -593,8 +593,10 @@ end
 
 -- Shows the cells of one row for its element, or hides them when it holds no order or the order is not scored.
 -- Runs once Blizzard has filled the row (OnInitializedFrame), so a recycled row is measured with its new item name.
+-- While Orders is off nothing captures or rescores the board, so its saved views would show stale scores: no cells.
 local function show_row(row, elementData)
   local O = orders()
+  if O and O.IsEnabled and not O:IsEnabled() then O = nil end
   local orderID = order_id_of(elementData)
   local view = (O and orderID ~= nil) and O:GetView(orderID) or nil
   if not (view and container) then

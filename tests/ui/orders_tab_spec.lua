@@ -310,6 +310,18 @@ describe("Orders tab frames", function()
     assert.same({ "orders" }, refreshed)
   end)
 
+  it("says on the status line that Orders is off, and the board is not captured", function()
+    snapshot({ view() })
+    local v = open()
+    assert.equal("", v.status:GetText())
+    ns.FS:SetModuleEnabled("Orders", false)
+    reg.orders.refresh(container)
+    assert.is_truthy(v.status:GetText():find("Orders off: the board is not captured", 1, true))
+    ns.FS:SetModuleEnabled("Orders", true)
+    reg.orders.refresh(container)
+    assert.equal("", v.status:GetText())
+  end)
+
   it("asks once for an uncached item and refreshes when its data arrives", function()
     local asked = {}
     _G.C_Item.RequestLoadItemDataByID = function(id) asked[#asked + 1] = id end
