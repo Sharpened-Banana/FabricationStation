@@ -13,7 +13,10 @@ local ADDON_NAME, ns = ...
 --   * Requests collect for REQUEST_WINDOW seconds; then each character goes out once: whispered to a single requester,
 --     to GUILD for two or more (never to the same target twice within RESEND_COOLDOWN).
 --   * DATA is stored only when its content hashes to the hash it carries and to the one the sender's last HELLO
---     listed, and the sender may publish that character (see may_claim).
+--     listed, and the claim rules let the sender publish that character (see claim(): verified = own name or named
+--     by the character's own HELLO; unverified claims never replace verified copies, and two unverified claimants
+--     of one character contest it: the copy is deleted until a verified claim arrives).
+--   * Whispered messages count only from guild members (Guild:IsGuildMember); GUILD traffic proves membership.
 -- No comm exists at all outside a guild, without C_EncodingUtil, while the module is off or while the saved data is
 -- from a newer version (then nothing is written either; settings live in a session copy).
 --
@@ -21,9 +24,9 @@ local ADDON_NAME, ns = ...
 --   db.global.settings.guild = { share, shareLevel = "quality"|"recipes", shareAlts = "current"|"guild"|"all",
 --                                tooltipLine, panelLine, useNative }
 --   db.global.guildDirectory[guildKey] = { members = { [nameRealm] = Member }, profiles = { [charKey] = Stored },
---                                          native = {} }
+--                                          native = {}, contested = { [charKey] = Now() of the contest } }
 --     Member = { addonVersion, proto, lastSeen, chars = { [charKey] = hash }, lastHelloSent }
---     Stored = { c, ts, lv, h, owner, rt, lines = { [skillLineID] = { k, m, recipes = { [recipeID] = true },
+--     Stored = { c, ts, lv, h, owner, verified, rt, lines = { [skillLineID] = { k, m, recipes = { [recipeID] = true },
 --                q = { [recipeID] = 0..5 } | nil, qc = { [recipeID] = 0..5 } | nil } } }
 --       (a keyed copy of a validated DATA: a repeated line or recipeID overwrites, unknown keys are never copied,
 --        q/qc exist only for lv = "q"; h is recomputed here; rt = when it arrived or its owner's HELLO last confirmed it)
@@ -97,7 +100,19 @@ local function recipes_module() return ns.FS:GetModule("Recipes", true) end
 -- Session state (never saved)
 ---------------------------------------------------------------------------
 
-local sessionStarted = false   -- the first PLAYER_ENTERING_WORLD of the session was handled
+local sessionStarted = false   -- the first PLAYER_ENTERING_WORLD of the session was handled by Guild
+local worldEntered = false     -- the first PLAYER_ENTERING_WORLD happened (seen even while Guild is off)
+
+-- A tiny always-on listener (not the module, so Guild's own registrations stay empty while it is off): lets a Guild
+-- turned on later in the session start its login path at once instead of at the next loading screen.
+do
+  local watcher = {}
+  LibStub("AceEvent-3.0"):Embed(watcher)
+  watcher:RegisterEvent("PLAYER_ENTERING_WORLD", function()
+    worldEntered = true
+    watcher:UnregisterEvent("PLAYER_ENTERING_WORLD")
+  end)
+end
 local warnedNewer = false      -- the newer-protocol notice was printed this session
 
 local own = { profiles = {}, hashes = {}, info = {} }   -- built own profiles, their hashes, { wireBytes, trimmed }
@@ -111,7 +126,7 @@ local deferredHello = {}   -- [target | "GUILD"] = true: HELLOs asked for while 
 local replyKeys = {}       -- [debounce key] = true
 local loggedDrops = {}     -- [charKey] = true: the oversize/dropped DATA was logged
 
-Guild.stats = { helloSent = 0, requestSent = 0, dataSent = 0, dataDropped = 0, rejected = 0, trimmed = 0 }
+Guild.stats = { helloSent = 0, requestSent = 0, dataSent = 0, dataDropped = 0, rejected = 0, trimmed = 0, strangers = 0 }
 
 local function reset_sync_state()
   requested, pending, lastData, announced, deferredHello = {}, {}, {}, {}, {}
@@ -184,7 +199,7 @@ function Guild:GetDirectory(guildKey)
   if not writable() then return type(dir) == "table" and dir or nil end
   if type(all) ~= "table" then all = {}; g.guildDirectory = all end
   if type(dir) ~= "table" then dir = {}; all[key] = dir end
-  for _, sub in ipairs({ "members", "profiles", "native" }) do
+  for _, sub in ipairs({ "members", "profiles", "native", "contested" }) do
     if type(dir[sub]) ~= "table" then dir[sub] = {} end
   end
   return dir
@@ -208,9 +223,9 @@ local function ensure_comm(self)
     now = now,
   })
   comm:RegisterHandler("H", function(msg, sender, distribution) self:OnHello(msg, sender, distribution) end)
-  comm:RegisterHandler("Q", function(msg, sender) self:OnRequest(msg, sender) end)
+  comm:RegisterHandler("Q", function(msg, sender, distribution) self:OnRequest(msg, sender, distribution) end)
   comm:RegisterHandler("D", function(msg, sender, distribution) self:OnData(msg, sender, distribution) end)
-  comm:RegisterHandler("version", function(sender, proto) self:OnVersion(sender, proto) end)
+  comm:RegisterHandler("version", function(sender, proto, distribution) self:OnVersion(sender, proto, distribution) end)
   self.comm = comm
   -- Inbound runs under Comm's own log-only source ("Guild:Comm"), never SafeCall("Guild"): a hostile message must not
   -- be able to turn the module off (preflight row 17).
@@ -598,6 +613,17 @@ function Guild:_RefreshStep(budgetMs)
   return true
 end
 
+local lastTickTime   -- GetTime() of the last ticker step
+
+-- The ticker's callback: one _RefreshStep per frame. NewTicker(0) is assumed to tick once per frame (P4-6); a second
+-- tick within the same frame (GetTime() unchanged) is skipped, so the budget is never spent twice per frame.
+function Guild:_RefreshTick()
+  local t = type(GetTime) == "function" and GetTime() or nil
+  if t ~= nil and t == lastTickTime then return false end
+  lastTickTime = t
+  return self:_RefreshStep()
+end
+
 local MODE_RANK = { ifChanged = 1, always = 2 }
 
 -- Rebuilds the own profiles of the shared characters in a time-sliced coroutine (preflight row 13), only while syncing
@@ -617,7 +643,7 @@ function Guild:RefreshOwnProfiles(mode)
     return true
   end
   new_pass(self)
-  refresh.ticker = C_Timer.NewTicker(0, ns.FS:Wrap("Guild", function() self:_RefreshStep() end))
+  refresh.ticker = C_Timer.NewTicker(0, ns.FS:Wrap("Guild", function() self:_RefreshTick() end))
   return true
 end
 
@@ -717,22 +743,62 @@ local function member_of(dir, name)
   return m
 end
 
--- Whether `sender` may publish `charKey` (anti-spoof; senders are named by the server, charKeys are just text). A
--- player may always publish their own name. Another character may be published when nobody holds it, the sender
--- already does, its holder no longer lists it, or its holder lists the sender (characters of one player list each
--- other: Q's HELLO naming P lets P update Q-Realm, while a stranger P cannot take over or withdraw Q's data).
-local function may_claim(dir, sender, charKey)
-  if charKey == sender then return true end
-  local p = dir.profiles[charKey]
-  if type(p) ~= "table" or p.owner == sender then return true end
-  local holder = dir.members[p.owner]
-  if type(holder) ~= "table" or type(holder.chars) ~= "table" or holder.chars[charKey] == nil then return true end
-  return holder.chars[sender] ~= nil
+-- Whether name is in the player's guild (Task 8's GuildDirectory reuses this). MemberExistsByName with the full
+-- "Name-Realm", then the guild-ambiguated form. An empty roster (not loaded yet after GuildRoster, preflight row 21) or
+-- a missing API counts as "unknown -> member".
+function Guild:IsGuildMember(nameRealm)
+  if type(nameRealm) ~= "string" or nameRealm == "" then return false end
+  local api = C_GuildInfo
+  if not api or type(api.MemberExistsByName) ~= "function" then return true end
+  if type(GetNumGuildMembers) == "function" then
+    local ok, total = pcall(GetNumGuildMembers)
+    if ok and (total == nil or total == 0) then return true end
+  end
+  local ok, exists = pcall(api.MemberExistsByName, nameRealm)
+  if ok and exists then return true end
+  if type(Ambiguate) == "function" then
+    local okA, short = pcall(Ambiguate, nameRealm, "guild")
+    if okA and type(short) == "string" and short ~= nameRealm then
+      ok, exists = pcall(api.MemberExistsByName, short)
+      if ok and exists then return true end
+    end
+  end
+  return false
 end
 
-local function linked(dir, owner, sender)
-  local m = dir.members[owner]
+-- Only GUILD traffic proves guild membership; anything else (a whisper) must come from a guild member.
+local function from_guild(self, sender, distribution)
+  if distribution == "GUILD" or self:IsGuildMember(sender) then return true end
+  self.stats.strangers = self.stats.strangers + 1
+  return false
+end
+
+-- Verified claim (controller ruling, Task 6 review): the sender publishes its own name, or the character's OWN record
+-- (its own HELLO) names the sender as a linked character. The holder's record is never evidence.
+local function verified(dir, sender, charKey)
+  if charKey == sender then return true end
+  local m = dir.members[charKey]
   return type(m) == "table" and type(m.chars) == "table" and m.chars[sender] ~= nil
+end
+
+-- Whether sender may publish charKey now: "verified", "unverified" or nil. A verified claim always wins and clears a
+-- contest. An unverified claim is accepted only when nothing is stored (and the character is not contested) or the
+-- same sender's unverified copy is stored. A different sender's unverified claim on an unverified copy deletes that
+-- copy and marks the character contested until a verified claim arrives, so a squatter yields "no data", never "fake
+-- data". A verified copy is never touched by an unverified claim.
+local function claim(dir, sender, charKey, t)
+  if verified(dir, sender, charKey) then
+    dir.contested[charKey] = nil
+    return "verified"
+  end
+  if dir.contested[charKey] ~= nil then return nil end
+  local p = dir.profiles[charKey]
+  if type(p) ~= "table" then return "unverified" end
+  if p.verified then return nil end
+  if p.owner == sender then return "unverified" end
+  dir.profiles[charKey] = nil
+  dir.contested[charKey] = t
+  return nil
 end
 
 -- A HELLO from a guildmate: stores the member, withdraws what it stopped listing, requests what differs and answers a
@@ -740,12 +806,12 @@ end
 function Guild:OnHello(msg, sender, distribution)
   sender = Util.NormalizeName(sender)
   if not self:IsEnabled() or not writable() or not valid(msg, "H") or type(sender) ~= "string" then return end
+  if not from_guild(self, sender, distribution) then return end
   local dir = self:GetDirectory()
   if not dir then return end
   local t = now()
   local mine = own_char_set()
   local member = member_of(dir, sender)
-  local previous = member.chars
   member.addonVersion = msg.v
   member.proto = ns.Social.Protocol.VERSION      -- the wire header (Comm dispatches only this version), never msg.p
   member.lastSeen = t
@@ -756,19 +822,22 @@ function Guild:OnHello(msg, sender, distribution)
   end
   member.chars = chars
 
+  -- Withdrawal: only by the copy's owner or a verified linker of the character.
   for charKey, p in pairs(dir.profiles) do
-    if chars[charKey] == nil and type(p) == "table"
-      and (p.owner == sender or (previous[charKey] ~= nil and linked(dir, p.owner, sender))) then
+    if chars[charKey] == nil and type(p) == "table" and (p.owner == sender or verified(dir, sender, charKey)) then
       dir.profiles[charKey] = nil
     end
   end
 
   local want = {}
   for _, charKey in ipairs(sorted_keys(chars)) do
-    local hash, p = chars[charKey], dir.profiles[charKey]
-    if may_claim(dir, sender, charKey) then
+    local hash = chars[charKey]
+    local kind = claim(dir, sender, charKey, t)
+    local p = dir.profiles[charKey]
+    if kind then
       if type(p) == "table" and p.h == hash then
-        p.rt = t                                   -- confirmed unchanged by a publisher
+        p.rt = t                                   -- confirmed unchanged by an allowed publisher
+        if kind == "verified" and not p.verified then p.owner, p.verified = sender, true end
       else
         local rk = charKey .. " " .. hash
         if not requested[rk] or t - requested[rk] >= Guild.REREQUEST_COOLDOWN then want[#want + 1] = charKey end
@@ -796,10 +865,11 @@ function Guild:OnHello(msg, sender, distribution)
 end
 
 -- A REQUEST: collects the requester for each asked character this player shares; FlushRequests runs REQUEST_WINDOW
--- after the first one.
-function Guild:OnRequest(msg, sender)
+-- after the first one. A whispered request must come from a guild member.
+function Guild:OnRequest(msg, sender, distribution)
   sender = Util.NormalizeName(sender)
   if not can_sync(self) or not self:Settings().share or not valid(msg, "Q") or type(sender) ~= "string" then return end
+  if not from_guild(self, sender, distribution) then return end
   local shared = {}
   for _, c in ipairs(self:GetSharedCharKeys()) do shared[c] = true end
   for _, key in ipairs(msg.c) do
@@ -813,7 +883,7 @@ function Guild:OnRequest(msg, sender)
 end
 
 -- The keyed copy stored for a validated DATA (known fields only; see the header).
-local function stored_copy(msg, hash, owner, t)
+local function stored_copy(msg, c, hash, owner, isVerified, t)
   local quality = msg.lv == "q"
   local lines = {}
   for _, line in ipairs(msg.pr) do
@@ -830,34 +900,41 @@ local function stored_copy(msg, hash, owner, t)
     end
     lines[line.s] = entry
   end
-  return { c = msg.c, ts = msg.ts, lv = msg.lv, h = hash, owner = owner, rt = t, lines = lines }
+  return { c = c, ts = msg.ts, lv = msg.lv, h = hash, owner = owner, verified = isVerified, rt = t, lines = lines }
 end
 
 -- A DATA: stored (replacing the previous copy, so an "r" profile drops the qualities) only when the sender's last
--- HELLO lists exactly this hash, the content hashes to it, and the sender may publish the character.
-function Guild:OnData(msg, sender, _distribution)   -- distribution: WHISPER or GUILD, both accepted
+-- HELLO lists exactly this hash, the content hashes to it, and the claim rules let the sender publish the character.
+function Guild:OnData(msg, sender, distribution)
   sender = Util.NormalizeName(sender)
   if not self:IsEnabled() or not writable() or type(sender) ~= "string" then return end
-  if not valid(msg, "D") then return end
+  if not valid(msg, "D") or not from_guild(self, sender, distribution) then return end
   local dir = self:GetDirectory()
   if not dir then return end
   local c = Util.NormalizeName(msg.c)
   local member = dir.members[sender]
   local hash = ns.Social.Protocol.HashProfile(msg)
-  if own_char_set()[c] or type(member) ~= "table" or type(member.chars) ~= "table" or member.chars[c] ~= msg.h
-    or hash ~= msg.h or not may_claim(dir, sender, c) then
+  local t = now()
+  local kind
+  if not own_char_set()[c] and type(member) == "table" and type(member.chars) == "table" and member.chars[c] == msg.h
+    and hash == msg.h then
+    kind = claim(dir, sender, c, t)
+  end
+  if not kind then
     self.stats.rejected = self.stats.rejected + 1
+    changed(self)            -- a contest may have removed a copy
     return
   end
-  dir.profiles[c] = stored_copy(msg, hash, sender, now())
+  dir.profiles[c] = stored_copy(msg, c, hash, sender, kind == "verified", t)
   changed(self)
 end
 
 -- A message under another protocol version (from Comm's header check): records it on the member and, for a newer
--- one, tells the player once per session.
-function Guild:OnVersion(sender, proto)
+-- one, tells the player once per session. A whispered one must come from a guild member.
+function Guild:OnVersion(sender, proto, distribution)
   sender = Util.NormalizeName(sender)
   if not self:IsEnabled() or type(sender) ~= "string" or type(proto) ~= "number" then return end
+  if not from_guild(self, sender, distribution) then return end
   if proto > ns.Social.Protocol.VERSION and not warnedNewer then
     warnedNewer = true
     ns.FS:Print(ns.L["A guildmate uses a newer FabricationStation sync protocol. Update to see their data."])
@@ -887,6 +964,7 @@ function Guild:OnPrivacyChanged()
     ns.FS:CancelDebounce(HELLO_KEY)
     self:SendHello()
   else
+    clear_own()                   -- the old profiles (maybe with qualities) must not go out during the rebuild
     self:RefreshOwnProfiles("always")
   end
 end
@@ -898,7 +976,8 @@ local function on_own_change(self)
   end))
 end
 
--- Drops profiles (rt) and members (lastSeen) older than PROFILE_MAX_AGE in every stored guild. -> entries removed.
+-- Drops profiles (rt) and members (lastSeen) older than PROFILE_MAX_AGE in every stored guild, and contest marks of
+-- that age. -> profiles and members removed.
 function Guild:Prune(t)
   local g = global()
   if not writable() or type(g.guildDirectory) ~= "table" then return 0 end
@@ -915,6 +994,11 @@ function Guild:Prune(t)
               removed = removed + 1
             end
           end
+        end
+      end
+      if type(dir.contested) == "table" then
+        for key, at in pairs(dir.contested) do
+          if type(at) ~= "number" or at < cutoff then dir.contested[key] = nil end
         end
       end
     end
@@ -950,6 +1034,10 @@ function Guild:OnEnable()
     if locked == false and self.comm then self.comm:Flush() end
   end))
   self.guildKey, self.syncKey = nil, nil
+  if worldEntered and not sessionStarted then
+    self:OnEnteringWorld()        -- turned on after the first loading screen passed while Guild was off
+    return
+  end
   self:OnGuildUpdate()
   if sessionStarted and self.guildKey and self.syncKey ~= self.guildKey then start_sync(self) end   -- re-enabled
 end

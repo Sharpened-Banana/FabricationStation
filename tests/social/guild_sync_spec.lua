@@ -291,12 +291,80 @@ describe("Guild sync", function()
       assert.are.same({}, dir().members["Peer-Realm"].chars)
     end)
 
-    it("does not request a character another member owns and still lists", function()
-      seed_peer_with_profile("Peer-Realm", PB)
+    it("contests a character two senders claim unverified: the copy goes and nothing is requested", function()
+      seed_peer_with_profile("Peer-Realm", PB)                   -- B-Realm reported by Peer (unverified)
+      assert.is_false(dir().profiles["B-Realm"].verified)
       Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = "0000bbbb" }), "Liar-Realm", "GUILD")
+      assert.is_nil(dir().profiles["B-Realm"])
+      assert.is_not_nil(dir().contested["B-Realm"])
       assert.are.equal(1, count_sent("Q"))                       -- Peer's own request only
+      p4.advance(200)
+      Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = Protocol.HashProfile(PB) }), "Peer-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(PB), "Peer-Realm", "WHISPER")
+      assert.are.equal(1, count_sent("Q"))
+      assert.is_nil(dir().profiles["B-Realm"])                   -- "no data", never the squatter's or a stale copy
       Guild:OnHello(Protocol.Hello("1.0.0", { ["Liar-Realm"] = "0000cccc" }), "Liar-Realm", "GUILD")
       assert.are.same({ "Liar-Realm" }, last_sent_msg().c)       -- a player may always publish their own name
+      -- B-Realm logs in itself: a verified claim clears the contest.
+      local PBs = merge(PB, { ts = 2 })
+      Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = Protocol.HashProfile(PBs) }), "B-Realm", "GUILD")
+      assert.is_nil(dir().contested["B-Realm"])
+      assert.are.same({ "B-Realm" }, last_sent_msg().c)
+      Guild:OnData(Protocol.Data(PBs), "B-Realm", "WHISPER")
+      assert.are.equal("B-Realm", dir().profiles["B-Realm"].owner)
+      assert.is_true(dir().profiles["B-Realm"].verified)
+    end)
+
+    it("turns a squat into no data when the real main claims the alt (attacker first)", function()
+      local PW = { c = "W-Realm", ts = 1, lv = "q", pr = { { s = 2907, k = 1, m = 10, r = { 100, 5, 5 } } } }
+      local Wreal = { c = "W-Realm", ts = 1, lv = "q", pr = { { s = 2907, k = 9, m = 10, r = { 101, 2, 3 } } } }
+      Guild:OnHello(Protocol.Hello("1", { ["W-Realm"] = Protocol.HashProfile(PW) }), "A-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(PW), "A-Realm", "WHISPER")
+      assert.are.equal("A-Realm", dir().profiles["W-Realm"].owner)
+      assert.is_false(dir().profiles["W-Realm"].verified)
+      local before = count_sent("Q")
+      Guild:OnHello(Protocol.Hello("1", { ["V-Realm"] = "0000aaaa", ["W-Realm"] = Protocol.HashProfile(Wreal) }), "V-Realm", "GUILD")
+      assert.is_nil(dir().profiles["W-Realm"])                   -- the squatted copy is gone
+      assert.are.same({ "V-Realm" }, last_sent_msg().c)          -- V's own name only; W-Realm is contested
+      assert.are.equal(before + 1, count_sent("Q"))
+      -- The squatter's refreshing HELLOs neither restore nor re-request it.
+      Guild:OnHello(Protocol.Hello("1", { ["W-Realm"] = Protocol.HashProfile(PW) }), "A-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(PW), "A-Realm", "WHISPER")
+      assert.is_nil(dir().profiles["W-Realm"])
+      -- W-Realm logs in and names V: now V's claim is verified and replaces nothing-stored.
+      Guild:OnHello(Protocol.Hello("1", { ["W-Realm"] = Protocol.HashProfile(Wreal), ["V-Realm"] = "0000aaaa" }), "W-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(Wreal), "V-Realm", "WHISPER")
+      assert.are.equal("V-Realm", dir().profiles["W-Realm"].owner)
+      assert.is_true(dir().profiles["W-Realm"].verified)
+      assert.are.same({ 101 }, (function()
+        local k = {}
+        for id in pairs(dir().profiles["W-Realm"].lines[2907].recipes) do k[#k + 1] = id end
+        return k
+      end)())
+    end)
+
+    it("lets a verified claim replace an unverified copy and keeps a verified one from unverified claims", function()
+      local PW = { c = "W-Realm", ts = 1, lv = "r", pr = { { s = 2907, k = 1, m = 10, r = { 100 } } } }
+      local Wself = { c = "W-Realm", ts = 1, lv = "r", pr = { { s = 2907, k = 2, m = 10, r = { 100, 101 } } } }
+      Guild:OnHello(Protocol.Hello("1", { ["W-Realm"] = Protocol.HashProfile(PW) }), "A-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(PW), "A-Realm", "WHISPER")
+      Guild:OnHello(Protocol.Hello("1", { ["W-Realm"] = Protocol.HashProfile(Wself) }), "W-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(Wself), "W-Realm", "WHISPER")
+      assert.are.equal("W-Realm", dir().profiles["W-Realm"].owner)
+      assert.is_true(dir().profiles["W-Realm"].verified)
+      -- An unverified claimant can neither replace nor contest a verified copy, nor withdraw it.
+      Guild:OnHello(Protocol.Hello("1", { ["W-Realm"] = Protocol.HashProfile(PW) }), "A-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(PW), "A-Realm", "WHISPER")
+      Guild:OnHello(Protocol.Hello("1", {}), "A-Realm", "GUILD")
+      assert.are.equal("W-Realm", dir().profiles["W-Realm"].owner)
+      assert.is_nil(dir().contested["W-Realm"])
+      -- A same-hash verified HELLO upgrades an unverified copy in place.
+      local X = { c = "X-Realm", ts = 1, lv = "r", pr = { { s = 2907, k = 1, m = 10, r = { 100 } } } }
+      seed_peer_with_profile("Peer-Realm", X)
+      assert.is_false(dir().profiles["X-Realm"].verified)
+      Guild:OnHello(Protocol.Hello("1", { ["X-Realm"] = Protocol.HashProfile(X) }), "X-Realm", "GUILD")
+      assert.is_true(dir().profiles["X-Realm"].verified)
+      assert.are.equal("X-Realm", dir().profiles["X-Realm"].owner)
     end)
 
     it("fires FS_GUILD_CHANGED at most once per second", function()
@@ -339,7 +407,7 @@ describe("Guild sync", function()
       Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = msg.h }), "Peer-Realm", "GUILD")
       Guild:OnData(msg, "Peer-Realm", "WHISPER")
       local p = dir().profiles["B-Realm"]
-      assert.are.same({ "c", "h", "lines", "lv", "owner", "rt", "ts" }, sorted((function()
+      assert.are.same({ "c", "h", "lines", "lv", "owner", "rt", "ts", "verified" }, sorted((function()
         local k = {}
         for key in pairs(p) do k[#k + 1] = key end
         return k
@@ -369,6 +437,8 @@ describe("Guild sync", function()
       Guild:OnHello(Protocol.Hello("1", { ["Q-Realm"] = Protocol.HashProfile(PQ), ["P-Realm"] = Protocol.HashProfile(PP) }), "Q-Realm", "GUILD")
       Guild:OnData(Protocol.Data(PQ), "Q-Realm", "WHISPER"); Guild:OnData(Protocol.Data(PP), "Q-Realm", "WHISPER")
       assert.are.equal("Q-Realm", dir().profiles["P-Realm"].owner)
+      assert.is_true(dir().profiles["Q-Realm"].verified)
+      assert.is_false(dir().profiles["P-Realm"].verified)         -- P has not named Q yet
       -- A stranger listing Q-Realm can neither take it over nor withdraw it.
       local fake = { c = "Q-Realm", ts = 1, lv = "r", pr = { { s = 2906, k = 1, m = 10, r = { 999 } } } }
       Guild:OnHello(Protocol.Hello("1", { ["Q-Realm"] = Protocol.HashProfile(fake) }), "Liar-Realm", "GUILD")
@@ -381,10 +451,22 @@ describe("Guild sync", function()
       Guild:OnHello(Protocol.Hello("1", { ["P-Realm"] = Protocol.HashProfile(PP), ["Q-Realm"] = Protocol.HashProfile(PQr) }), "P-Realm", "GUILD")
       Guild:OnData(Protocol.Data(PQr), "P-Realm", "WHISPER")
       assert.are.equal("r", dir().profiles["Q-Realm"].lv)
-      -- Q turns sharing off: everything Q published goes, including P-Realm (P listed Q, Q had listed P).
+      assert.is_true(dir().profiles["Q-Realm"].verified)          -- Q's own HELLO names P
+      assert.is_true(dir().profiles["P-Realm"].verified)          -- upgraded by P's own same-hash HELLO
+      -- Q turns sharing off: Q-Realm (Q is its own linker) and P-Realm (P's HELLO names Q) go.
       Guild:OnHello(Protocol.Hello("1", {}), "Q-Realm", "GUILD")
       assert.is_nil(dir().profiles["P-Realm"])
       assert.is_nil(dir().profiles["Q-Realm"])
+    end)
+
+    it("withdraws only by the owner or a verified linker", function()
+      local X = { c = "X-Realm", ts = 1, lv = "r", pr = { { s = 2907, k = 1, m = 10, r = { 100 } } } }
+      Guild:OnHello(Protocol.Hello("1", { ["X-Realm"] = Protocol.HashProfile(X), ["L-Realm"] = "0000aaaa" }), "X-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(X), "X-Realm", "WHISPER")
+      Guild:OnHello(Protocol.Hello("1", {}), "Other-Realm", "GUILD")           -- neither owner nor linker
+      assert.is_not_nil(dir().profiles["X-Realm"])
+      Guild:OnHello(Protocol.Hello("1", {}), "L-Realm", "GUILD")              -- named by X's own HELLO
+      assert.is_nil(dir().profiles["X-Realm"])
     end)
 
     it("refreshes rt when the owner's HELLO confirms an unchanged hash", function()
@@ -447,6 +529,59 @@ describe("Guild sync", function()
     end)
   end)
 
+  describe("whispers from outside the guild", function()
+    before_each(function()
+      p4.guild.members = { { "Peer-Realm", true } }        -- a loaded roster; Stranger-Realm is not on it
+      p4.guild.exists["Stranger-Realm"] = false
+    end)
+
+    it("treats an empty roster as unknown, so every whisperer counts as a member", function()
+      p4.guild.members = {}
+      assert.is_true(Guild:IsGuildMember("Stranger-Realm"))
+      p4.guild.members = { { "Peer-Realm", true } }
+      assert.is_false(Guild:IsGuildMember("Stranger-Realm"))
+      assert.is_true(Guild:IsGuildMember("Peer-Realm"))
+    end)
+
+    it("OnHello: no request, no reply, no member record", function()
+      Guild:OnHello(Protocol.Hello("1", { ["Stranger-Realm"] = "0000aaaa" }), "Stranger-Realm", "WHISPER"); p4.advance(20)
+      assert.are.equal(0, #p4.comm.sent)
+      assert.is_nil(dir().members["Stranger-Realm"])
+      assert.are.equal(1, Guild.stats.strangers)
+    end)
+
+    it("OnRequest: never answered", function()
+      Guild:OnRequest(Protocol.Request({ "Me-Realm" }), "Stranger-Realm", "WHISPER"); p4.advance(5)
+      assert.are.equal(0, count_sent("D"))
+      Guild:OnRequest(Protocol.Request({ "Me-Realm" }), "Peer-Realm", "WHISPER"); p4.advance(5)
+      assert.are.equal(1, count_sent("D", "WHISPER"))
+    end)
+
+    it("OnData: nothing stored", function()
+      local S = { c = "Stranger-Realm", ts = 1, lv = "r", pr = { { s = 2907, k = 1, m = 10, r = { 100 } } } }
+      p4.guild.exists["Stranger-Realm"] = nil                -- briefly a member: its HELLO is stored
+      Guild:OnHello(Protocol.Hello("1", { ["Stranger-Realm"] = Protocol.HashProfile(S) }), "Stranger-Realm", "WHISPER")
+      p4.guild.exists["Stranger-Realm"] = false              -- left the guild
+      Guild:OnData(Protocol.Data(S), "Stranger-Realm", "WHISPER")
+      assert.is_nil(dir().profiles["Stranger-Realm"])
+    end)
+
+    it("OnVersion: no member record (a GUILD one still counts)", function()
+      Guild:OnVersion("Stranger-Realm", 2, "WHISPER")
+      assert.is_nil(dir().members["Stranger-Realm"])
+      Guild:OnVersion("Stranger-Realm", 2, "GUILD")
+      assert.are.equal(2, dir().members["Stranger-Realm"].proto)
+    end)
+
+    it("drops a stranger's whisper that arrives through AceComm", function()
+      p4.comm.deliver(Protocol.PREFIX, Protocol.Wire(Protocol.Request({ "Me-Realm" })), "WHISPER", "Stranger-Realm")
+      p4.comm.deliver(Protocol.PREFIX, "2:x", "WHISPER", "Stranger-Realm")
+      p4.advance(5)
+      assert.are.equal(0, #p4.comm.sent)
+      assert.is_nil(dir().members["Stranger-Realm"])
+    end)
+  end)
+
   ---------------------------------------------------------------------------
   -- Own changes, privacy, login
   ---------------------------------------------------------------------------
@@ -478,6 +613,45 @@ describe("Guild sync", function()
       assert.are.equal("r", Guild:GetOwnProfile("Me-Realm").lv)
       assert.are.equal("H", last_sent_msg().t)
       assert.are.equal(Guild:GetOwnHashes()["Me-Realm"], last_sent_msg().c["Me-Realm"])
+    end)
+
+    it("never sends the old quality profile while a lowered sharing level is rebuilt", function()
+      settings.shareLevel = "recipes"; Guild:OnPrivacyChanged()
+      Guild:OnRequest(Protocol.Request({ "Me-Realm" }), "P1-Realm")
+      Guild:FlushRequests()                                    -- before the rebuild ran a single step
+      assert.are.equal(0, count_sent("D"))
+      p4.advance(4)
+      assert.are.equal(1, count_sent("D"))
+      assert.are.equal("r", last_sent_msg().lv)
+    end)
+
+    it("starts the login path at once when turned on after the first loading screen", function()
+      boot({ login = false })
+      Guild:Disable()
+      W.fire("PLAYER_ENTERING_WORLD", true, false); p4.advance(30)
+      assert.are.equal(0, #p4.comm.sent)
+      Guild:Enable()
+      assert.are.equal(1, p4.guild.rosterRequests)
+      p4.advance(21)
+      assert.are.equal(1, count_sent("H", "GUILD"))
+    end)
+
+    it("skips a second refresh tick within the same frame", function()
+      local clock, frameTime = 0, 5
+      _G.debugprofilestop = function() clock = clock + 1; return clock end
+      _G.GetTime = function() return frameTime end
+      finally(function() _G.debugprofilestop = nil; _G.GetTime = nil end)
+      ns.FS:GetModule("Recipes").GetSetting = function() return 1 end   -- scanBudgetMs = 1: one recipe per step
+      evaluate_spy:clear()
+      Guild:RefreshOwnProfiles()
+      Guild:_RefreshTick()
+      local first = #evaluate_spy.calls
+      assert.is_true(first > 0)
+      Guild:_RefreshTick()                                     -- same GetTime(): skipped
+      assert.are.equal(first, #evaluate_spy.calls)
+      frameTime = 6
+      Guild:_RefreshTick()
+      assert.is_true(#evaluate_spy.calls > first)
     end)
 
     it("announces once on login, after the jitter, and not again on later loading screens", function()
@@ -594,7 +768,7 @@ describe("Guild sync", function()
     end)
 
     it("creates the directory record with its three tables", function()
-      assert.are.same({ members = {}, profiles = {}, native = {} }, Guild:GetDirectory("New-Realm"))
+      assert.are.same({ members = {}, profiles = {}, native = {}, contested = {} }, Guild:GetDirectory("New-Realm"))
     end)
   end)
 

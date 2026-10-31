@@ -297,7 +297,7 @@ local function receive(self, prefix, text, distribution, sender)
   local msg, protoVersion, err = Protocol.Unwire(text)
   if not msg then
     if err == "version" then
-      if self.handlers.version then self.handlers.version(senderName, protoVersion) end
+      if self.handlers.version then self.handlers.version(senderName, protoVersion, distribution) end
     else
       self.stats.invalid = self.stats.invalid + 1
     end
