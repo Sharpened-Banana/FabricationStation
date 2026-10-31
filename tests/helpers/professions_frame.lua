@@ -37,10 +37,16 @@
 --   node(data)            a recipe-list element: { GetData = function() return data end }
 --   recipeScrollBox.fireInitialized(row, elementData)  runs the OnInitializedFrame callbacks as fn(owner, row,
 --                         elementData) and remembers the row for ScrollBox:ForEachFrame
---   newRow()              a fake Blizzard recipe-list row: an empty proxy like the other Blizzard objects (every
+--   newRow(geometry?)     a fake Blizzard recipe-list row: an empty proxy like the other Blizzard objects (every
 --                         assignment is recorded in assignedFields as "Row.<key>"); its CreateFontString makes a
---                         font string that tracks IsShown (shown at first), Hide/Show, SetTextColor, SetPoint and
---                         records (template, layer) in .template / .layer
+--                         font string that tracks IsShown (shown at first), Hide/Show, SetTextColor, SetPoint,
+--                         records (template, layer) in .template / .layer and its SetPoint arguments in .points,
+--                         and measures GetStringWidth as 6 per character. geometry (H1-6) gives the row Blizzard's layout, read-only:
+--                         { left, width, lockedIconWidth, label = { right?, width }, count = { shown, right?,
+--                         stringWidth } }: row:GetLeft/GetRight/GetWidth, row.LockedIcon:GetWidth(),
+--                         row.SkillUps:GetWidth() (26), row.Label / row.Count with GetRight (nil when not given),
+--                         GetWidth, GetStringWidth and IsShown. Every method call on them is counted in
+--                         form.rowReads[name] and any other method (a setter) is recorded in assignedFields.
 --   fontStringsOf(row)    the font strings created through that row's CreateFontString, in creation order
 --
 -- Specs get a clean slate from make_world, which removes these globals before installing the stubs.
@@ -228,8 +234,40 @@ local function fake_professions_frame(opts)
   end
 
   local rowFontStrings = setmetatable({}, { __mode = "k" })
-  function form.newRow()
+  form.rowReads = {}
+  -- A read-only Blizzard object: the given getters answer, anything else is recorded as a write.
+  local function blizzard_part(name, getters)
+    return setmetatable({}, { __index = function(_, key)
+      local getter = getters[key]
+      if getter then
+        return function()
+          form.rowReads[name .. ":" .. key] = (form.rowReads[name .. ":" .. key] or 0) + 1
+          return getter()
+        end
+      end
+      return function() form.assignedFields[#form.assignedFields + 1] = name .. ":" .. tostring(key) end
+    end, __newindex = function(_, key)
+      form.assignedFields[#form.assignedFields + 1] = name .. "." .. tostring(key)
+    end })
+  end
+  function form.newRow(geometry)
     local target = CreateFrame("Frame", nil, form.recipeScrollBox)
+    if geometry then
+      local g = geometry
+      local label, count = g.label or {}, g.count or {}
+      rawset(target, "GetLeft", function() return g.left end)
+      rawset(target, "GetRight", function() return g.left and g.width and g.left + g.width end)
+      rawset(target, "GetWidth", function() return g.width end)
+      rawset(target, "LockedIcon", blizzard_part("LockedIcon", { GetWidth = function() return g.lockedIconWidth or 17 end,
+        IsShown = function() return false end }))
+      rawset(target, "SkillUps", blizzard_part("SkillUps", { GetWidth = function() return 26 end }))
+      rawset(target, "Label", blizzard_part("Label", { GetRight = function() return label.right end,
+        GetWidth = function() return label.width end, GetStringWidth = function() return label.width end,
+        IsShown = function() return true end }))
+      rawset(target, "Count", blizzard_part("Count", { GetRight = function() return count.right end,
+        GetWidth = function() return count.stringWidth end, GetStringWidth = function() return count.stringWidth or 0 end,
+        IsShown = function() return count.shown == true end }))
+    end
     local row = recorded("Row", target)
     local made = {}
     rowFontStrings[row] = made
@@ -243,6 +281,10 @@ local function fake_professions_frame(opts)
       rawset(fs, "IsShown", function() return shown end)
       rawset(fs, "SetTextColor", function(_, r, g, b, a) color = { r, g, b, a } end)
       rawset(fs, "GetTextColor", function() return unpack(color or {}) end)
+      rawset(fs, "GetStringWidth", function() return #(fs:GetText() or "") * 6 end)
+      local points = {}
+      rawset(fs, "points", points)
+      rawset(fs, "SetPoint", function(_, ...) points[#points + 1] = { ... } end)
       made[#made + 1] = fs
       return fs
     end)

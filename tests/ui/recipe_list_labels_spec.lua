@@ -253,3 +253,78 @@ describe("RecipeListLabels", function()
     assert.is_false(ns.FS.db.global.settings.modules.RecipeListLabels)
   end)
 end)
+
+-- Hotfix H1-6: labels overlapped long recipe names. The label sits left of the lock icon's place and hides when
+-- Blizzard's name (+ craftable count) text would reach it; Blizzard's font strings are only read.
+describe("H1-6 RecipeListLabels and long names", function()
+  local ns, world, form
+  before_each(function()
+    local W
+    ns, W, world = make_world({ last = "UI/RecipeListLabels.lua", calibrate = { ["Main-Realm"] = { 9001 } } })
+    form = fake_professions_frame({ loaded = true })
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    world.fakeEvaluate(9001, { profit = 120010, flags = {} })   -- "+12g": 4 characters, 24 wide in the fake
+  end)
+  local function label_of(row) return form.fontStringsOf(row)[1] end
+  local function show(row) form.recipeScrollBox.fireInitialized(row, form.node({ recipeInfo = { recipeID = 9001 } })) end
+
+  -- Row from x = 100 to 400; the label is anchored 17 + 4 left of the row's right edge, so it starts at
+  -- 400 - 21 - 24 = 355 and needs the text to end by 351.
+  it("anchors the label left of the lock icon's place", function()
+    local row = form.newRow({ left = 100, width = 300, label = { right = 200, width = 80 } })
+    show(row)
+    assert.same({ "RIGHT", row, "RIGHT", -21, 0 }, label_of(row).points[1])
+  end)
+
+  it("shows the label beside a short name", function()
+    local row = form.newRow({ left = 100, width = 300, label = { right = 200, width = 80 } })
+    show(row)
+    assert.is_true(label_of(row):IsShown())
+  end)
+
+  it("hides the label when a long name reaches it", function()
+    local row = form.newRow({ left = 100, width = 300, label = { right = 370, width = 250 } })
+    show(row)
+    assert.is_false(label_of(row):IsShown())
+  end)
+
+  it("counts Blizzard's craftable count after the name", function()
+    local row = form.newRow({ left = 100, width = 300, label = { right = 320, width = 200 },
+      count = { shown = true, right = 360, stringWidth = 40 } })
+    show(row)
+    assert.is_false(label_of(row):IsShown())
+    row = form.newRow({ left = 100, width = 300, label = { right = 280, width = 160 },
+      count = { shown = true, right = 320, stringWidth = 40 } })
+    show(row)
+    assert.is_true(label_of(row):IsShown())
+  end)
+
+  it("measures from the widths when the positions are not laid out yet", function()
+    -- Name starts at 26 - 9 + 4 = 21 from the row's left edge; 21 + 250 = 271 > 351 - 100 = 251.
+    local long = form.newRow({ width = 300, label = { width = 250 } })
+    show(long)
+    assert.is_false(label_of(long):IsShown())
+    local short = form.newRow({ width = 300, label = { width = 120 } })
+    show(short)
+    assert.is_true(label_of(short):IsShown())
+  end)
+
+  it("shows the label again when the recycled row holds a short name", function()
+    local geometry = { left = 100, width = 300, label = { right = 370, width = 250 } }
+    local row = form.newRow(geometry)
+    show(row)
+    assert.is_false(label_of(row):IsShown())
+    geometry.label.right, geometry.label.width = 200, 80
+    show(row)
+    assert.is_true(label_of(row):IsShown())
+  end)
+
+  it("only reads Blizzard's row parts: no writes, no SetWidth", function()
+    local row = form.newRow({ left = 100, width = 300, label = { right = 370, width = 250 },
+      count = { shown = true, right = 390, stringWidth = 20 } })
+    show(row)
+    assert.same({}, form.assignedFields)
+    assert.is_truthy(form.rowReads["Label:GetRight"] or form.rowReads["Count:GetRight"])
+    assert.is_not_nil(ns)
+  end)
+end)
