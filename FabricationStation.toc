@@ -54,6 +54,7 @@ Modules\Social\ItemIndex.lua
 Modules\Social\Guild.lua
 Modules\Social\GuildNative.lua
 Modules\Social\GuildDirectory.lua
+Modules\Social\GuildOptions.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua
@@ -68,6 +69,7 @@ UI\Tabs\CharactersView.lua
 UI\Tabs\PlannerView.lua
 UI\Tabs\Characters.lua
 UI\Tabs\Planner.lua
+UI\Tabs\Guild.lua
 UI\Tabs\Settings.lua
 UI\Launcher.lua
 UI\ProfessionPanel.lua

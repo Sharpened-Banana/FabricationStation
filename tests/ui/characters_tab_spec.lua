@@ -566,7 +566,7 @@ describe("Characters tab in a full load", function()
     local tabs = ns.FS:GetModule("MainWindow"):GetTabs()
     local ids = {}
     for _, t in ipairs(tabs) do ids[#ids + 1] = t.id end
-    assert.same({ "dashboard", "recipes", "queue", "orders", "customers", "ledger", "characters", "planner", "settings" },
+    assert.same({ "dashboard", "recipes", "queue", "orders", "customers", "ledger", "characters", "planner", "guild", "settings" },
       ids)
     assert.is_true(ns.FS:GetModule("CharactersTab"):IsEnabled())
     assert.is_nil(ns.FS:GetOptionsTable().args.modules.args.CharactersTab)

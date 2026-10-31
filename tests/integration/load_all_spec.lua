@@ -9,7 +9,7 @@ describe("whole addon", function()
       -- phase 3
       "Alts", "AltsTooltips", "Planner", "CharactersTab", "PlannerTab", "AltsWidgets",
       -- phase 4
-      "Guild" }) do
+      "Guild", "GuildTab" }) do
       assert.is_true(ns.FS:GetModule(name):IsEnabled(), name)
     end
     assert.same({}, ns.FS.db.global.diagnostics.errors)
@@ -21,7 +21,7 @@ describe("whole addon", function()
   it("registers the slash aliases", function() assert.is_truthy(W.slash.fs); assert.is_truthy(W.slash.fabstation) end)
   it("exposes the option groups", function()
     local args = ns.FS:GetOptionsTable().args
-    for _, k in ipairs({ "general", "prices", "crafting", "orders", "alts", "planner", "modules", "diagnostics" }) do
+    for _, k in ipairs({ "general", "prices", "crafting", "orders", "alts", "planner", "guild", "modules", "diagnostics" }) do
       assert.is_truthy(args[k], k)
     end
   end)

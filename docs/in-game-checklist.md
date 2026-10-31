@@ -805,6 +805,43 @@ profit breakdown with the count on the right, then one row per crafter ("Q3, syn
 rows from the native query); long names are cut off and the full line shows on hover. A name copied from an
 unverified claim reads "<char> (via <owner>)". Report any colored or broken text in a name.
 
+P4-13. **Guild tab self-test and wire size (Task 9, two characters in one guild, both running this build).** On the
+character with the most recipes run `/fs guild selftest`. Expected: `guild selftest ok: <char>, <N> bytes on the wire, <M> chunks`
+with N at most 12000 (the in-game threshold; the line adds "above the 12000 byte check" otherwise). Record N and M for
+the largest profile in the commit message or here. The hard limit is `Codec.MAX_WIRE` (16384): raise it only if a real
+profile exceeds it. Also run it with sharing turned off (Guild settings): it still reports `ok`, because it builds the
+profile itself. `/fs guild` prints the sync status, counts and session stats; check them against the Guild tab footer.
+
+P4-14. **Guild tab lists the other account's crafters.** Log in on the second account in the same guild (this build on
+both). Within 30 s of its login the first account's Guild tab (`/fs tab guild`) lists the second account's crafters:
+one row per recipe and crafter, Q and Conc Q filled for "Recipes and expected quality" shares, "-" (em dash) for
+recipes-only shares, Source "Addon", Synced "<1m". Narrow the window to its minimum: Source, Conc Q and Synced drop out
+(in that order) and the Recipe column stays readable; the row tooltip still shows every value. Names with an unusual
+character must print as typed (no colour or texture codes).
+
+P4-15. **Sync paused in an instance.** Enter a dungeon on the sender: the Guild tab footer reads "Sync paused (instance)"
+within about a second, "Ask guild" is disabled, and nothing is sent. After leaving it sync resumes (footer "Sync: on")
+and queued messages go out. If the footer pauses for a different situation (a world quest area, a scenario) or does not
+pause in a dungeon, report which Gate reason (hover the footer) it showed.
+
+P4-16. **Ask guild.** Click a row, then "Ask guild". Expected: the status line says "Asking the guild...", then "Guild answered:
+N can craft this" within about 5 s, and the guildmates who know the recipe but do not run the addon appear as extra rows
+with Source "Guild query" and no quality. The tab passes the skill line ID of the row (the profile's line key for addon
+rows, the answer's for cached ones) to `GuildNative:Query`; if the game answers nothing for a recipe the guild does know,
+compare that ID with `GetGuildRecipeInfoPostQuery()`'s first return (P4-9) and report both. With "Also use the game's guild
+recipe list" turned off in the Guild settings the button is disabled and asks nothing.
+
+P4-17. **Whisper after a click (preflight row 42).** Click a crafter row: the chat box opens on `/w <name>`. Type a word
+and press Enter, in the open world and again inside an instance. Expected: it sends with no "blocked" or "forbidden"
+message (the tab only calls `ChatFrameUtil.SendTell` from the click). A cross-realm guildmate must open the whisper as
+`Name-Realm`; report if the box opens empty or on the wrong name.
+
+P4-18. **Guild settings.** In `/fs settings` > Guild: switching "What to share" or "Which characters to share" makes
+guildmates' tabs show the change within about a minute; switching "Share my recipes with my guild" off removes your
+characters from their tab at once. "Forget this guild's crafter data" asks for confirmation, then empties your Guild tab
+until guildmates log in again. If P4-11 says recipes you do not know cannot resolve to items, say so in the description of
+"Show guild crafters in item tooltips" (Task 9 left the description neutral).
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

@@ -204,6 +204,146 @@ function Guild:GetCraftersForItem(itemID)
 end
 
 ---------------------------------------------------------------------------
+-- Guild tab model and diagnostics
+---------------------------------------------------------------------------
+
+-- Every recipe in the stored profiles and the native cache: byRecipe[recipeID] = { [charKey] = profile } (the profiles
+-- that list it; empty for a native-only recipe) and lines[recipeID] = { [skillLineID] = true }.
+local function tab_candidates(dir)
+  local byRecipe, lines = {}, {}
+  local function note(recipeID, skillLineID)
+    if not byRecipe[recipeID] then byRecipe[recipeID] = {}; lines[recipeID] = {} end
+    if type(skillLineID) == "number" then lines[recipeID][skillLineID] = true end
+  end
+  if type(dir.profiles) == "table" then
+    for charKey, profile in pairs(dir.profiles) do
+      if type(charKey) == "string" and type(profile) == "table" and type(profile.lines) == "table" then
+        for skillLineID, line in pairs(profile.lines) do
+          if type(line) == "table" and type(line.recipes) == "table" then
+            for recipeID in pairs(line.recipes) do
+              if type(recipeID) == "number" then
+                note(recipeID, skillLineID)
+                byRecipe[recipeID][charKey] = profile
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  if type(dir.native) == "table" then
+    for recipeID, entry in pairs(dir.native) do
+      if type(recipeID) == "number" and type(entry) == "table" then note(recipeID, entry.skillLineID) end
+    end
+  end
+  return byRecipe, lines
+end
+
+local function lowest(set)
+  local best
+  for id in pairs(set) do if best == nil or id < best then best = id end end
+  return best
+end
+
+local function recipe_name(recipeID)
+  local api = type(C_Spell) == "table" and C_Spell.GetSpellName
+  if type(api) == "function" then
+    local ok, name = pcall(api, recipeID)
+    if ok and type(name) == "string" and name ~= "" then return name end
+  end
+  return ns.L["Recipe %d"]:format(recipeID)
+end
+
+-- The Guild tab's rows: { { recipeID, recipeName, skillLineID, crafter = CrafterRow } } for every recipe of the
+-- current guild's stored profiles and native cache, one row per crafter. filter = { text = string|nil,
+-- skillLineID = number|nil }: text is a plain, case-insensitive substring of the recipe name (all its crafters) or of
+-- a crafter's name (just those crafters); skillLineID keeps the recipes of that profession. Recipe names come from
+-- C_Spell.GetSpellName ("Recipe <id>" while the client has none). Sorted by recipe name, then GetCrafters' order. The
+-- crafters are exactly GetCrafters' (own characters, contested copies and members who left are out). Read-only.
+function Guild:BuildTabRows(filter)
+  local out = {}
+  if not self:IsEnabled() then return out end
+  local dir = peek(self)
+  if not dir then return out end
+  filter = type(filter) == "table" and filter or {}
+  local text = type(filter.text) == "string" and filter.text:lower() or ""
+  local skillLineID = type(filter.skillLineID) == "number" and filter.skillLineID or nil
+  local byRecipe, lines = tab_candidates(dir)
+  local recipes = {}
+  for recipeID in pairs(byRecipe) do
+    if not skillLineID or lines[recipeID][skillLineID] then
+      recipes[#recipes + 1] = { id = recipeID, name = recipe_name(recipeID) }
+    end
+  end
+  table.sort(recipes, function(a, b)
+    if a.name ~= b.name then return a.name < b.name end
+    return a.id < b.id
+  end)
+  local ctx = context(self)
+  local contested = type(dir.contested) == "table" and dir.contested or {}
+  for _, recipe in ipairs(recipes) do
+    local recipeMatches = text == "" or recipe.name:lower():find(text, 1, true) ~= nil
+    local rows, byName = {}, {}
+    addon_rows(ctx, { profiles = byRecipe[recipe.id], contested = contested }, recipe.id, byName, rows)
+    native_rows(ctx, recipe.id, byName, rows)
+    table.sort(rows, crafter_before)
+    local line = skillLineID or lowest(lines[recipe.id])
+    for _, crafter in ipairs(rows) do
+      if recipeMatches or crafter.name:lower():find(text, 1, true) then
+        out[#out + 1] = { recipeID = recipe.id, recipeName = recipe.name, skillLineID = line, crafter = crafter }
+      end
+    end
+  end
+  return out
+end
+
+-- The profession lines (skill line IDs, ascending) that the stored profiles and the native cache know recipes for;
+-- the Guild tab's profession button cycles through them.
+function Guild:TabSkillLines()
+  local out = {}
+  if not self:IsEnabled() then return out end
+  local dir = peek(self)
+  if not dir then return out end
+  local _, lines = tab_candidates(dir)
+  local seen = {}
+  for _, set in pairs(lines) do
+    for id in pairs(set) do
+      if not seen[id] then seen[id] = true; out[#out + 1] = id end
+    end
+  end
+  table.sort(out)
+  return out
+end
+
+local function count(t)
+  local n = 0
+  if type(t) == "table" then for _ in pairs(t) do n = n + 1 end end
+  return n
+end
+
+-- A summary of the sync for the tab's footer and /fs guild: { guildKey, addonMembers (guildmates seen running the
+-- addon), profiles (stored crafter profiles), nativeCached (recipes with a cached roster answer), gateLocked,
+-- gateReason, queue (messages waiting for the chat gate), sync = Guild:SyncStatus(), stats = a copy of Guild.stats }.
+-- Counts are of the saved directory of the current guild, whether or not Guild is on. Read-only.
+function Guild:Status()
+  local dir = peek(self)
+  local locked, reason = ns.Social.Gate:IsLocked()
+  local stats = {}
+  for k, v in pairs(self.stats) do stats[k] = v end
+  return {
+    guildKey = self.guildKey,
+    addonMembers = dir and count(dir.members) or 0,
+    profiles = dir and count(dir.profiles) or 0,
+    nativeCached = dir and count(dir.native) or 0,
+    gateLocked = locked and true or false,
+    gateReason = locked and reason or nil,
+    queue = self.comm and self.comm:QueueSize() or 0,
+    sync = self:SyncStatus(),
+    stats = stats,
+  }
+end
+
+---------------------------------------------------------------------------
 -- Lines
 ---------------------------------------------------------------------------
 
@@ -228,6 +368,10 @@ local function display_name(row)
   end
   return name
 end
+
+-- Shared with the Guild tab: the crafter's name as shown everywhere (pipes escaped, "(via <owner>)" for a copy its
+-- character did not publish itself).
+Guild.CrafterLabel = display_name
 
 local function tooltip_lines(self, itemID)
   if not self:IsEnabled() or type(itemID) ~= "number" then return {} end

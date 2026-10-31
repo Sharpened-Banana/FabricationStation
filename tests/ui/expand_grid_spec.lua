@@ -155,6 +155,16 @@ describe("ExpandGrid.New", function()
     assert.same({ "TOPLEFT", grid.child, "TOPLEFT", 0, -40 }, point(find_row(grid, "k3"), 1))
   end)
 
+  it("hands a click to opts.onRowClick (row, frame) instead of toggling a detail", function()
+    local clicked = {}
+    local grid = G.New(parent, COLS, { onRowClick = function(row, frame) clicked[#clicked + 1] = { row.key, frame } end })
+    grid:SetRows(rows(3, 2))   -- k2 has a detail, but the click hook owns the click
+    local r2 = find_row(grid, "k2")
+    r2:GetScript("OnClick")(r2)
+    assert.same({ { "k2", r2 } }, clicked)
+    assert.is_false(grid:IsExpanded("k2"))
+  end)
+
   it("does not expand a row without detail, and keeps an expansion across SetRows", function()
     local grid = G.New(parent, COLS, {})
     grid:SetRows(rows(3, 2))

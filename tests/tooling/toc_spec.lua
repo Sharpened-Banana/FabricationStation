@@ -88,4 +88,20 @@ describe("FabricationStation.toc", function()
       assert.is_true(at[pair[1]] < at[pair[2]], pair[1] .. " before " .. pair[2])
     end
   end)
+  -- Phase 4 Task 9: the guild options and slash command after the directory they read, the tab after the Planner's and
+  -- before the Settings tab (preflight row 33).
+  it("loads the guild options after GuildDirectory and the Guild tab between the Planner and Settings tabs", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    for _, pair in ipairs({
+      { "Modules/Social/GuildDirectory.lua", "Modules/Social/GuildOptions.lua" },
+      { "Modules/Social/GuildOptions.lua", "UI/Util.lua" },
+      { "UI/Widgets/ExpandGrid.lua", "UI/Tabs/Guild.lua" },
+      { "UI/Tabs/Planner.lua", "UI/Tabs/Guild.lua" },
+      { "UI/Tabs/Guild.lua", "UI/Tabs/Settings.lua" },
+    }) do
+      assert.is_truthy(at[pair[1]], pair[1]); assert.is_truthy(at[pair[2]], pair[2])
+      assert.is_true(at[pair[1]] < at[pair[2]], pair[1] .. " before " .. pair[2])
+    end
+  end)
 end)
