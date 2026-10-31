@@ -765,6 +765,19 @@ P4-8. **Addon version in HELLO.** `/dump C_AddOns.GetAddOnMetadata("FabricationS
 packaged version (a dev checkout prints `@project-version@`); HELLO carries it (first 32 bytes) as the member's
 `addonVersion`.
 
+P4-9. **Native guild recipe query.** In a guild, take a recipeID and its skill line ID from the
+Professions window and run
+`/run print(C_GuildInfo.QueryGuildMembersForRecipe(<skillLineID>, <recipeID>))`, wait 2 s, then
+`/run print(GetGuildRecipeInfoPostQuery()); print(GetGuildRecipeMember(1))`. Expected: the first call prints the
+recipeID (GuildNative treats a nil return as "unavailable"), then `skillLineID, recipeID, numMembers` and
+`displayName, fullName, classFileName, online`; `/dump FabricationStationDB.global.guildDirectory` shows the answer under
+`native[<recipeID>]` as `{ time, skillLineID, members = { { name = "Name-Realm", classFile, online } } }`. Check whether
+offline members are listed (`online = false`) or only online ones, and whether `fullName` already carries the realm.
+Also confirm both globals exist (`/dump GetGuildRecipeInfoPostQuery, GetGuildRecipeMember`: functions, not nil); if
+either is nil the fallback reports "unavailable" and nothing else breaks. Then open Blizzard's own Professions guild
+panel on another recipe and confirm that recipe appears under `native` too (passive capture), and `/fs diagnostics`
+shows no `GuildNative` entry.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

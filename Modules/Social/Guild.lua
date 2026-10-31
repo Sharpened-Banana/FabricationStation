@@ -24,7 +24,8 @@ local ADDON_NAME, ns = ...
 --   db.global.settings.guild = { share, shareLevel = "quality"|"recipes", shareAlts = "current"|"guild"|"all",
 --                                tooltipLine, panelLine, useNative }
 --   db.global.guildDirectory[guildKey] = { members = { [nameRealm] = Member }, profiles = { [charKey] = Stored },
---                                          native = {}, contested = { [charKey] = Now() of the contest } }
+--                                          native = { [recipeID] = { time, skillLineID, members } } (GuildNative's cache),
+--                                          contested = { [charKey] = Now() of the contest } }
 --     Member = { addonVersion, proto, lastSeen, chars = { [charKey] = hash }, lastHelloSent }
 --     Stored = { c, ts, lv, h, owner, verified, rt, lines = { [skillLineID] = { k, m, recipes = { [recipeID] = true },
 --                q = { [recipeID] = 0..5 } | nil, qc = { [recipeID] = 0..5 } | nil } } }
@@ -250,6 +251,12 @@ local function cancel_timers()
   if flushTimer then flushTimer:Cancel(); flushTimer = nil end
 end
 
+-- GuildNative's pending queries belong to one guild and one enabled session: fail them with err.
+local function stop_native(err)
+  local native = ns.Social.GuildNative
+  if native then native:Stop(err) end
+end
+
 -- Starts syncing for the current guild: comm, an own-profile refresh and the jittered login HELLO.
 local function start_sync(self)
   if not can_sync(self) then return end
@@ -278,6 +285,7 @@ function Guild:OnGuildUpdate()
   cancel_refresh()
   clear_own()
   reset_sync_state()
+  stop_native("noguild")
   ns.FS:CancelDebounce(LOGIN_HELLO_KEY)
   if key == nil then stop_comm(self) end
   changed(self)
@@ -976,8 +984,8 @@ local function on_own_change(self)
   end))
 end
 
--- Drops profiles (rt) and members (lastSeen) older than PROFILE_MAX_AGE in every stored guild, and contest marks of
--- that age. -> profiles and members removed.
+-- Drops profiles (rt), members (lastSeen), native recipe answers (time) and contest marks older than PROFILE_MAX_AGE
+-- in every stored guild. -> profiles and members removed.
 function Guild:Prune(t)
   local g = global()
   if not writable() or type(g.guildDirectory) ~= "table" then return 0 end
@@ -994,6 +1002,11 @@ function Guild:Prune(t)
               removed = removed + 1
             end
           end
+        end
+      end
+      if type(dir.native) == "table" then   -- GuildNative's cache: same age rule (not counted in the result)
+        for id, entry in pairs(dir.native) do
+          if type(entry) ~= "table" or type(entry.time) ~= "number" or entry.time < cutoff then dir.native[id] = nil end
         end
       end
       if type(dir.contested) == "table" then
@@ -1026,6 +1039,12 @@ function Guild:OnEnable()
   local onGuild = ns.FS:Wrap("Guild", function() self:OnGuildUpdate() end)
   self:RegisterEvent("PLAYER_GUILD_UPDATE", onGuild)
   self:RegisterEvent("GUILD_ROSTER_UPDATE", onGuild)
+  -- Blizzard's guild recipe answers (ours and its own Professions panel's): GuildNative caches them. Its failures are
+  -- logged under their own source and never turn Guild off.
+  self:RegisterEvent("GUILD_RECIPE_KNOWN_BY_MEMBERS", ns.FS:Wrap("GuildNative", function()
+    local native = ns.Social.GuildNative
+    if native then native:OnRecipeKnownByMembers() end
+  end))
   self:RegisterMessage(ns.Msg.RECIPES_CHANGED, ns.FS:Wrap("Guild", function() on_own_change(self) end))
   self:RegisterMessage(ns.Msg.DATA_CHANGED, ns.FS:Wrap("Guild", function(_, _, kind)
     if kind == "recipes" or kind == "professions" then on_own_change(self) end   -- "moxie" etc. change no profile
@@ -1045,6 +1064,7 @@ end
 function Guild:OnDisable()
   cancel_refresh()
   cancel_timers()
+  stop_native("unavailable")
   stop_comm(self)
   self:UnregisterAllEvents()
   self:UnregisterAllMessages()
