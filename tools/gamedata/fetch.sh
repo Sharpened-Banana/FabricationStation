@@ -2,8 +2,8 @@
 # Downloads the DB2 CSV exports listed in tables.txt from wago.tools for one client build.
 # Usage: bash tools/gamedata/fetch.sh <version.build>     e.g. bash tools/gamedata/fetch.sh 12.1.5.70575
 # Writes tools/gamedata/cache/<version.build>/<Table>.csv and skips tables already downloaded.
-# UNVERIFIED: the URL pattern and the array-column header style (Pos[0] or Pos_0) have not been
-# checked against wago.tools yet; see tools/gamedata/README.md.
+# The URL pattern was checked against wago.tools on 2026-10-31 (headers use the Pos_0 style);
+# see tools/gamedata/README.md.
 set -euo pipefail
 
 build="${1:-}"

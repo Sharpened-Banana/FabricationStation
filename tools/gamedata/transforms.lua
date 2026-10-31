@@ -110,15 +110,17 @@ end
 -- Item -> ModifiedCraftingReagentItem -> CraftingReagentEffect -> ProfessionEffect
 -- => [itemID] = { categoryID, effects = { { type, amount } } }, only items with at least one effect.
 -- CraftingReagentEffect rows are ordered by Order (when the export has it), then ID.
+-- wago.tools exports the column as "_Order" (12.1.5.70688); WoWDBDefs names it "Order".
 function T.optionalReagents(items, mcri, effectsByCategory, professionEffects)
   local mcriByID = indexBy(mcri, "ID")
   local effectsByID = indexBy(professionEffects, "ID")
   local linksByCategory = groupBy(effectsByCategory, "ModifiedCraftingCategoryID")
   local categoryEffects = {}
   for categoryID, links in pairs(linksByCategory) do
+    local orderCol = links[1].Order ~= nil and "Order" or "_Order"
     local hasOrder = true
-    for _, link in ipairs(links) do if link.Order == nil then hasOrder = false end end
-    if hasOrder then sortRows(links, "Order", "ID") else sortRows(links, "ID") end
+    for _, link in ipairs(links) do if link[orderCol] == nil then hasOrder = false end end
+    if hasOrder then sortRows(links, orderCol, "ID") else sortRows(links, "ID") end
     categoryEffects[categoryID] = effectsFor(links, effectsByID)
   end
 
@@ -228,11 +230,18 @@ end
 -- SpellLabel + SkillLineAbility => [recipeSpellID] = { labelID... } (sorted, unique), keeping only labels in
 -- labelSet and recipes on profession skill lines (professionLines, from T.professionLines) with
 -- expansionID >= minExpansion (default 11).
+-- Real exports give a recipe's base profession in SkillLine and its expansion line in SkillupSkillLineID.
+function T.recipeSkillLine(row)
+  local skillup = tonumber(row.SkillupSkillLineID)
+  if skillup and skillup ~= 0 then return skillup end
+  return num(row, "SkillLine")
+end
+
 function T.recipeLabels(spellLabels, skillLineAbilities, professionLines, labelSet, minExpansion)
   minExpansion = minExpansion or 11
   local recipes = {}
   for _, row in ipairs(skillLineAbilities) do
-    local line = professionLines[num(row, "SkillLine")]
+    local line = professionLines[T.recipeSkillLine(row)]
     if line and line.expansionID >= minExpansion then recipes[num(row, "Spell")] = true end
   end
   local out, seen = {}, {}

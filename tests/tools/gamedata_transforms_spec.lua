@@ -35,6 +35,14 @@ describe("gamedata transforms", function()
     assert.is_nil(r[5003])
   end)
 
+  it("orders effects by the _Order column of wago.tools exports", function()
+    local r = T.optionalReagents({ { ID="5001", ModifiedCraftingReagentItemID="70" } }, { { ID="70", ModifiedCraftingCategoryID="80" } },
+      { { ID="1", ProfessionEffectID="91", ModifiedCraftingCategoryID="80", _Order="1" },
+        { ID="2", ProfessionEffectID="90", ModifiedCraftingCategoryID="80", _Order="0" } },
+      { { ID="90", ProfessionEffectTypeEnumID="7", Amount="15" }, { ID="91", ProfessionEffectTypeEnumID="2", Amount="5" } })
+    assert.same({ { type = "multicraft", amount = 15 }, { type = "resourcefulness", amount = 5 } }, r[5001].effects)
+  end)
+
   it("names unknown effect types", function()
     local r = T.optionalReagents({ { ID="5001", ModifiedCraftingReagentItemID="70" } }, { { ID="70", ModifiedCraftingCategoryID="80" } },
       { { ID="1", ProfessionEffectID="90", ModifiedCraftingCategoryID="80" } }, { { ID="90", ProfessionEffectTypeEnumID="42", Amount="3" } })
@@ -103,6 +111,13 @@ describe("gamedata transforms", function()
                                { ID="3", LabelID="777", SpellID="440001" }, { ID="4", LabelID="777", SpellID="999" } },
       { { ID="1", SkillLine="2950", Spell="450001" }, { ID="2", SkillLine="2872", Spell="440001" } },
       lines, { [777] = true }, 11)
+    assert.same({ [450001] = { 777 } }, r)
+  end)
+
+  it("finds a recipe's expansion line through SkillupSkillLineID, as real exports do", function()
+    local lines = { [2950] = { professionID = 164, expansionID = 11, concentrationCurrencyID = 3200 } }
+    local r = T.recipeLabels({ { ID="1", LabelID="777", SpellID="450001" } },
+      { { ID="1", SkillLine="164", SkillupSkillLineID="2950", Spell="450001" } }, lines, { [777] = true }, 11)
     assert.same({ [450001] = { 777 } }, r)
   end)
 

@@ -14,9 +14,11 @@ busted && luacheck .
 
 - `fetch.sh` downloads every table in `tables.txt` into `tools/gamedata/cache/<version.build>/` (git-ignored).
   It skips files that already exist, so delete a file to fetch it again.
-- **Unverified:** the URL `https://wago.tools/db2/<Table>/csv?build=<version.build>` and the array header
-  style were not checked, because wago.tools was unreachable when this was written. If the CurvePoint
-  header uses neither `Pos[0]` nor `Pos_0`, extend `csv.col` in `tools/lib/csv.lua` and its test first.
+- Checked against wago.tools on 2026-10-31 (build 12.1.5.70688): the URL `https://wago.tools/db2/<Table>/csv?build=<version.build>`
+  works and array headers use the `Pos_0` style. Real exports differ from the test fixtures in three ways the
+  generators handle: `CraftingReagentEffect` names its order column `_Order`; `SkillLineAbility.SkillLine` is the
+  base profession (e.g. 164) and the expansion line (e.g. 2907) is `SkillupSkillLineID`; Midnight recipe items
+  teach through `ItemEffect.TriggerType` 6 on the recipe spell itself, not through a SpellEffect LEARN_SPELL.
 - `generate.lua` prints `MoxieCurrency candidates:` (id and name of each currency named "Moxie") for filling
   `Data/GameData_Manual.lua`. It prints `unknown ProfessionEffect type <N> (<count> rows)` to stderr for effect
   types it cannot name (expected for Midnight's Ingenuity). `--min-expansion N` (default 11) sets the oldest
@@ -56,8 +58,9 @@ lua tools/gamedata/gen_phase3.lua --build 12.1.5.70575 --cache tools/gamedata/ca
   QUEST_COMPLETE, `EffectMiscValue[0]`) must appear in `quests`. Each mismatch prints
   `<id>: item <itemID> completes quest <q>, table has <quests>` to stderr. The run then exits 1 and writes nothing.
   Correct the CSV, or confirm the row in game, note it in `credit`, and re-run with `--allow-warnings`.
-- **Unverified:** the effect codes 36 and 16 and the meaning of `AcquireMethod` have not been checked against Midnight
-  exports. wago.tools was unreachable when this was written.
+- A recipe is also `item` when an item's `ItemEffect` has `TriggerType` 6 and the recipe spell as its `SpellID`; at
+  build 70688 that finds every recipe item (283 Recipe-class items, 2 consumables) and effect 36 finds none.
+- **Unverified:** effect code 16 and the meaning of `AcquireMethod` have not been checked in game.
 - `--empty --build <version.build> --out Data` is for when wago.tools is unreachable. It needs no cache. It still writes
   `Knowledge` from the hand-authored CSVs, stamped with the build, and skips the cross-check. It writes
   `Define("RecipeSources", nil, { bySkillLine = {} })`, so GameData reports as not generated. Both files get the header

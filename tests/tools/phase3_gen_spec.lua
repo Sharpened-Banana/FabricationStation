@@ -86,6 +86,25 @@ describe("tools/gamedata/phase3_gen.lua", function()
     assert.is_nil(s.bySkillLine[171])
   end)
 
+  it("files recipes under SkillupSkillLineID, as real exports do (SkillLine is the base profession)", function()
+    local sla = { { SkillLine = "164", SkillupSkillLineID = "2907", Spell = "5101", AcquireMethod = "1" },
+                  { SkillLine = "2907", SkillupSkillLineID = "0", Spell = "5102", AcquireMethod = "1" },
+                  { SkillLine = "164", SkillupSkillLineID = "0", Spell = "5103", AcquireMethod = "1" } }
+    local s = G.buildRecipeSources(csv("skill_lines.csv"), sla, {}, {}, {})
+    assert.same({ [5101] = { kind = "auto" }, [5102] = { kind = "auto" } }, s.bySkillLine[2907])
+  end)
+
+  it("finds recipe items whose ItemEffect learns the recipe spell directly (TriggerType 6)", function()
+    local sla = { { SkillLine = "164", SkillupSkillLineID = "2907", Spell = "5201", AcquireMethod = "0" },
+                  { SkillLine = "164", SkillupSkillLineID = "2907", Spell = "5202", AcquireMethod = "0" } }
+    local ie = { { ID = "60", SpellID = "5201", TriggerType = "6" }, { ID = "61", SpellID = "5201", TriggerType = "6" },
+                 { ID = "62", SpellID = "5202", TriggerType = "0" } }
+    local ix = { { ItemEffectID = "60", ItemID = "9300" }, { ItemEffectID = "61", ItemID = "9250" }, { ItemEffectID = "62", ItemID = "9400" } }
+    local s = G.buildRecipeSources(csv("skill_lines.csv"), sla, {}, ie, ix)
+    assert.same({ kind = "item", itemID = 9250 }, s.bySkillLine[2907][5201])
+    assert.same({ kind = "unknown" }, s.bySkillLine[2907][5202])
+  end)
+
   it("lets the lowest teaching itemID win and ignores non-learn effects", function()
     local se = csv("SpellEffect.csv")
     se[#se + 1] = { ID = "3", Effect = "36", ["EffectMiscValue[0]"] = "0", ["EffectMiscValue[1]"] = "0", EffectTriggerSpell = "5003", SpellID = "7003" }
