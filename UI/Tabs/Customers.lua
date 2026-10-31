@@ -15,8 +15,15 @@ local _, ns = ...
 --
 -- Width: the Name column keeps at least MIN_NAME px; when the window is too narrow Tags is hidden first, then
 -- Orders (Tab.Layout, applied again on every size change). Tips are compact ("1,234g"); the row tooltip carries the
--- full values, the tags, the alts and the note. The detail pane keeps a fixed-width right column (notes, tags,
--- link) and gives the rest to the history.
+-- full values, the tags, who blocks the group, the alts and the note. The detail pane keeps a fixed-width right
+-- column (notes, tags, link) and gives the rest to the history, whose Item column keeps at least MIN_ITEM px
+-- (Tab.HistoryLayout; Quality is hidden below that). Tag and group chips that do not fit go under a "+N" chip whose
+-- own pick menu reaches each of them, so no alt or tag is ever out of reach; an alt's order in a main's history
+-- also selects that alt. The list highlights the row holding the selection (its main, for an alt).
+--
+-- A group blocked through another character reads "blocked (via Name)" / "blocked (alt)" in the list, says so in
+-- the tooltip, and shows a clickable "Group blocked via Name" hint in the detail pane. While the saved data is
+-- read-only a notice stays in the status line and every editing control is disabled.
 --
 -- ns.UI.OrdersPanel (CompactMoney) loads after this file, so it is looked up at call time, like every module.
 local CustomersTab = ns.FS:NewModule("CustomersTab", "AceEvent-3.0")
@@ -31,8 +38,10 @@ local REFRESH_KEY, REFRESH_DELAY = "customersTab.refresh", 0.3
 local STATUS_SECONDS = 6
 local ROW_HEIGHT, HEADER_HEIGHT, BAR_HEIGHT, HISTORY_ROW, CHIP_HEIGHT = 20, 18, 26, 16, 18
 local PAD, GAP = 6, 4
-local MIN_NAME = 120
+local MIN_NAME, MIN_ITEM = 120, 120
 local DETAIL_HEIGHT, RIGHT_WIDTH, GROUP_LABEL_WIDTH = 196, 260, 46
+local HISTORY_PAD, MORE_WIDTH, MENU_WIDTH, MENU_ROW, MENU_PER_COLUMN = 2, 34, 170, 20, 10
+local TAGS_FIT_CHARS = 21   -- about what the 130 px Tags cell shows in GameFontHighlightSmall
 local MAX_SEARCH, MAX_NOTE, MAX_TAG, MAX_NAME = 40, 500, 24, 48
 local DEFAULT_VIEW_HEIGHT = 200   -- before a scroll frame has a size
 local DIALOG_NAME = "FabricationStationCustomersExport"
@@ -42,6 +51,7 @@ local WHITE, GREY, GOLD, RED = { 1, 1, 1 }, { 0.62, 0.62, 0.62 }, { 1, 0.82, 0 }
 local SELECTED_TINT = { 0.25, 0.5, 1, 0.3 }
 
 local READ_ONLY = "Saved data is from a newer version of the addon (read-only); nothing was changed"
+local READ_ONLY_NOTICE = "Saved data is from a newer version of the addon: read-only, nothing can be changed"
 local LINK_ERRORS = {
   empty = "Type the main character's name first",
   self = "A character cannot be its own alt",
@@ -60,12 +70,13 @@ local COLUMNS = {
 }
 local HIDE_ORDER = { "tags", "orders" }   -- dropped in this order when Name would get under MIN_NAME
 
--- The detail pane's order history: Date, Item (flexible), Quality, Tip.
+-- The detail pane's order history: Date (month-day; the full date is in the tooltip), Item (flexible), Quality,
+-- Tip (compact). Quality is hidden when Item would get under MIN_ITEM.
 local HISTORY_COLUMNS = {
-  { key = "date", label = "Date", width = 48 },
+  { key = "date", label = "Date", width = 34 },
   { key = "item", label = "Item", flex = true },
-  { key = "quality", label = "Q", width = 22, right = true },
-  { key = "tip", label = "Tip", width = 50, right = true },
+  { key = "quality", label = "Q", width = 20, right = true },
+  { key = "tip", label = "Tip", width = 44, right = true },
 }
 
 local view            -- built frames and the displayed rows, nil before the tab is built
@@ -125,8 +136,19 @@ end
 -- Models (pure apart from reading the Customers module)
 ---------------------------------------------------------------------------
 
--- records -> { { nameRealm, orders = count, tipsTotal, lastSeen, tagsText, linkedTo, alts } }; tagsText is the
--- sorted tags joined with ", ". alts (a group's other characters) is set only when there are any.
+-- records -> { { nameRealm, orders = count, tipsTotal, lastSeen, tagsText, linkedTo, alts, blockedVia } }; tagsText
+-- is the sorted tags joined with ", ". alts (a group's other characters) is set only when there are any; blockedVia
+-- (the first other character that is blocked, from the group's blockedBy) only when the group is blocked through
+-- another character and not by its own tag.
+-- The other character a group record is blocked through: nil when the record itself is blocked or nobody is.
+function Tab.BlockedVia(record)
+  if type(record) ~= "table" or type(record.blockedBy) ~= "table" then return nil end
+  for _, name in ipairs(record.blockedBy) do
+    if name == record.nameRealm then return nil end
+  end
+  return record.blockedBy[1]
+end
+
 function Tab.ListModel(records)
   local rows = {}
   for _, record in ipairs(type(records) == "table" and records or {}) do
@@ -139,6 +161,7 @@ function Tab.ListModel(records)
         tagsText = table.concat(sorted_tags(record.tags), ", "),
         linkedTo = record.linkedTo,
         alts = type(record.alts) == "number" and record.alts > 0 and record.alts or nil,
+        blockedVia = Tab.BlockedVia(record),
       }
     end
   end
@@ -147,7 +170,8 @@ end
 
 -- The customer groups the search text finds (Customers:Search; a match on an alt finds its main), as merged
 -- records: { nameRealm = main, members = { main, alts sorted }, alts = #alts, orders = every member's orders,
--- tipsTotal = sum, lastSeen = latest, tags = the main's tags plus "blocked" when anyone in the group is blocked }.
+-- tipsTotal = sum, lastSeen = latest, tags = the main's tags plus "blocked" when anyone in the group is blocked,
+-- blockedBy = { the members whose own record is blocked, in members order } }.
 -- Groups without orders are left out. Newest lastSeen first, then by name.
 function Tab.Groups(text)
   local C = module("Customers")
@@ -171,11 +195,12 @@ function Tab.Groups(text)
       local names = { root }
       for _, alt in ipairs(alts) do names[#names + 1] = alt end
       local merged = { nameRealm = root, members = names, alts = #alts, orders = {}, tipsTotal = 0, tags = {} }
-      local blocked = false
+      local blockedBy = {}
+      merged.blockedBy = blockedBy
       for _, name in ipairs(names) do
         local r = C:Get(name)
         if r then
-          if type(r.tags) == "table" and r.tags.blocked then blocked = true end
+          if type(r.tags) == "table" and r.tags.blocked then blockedBy[#blockedBy + 1] = name end
           for _, o in ipairs(type(r.orders) == "table" and r.orders or {}) do
             if type(o) == "table" then merged.orders[#merged.orders + 1] = o end
           end
@@ -189,7 +214,7 @@ function Tab.Groups(text)
       for _, tag in ipairs(sorted_tags(main and main.tags)) do merged.tags[tag] = true end
       -- The same group Customers:IsBlocked checks (members came from Root, as GetGroup's do), without its per-group
       -- scan of every record.
-      if blocked then merged.tags.blocked = true end
+      if #blockedBy > 0 then merged.tags.blocked = true end
       if #merged.orders > 0 then groups[#groups + 1] = merged end
     end
   end
@@ -262,6 +287,38 @@ function Tab.Layout(width)
   return { hidden = hidden, name = name }
 end
 
+-- Content width -> the order history's { hidden = { [columnKey] = true }, item = Item column width|nil, left = width
+-- of the detail pane's left column|nil }. Quality is hidden when Item would get under MIN_ITEM.
+function Tab.HistoryLayout(width)
+  local hidden = {}
+  if type(width) ~= "number" or width <= 0 then return { hidden = hidden } end
+  local left = width - 2 * PAD - RIGHT_WIDTH - PAD
+  local item = left - 2 * HISTORY_PAD - (#HISTORY_COLUMNS - 1) * GAP
+  for _, col in ipairs(HISTORY_COLUMNS) do item = item - (col.width or 0) end
+  if item < MIN_ITEM then
+    hidden.quality = true
+    item = item + HISTORY_COLUMNS[3].width + GAP
+  end
+  return { hidden = hidden, item = item, left = left }
+end
+
+-- The Tags cell text: "blocked" reads "blocked (via Name-Realm)" when the group is blocked through another
+-- character, or "blocked (alt)" when that would not fit.
+local function tags_cell(row)
+  local text = row.tagsText or ""
+  if not row.blockedVia then return text end
+  local function with(suffix)
+    local parts = {}
+    for part in (text .. ", "):gmatch("(.-), ") do
+      parts[#parts + 1] = part == "blocked" and ("blocked " .. suffix) or part
+    end
+    return table.concat(parts, ", ")
+  end
+  local full = with("(via " .. row.blockedVia .. ")")
+  if #full <= TAGS_FIT_CHARS then return full end
+  return with("(alt)")
+end
+
 -- The display text of one list row's cells, by column key (now = server seconds).
 function Tab.CellTexts(row, now)
   local name = tostring(row.nameRealm)
@@ -273,7 +330,7 @@ function Tab.CellTexts(row, now)
     orders = tostring(row.orders or 0),
     tips = money_text(row.tipsTotal, true),
     lastSeen = lastSeen,
-    tags = row.tagsText or "",
+    tags = tags_cell(row),
   }
 end
 
@@ -294,7 +351,7 @@ local function history_cells(row)
   local item = item_name(row.item)
   if row.who then item = item .. color(DIM, " (" .. row.who .. ")") end
   return {
-    date = date_text(row.time, "%y-%m-%d"),
+    date = date_text(row.time, "%m-%d"),
     item = item,
     quality = type(row.quality) == "number" and ("Q" .. row.quality) or "--",
     tip = money_text(row.tip, true),
@@ -351,16 +408,21 @@ end
 -- Actions
 ---------------------------------------------------------------------------
 
--- Saves the notes box for the character it shows (when the text changed).
+-- Saves the notes box for the character it shows (when the text changed). When nothing could be saved (read-only
+-- data) the box shows the stored note again.
 local function save_note()
   if not view then return end
-  local owner, C = view.detail.noteOwner, module("Customers")
+  local d = view.detail
+  local owner, C = d.noteOwner, module("Customers")
   if not owner or not C then return end
-  local text = clean(view.detail.notes:GetText(), MAX_NOTE)
+  local text = clean(d.notes:GetText(), MAX_NOTE)
   local record = C:Get(owner)
   local current = record and type(record.notes) == "string" and record.notes or ""
   if text == current then return end
-  if not C:SetNote(owner, text) then report_unchanged() end
+  if not C:SetNote(owner, text) then
+    d.notes:SetText(current)
+    report_unchanged()
+  end
 end
 
 local refresh
@@ -404,7 +466,11 @@ end
 local function remove_tag(tag)
   local C = module("Customers")
   if not (C and selected and tag) then return end
-  if not C:SetTag(selected, tag, false) then report_unchanged() end
+  if C:SetTag(selected, tag, false) then
+    set_status(('Removed the tag "%s" from %s'):format(tag, selected), "good")
+  else
+    report_unchanged()
+  end
   refresh()
 end
 
@@ -471,6 +537,11 @@ local function row_tooltip(owner)
     local blocked = group and group.tags.blocked
     lines[#lines + 1] = { text = "Tags: " .. row.tagsText, color = blocked and RED or GOLD }
   end
+  for _, name in ipairs(group and group.blockedBy or {}) do
+    if name ~= row.nameRealm then
+      lines[#lines + 1] = { text = ("Blocked because %s is blocked"):format(name), color = RED }
+    end
+  end
   if group and #group.members > 1 then
     lines[#lines + 1] = { text = "Alts: " .. table.concat(group.members, ", ", 2), color = GREY }
   end
@@ -497,11 +568,8 @@ local function history_tooltip(owner)
   if row.orderType ~= nil then
     lines[#lines + 1] = { text = "Order: " .. (TYPE_LABELS[row.orderType] or tostring(row.orderType)), color = GREY }
   end
+  if row.who then lines[#lines + 1] = { text = "Click to show " .. row.who, color = GREY } end
   show_lines(owner, lines)
-end
-
-local function text_tooltip(text)
-  return function(owner) show_lines(owner, { { text = text } }) end
 end
 
 ---------------------------------------------------------------------------
@@ -643,7 +711,8 @@ end
 
 local function bind_customer_row(row, data, index)
   row.group = view.groups[index]
-  row.selected = selected ~= nil and data.nameRealm == selected or nil
+  -- An alt's main is the row that holds it.
+  row.selected = view.selectedRoot ~= nil and data.nameRealm == view.selectedRoot or nil
   if row.selected then
     row.background:SetColorTexture(SELECTED_TINT[1], SELECTED_TINT[2], SELECTED_TINT[3], SELECTED_TINT[4])
   else
@@ -660,13 +729,16 @@ local function bind_customer_row(row, data, index)
 end
 
 local function create_history_row(list)
-  local row = CreateFrame("Frame", nil, list.child)
+  local row = CreateFrame("Button", nil, list.child)
   row:SetHeight(HISTORY_ROW)
-  row:EnableMouse(true)
   row.background = row:CreateTexture(nil, "BACKGROUND")
   row.background:SetAllPoints(row)
   create_cells(row, HISTORY_COLUMNS)
-  place_cells(row, row.placed, HISTORY_COLUMNS, {}, 2)
+  place_cells(row, row.placed, HISTORY_COLUMNS, view.historyLayout and view.historyLayout.hidden or {}, HISTORY_PAD)
+  -- An alt's order in a main's history selects that alt.
+  row:SetScript("OnClick", ns.FS:Wrap(SOURCE, function(self)
+    if self.data and self.data.who then select_customer(self.data.who) end
+  end))
   row:SetScript("OnEnter", ns.FS:Wrap(SOURCE, history_tooltip))
   row:SetScript("OnLeave", hide_tooltip)
   return row
@@ -685,43 +757,149 @@ local function layout_key(hidden)
   return table.concat(keys, ",")
 end
 
--- Lays the list columns out for the container's width (header and every pooled row) when the hidden set changed.
+-- Lays the list columns and the history columns out for the container's width (header and every pooled row) when
+-- their hidden sets changed.
 local function apply_layout()
   if not view then return end
-  local layout = Tab.Layout(view.container:GetWidth())
+  local width = view.container:GetWidth()
+  local layout = Tab.Layout(width)
   view.layout = layout
   local key = layout_key(layout.hidden)
-  if key == view.layoutKey then return end
-  view.layoutKey = key
-  place_cells(view.headerBar, view.headers, COLUMNS, layout.hidden, PAD)
-  for _, row in ipairs(view.list.pool) do place_cells(row, row.placed, COLUMNS, layout.hidden, PAD) end
+  if key ~= view.layoutKey then
+    view.layoutKey = key
+    place_cells(view.headerBar, view.headers, COLUMNS, layout.hidden, PAD)
+    for _, row in ipairs(view.list.pool) do place_cells(row, row.placed, COLUMNS, layout.hidden, PAD) end
+  end
+  local history = Tab.HistoryLayout(width)
+  view.historyLayout = history
+  local historyKey = history.hidden.quality and "quality" or ""
+  if historyKey ~= view.historyKey then
+    view.historyKey = historyKey
+    for _, row in ipairs(view.detail.history.pool) do
+      place_cells(row, row.placed, HISTORY_COLUMNS, history.hidden, HISTORY_PAD)
+    end
+  end
 end
 
--- Chips (own buttons) flowed left to right from (left, top) over up to `lines` lines of `width` px; the ones that do
--- not fit are hidden. Returns the number shown.
-local function flow_chips(parent, chips, count, width, lines, left, top)
-  local x, line, shown = 0, 0, 0
+-- The own pick menu: a frame of buttons, one per value, below the "+N" chip that opened it. A click on a button
+-- closes the menu and calls its onPick with the value.
+local MENU_BACKDROP = { bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 }
+
+local function hide_menu()
+  if view and view.menu then view.menu.frame:Hide() end
+end
+
+local function create_menu()
+  local f = CreateFrame("Frame", nil, view.container, "BackdropTemplate")
+  f:SetFrameStrata("DIALOG")
+  f:SetToplevel(true)
+  f:SetClampedToScreen(true)
+  f:EnableMouse(true)
+  if f.SetBackdrop then
+    f:SetBackdrop(MENU_BACKDROP)
+    f:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+    f:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+  end
+  local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
+  f:Hide()
+  return { frame = f, title = title, buttons = {} }
+end
+
+local function menu_button(menu, index)
+  if menu.buttons[index] then return menu.buttons[index] end
+  local button = CreateFrame("Button", nil, menu.frame, "UIPanelButtonTemplate")
+  button:SetSize(MENU_WIDTH, MENU_ROW - 2)
+  if button.SetNormalFontObject then button:SetNormalFontObject("GameFontHighlightSmall") end
+  button:SetScript("OnClick", ns.FS:Wrap(SOURCE, function(self)
+    local pick = menu.onPick
+    menu.frame:Hide()
+    if pick then pick(self.value) end
+  end))
+  button:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self) show_lines(self, { { text = self.value } }) end))
+  button:SetScript("OnLeave", hide_tooltip)
+  menu.buttons[index] = button
+  return button
+end
+
+-- Opens the menu below `owner` with one button per value, MENU_PER_COLUMN to a column; opening it again from the
+-- same owner closes it.
+local function open_menu(owner, title, values, onPick)
+  view.menu = view.menu or create_menu()
+  local menu = view.menu
+  if menu.frame:IsShown() and menu.owner == owner then
+    menu.frame:Hide()
+    return
+  end
+  menu.owner, menu.onPick = owner, onPick
+  menu.title:SetText(title)
+  for i, value in ipairs(values) do
+    local button = menu_button(menu, i)
+    local column, line = math.floor((i - 1) / MENU_PER_COLUMN), (i - 1) % MENU_PER_COLUMN
+    button.value = value
+    button:SetText(value)
+    button:ClearAllPoints()
+    button:SetPoint("TOPLEFT", menu.frame, "TOPLEFT", 8 + column * (MENU_WIDTH + GAP), -(22 + line * MENU_ROW))
+    button:Show()
+  end
+  for i = #values + 1, #menu.buttons do menu.buttons[i]:Hide() end
+  local columns = math.max(1, math.ceil(#values / MENU_PER_COLUMN))
+  menu.frame:SetSize(16 + columns * MENU_WIDTH + (columns - 1) * GAP, 30 + math.min(#values, MENU_PER_COLUMN) * MENU_ROW)
+  menu.frame:ClearAllPoints()
+  menu.frame:SetPoint("TOPLEFT", owner, "BOTTOMLEFT", 0, -2)
+  menu.frame:Show()
+end
+
+local function chip_width(chip, width)
+  local fs = chip.GetFontString and chip:GetFontString()
+  local textWidth = fs and fs.GetStringWidth and fs:GetStringWidth()
+  if type(textWidth) ~= "number" then textWidth = #(chip.label or "") * 6 end
+  return math.min(width, textWidth + 16)
+end
+
+-- Walks chips 1..count over `lines` lines of `width` px, the last line keeping `reserve` px free, and calls
+-- place(chip, x, line, w) for each that fits. Returns how many fit and the next free x on the last line.
+local function fit_chips(chips, count, width, lines, reserve, place)
+  local x, line, fitted, lastX = 0, 0, 0, 0
+  local function capacity() return line == lines - 1 and width - reserve or width end
+  for i = 1, count do
+    local w = chip_width(chips[i], width)
+    if x > 0 and x + w > capacity() then x, line = 0, line + 1 end
+    if line >= lines or x + w > capacity() then break end
+    if place then place(chips[i], x, line, w) end
+    x = x + w + GAP
+    fitted = fitted + 1
+    if line == lines - 1 then lastX = x end
+  end
+  return fitted, lastX
+end
+
+-- Chips (own buttons) flowed left to right from (left, top) over up to `lines` lines of `width` px. When they do not
+-- all fit, the last line keeps room for the `more` chip ("+N"), whose hidden list holds the values of the chips left
+-- out (its tooltip names them and its menu reaches them). Returns the number of chips shown.
+local function flow_chips(parent, chips, count, width, lines, left, top, more)
   for i = 1, #chips do
-    local chip = chips[i]
-    chip:ClearAllPoints()
-    if i > count then
-      chip:Hide()
-    else
-      local fs = chip.GetFontString and chip:GetFontString()
-      local textWidth = fs and fs.GetStringWidth and fs:GetStringWidth()
-      if type(textWidth) ~= "number" then textWidth = #(chip.label or "") * 6 end
-      local w = math.min(width, textWidth + 16)
-      if x > 0 and x + w > width then x, line = 0, line + 1 end
-      if line >= lines then
-        chip:Hide()
-      else
-        chip:SetWidth(w)
-        chip:SetPoint("TOPLEFT", parent, "TOPLEFT", left + x, -(top + line * (CHIP_HEIGHT + 2)))
-        chip:Show()
-        x = x + w + GAP
-        shown = shown + 1
-      end
-    end
+    chips[i]:ClearAllPoints()
+    chips[i]:Hide()
+  end
+  local all = fit_chips(chips, count, width, lines, 0)
+  local reserve = all < count and MORE_WIDTH + GAP or 0
+  local shown, lastX = fit_chips(chips, count, width, lines, reserve, function(chip, x, line, w)
+    chip:SetWidth(w)
+    chip:SetPoint("TOPLEFT", parent, "TOPLEFT", left + x, -(top + line * (CHIP_HEIGHT + 2)))
+    chip:Show()
+  end)
+  more.hidden = {}
+  more:ClearAllPoints()
+  if shown < count then
+    for i = shown + 1, count do more.hidden[#more.hidden + 1] = chips[i].value end
+    more.label = "+" .. #more.hidden
+    more:SetText(more.label)
+    more:SetWidth(MORE_WIDTH)
+    more:SetPoint("TOPLEFT", parent, "TOPLEFT", left + lastX, -(top + (lines - 1) * (CHIP_HEIGHT + 2)))
+    more:Show()
+  else
+    more:Hide()
   end
   return shown
 end
@@ -742,12 +920,38 @@ local function chip_at(d, key, parent, index, onClick, onEnter)
   return chips[index]
 end
 
+-- A "+N" chip: its tooltip lists the hidden values, a click opens the pick menu with them.
+local function new_more_chip(parent, title, hint, onPick)
+  local chip
+  chip = new_chip(parent, function(self) open_menu(self, title, self.hidden or {}, onPick) end, function(self)
+    local lines = { { text = hint } }
+    for _, value in ipairs(self.hidden or {}) do lines[#lines + 1] = { text = value } end
+    show_lines(self, lines)
+  end)
+  chip.hidden = {}
+  chip:Hide()
+  return chip
+end
+
+local function tag_chip_tooltip(self)
+  show_lines(self, { { text = self.value }, { text = "Click to remove this tag", color = GREY } })
+end
+
+local function group_chip_tooltip(self)
+  show_lines(self, { { text = self.label or self.value }, { text = "Click to show this character", color = GREY } })
+end
+
+local function set_enabled(widget, on)
+  if on then widget:Enable() else widget:Disable() end
+end
+
 ---------------------------------------------------------------------------
 -- Detail pane
 ---------------------------------------------------------------------------
 
 local function refresh_detail()
   local d = view.detail
+  hide_menu()
   local C = module("Customers")
   local record = C and selected and C:Get(selected) or nil
   if not record then
@@ -761,9 +965,11 @@ local function refresh_detail()
   d.hint:Hide()
   local changed = d.detailFor ~= selected
   d.detailFor = selected
+  local readOnly = ns.FS.dbIsNewer and true or false
 
   local root = C:Root(selected)
-  d.title:SetText(root ~= selected and ("%s (alt of %s)"):format(selected, root) or selected)
+  d.titleText = root ~= selected and ("%s (alt of %s)"):format(selected, root) or selected
+  d.title:SetText(d.titleText)
 
   d.history.rows = Tab.HistoryRows(selected)
   list_refresh(d.history)
@@ -779,40 +985,64 @@ local function refresh_detail()
     d.noteOwner = selected
   end
   local linked = type(record.linkedTo) == "string" and record.linkedTo or nil
+  d.linked = linked
   if changed or d.linkFor ~= selected then
     d.linkEdit:SetText(linked or "")
     d.linkFor = selected
   end
-  if linked then d.unlink:Enable() else d.unlink:Disable() end
+  -- While the saved data is read-only nothing can be changed here, and the controls say so by being disabled.
+  for _, widget in ipairs({ d.vip, d.blocked, d.notes, d.tagEdit, d.tagAdd, d.linkEdit, d.link }) do
+    set_enabled(widget, not readOnly)
+  end
+  set_enabled(d.unlink, linked ~= nil and not readOnly)
 
-  -- Custom tag chips (VIP and Blocked have their check buttons).
+  local group = C:GetGroup(selected)
+
+  -- Blocked through another character of the group (this one's own box unchecked): a dim hint that selects it.
+  local via
+  if not tags.blocked then
+    for _, name in ipairs(group) do
+      local r = name ~= selected and C:Get(name) or nil
+      if r and type(r.tags) == "table" and r.tags.blocked then via = name; break end
+    end
+  end
+  d.blockedHint.name = via
+  if via then
+    d.blockedHint.text:SetText(color(DIM, "Group blocked via " .. via))
+    d.blockedHint:Show()
+  else
+    d.blockedHint.text:SetText("")
+    d.blockedHint:Hide()
+  end
+
+  -- Custom tag chips (VIP and Blocked have their check buttons); a click removes the tag.
   local custom = {}
   for _, tag in ipairs(sorted_tags(tags)) do
     if tag ~= "VIP" and tag ~= "blocked" then custom[#custom + 1] = tag end
   end
   for i, tag in ipairs(custom) do
-    local chip = chip_at(d, "chips", d.right, i, function(self) remove_tag(self.tag) end,
-      text_tooltip("Click to remove this tag"))
-    chip.tag, chip.label = tag, tag .. " x"
+    local chip = chip_at(d, "chips", d.right, i, function(self) remove_tag(self.value) end, tag_chip_tooltip)
+    chip.value, chip.tag, chip.label = tag, tag, tag .. " x"
     chip:SetText(chip.label)
   end
-  d.chipsShown = flow_chips(d.right, d.chips, #custom, RIGHT_WIDTH, 2, 0, d.chipsTop)
+  d.chipsShown = flow_chips(d.right, d.chips, #custom, RIGHT_WIDTH, 2, 0, d.chipsTop, d.chipsMore)
 
   -- The other characters of the group; a click selects one.
   local others = {}
-  for _, name in ipairs(C:GetGroup(selected)) do
+  for _, name in ipairs(group) do
     if name ~= selected then others[#others + 1] = name end
   end
   for i, name in ipairs(others) do
-    local chip = chip_at(d, "group", d.groupBar, i, function(self) select_customer(self.name) end,
-      text_tooltip("Click to show this character"))
-    chip.name, chip.label = name, name == root and (name .. " (main)") or name
+    local chip = chip_at(d, "group", d.groupBar, i, function(self) select_customer(self.value) end,
+      group_chip_tooltip)
+    chip.value, chip.name, chip.label = name, name, name == root and (name .. " (main)") or name
     chip:SetText(chip.label)
   end
   d.groupLabel:SetText(#others > 0 and "Group:" or color(DIM, "No linked characters"))
-  local groupWidth = (d.groupBar:GetWidth() or 0) - GROUP_LABEL_WIDTH
+  local layout = view.historyLayout
+  local groupWidth = (layout and layout.left or 0) - GROUP_LABEL_WIDTH
   if groupWidth <= 0 then groupWidth = 200 end
-  d.groupShown = flow_chips(d.groupBar, d.group, #others, groupWidth, 1, GROUP_LABEL_WIDTH, 0)
+  d.groupShown = flow_chips(d.groupBar, d.group, #others, groupWidth, 1, GROUP_LABEL_WIDTH, 0, d.groupMore)
 end
 
 ---------------------------------------------------------------------------
@@ -822,10 +1052,12 @@ end
 function refresh()
   if not view then return end
   if statusAt ~= nil and ns.FS:Now() - statusAt >= STATUS_SECONDS then clear_status() end
+  local C = module("Customers")
   view.groups = Tab.Groups(searchText)
   view.list.rows = Tab.ListModel(view.groups)
+  view.selectedRoot = C and selected and C:Root(selected) or nil
   if #view.list.rows == 0 then
-    local text = searchText ~= "" and ('No customer matches "%s".'):format(searchText)
+    local text = searchText ~= "" and ('No customer matches "%s".'):format((searchText:gsub("|", "||")))
       or "Customers appear here after you fulfil a crafting order for another player."
     view.empty:SetText(color(DIM, text))
     view.empty:Show()
@@ -833,7 +1065,8 @@ function refresh()
     view.empty:SetText("")
     view.empty:Hide()
   end
-  view.status:SetText(status or "")
+  -- The read-only notice stays up for as long as the saved data is from a newer version.
+  view.status:SetText(ns.FS.dbIsNewer and color(BAD, READ_ONLY_NOTICE) or status or "")
   apply_layout()
   list_refresh(view.list)
   refresh_detail()
@@ -988,7 +1221,7 @@ local function create_notes(parent, top, height)
   edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
   edit:SetScript("OnEditFocusLost", ns.FS:Wrap(SOURCE, save_note))
   frame:EnableMouse(true)
-  frame:SetScript("OnMouseDown", function() edit:SetFocus() end)
+  frame:SetScript("OnMouseDown", function() if not ns.FS.dbIsNewer then edit:SetFocus() end end)
   return edit
 end
 
@@ -1023,6 +1256,22 @@ local function build_detail(container)
   d.right = right
   d.vip = create_check(right, "VIP", 0, 0, "VIP")
   d.blocked = create_check(right, "Blocked", 70, 0, "blocked")
+  local hint = CreateFrame("Button", nil, right)
+  hint:SetPoint("TOPLEFT", right, "TOPLEFT", 140, -2)
+  hint:SetSize(RIGHT_WIDTH - 140, 20)
+  hint.text = hint:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  hint.text:SetAllPoints(hint)
+  hint.text:SetJustifyH("LEFT")
+  hint.text:SetWordWrap(false)
+  hint:SetScript("OnClick", ns.FS:Wrap(SOURCE, function(self) if self.name then select_customer(self.name) end end))
+  hint:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
+    if not self.name then return end
+    show_lines(self, { { text = ("Blocked because %s is blocked"):format(self.name), color = RED },
+      { text = "Click to show " .. self.name, color = GREY } })
+  end))
+  hint:SetScript("OnLeave", hide_tooltip)
+  hint:Hide()
+  d.blockedHint = hint
   local notesLabel = right:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   notesLabel:SetPoint("TOPLEFT", right, "TOPLEFT", 0, -26)
   notesLabel:SetText("Notes (saved when you click elsewhere)")
@@ -1032,6 +1281,7 @@ local function build_detail(container)
   d.tagAdd = create_button(right, "Add tag", 70, add_tag)
   d.tagAdd:SetPoint("LEFT", d.tagEdit, "RIGHT", GAP + 2, 0)
   d.chipsTop = 122
+  d.chipsMore = new_more_chip(right, "Remove which tag?", "More tags (click to remove one):", remove_tag)
   local linkLabel = right:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   linkLabel:SetPoint("TOPLEFT", right, "TOPLEFT", 0, -168)
   linkLabel:SetWidth(54)
@@ -1043,20 +1293,32 @@ local function build_detail(container)
   d.link:SetPoint("LEFT", d.linkEdit, "RIGHT", GAP, 0)
   d.unlink = create_button(right, "Unlink", 56, do_unlink)
   d.unlink:SetPoint("LEFT", d.link, "RIGHT", GAP, 0)
-  d.linkEdit:SetScript("OnEnter", ns.FS:Wrap(SOURCE,
-    text_tooltip("Type the name of the main character this one is an alt of (Name or Name-Realm)")))
+  d.linkEdit:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
+    show_lines(self, { { text = d.linked and ("Linked to " .. d.linked) or "Not linked to a main character" },
+      { text = "Type the name of the main character this one is an alt of (Name or Name-Realm)", color = GREY } })
+  end))
   d.linkEdit:SetScript("OnLeave", hide_tooltip)
 
   -- Left column (the rest): title, order history, the group.
   local left = CreateFrame("Frame", nil, body)
   left:SetPoint("TOPLEFT", body, "TOPLEFT", 0, -4)
-  left:SetPoint("BOTTOMRIGHT", right, "BOTTOMLEFT", -2 * PAD, 0)
+  left:SetPoint("BOTTOMRIGHT", right, "BOTTOMLEFT", -PAD, 0)
   d.left = left
   d.title = left:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   d.title:SetPoint("TOPLEFT", left, "TOPLEFT", 0, -2)
   d.title:SetPoint("TOPRIGHT", left, "TOPRIGHT", 0, -2)
   d.title:SetJustifyH("LEFT")
   d.title:SetWordWrap(false)
+  -- The title may be cut; its own mouse area shows the full text.
+  d.titleArea = CreateFrame("Frame", nil, left)
+  d.titleArea:SetPoint("TOPLEFT", left, "TOPLEFT", 0, 0)
+  d.titleArea:SetPoint("TOPRIGHT", left, "TOPRIGHT", 0, 0)
+  d.titleArea:SetHeight(20)
+  d.titleArea:EnableMouse(true)
+  d.titleArea:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
+    if d.titleText then show_lines(self, { { text = d.titleText } }) end
+  end))
+  d.titleArea:SetScript("OnLeave", hide_tooltip)
   d.history = new_list(left, HISTORY_ROW, create_history_row, bind_history_row)
   d.history.scroll:SetPoint("TOPLEFT", left, "TOPLEFT", 0, -22)
   d.history.scroll:SetPoint("BOTTOMRIGHT", left, "BOTTOMRIGHT", 0, CHIP_HEIGHT + 6)
@@ -1070,6 +1332,8 @@ local function build_detail(container)
   d.groupBar:SetHeight(CHIP_HEIGHT)
   d.groupLabel = d.groupBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   d.groupLabel:SetPoint("LEFT", d.groupBar, "LEFT", 0, 0)
+  d.groupMore = new_more_chip(d.groupBar, "Show which character?", "More linked characters (click to show one):",
+    select_customer)
 
   body:Hide()
   return d
@@ -1106,8 +1370,7 @@ local function build(container)
   created.search:SetPoint("LEFT", bar, "LEFT", 50, 0)
   created.search:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
   created.search:SetScript("OnTextChanged", ns.FS:Wrap(SOURCE, function(self)
-    local text = self:GetText()
-    searchText = type(text) == "string" and text or ""
+    searchText = clean(self:GetText(), MAX_SEARCH)
     refresh()
   end))
   created.exportButton = create_button(bar, "Export", 70, open_export)
@@ -1143,7 +1406,10 @@ local function build(container)
   end))
   -- Reselecting the tab starts without the last action's status line.
   container:HookScript("OnShow", ns.FS:Wrap(SOURCE, clear_status))
-  container:HookScript("OnHide", ns.FS:Wrap(SOURCE, save_note))
+  container:HookScript("OnHide", ns.FS:Wrap(SOURCE, function()
+    save_note()
+    hide_menu()
+  end))
 end
 
 ---------------------------------------------------------------------------

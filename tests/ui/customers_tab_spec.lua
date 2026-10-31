@@ -110,6 +110,33 @@ describe("Customers tab models", function()
     assert.same({}, T.Layout(nil).hidden)
   end)
 
+  it("keeps the history's Item column at 120 px or more at the 516 px minimum; Quality goes below that", function()
+    local at516 = T.HistoryLayout(516)
+    assert.same({ {}, 124, 238 }, { at516.hidden, at516.item, at516.left })
+    local at500 = T.HistoryLayout(500)
+    assert.same({ { quality = true }, 132 }, { at500.hidden, at500.item })
+    assert.same({}, T.HistoryLayout(nil).hidden)
+  end)
+
+  it("carries who blocks a group and shows it in the Tags cell", function()
+    C:RecordOrder("Bob-Silvermoon", order(1, 500, 100))
+    C:RecordOrder("Al-Silvermoon", order(2, 600, 0))
+    C:Link("Al-Silvermoon", "Bob-Silvermoon")
+    C:SetTag("Al-Silvermoon", "blocked", true)
+    local group = T.Groups("")[1]
+    assert.same({ "Al-Silvermoon" }, group.blockedBy)
+    local row = T.ListModel({ group })[1]
+    assert.same({ "blocked", "Al-Silvermoon" }, { row.tagsText, row.blockedVia })
+    assert.equal("blocked (alt)", T.CellTexts(row, 1000).tags)   -- "blocked (via Al-Silvermoon)" does not fit
+    assert.equal("blocked (via Al-X)", T.CellTexts({ nameRealm = "B", orders = 1, tagsText = "blocked", blockedVia = "Al-X" }, 1000).tags)
+    assert.equal("VIP, blocked (alt)", T.CellTexts({ nameRealm = "B", orders = 1, tagsText = "VIP, blocked", blockedVia = "Long-Silvermoon" }, 1000).tags)
+    -- Blocked by its own tag: no "via".
+    C:SetTag("Bob-Silvermoon", "blocked", true)
+    group = T.Groups("")[1]
+    assert.same({ "Bob-Silvermoon", "Al-Silvermoon" }, group.blockedBy)
+    assert.is_nil(T.ListModel({ group })[1].blockedVia)
+  end)
+
   it("formats cells: compact tips, last seen age, never shows unknown money as 0", function()
     local cells = T.CellTexts({ nameRealm = "Bob-Silvermoon", orders = 3, tipsTotal = 12345678, lastSeen = 1000 - 7200,
       tagsText = "VIP", alts = 1 }, 1000)
@@ -200,6 +227,12 @@ describe("Customers tab frames", function()
     v.search:Type("zzz")
     assert.equal(0, v.list.shown); assert.is_true(v.empty:IsShown())
     assert.is_truthy(v.empty:GetText():find("zzz", 1, true))
+    -- The echo is the trimmed search, at most 40 characters, with "|" escaped.
+    v.search:Type("   " .. string.rep("q", 50) .. "|cff  ")
+    local echoed = v.empty:GetText():match('"(.*)"')
+    assert.equal(string.rep("q", 40), echoed)
+    v.search:Type(" a|b ")
+    assert.equal("a||b", v.empty:GetText():match('"(.*)"'))
   end)
 
   it("filters through Customers:Search as the search text changes", function()
@@ -208,7 +241,7 @@ describe("Customers tab frames", function()
     C.Search = function(self, text) asked[#asked + 1] = text; return search(self, text) end
     local v = open()
     v.search:Type("  bob ")
-    assert.equal("  bob ", asked[#asked])
+    assert.equal("bob", asked[#asked])
     assert.equal(1, v.list.shown); assert.equal("Bob-Silvermoon", v.list.pool[1].data.nameRealm)
   end)
 
@@ -227,6 +260,126 @@ describe("Customers tab frames", function()
     container:GetScript("OnSizeChanged")(container, 380, 500)
     assert.is_false(v.headers[5]:IsShown()); assert.is_false(v.list.pool[1].placed[5]:IsShown())
     assert.same({ "RIGHT", v.list.pool[1], "RIGHT", -6, 0 }, point(v.list.pool[1].placed[4]))
+  end)
+
+  it("lays the history out at 516 px with Item between Date and Q, at least 120 px wide", function()
+    local function point(cell, i) return { cell:GetPoint(i or 1) } end
+    local v = open(516)
+    click(row_for(v, "Bob-Silvermoon"))
+    local r = v.detail.history.pool[1]
+    local dateCell, item, quality, tip = r.placed[1], r.placed[2], r.placed[3], r.placed[4]
+    assert.same({ "LEFT", r, "LEFT", 2, 0 }, point(dateCell)); assert.equal(34, dateCell:GetWidth())
+    assert.same({ "RIGHT", r, "RIGHT", -2, 0 }, point(tip)); assert.equal(44, tip:GetWidth())
+    assert.same({ "RIGHT", tip, "LEFT", -4, 0 }, point(quality)); assert.equal(20, quality:GetWidth())
+    assert.same({ "LEFT", dateCell, "RIGHT", 4, 0 }, point(item, 1))
+    assert.same({ "RIGHT", quality, "LEFT", -4, 0 }, point(item, 2))
+    assert.is_true(quality:IsShown())
+    assert.is_true(v.historyLayout.item >= 120); assert.equal(124, v.historyLayout.item)
+    -- The left column ends PAD before the fixed right column.
+    assert.same({ "BOTTOMRIGHT", v.detail.right, "BOTTOMLEFT", -6, 0 }, { v.detail.left:GetPoint(2) })
+    container:SetSize(500, 500)
+    container:GetScript("OnSizeChanged")(container, 500, 500)
+    assert.is_false(quality:IsShown())
+    assert.same({ "RIGHT", tip, "LEFT", -4, 0 }, point(item, 2))
+  end)
+
+  it("reaches every alt at 516 px: chips that do not fit go under a +N chip with a pick menu", function()
+    for i = 1, 3 do
+      local alt = ("Alt%d-Silvermoon"):format(i)
+      C:RecordOrder(alt, order(10 + i, 300 + i, 1))
+      C:Link(alt, "Bob-Silvermoon")
+    end
+    local v = open(516)
+    local d = v.detail
+    click(row_for(v, "Bob-Silvermoon"))
+    assert.equal(1, d.groupShown); assert.equal("Alt1-Silvermoon", d.group[1].value)
+    assert.is_false(d.group[2]:IsShown()); assert.is_false(d.group[3]:IsShown())
+    local more = d.groupMore
+    assert.is_true(more:IsShown()); assert.equal("+2", more.label)
+    assert.same({ "Alt2-Silvermoon", "Alt3-Silvermoon" }, more.hidden)
+    more:GetScript("OnEnter")(more)
+    assert.is_truthy(table.concat(tooltip.lines, "\n"):find("Alt3-Silvermoon", 1, true))
+    d.group[1]:GetScript("OnEnter")(d.group[1])
+    assert.equal("Alt1-Silvermoon", tooltip.lines[1])
+    click(more)
+    local menu = v.menu
+    assert.is_true(menu.frame:IsShown())
+    assert.same({ "Alt2-Silvermoon", "Alt3-Silvermoon" }, { menu.buttons[1].value, menu.buttons[2].value })
+    click(more)   -- a second click closes it
+    assert.is_false(menu.frame:IsShown())
+    click(more)
+    click(menu.buttons[2])
+    assert.is_false(menu.frame:IsShown())
+    assert.equal("Alt3-Silvermoon (alt of Bob-Silvermoon)", d.title:GetText())
+    assert.is_truthy(row_for(v, "Bob-Silvermoon").selected)   -- the main's row holds the alt
+    click(d.unlink)
+    assert.is_nil(C:Get("Alt3-Silvermoon").linkedTo)
+  end)
+
+  it("reaches every custom tag: the menu of hidden tags removes the one picked and says so", function()
+    for i = 1, 8 do C:SetTag("Bob-Silvermoon", "tag-number-" .. i, true) end
+    local v = open(516)
+    local d = v.detail
+    click(row_for(v, "Bob-Silvermoon"))
+    assert.equal(4, d.chipsShown)
+    assert.same({ "tag-number-5", "tag-number-6", "tag-number-7", "tag-number-8" }, d.chipsMore.hidden)
+    d.chips[2]:GetScript("OnEnter")(d.chips[2])
+    assert.equal("tag-number-2", tooltip.lines[1])
+    click(d.chipsMore)
+    click(v.menu.buttons[4])
+    assert.is_nil(C:Get("Bob-Silvermoon").tags["tag-number-8"])
+    assert.is_truthy(v.status:GetText():find('Removed the tag "tag-number-8"', 1, true))
+    assert.equal("+3", d.chipsMore.label)
+  end)
+
+  it("selects an alt from its order in the main's history", function()
+    C:RecordOrder("Alt-Silvermoon", order(3, 900, 5))
+    C:Link("Alt-Silvermoon", "Bob-Silvermoon")
+    local v = open()
+    local d = v.detail
+    click(row_for(v, "Bob-Silvermoon"))
+    local altRow = d.history.pool[1]
+    assert.equal("Alt-Silvermoon", altRow.data.who)
+    altRow:GetScript("OnEnter")(altRow)
+    assert.equal("Click to show Alt-Silvermoon", tooltip.lines[#tooltip.lines])
+    click(altRow)
+    assert.equal("Alt-Silvermoon (alt of Bob-Silvermoon)", d.title:GetText())
+    click(d.history.pool[1])   -- the alt's own orders select nothing else
+    assert.equal("Alt-Silvermoon (alt of Bob-Silvermoon)", d.title:GetText())
+  end)
+
+  it("shows a group blocked through an alt in the list, the tooltip and the detail pane", function()
+    C:RecordOrder("Alt-Silvermoon", order(3, 400, 5))
+    C:Link("Alt-Silvermoon", "Bob-Silvermoon")
+    C:SetTag("Alt-Silvermoon", "blocked", true)
+    local v = open()
+    local d = v.detail
+    local r = row_for(v, "Bob-Silvermoon")
+    assert.equal("blocked (alt)", r.cells.tags:GetText())
+    r:GetScript("OnEnter")(r)
+    assert.is_truthy(table.concat(tooltip.lines, "\n"):find("Blocked because Alt-Silvermoon is blocked", 1, true))
+    click(r)
+    assert.is_false(d.blocked:GetChecked())
+    assert.is_true(d.blockedHint:IsShown())
+    assert.is_truthy(d.blockedHint.text:GetText():find("Group blocked via Alt-Silvermoon", 1, true))
+    click(d.blockedHint)
+    assert.equal("Alt-Silvermoon (alt of Bob-Silvermoon)", d.title:GetText())
+    assert.is_true(d.blocked:GetChecked()); assert.is_false(d.blockedHint:IsShown())
+  end)
+
+  it("shows the full title and the current link in tooltips", function()
+    C:Link("Cat-Silvermoon", "Bob-Silvermoon")
+    local v = open()
+    local d = v.detail
+    click(row_for(v, "Bob-Silvermoon"))
+    click(d.group[1])
+    d.titleArea:GetScript("OnEnter")(d.titleArea)
+    assert.equal("Cat-Silvermoon (alt of Bob-Silvermoon)", tooltip.lines[1])
+    d.linkEdit:GetScript("OnEnter")(d.linkEdit)
+    assert.equal("Linked to Bob-Silvermoon", tooltip.lines[1])
+    click(d.group[1])
+    d.linkEdit:GetScript("OnEnter")(d.linkEdit)
+    assert.equal("Not linked to a main character", tooltip.lines[1])
   end)
 
   it("puts the full tips, tags, alts and note in the row tooltip", function()
@@ -257,7 +410,7 @@ describe("Customers tab frames", function()
     assert.equal("Bob-Silvermoon", d.title:GetText())
     assert.equal(1, d.history.shown)
     local h = d.history.pool[1]
-    assert.same({ date("%y-%m-%d", 500), "item:5", "Q3", "1s" },
+    assert.same({ date("%m-%d", 500), "item:5", "Q3", "1s" },
       { h.cells.date:GetText(), h.cells.item:GetText(), h.cells.quality:GetText(), h.cells.tip:GetText() })
     assert.equal("pays well", d.notes:GetText())
     assert.is_true(d.vip:GetChecked()); assert.is_false(d.blocked:GetChecked())
@@ -370,8 +523,25 @@ describe("Customers tab frames", function()
     assert.is_truthy(v.status:GetText():find("read-only", 1, true))
     d.notes:SetFocus(); d.notes:Type("x"); d.notes:ClearFocus()
     assert.equal("", C:Get("Bob-Silvermoon").notes)
+    assert.equal("", d.notes:GetText())   -- the stored note is back in the box
     d.linkEdit:Type("Cat"); click(d.link)
     assert.is_nil(C:Get("Bob-Silvermoon").linkedTo)
+    assert.is_truthy(v.status:GetText():find("read-only", 1, true))
+    -- The controls are disabled and the notice stays up.
+    for _, w in ipairs({ d.vip, d.blocked, d.notes, d.tagEdit, d.tagAdd, d.linkEdit, d.link, d.unlink }) do
+      assert.is_false(w:IsEnabled())
+    end
+    W.now = W.now + 60
+    reg.customers.refresh(container)
+    assert.is_truthy(v.status:GetText():find("read-only", 1, true))
+    ns.FS.dbIsNewer = nil
+    reg.customers.refresh(container)
+    assert.is_true(d.vip:IsEnabled()); assert.is_true(d.notes:IsEnabled()); assert.is_false(d.unlink:IsEnabled())
+  end)
+
+  it("shows the read-only notice from the first refresh", function()
+    ns.FS.dbIsNewer = true
+    local v = open()
     assert.is_truthy(v.status:GetText():find("read-only", 1, true))
   end)
 
