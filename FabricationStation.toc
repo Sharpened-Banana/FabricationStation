@@ -55,6 +55,7 @@ Modules\Social\Guild.lua
 Modules\Social\GuildNative.lua
 Modules\Social\GuildDirectory.lua
 Modules\Social\GuildOptions.lua
+Modules\Social\ChatMatcher.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua

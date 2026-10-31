@@ -843,6 +843,12 @@ characters from their tab at once. "Forget this guild's crafter data" asks for c
 until guildmates log in again. If P4-11 says recipes you do not know cannot resolve to items, say so in the description of
 "Show guild crafters in item tooltips" (Task 9 left the description neutral).
 
+P4-19. **Recipe chat-link type (Task 10, ChatMatcher).** Shift-click a recipe from the profession window into chat, then
+run `/run print((C_TradeSkillUI.GetRecipeLink(<recipeID>) or ""):gsub("|","||"))`. Note the `|H<type>:<id>|h` type
+(`enchant` or `spell`). ChatMatcher accepts both; if it prints another type, add it to the recipe-link kinds in
+`extractLinks` (`Modules/Social/ChatMatcher.lua`). Also post `LF crafter` plus a recipe link and an item link in a public
+channel: once Task 11 lands, ChatScan should name both.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

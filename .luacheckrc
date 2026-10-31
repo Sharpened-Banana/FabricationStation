@@ -21,6 +21,7 @@ files["Math/"] = { std = "lua51" }
 files["Data/"] = { std = "lua51" }
 files["Modules/CraftingData.lua"] = { std = "lua51" }
 files["Modules/PlanCalc.lua"] = { std = "lua51" }
+files["Modules/Social/ChatMatcher.lua"] = { std = "lua51" }
 files["tools/"] = { std = "lua51" }
 files["Locales/"] = { ignore = { "211/ns" } }  -- every locale file keeps the standard `local ADDON_NAME, ns = ...` header
 files["tests/"] = { std = "lua51+busted+wow", globals = { "make_world", "fake_professions_frame" },
