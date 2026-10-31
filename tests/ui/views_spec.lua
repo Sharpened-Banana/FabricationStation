@@ -173,16 +173,18 @@ describe("CharactersView", function()
 
   it("sums the header: characters, gold and knowledge left (partial and unknown marked)", function()
     local h = V.Header(A:GetOverview())
-    assert.equal("Characters: 3 · Gold: 1234g 61s 78c · Knowledge left: 5 KP", h.text)
-    assert.is_table(h.tooltip)
+    assert.equal("Characters: 3 · Gold: 1,234g · Knowledge left: 5 KP", h.text)   -- compact; full in the tooltip
+    assert.same({ h.text, nil }, { h.base, h.note })
+    assert.equal("Gold: 1234g 61s 78c (all characters shown)", h.tooltip[2])
     local g = ns.FS.db.global.characters
     g["Bren-Silvermoon"].gold = nil
     g["Bren-Silvermoon"].knowledgeWeekly = {}                 -- no snapshot: Herbalism unknown
     h = V.Header(A:GetOverview())
-    assert.equal("Characters: 3 · Gold: 1234g 56s 78c+ · Knowledge left: 2+? KP", h.text)
+    assert.equal("Characters: 3 · Gold: 1,234g+ · Knowledge left: 2+? KP", h.text)
+    assert.equal("Gold: 1234g 56s 78c+ (all characters shown)", h.tooltip[2])
     assert.is_truthy(table.concat(h.tooltip, "\n"):find("1 character's gold is unknown", 1, true))
     g["Aria-Silvermoon"].knowledgeWeekly = {}
-    assert.equal("Characters: 3 · Gold: 1234g 56s 78c+ · Knowledge left: ? KP", V.Header(A:GetOverview()).text)
+    assert.equal("Characters: 3 · Gold: 1,234g+ · Knowledge left: ? KP", V.Header(A:GetOverview()).text)
     assert.equal("Characters: 0 · Gold: -- · Knowledge left: ? KP", V.Header({}).text)
   end)
 
@@ -201,7 +203,9 @@ describe("CharactersView", function()
     local ns2, A2 = boot({ GetBuildInfo = function() return "12.2.0", "70700", "Nov 1 2026", 120200 end })
     local V2 = ns2.UI.CharactersView
     local h = V2.Header(A2:GetOverview())
-    assert.equal("Characters: 3 · Gold: 1234g 61s 78c · Knowledge left: 5 KP · data build 70575 (outdated)", h.text)
+    assert.equal("Characters: 3 · Gold: 1,234g · Knowledge left: 5 KP · data build 70575 (outdated)", h.text)
+    assert.same({ "Characters: 3 · Gold: 1,234g · Knowledge left: 5 KP", "data build 70575 (outdated)" },
+      { h.base, h.note })
     assert.is_truthy(table.concat(h.tooltip, "\n"):find("data build 70575 (outdated)", 1, true))
     -- The row tooltip marks the knowledge count too.
     local all = table.concat(V2.TooltipLines(V2.Row(A2:GetAltRow("Aria-Silvermoon", NOW), NOW)), "\n")

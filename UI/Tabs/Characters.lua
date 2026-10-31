@@ -22,9 +22,14 @@ local _, ns = ...
 --
 -- Refresh: MainWindow refreshes the tab on every select; while it is shown, FS_ALTS_CHANGED (Alts sends it for its
 -- own changes, after Scanner data changes and when it is turned on or off) and item names arriving for a search
--- (GET_ITEM_INFO_RECEIVED, registered only while a search is shown) ask MainWindow:RefreshTab after a 0.5 s debounce,
--- and a one-minute tick keeps ages and times to full moving. RefreshTab does nothing once the tab is hidden, so the
--- tick stops by itself; OnDisable cancels everything pending and no timer starts while the registrar is off. While Alts
+-- (GET_ITEM_INFO_RECEIVED, registered by refresh only while a search is shown and Alts is on; dropped when the search
+-- is cleared or the tab hides) ask MainWindow:RefreshTab after a 0.5 s debounce, and a one-minute tick keeps ages and
+-- times to full moving (cancelled when the tab hides). OnDisable cancels everything pending and no timer starts while
+-- the registrar is off.
+--
+-- The header line: an "Outdated" marker in its own fixed region first (only while the data build is outdated; its
+-- tooltip has the build), then the header sums (compact gold; full values in the header tooltip). A narrow window cuts
+-- only the header's tail, never the marker. While Alts
 -- is off the tab says "Alts is turned off" instead of showing an empty grid.
 --
 -- Own frames only; every handler runs isolated (ns.FS:Wrap, log-only sources).
@@ -43,6 +48,9 @@ local PAD = 6
 local LINE_TOP, LINE_HEIGHT, CHECK_TOP, CHECK_SIZE = 4, 20, 28, 24
 local SEARCH_WIDTH, SEARCH_GAP, MAX_SEARCH = 160, 8, 60
 local CHECK_LABEL_GAP, CHECK_LABEL_WIDTH, STATUS_GAP = 2, 90, 8
+-- The outdated-data marker: its own region at the start of the header line, fixed and wider than its 8 characters
+-- (about 50 px in GameFontNormal), so truncation can only cut the header's tail, never the marker.
+local MARKER_TEXT, MARKER_WIDTH, MARKER_GAP = "Outdated", 70, 6
 local STATUS_LEFT = CHECK_SIZE + CHECK_LABEL_GAP + CHECK_LABEL_WIDTH + STATUS_GAP   -- 124 px into the bar
 local BAR_HEIGHT = CHECK_TOP + CHECK_SIZE + 2                                       -- 54
 local GRID_TOP = BAR_HEIGHT + 2                                                     -- 56
@@ -159,16 +167,17 @@ function Tab.ResultRow(r, me)
   }
 end
 
--- query (trimmed), { ItemLocationRow } -> status, empty|nil. The status leads with "Search"; empty is the text shown
--- in place of an empty list.
-function Tab.SearchStatus(query, rows)
+-- query (trimmed), { ItemLocationRow }, hiddenShown (Show hidden ticked) -> status, empty|nil. The status leads with
+-- "Search"; empty is the text shown in place of an empty list. FindItems searches visible characters only, so while
+-- Show hidden is ticked (hidden characters in the grid) both say so.
+function Tab.SearchStatus(query, rows, hiddenShown)
+  local DOT = ns.UI.ViewUtil.DOT
   local n = #rows
   if n > 0 then
     local text = "Search: " .. n .. (n == 1 and " item" or " items")
+    if hiddenShown then text = text .. DOT .. "visible characters only (hidden ones are not searched)" end
     for _, r in ipairs(rows) do
-      if r.partial then
-        return text .. ns.UI.ViewUtil.DOT .. "+: a bank or the warband bank was never scanned", nil
-      end
+      if r.partial then return text .. DOT .. "+: a bank or the warband bank was never scanned", nil end
     end
     return text, nil
   end
@@ -176,7 +185,8 @@ function Tab.SearchStatus(query, rows)
     return "Search: too short", "Type at least 3 letters of a reagent name, or an item ID"
   end
   return "Search: no items",
-    ('No reagent named "%s" on the characters shown or in the warband bank'):format((query:gsub("|", "||")))
+    ('No reagent named "%s" on your visible characters or in the warband bank'):format((query:gsub("|", "||")))
+      .. (hiddenShown and " (hidden characters are not searched)" or "")
 end
 
 ---------------------------------------------------------------------------
@@ -225,9 +235,10 @@ local onItemInfo = ns.FS:Wrap(REFRESH_SOURCE, function()
   if activeSearch ~= "" then schedule_refresh() end
 end)
 
-local function listen_for_items()
-  if not live() then return end
-  if activeSearch ~= "" then
+-- on: a search is shown (refresh decides; it runs only while the tab is shown and Alts is on). Off when the search
+-- is cleared, the tab is hidden or Alts is off.
+local function listen_for_items(on)
+  if on and live() then
     CharactersTab:RegisterEvent("GET_ITEM_INFO_RECEIVED", onItemInfo)
   else
     CharactersTab:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
@@ -236,7 +247,7 @@ end
 
 local function set_active_search(text)
   activeSearch = text
-  listen_for_items()
+  if text == "" then listen_for_items(false) end
 end
 
 local searchLater = ns.FS:Wrap(SOURCE, function()
@@ -355,14 +366,32 @@ end
 -- Layout and refresh
 ---------------------------------------------------------------------------
 
--- Sizes the header line (left of the search box) and the status line (right of the check box) for the width.
+-- Places the header after the outdated marker (when shown) and sizes it up to the search box, and sizes the status
+-- line (right of the check box) for the width.
 local function apply_layout()
   if not view then return end
+  local offset = view.outdated:IsShown() and (MARKER_WIDTH + MARKER_GAP) or 0
+  view.header:ClearAllPoints()
+  view.header:SetPoint("TOPLEFT", view.bar, "TOPLEFT", offset, -LINE_TOP)
   local width = view.container:GetWidth()
   if type(width) ~= "number" or width <= 0 then return end
   local inner = width - 2 * PAD
-  view.header:SetWidth(math.max(0, inner - SEARCH_WIDTH - SEARCH_GAP))
+  view.header:SetWidth(math.max(0, inner - SEARCH_WIDTH - SEARCH_GAP - offset))
   view.status:SetWidth(math.max(0, inner - STATUS_LEFT))
+end
+
+-- note: CharactersView's data build note ("data build X (outdated)") or nil.
+local function set_marker(note)
+  if note then
+    view.outdated:SetText(color(ORANGE, MARKER_TEXT))
+    view.outdatedTooltip = { "Outdated: " .. note,
+      "Knowledge sources and counts come from that game build; the game has changed since, so they may be wrong." }
+    view.outdated:Show(); view.outdatedHit:Show()
+  else
+    view.outdated:SetText("")
+    view.outdatedTooltip = nil
+    view.outdated:Hide(); view.outdatedHit:Hide()
+  end
 end
 
 local function show_empty(text)
@@ -379,10 +408,15 @@ function refresh()
   if not view then return end
   local A = alts()
   if not A then
+    listen_for_items(false)
     view.grid.frame:Hide(); view.results.frame:Hide()
     view.header:SetText("Characters")
     view.headerTooltip = { "Characters", V().OFF_TEXT }
+    set_marker(nil)
     view.status:SetText("")
+    view.statusText = ""
+    view.showHiddenLabel:SetText("Show hidden")
+    view.hiddenCount = nil
     show_empty(V().OFF_TEXT .. ": turn it on in Settings > Modules to see your characters")
     apply_layout()
     return
@@ -395,12 +429,15 @@ function refresh()
     if showHidden or not r.hidden then rows[#rows + 1] = r end
   end
   local header = V().Header(rows)
-  view.header:SetText(header.text)
+  view.header:SetText(header.base)
   view.headerTooltip = header.tooltip
+  set_marker(header.note)
   view.showHiddenLabel:SetText("Show hidden (" .. hiddenCount .. ")")
+  view.hiddenCount = hiddenCount
   view.showHidden:SetChecked(showHidden)
 
   local status
+  listen_for_items(activeSearch ~= "")
   if activeSearch ~= "" then
     view.grid.frame:Hide(); view.results.frame:Show()
     local found = A:FindItems(activeSearch)
@@ -409,7 +446,7 @@ function refresh()
     for i, r in ipairs(found) do resultRows[i] = Tab.ResultRow(r, me) end
     view.results:SetRows(resultRows)
     local empty
-    status, empty = Tab.SearchStatus(activeSearch, found)
+    status, empty = Tab.SearchStatus(activeSearch, found, showHidden)
     show_empty(empty)
   else
     view.results.frame:Hide(); view.grid.frame:Show()
@@ -449,6 +486,17 @@ local function build_bar(container, created)
   search:HookScript("OnTextChanged", ns.FS:Wrap(SOURCE, on_search_changed))
   created.search = search
 
+  local marker = bar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  marker:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, -LINE_TOP)
+  marker:SetWidth(MARKER_WIDTH)
+  marker:SetHeight(LINE_HEIGHT)
+  marker:SetJustifyH("LEFT")
+  marker:SetWordWrap(false)
+  marker:Hide()
+  created.outdated = marker
+  created.outdatedHit = hover_area(bar, marker, function() return view and view.outdatedTooltip end)
+  created.outdatedHit:Hide()
+
   local header = bar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   header:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, -LINE_TOP)
   header:SetHeight(LINE_HEIGHT)
@@ -472,6 +520,14 @@ local function build_bar(container, created)
   label:SetJustifyH("LEFT")
   label:SetWordWrap(false)
   created.showHiddenLabel = label
+  created.showHiddenHit = hover_area(bar, label, function()
+    local n = view and view.hiddenCount
+    return {
+      n and ("Show hidden (" .. n .. ")") or "Show hidden",
+      "Lists the characters you hid with \"Hide character\" (in a row's detail), marked \"(hidden)\".",
+      "The reagent search, the Planner, the holdings tooltip lines and the knowledge widget always leave them out.",
+    }
+  end)
 
   local status = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   status:SetPoint("LEFT", check, "RIGHT", STATUS_LEFT - CHECK_SIZE, 0)
@@ -521,6 +577,11 @@ local function build(container)
   container:HookScript("OnSizeChanged", ns.FS:Wrap(SOURCE, apply_layout))
   -- Reselecting the tab starts without the last action's feedback.
   container:HookScript("OnShow", ns.FS:Wrap(SOURCE, function() notice = nil end))
+  -- Hidden: no tick and no item-name listening until the next refresh (MainWindow refreshes on every select).
+  container:HookScript("OnHide", ns.FS:Wrap(SOURCE, function()
+    ns.FS:CancelDebounce(TICK_KEY)
+    listen_for_items(false)
+  end))
 end
 
 ---------------------------------------------------------------------------
@@ -546,7 +607,7 @@ end
 function CharactersTab:OnEnable()
   -- One refresh follows 0.5 s after the last of a burst; MainWindow only refreshes a selected, visible tab.
   self:RegisterMessage(ns.Msg.ALTS_CHANGED, ns.FS:Wrap(REFRESH_SOURCE, schedule_refresh))
-  listen_for_items()
+  -- GET_ITEM_INFO_RECEIVED is registered by refresh while a search is shown (listen_for_items).
 end
 
 function CharactersTab:OnDisable()

@@ -396,10 +396,11 @@ function V.CurrentDataNote()
   return V.DataBuildNote((ns.FS:GameDataStatus()))
 end
 
--- { AltRow } (the rows the grid shows) -> { text, tooltip = { line } }:
--- "Characters: N · Gold: <sum> · Knowledge left: <sum> KP". Unknown gold makes the sum "<sum>+"; a knowledge sum
--- over only some professions is "N+? KP", none known "? KP"; an outdated data build adds " · data build X
--- (outdated)". The tooltip explains each.
+-- { AltRow } (the rows the grid shows) -> { text, base, note|nil, tooltip = { line } }:
+-- "Characters: N · Gold: <sum> · Knowledge left: <sum> KP" (gold compact, e.g. "1,234g"; the full sum is in the
+-- tooltip). Unknown gold makes the sum "<sum>+"; a knowledge sum over only some professions is "N+? KP", none known
+-- "? KP"; an outdated data build adds " · data build X (outdated)" to text. base is the text without that note (a
+-- view that shows the note in its own place uses base + note). The tooltip explains each.
 function V.Header(rows, note)
   rows = type(rows) == "table" and rows or {}
   if note == nil then note = V.CurrentDataNote() end
@@ -415,15 +416,16 @@ function V.Header(rows, note)
       kpPartial = true
     end
   end
-  local goldText = goldKnown > 0 and ns.UI.FormatMoney(gold) or ns.UI.FormatMoney(nil)
-  if goldKnown > 0 and goldUnknown > 0 then goldText = goldText .. "+" end
+  local goldText = goldKnown > 0 and U.compactMoney(gold) or ns.UI.FormatMoney(nil)
+  local goldFull = ns.UI.FormatMoney(goldKnown > 0 and gold or nil)
+  if goldKnown > 0 and goldUnknown > 0 then goldText, goldFull = goldText .. "+", goldFull .. "+" end
   local kpText = "?"
   if kpKnown then kpText = whole(kp) .. (kpPartial and "+?" or "") end
-  local text = "Characters: " .. #rows .. DOT .. "Gold: " .. goldText .. DOT .. "Knowledge left: " .. kpText .. " KP"
-  if note then text = text .. DOT .. note end
+  local base = "Characters: " .. #rows .. DOT .. "Gold: " .. goldText .. DOT .. "Knowledge left: " .. kpText .. " KP"
+  local text = note and (base .. DOT .. note) or base
   local tooltip = {
     "Characters: " .. #rows,
-    "Gold: " .. goldText .. " (all characters shown)",
+    "Gold: " .. goldFull .. " (all characters shown)",
     "Knowledge left this week: " .. kpText .. " KP (professions with knowledge data)",
   }
   if goldUnknown > 0 then
@@ -435,7 +437,7 @@ function V.Header(rows, note)
   if note then
     tooltip[#tooltip + 1] = "Knowledge " .. note .. ": the game has changed since, so counts may be wrong"
   end
-  return { text = text, tooltip = tooltip }
+  return { text = text, base = base, note = note or nil, tooltip = tooltip }
 end
 
 -- "Alts is turned off" while the Alts module is missing or off (the tab shows it instead of the grid), else nil.
