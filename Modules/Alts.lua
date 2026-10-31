@@ -25,14 +25,20 @@ local function clamp_whole(v, range)
 end
 
 -- Alts' own repair rules: a boolean toggle, whole numbers clamped to their range (anything that is not a finite
--- number gets the default), and a `hidden` table (never the defaults' own table).
+-- number gets the default), and a `hidden` table (never the defaults' own table) holding only `[charKey] = true`.
 local function fill(target, defaults)
   if type(target.tooltipHoldings) ~= "boolean" then target.tooltipHoldings = defaults.tooltipHoldings end
   for key, range in pairs(Alts.SETTINGS_RANGES) do
     local v = target[key]
     target[key] = is_finite(v) and clamp_whole(v, range) or defaults[key]
   end
-  if type(target.hidden) ~= "table" then target.hidden = {} end
+  if type(target.hidden) ~= "table" then
+    target.hidden = {}
+  else
+    for k, v in pairs(target.hidden) do
+      if v ~= true then target.hidden[k] = nil end   -- only [charKey] = true entries are kept
+    end
+  end
   return target
 end
 

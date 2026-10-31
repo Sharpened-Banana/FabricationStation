@@ -4,20 +4,25 @@ local ADDON_NAME, ns = ...
 --   knowledgeWeekly = { time, quests = { [questID] = true } }   completed quests of the Knowledge sources of the
 --                                                                character's own (not dropped) professions
 --   planning[skillLineID] = { pathNames = { [pathID] = name }, firstCraftsPending, time }
---   global.recipeCatalog[skillLineID][recipeID] = { name, sourceText, time }   unlearned recipes (lazy)
+--   global.recipeCatalog[skillLineID][recipeID] = { name, sourceText, time }   every recipe the open profession lists,
+--                                                                learned or not (account-wide, lazy; Task 9
+--                                                                subtracts each character's own recipes)
 -- Spec ranks, unspent points, concentration, Moxie and cooldowns are NOT collected here: 1a's Scanner snapshots them
 -- (ProfessionRecord.spec etc.); GetSpecSnapshot derives phase 3's display shape from that record.
 -- Only Knowledge variant lines are planned and cataloged (or, without Knowledge data, the open child line), so old
 -- expansions do not bloat the saved data (preflight row 35). Nothing is written while the saved data is from a newer
--- version. Every write that changes something sends FS_ALTS_CHANGED(charKey); FS_DATA_CHANGED is relayed as
--- FS_ALTS_CHANGED(charKey) 0.5 s after the last one.
+-- version. Collector writes send FS_ALTS_CHANGED(charKey) (flags: every write; path names and the open profession:
+-- when something changed); FS_DATA_CHANGED is relayed as FS_ALTS_CHANGED(charKey) 0.5 s after the last one (only
+-- the last charKey of that window is sent). Alts also announces itself when turned on (from a debounced run, so
+-- OnEnable calls no game API) and off, so views can leave or enter their "Alts is turned off" state.
 local Alts = ns.FS:GetModule("Alts")
 
 local SOURCE_TEXT_MAX = 200
 
 local FLAGS_KEY, PROF_KEY, LOGIN_KEY, PATHS_KEY, RELAY_KEY = "alts.flags", "alts.prof", "alts.login", "alts.paths",
   "alts.relay"
-local DEBOUNCE_KEYS = { FLAGS_KEY, PROF_KEY, LOGIN_KEY, PATHS_KEY, RELAY_KEY }
+local ENABLED_KEY = "alts.enabled"
+local DEBOUNCE_KEYS = { FLAGS_KEY, PROF_KEY, LOGIN_KEY, PATHS_KEY, RELAY_KEY, ENABLED_KEY }
 
 ---------------------------------------------------------------------------
 -- Helpers
@@ -202,8 +207,9 @@ end
 -- Knowledge flags
 ---------------------------------------------------------------------------
 
--- Snapshots which quests of the Knowledge sources of the character's own professions are completed. The snapshot
--- time is always refreshed; FS_ALTS_CHANGED is sent only when the set changed or there was no snapshot before.
+-- Snapshots which quests of the Knowledge sources of the character's own professions are completed and sends
+-- FS_ALTS_CHANGED after every write (a refreshed time alone can change what is shown around a reset; the callers
+-- are debounced).
 function Alts:CollectKnowledgeFlags()
   if not writable() then return end
   local k, isDone = knowledge(), quest_check()
@@ -222,10 +228,8 @@ function Alts:CollectKnowledgeFlags()
       end
     end
   end
-  local old = c.knowledgeWeekly
-  local isNew = type(old) ~= "table" or type(old.time) ~= "number" or not same_set(old.quests, quests)
   c.knowledgeWeekly = { time = ns.FS:Now(), quests = quests }
-  if isNew then changed(self, charKey) end
+  changed(self, charKey)
 end
 
 ---------------------------------------------------------------------------
@@ -248,13 +252,24 @@ end
 local function source_text(recipeID)
   local fn = C_TradeSkillUI.GetRecipeSourceText
   local text = ns.PlanCalc.StripCodes(type(fn) == "function" and fn(recipeID) or "")
-  if #text > SOURCE_TEXT_MAX then text = text:sub(1, SOURCE_TEXT_MAX - 3) .. "..." end
+  if #text > SOURCE_TEXT_MAX then
+    -- Cut before byte n + 1 only where that byte starts a character (not a UTF-8 continuation byte 0x80-0xBF).
+    local n = SOURCE_TEXT_MAX - 3
+    while n > 0 do
+      local b = text:byte(n + 1)
+      if b < 0x80 or b > 0xBF then break end
+      n = n - 1
+    end
+    text = text:sub(1, n) .. "..."
+  end
   return text
 end
 
 -- While the logged-in character's own profession is open (1a's IsProfessionOpen: not a linked, guild or NPC view):
--- counts learned first-craft recipes per planned line and catalogs unlearned ones (a learned recipe leaves the
--- catalog). Writes planning[line] = { pathNames, firstCraftsPending, time } for each planned line seen.
+-- catalogs every recipe of a planned line (learned or not: the catalog is account-wide) and counts learned first-craft
+-- recipes per planned line. A catalog entry is (re)written, with a new time, only when it is new or its name or source
+-- text changed. Writes planning[line] = { pathNames, firstCraftsPending, time } for each planned line seen (time is
+-- always refreshed). FS_ALTS_CHANGED is sent only when a catalog entry or a line's count or path names changed.
 function Alts:CollectOpenProfession()
   if not writable() then return end
   local S = scanner()
@@ -268,20 +283,20 @@ function Alts:CollectOpenProfession()
   local function planned(line) if v then return v[line] ~= nil end return line == openLine end
 
   local g, now = global(), ns.FS:Now()
-  local firstCrafts = {}
+  local firstCrafts, any = {}, false
   for _, id in ipairs(recipe_ids()) do
     local line = recipe_line(id)
     local info = line and planned(line) and C_TradeSkillUI.GetRecipeInfo(id)
     if type(info) == "table" then
       firstCrafts[line] = firstCrafts[line] or 0
-      local catalog = type(g.recipeCatalog) == "table" and g.recipeCatalog[line]
-      if info.learned then
-        if info.firstCraft then firstCrafts[line] = firstCrafts[line] + 1 end
-        if type(catalog) == "table" then catalog[id] = nil end
-      else
-        if type(g.recipeCatalog) ~= "table" then g.recipeCatalog = {} end
-        if type(catalog) ~= "table" then catalog = {}; g.recipeCatalog[line] = catalog end
-        catalog[id] = { name = info.name, sourceText = source_text(id), time = now }
+      if info.learned and info.firstCraft then firstCrafts[line] = firstCrafts[line] + 1 end
+      if type(g.recipeCatalog) ~= "table" then g.recipeCatalog = {} end
+      local catalog = g.recipeCatalog[line]
+      if type(catalog) ~= "table" then catalog = {}; g.recipeCatalog[line] = catalog end
+      local entry, text = catalog[id], source_text(id)
+      if type(entry) ~= "table" or entry.name ~= info.name or entry.sourceText ~= text then
+        catalog[id] = { name = info.name, sourceText = text, time = now }
+        any = true
       end
     end
   end
@@ -293,11 +308,13 @@ function Alts:CollectOpenProfession()
     if type(c.planning) ~= "table" then c.planning = {} end
     for line, count in pairs(firstCrafts) do
       local old = type(c.planning[line]) == "table" and c.planning[line] or {}
-      c.planning[line] = { pathNames = read_path_names(charKey, line) or old.pathNames, firstCraftsPending = count,
-        time = now }
+      local names = read_path_names(charKey, line) or old.pathNames
+      local sameNames = names == nil and old.pathNames == nil or type(names) == "table" and same_set(old.pathNames, names)
+      if old.firstCraftsPending ~= count or not sameNames then any = true end
+      c.planning[line] = { pathNames = names, firstCraftsPending = count, time = now }
     end
   end
-  changed(self, charKey)
+  if any then changed(self, charKey) end
 end
 
 function Alts:GetRecipeCatalog(skillLineID)
@@ -368,10 +385,13 @@ function Alts:OnEnable()
     if kind == "recipes" or kind == "spec" then ns.FS:Debounce(PATHS_KEY, 0.5, collectPaths) end
     if kind == "recipes" or kind == "professions" then flagsSoon() end
   end))
+  -- Announce that Alts is on from the first debounced run (CharKey reads game APIs; OnEnable stays free of them).
+  ns.FS:Debounce(ENABLED_KEY, 0, wrap(function() changed(self, ns.FS:CharKey()) end))
 end
 
 function Alts:OnDisable()
   for _, key in ipairs(DEBOUNCE_KEYS) do ns.FS:CancelDebounce(key) end
   self:UnregisterAllEvents()
   self:UnregisterAllMessages()
+  changed(self, ns.FS:CharKey())   -- views switch to their "Alts is turned off" state (Orders' phase-2 precedent)
 end

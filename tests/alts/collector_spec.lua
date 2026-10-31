@@ -162,12 +162,12 @@ describe("Alts collector", function()
       assert.same({ "FS_ALTS_CHANGED", "Aria-Silvermoon" }, W.messages[#W.messages])   -- 1a stub records SendMessage
     end)
 
-    it("refreshes the snapshot time without a message when the flags did not change", function()
+    it("announces every write, also one that only refreshes the snapshot time", function()
       local ns, _, W = phase3_env({ files = FILES, wow = { C_QuestLog = { IsQuestFlaggedCompleted = function(q)
         return q == 93691 end } } })
       alts(ns):CollectKnowledgeFlags()
-      assert.equal(0, #sent(W, "FS_ALTS_CHANGED"))
       assert.same({ time = NOW, quests = { [93691] = true } }, aria(ns).knowledgeWeekly)
+      assert.same({ { "FS_ALTS_CHANGED", "Aria-Silvermoon" } }, sent(W, "FS_ALTS_CHANGED"))
     end)
 
     it("announces the first snapshot even when it is empty (1a's {} default counts as no snapshot)", function()
@@ -197,15 +197,18 @@ describe("Alts collector", function()
   end)
 
   describe("CollectOpenProfession", function()
-    it("counts first crafts and catalogs unlearned recipes of the knowledge variants under their own skill line", function()
+    it("counts first crafts and catalogs every recipe of the knowledge variants under its own skill line", function()
       local ns = phase3_env({ files = FILES, wow = { C_TradeSkillUI = trade_skill() } })
       alts(ns):CollectOpenProfession()
       local planning = aria(ns).planning[2907]
       assert.same({ 1, NOW }, { planning.firstCraftsPending, planning.time })
       assert.same({ [1] = "Path 1", [2] = "Path 2", [3] = "Path 3" }, planning.pathNames)   -- no config: old names kept
-      assert.same({ name = "C", sourceText = "Vendor: Smith", time = NOW }, ns.FS.db.global.recipeCatalog[2907][103])
-      assert.is_nil(ns.FS.db.global.recipeCatalog[2907][101])
-      assert.is_nil(ns.FS.db.global.recipeCatalog[2907][104])
+      local catalog = ns.FS.db.global.recipeCatalog[2907]
+      assert.same({ name = "C", sourceText = "Vendor: Smith", time = NOW }, catalog[103])
+      -- learned by Aria, still listed: the catalog is account-wide and Task 9 subtracts each character's own recipes
+      assert.same({ name = "A", sourceText = "Vendor: Smith", time = NOW }, catalog[101])
+      assert.same({ name = "B", sourceText = "Vendor: Smith", time = NOW }, catalog[102])
+      assert.is_nil(catalog[104])
       -- preflight row 35: 2822 (an older expansion) is not a Knowledge variant, so it is neither cataloged nor planned
       assert.is_nil(ns.FS.db.global.recipeCatalog[2822])
       assert.is_nil(aria(ns).planning[2822])
@@ -218,20 +221,55 @@ describe("Alts collector", function()
     end)
 
     it("catalogs only the open child line when there is no knowledge data", function()
-      local ns = phase3_env({ files = FILES, knowledge = false, wow = { C_TradeSkillUI = trade_skill({
+      local ns, _, W = phase3_env({ files = FILES, knowledge = false, wow = { C_TradeSkillUI = trade_skill({
         GetChildProfessionInfo = function() return { professionID = 2822 } end }) } })
       alts(ns):CollectOpenProfession()
       assert.equal("Other line", ns.FS.db.global.recipeCatalog[2822][104].name)
       assert.is_nil(ns.FS.db.global.recipeCatalog[2907])
       assert.same({ 0, NOW }, { aria(ns).planning[2822].firstCraftsPending, aria(ns).planning[2822].time })
+      local n = #W.messages
+      alts(ns):CollectOpenProfession()   -- unchanged (and no path names on either side): no message
+      assert.equal(n, #W.messages)
     end)
 
-    it("removes a recipe from the catalog once it is learned", function()
+    it("keeps a recipe another character catalogued once this character has learned it", function()
       local ns = phase3_env({ files = FILES, wow = { C_TradeSkillUI = trade_skill() } })
-      ns.FS.db.global.recipeCatalog[2907] = { [102] = { name = "B", sourceText = "Trainer", time = NOW - 5 } }
+      local bren = { name = "B", sourceText = "Vendor: Smith", time = NOW - 5 }
+      ns.FS.db.global.recipeCatalog[2907] = { [102] = bren }
       alts(ns):CollectOpenProfession()
-      assert.is_nil(ns.FS.db.global.recipeCatalog[2907][102])
+      assert.same({ name = "B", sourceText = "Vendor: Smith", time = NOW - 5 }, ns.FS.db.global.recipeCatalog[2907][102])
       assert.is_table(ns.FS.db.global.recipeCatalog[2907][103])
+    end)
+
+    it("re-stamps and announces only entries that were added or changed their name or source text", function()
+      local text = "|cffffd200Vendor:|r Smith"
+      local ns, _, W = phase3_env({ files = FILES, wow = { C_TradeSkillUI = trade_skill({
+        GetRecipeSourceText = function() return text end }) } })
+      alts(ns):CollectOpenProfession()
+      assert.equal(1, #sent(W, "FS_ALTS_CHANGED"))
+      W.now = NOW + 100
+      alts(ns):CollectOpenProfession()                                  -- nothing changed
+      local catalog = ns.FS.db.global.recipeCatalog[2907]
+      assert.same({ NOW, NOW }, { catalog[101].time, catalog[103].time })
+      assert.equal(1, #sent(W, "FS_ALTS_CHANGED"))
+      assert.equal(NOW + 100, aria(ns).planning[2907].time)               -- the count's time is still refreshed
+      text = "Trainer"
+      W.now = NOW + 200
+      alts(ns):CollectOpenProfession()
+      assert.same({ "Trainer", NOW + 200 }, { catalog[103].sourceText, catalog[103].time })
+      assert.equal(2, #sent(W, "FS_ALTS_CHANGED"))
+    end)
+
+    it("announces a changed first-craft count or new path names even when the catalog did not change", function()
+      local info = { learned = true, firstCraft = true, name = "A" }
+      local ns, _, W = phase3_env({ files = FILES, wow = { C_TradeSkillUI = trade_skill({
+        GetAllRecipeIDs = function() return { 101 } end, GetRecipeInfo = function() return info end }) } })
+      alts(ns):CollectOpenProfession()
+      assert.equal(1, #sent(W, "FS_ALTS_CHANGED"))
+      info.firstCraft = false
+      alts(ns):CollectOpenProfession()
+      assert.equal(0, aria(ns).planning[2907].firstCraftsPending)
+      assert.equal(2, #sent(W, "FS_ALTS_CHANGED"))
     end)
 
     it("falls back to GetFilteredRecipeIDs and an empty source text when the client lacks those functions", function()
@@ -251,6 +289,22 @@ describe("Alts collector", function()
       local text = ns.FS.db.global.recipeCatalog[2907][103].sourceText
       assert.equal(200, #text)
       assert.equal(long:sub(1, 197) .. "...", text)
+    end)
+
+    it("never splits a UTF-8 character at the cap", function()
+      local function catalogued(source)
+        local ns = phase3_env({ files = FILES, wow = { C_TradeSkillUI = trade_skill({
+          GetRecipeSourceText = function() return source end }) } })
+        alts(ns):CollectOpenProfession()
+        return ns.FS.db.global.recipeCatalog[2907][103].sourceText
+      end
+      local pad = string.rep("a", 196)
+      -- "\195\169" (e acute) takes bytes 197-198: the cut backs off to byte 196
+      assert.equal(pad .. "...", catalogued(pad .. "\195\169" .. string.rep("b", 20)))
+      -- "\226\130\172" (euro sign) takes bytes 196-198: the cut backs off to byte 195
+      assert.equal(pad:sub(1, 195) .. "...", catalogued(pad:sub(1, 195) .. "\226\130\172" .. string.rep("b", 20)))
+      -- a character ending exactly at byte 197 is kept whole
+      assert.equal(pad:sub(1, 195) .. "\195\169...", catalogued(pad:sub(1, 195) .. "\195\169" .. string.rep("b", 20)))
     end)
 
     it("writes nothing for someone else's profession view", function()
@@ -320,6 +374,7 @@ describe("Alts collector", function()
 
     it("relays FS_DATA_CHANGED as FS_ALTS_CHANGED(charKey) 0.5 s later", function()
       local ns, _, W = phase3_env({ files = FILES })
+      W.advance(0); W.messages = {}   -- past the enable announcement
       alts(ns):SendMessage("FS_DATA_CHANGED", "Bren-Silvermoon", "items")
       alts(ns):SendMessage("FS_DATA_CHANGED", "Bren-Silvermoon", "items")
       assert.equal(0, #sent(W, "FS_ALTS_CHANGED"))
@@ -351,18 +406,41 @@ describe("Alts collector", function()
     end)
 
     it("stops listening and drops pending work when disabled", function()
-      local ns, _, W = phase3_env({ files = FILES, wow = { C_QuestLog = { IsQuestFlaggedCompleted = function() return true end },
-        C_TradeSkillUI = trade_skill() } })
+      local ns, _, W = phase3_env({ files = FILES, wow = with_paths({ C_QuestLog = {
+        IsQuestFlaggedCompleted = function() return true end }, C_TradeSkillUI = trade_skill() }) })
+      W.advance(0); W.messages = {}   -- past the enable announcement
       W.fire("QUEST_TURNED_IN", 1); W.fire("TRADE_SKILL_SHOW"); W.fire("PLAYER_ENTERING_WORLD")
-      alts(ns):SendMessage("FS_DATA_CHANGED", "Aria-Silvermoon", "spec")
-      local before = #W.messages
+      alts(ns):SendMessage("FS_DATA_CHANGED", "Aria-Silvermoon", "spec")     -- alts.paths and alts.relay pending
+      W.messages = {}
       ns.FS:SetModuleEnabled("Alts", false)
       W.advance(5)
       assert.equal(NOW - 60, aria(ns).knowledgeWeekly.time)
       assert.same({}, ns.FS.db.global.recipeCatalog)
-      assert.equal(0, #sent({ messages = { unpack(W.messages, before + 1) } }, "FS_ALTS_CHANGED"))
+      assert.same({ [1] = "Path 1", [2] = "Path 2", [3] = "Path 3" }, aria(ns).planning[2907].pathNames)
+      -- only the disable announcement
+      assert.same({ { "FS_ALTS_CHANGED", "Aria-Silvermoon" } }, sent(W, "FS_ALTS_CHANGED"))
       W.fire("QUEST_TURNED_IN", 1); W.advance(5)
       assert.equal(NOW - 60, aria(ns).knowledgeWeekly.time)
+    end)
+
+    it("announces FS_ALTS_CHANGED when turned on (from a debounced run, not OnEnable) and when turned off", function()
+      local ns, _, W = phase3_env({ files = FILES })
+      assert.equal(0, #sent(W, "FS_ALTS_CHANGED"))   -- OnEnable itself calls no game API
+      W.advance(0)
+      assert.same({ { "FS_ALTS_CHANGED", "Aria-Silvermoon" } }, sent(W, "FS_ALTS_CHANGED"))
+      ns.FS:SetModuleEnabled("Alts", false)
+      assert.equal(2, #sent(W, "FS_ALTS_CHANGED"))
+      ns.FS:SetModuleEnabled("Alts", true)
+      assert.equal(2, #sent(W, "FS_ALTS_CHANGED"))
+      W.advance(0)
+      assert.equal(3, #sent(W, "FS_ALTS_CHANGED"))
+    end)
+
+    it("a disable before the enable announcement ran cancels it", function()
+      local ns, _, W = phase3_env({ files = FILES })
+      ns.FS:SetModuleEnabled("Alts", false)
+      W.advance(1)
+      assert.equal(1, #sent(W, "FS_ALTS_CHANGED"))
     end)
   end)
 
@@ -405,7 +483,7 @@ describe("Alts settings", function()
       hidden = "x" }
     assert.same({ tooltipHoldings = true, tooltipMaxChars = 8, staleDays = 3, hidden = {} }, alts(ns):Settings())
     ns.FS.db.global.settings.alts = { tooltipHoldings = false, tooltipMaxChars = 500, staleDays = -2,
-      hidden = { ["Bren-Silvermoon"] = true } }
+      hidden = { ["Bren-Silvermoon"] = true, ["Cato-Silvermoon"] = false, ["Dora-Silvermoon"] = "yes", [3] = 1 } }
     assert.same({ tooltipHoldings = false, tooltipMaxChars = 20, staleDays = 1, hidden = { ["Bren-Silvermoon"] = true } },
       alts(ns):Settings())
   end)
