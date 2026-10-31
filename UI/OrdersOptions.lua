@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- OrdersOptions: the "Orders & Ledger" settings group (Settings tab and Blizzard's AddOns panel, through 1a's
 -- RegisterOptions). Four subgroups:
@@ -27,9 +28,9 @@ local DEFAULT_SOUND = "RAID_WARNING"
 
 -- SOUNDKIT keys offered for the alert, with their labels; only the ones the client has are listed.
 M.SOUNDS = {
-  { key = "RAID_WARNING", label = "Raid warning" },
-  { key = "READY_CHECK", label = "Ready check" },
-  { key = "UI_PROFESSIONS_NEW_RECIPE_LEARNED", label = "New recipe learned" },
+  { key = "RAID_WARNING", label = L["Raid warning"] },
+  { key = "READY_CHECK", label = L["Ready check"] },
+  { key = "UI_PROFESSIONS_NEW_RECIPE_LEARNED", label = L["New recipe learned"] },
 }
 
 ---------------------------------------------------------------------------
@@ -148,22 +149,22 @@ end
 
 local function scoring_group()
   local args = {
-    lowTipMargin = gold(1, "lowTipMargin", "Low tip margin (gold)",
+    lowTipMargin = gold(1, "lowTipMargin", L["Low tip margin (gold)"],
       "An order with no materials provided is flagged \"No mats, low tip\" when its commission (the tip after "
         .. "the cut) is less than the reagent cost plus this much.", { softMax = 1000 }),
-    knowledgePointValue = gold(2, "knowledgePointValue", "Value of one knowledge point (gold)",
-      "What a knowledge point from a patron order reward is worth to you.", { softMax = 5000, bigStep = 10 }),
-    moxieValue = gold(3, "moxieValue", "Value of one Moxie (gold)",
-      "What one Moxie from a patron order reward is worth to you.", { softMax = 100, bigStep = 0.5 }),
+    knowledgePointValue = gold(2, "knowledgePointValue", L["Value of one knowledge point (gold)"],
+      L["What a knowledge point from a patron order reward is worth to you."], { softMax = 5000, bigStep = 10 }),
+    moxieValue = gold(3, "moxieValue", L["Value of one Moxie (gold)"],
+      L["What one Moxie from a patron order reward is worth to you."], { softMax = 100, bigStep = 0.5 }),
     expiringSoonSeconds = range({
       module = "Orders", key = "expiringSoonSeconds", order = 4, scale = SECONDS_PER_MINUTE,
-      name = "Expiring soon (minutes)", desc = "An order with less time left than this is flagged \"Expiring soon\".",
+      name = L["Expiring soon (minutes)"], desc = L["An order with less time left than this is flagged \"Expiring soon\"."],
       min = 0, max = 2880, softMax = 720, step = 1, bigStep = 5, after = rescore,
     }),
-    claimMinScore = gold(5, "claimMinScore", "Claim Best: minimum score (gold)",
-      "Claim Best Order only picks an order whose score is above this.",
+    claimMinScore = gold(5, "claimMinScore", L["Claim Best: minimum score (gold)"],
+      L["Claim Best Order only picks an order whose score is above this."],
       { min = -100000, softMin = -1000, softMax = 5000, bigStep = 10 }),
-    claimHeader = { type = "header", order = 10, name = "Claim Best skips orders with" },
+    claimHeader = { type = "header", order = 10, name = L["Claim Best skips orders with"] },
   }
   local orders = module_of("Orders")
   if orders then
@@ -178,7 +179,7 @@ local function scoring_group()
       })
     end
   end
-  return { type = "group", order = 1, name = "Order scoring", args = args }
+  return { type = "group", order = 1, name = L["Order scoring"], args = args }
 end
 
 ---------------------------------------------------------------------------
@@ -198,17 +199,17 @@ end
 
 local function panel_group()
   return {
-    type = "group", order = 2, name = "Crafting-orders window",
+    type = "group", order = 2, name = L["Crafting-orders window"],
     args = {
       note = { type = "description", order = 0,
-        name = "Additions to Blizzard's crafting-orders window. The same switches are in Settings > Modules." },
-      rows = module_toggle(1, "OrdersRowAddons", "Profit, score and risk on each order row",
+        name = L["Additions to Blizzard's crafting-orders window. The same switches are in Settings > Modules."] },
+      rows = module_toggle(1, "OrdersRowAddons", L["Profit, score and risk on each order row"],
         "Module OrdersRowAddons: cells on each row of Blizzard's order list, a tint for VIP, repeat and blocked "
           .. "customers, and a dark overlay on orders your filters hide."),
-      sidePanel = module_toggle(2, "OrdersSidePanel", "Side panel with filters and Claim Best Order",
-        "Module OrdersSidePanel: risk filters, claims remaining, the best claimable order and its button."),
-      orderViewWarning = module_toggle(3, "OrderViewWarning", "Warning for blocked and VIP customers",
-        "Module OrderViewWarning: a line above the order details when the customer is blocked or a VIP."),
+      sidePanel = module_toggle(2, "OrdersSidePanel", L["Side panel with filters and Claim Best Order"],
+        L["Module OrdersSidePanel: risk filters, claims remaining, the best claimable order and its button."]),
+      orderViewWarning = module_toggle(3, "OrderViewWarning", L["Warning for blocked and VIP customers"],
+        L["Module OrderViewWarning: a line above the order details when the customer is blocked or a VIP."]),
     },
   }
 end
@@ -231,14 +232,14 @@ end
 local function alerts_group()
   local function alerts() return settings_of("OrderAlert") end
   return {
-    type = "group", order = 3, name = "Alerts",
+    type = "group", order = 3, name = L["Alerts"],
     args = {
       personalOrderSound = toggle({ module = "OrderAlert", key = "personalOrderSound", order = 1,
-        name = "Play a sound when a personal order arrives" }),
+        name = L["Play a sound when a personal order arrives"] }),
       personalOrderToast = toggle({ module = "OrderAlert", key = "personalOrderToast", order = 2,
-        name = "Show a message when a personal order arrives" }),
+        name = L["Show a message when a personal order arrives"] }),
       sound = {
-        type = "select", order = 3, name = "Sound", values = sound_values,
+        type = "select", order = 3, name = L["Sound"], values = sound_values,
         disabled = disabled_for("OrderAlert"),
         get = function()
           local s = alerts()
@@ -252,7 +253,7 @@ local function alerts_group()
         end,
       },
       toastSeconds = range({ module = "OrderAlert", key = "toastSeconds", order = 4,
-        name = "Show the message for (seconds)", min = 1, max = 60, step = 1 }),
+        name = L["Show the message for (seconds)"], min = 1, max = 60, step = 1 }),
     },
   }
 end
@@ -263,14 +264,14 @@ end
 
 local function ledger_group()
   return {
-    type = "group", order = 4, name = "Ledger",
+    type = "group", order = 4, name = L["Ledger"],
     args = {
       benchmarkMinSamples = range({ module = "Ledger", key = "benchmarkMinSamples", order = 1,
-        name = "Commissions needed for a benchmark",
-        desc = "A recipe's typical commission is shown once you have been paid for it at least this many times.",
+        name = L["Commissions needed for a benchmark"],
+        desc = L["A recipe's typical commission is shown once you have been paid for it at least this many times."],
         min = 1, max = 20, step = 1, after = ledger_changed }),
-      keepDays = range({ module = "Ledger", key = "keepDays", order = 2, name = "Keep ledger entries for (days)",
-        desc = "Older entries are removed when the Ledger starts.",
+      keepDays = range({ module = "Ledger", key = "keepDays", order = 2, name = L["Keep ledger entries for (days)"],
+        desc = L["Older entries are removed when the Ledger starts."],
         min = 30, max = 1095, step = 1, bigStep = 30, after = ledger_changed }),
     },
   }
@@ -283,7 +284,7 @@ end
 -- The AceConfig group. Getters and setters look modules up when they run, so a test can replace them.
 function M.Build()
   return {
-    type = "group", name = "Orders & Ledger", order = 40,
+    type = "group", name = L["Orders & Ledger"], order = 40,
     args = {
       scoring = scoring_group(),
       panel = panel_group(),

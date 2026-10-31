@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Two Dashboard widgets for phase 2, registered through 1b's Dashboard:RegisterWidget and filled with its SetLines:
 --   * "Open orders" (order 40): the last order board seen (Orders:GetSnapshot): how many orders were on it, how many
@@ -133,14 +134,14 @@ end
 function M.OpenOrdersLines(snapshot, now)
   local model = M.OpenOrdersModel(snapshot, now)
   if model.age == nil then
-    return { color(DIM, "No orders seen yet"), color(DIM, "Open the crafting orders board at a profession table.") }
+    return { color(DIM, L["No orders seen yet"]), color(DIM, L["Open the crafting orders board at a profession table."]) }
   end
   local lines = {}
   if model.total == 0 then
     lines[1] = "No open orders on the last board"
   else
-    local personal = ("%d personal"):format(model.personal)
-    lines[1] = ("%d on the board, %s"):format(model.total, model.personal > 0 and color(GOOD, personal) or personal)
+    local personal = (L["%d personal"]):format(model.personal)
+    lines[1] = (L["%d on the board, %s"]):format(model.total, model.personal > 0 and color(GOOD, personal) or personal)
     local orders = orders_of(snapshot)
     local best = M.BestOrder(filtered(orders))
     if best then
@@ -175,23 +176,23 @@ end
 function M.GoldThisWeekLines(ledger, now)
   local lines = {}
   if not ledger then
-    lines[1] = color(DIM, "The Ledger is not available")
+    lines[1] = color(DIM, L["The Ledger is not available"])
     return lines
   end
   if not has_sales(ledger) then
-    lines[1] = color(DIM, "No sales recorded yet")
-    lines[2] = color(DIM, "Order commissions and auction sales from the mailbox show here.")
+    lines[1] = color(DIM, L["No sales recorded yet"])
+    lines[2] = color(DIM, L["Order commissions and auction sales from the mailbox show here."])
   else
     local model = M.GoldThisWeekModel(ledger:Weekly(now, 1))
     if model.profit == nil then
-      lines[1] = color(DIM, "Week unknown: the game gave no weekly reset time")
+      lines[1] = color(DIM, L["Week unknown: the game gave no weekly reset time"])
     else
       local partial = model.incomplete > 0
       local estimated = type(model.estimated) == "number" and model.estimated > 0
       lines[1] = "Profit: " .. signed(model.profit, money(model.profit, estimated))
         .. (partial and color(WARN, " (partial)") or "")
       lines[2] = "Income: " .. money(model.income)
-      if partial then lines[3] = color(WARN, ("Partial: %d with missing or partial cost"):format(model.incomplete)) end
+      if partial then lines[3] = color(WARN, (L["Partial: %d with missing or partial cost"]):format(model.incomplete)) end
     end
   end
   if ns.FS.dbIsNewer then
@@ -239,7 +240,7 @@ end
 local function refresh_open_orders(frame)
   local orders = module("Orders")
   if not orders then
-    set_lines(frame, { color(DIM, "Orders are not available") })
+    set_lines(frame, { color(DIM, L["Orders are not available"]) })
     return
   end
   set_lines(frame, M.OpenOrdersLines(orders:GetSnapshot(), ns.FS:Now()))
@@ -267,9 +268,9 @@ end
 function OrdersWidgets:OnInitialize()
   local dashboard = module("Dashboard")
   if not dashboard then return end
-  dashboard:RegisterWidget("openOrders", { order = 40, title = "Open orders", build = builder("openOrders", "Open orders"),
+  dashboard:RegisterWidget("openOrders", { order = 40, title = L["Open orders"], build = builder("openOrders", L["Open orders"]),
     refresh = refresh_open_orders })
-  dashboard:RegisterWidget("goldThisWeek", { order = 50, title = "Gold this week", build = builder("goldThisWeek", "Gold this week"),
+  dashboard:RegisterWidget("goldThisWeek", { order = 50, title = L["Gold this week"], build = builder("goldThisWeek", L["Gold this week"]),
     refresh = refresh_gold })
 end
 

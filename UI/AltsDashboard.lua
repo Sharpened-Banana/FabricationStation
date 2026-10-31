@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- The phase-3 Dashboard widget "Knowledge left this week" (order 65, after phase 2's 40/50): the knowledge points the
 -- visible characters can still earn this week, from Planner:GetKnowledgeChecklist through PlannerView.KnowledgeLines
@@ -23,7 +24,7 @@ local M = {}
 ns.UI = ns.UI or {}
 ns.UI.AltsDashboard = M
 
-local WIDGET_ID, WIDGET_TITLE, WIDGET_ORDER = "altsKnowledge", "Knowledge left this week", 65
+local WIDGET_ID, WIDGET_TITLE, WIDGET_ORDER = "altsKnowledge", L["Knowledge left this week"], 65
 local WIDGET_SOURCE = "Dashboard:" .. WIDGET_ID
 local REFRESH_SOURCE = "AltsWidgets:Refresh"
 local REFRESH_KEY, REFRESH_DELAY = "altsWidgets.refresh", 0.5
@@ -87,11 +88,11 @@ function M.KnowledgeModel(rows, status, max)
   local lines
   rows = type(rows) == "table" and rows or {}
   if status ~= "ok" then
-    lines = { PV.StatusText(status), color(DIM, "Turn it on in Settings > Modules") }
+    lines = { PV.StatusText(status), color(DIM, L["Turn it on in Settings > Modules"]) }
   elseif #rows == 0 then
-    lines = { M.EMPTY_TEXT, color(DIM, "Open a Midnight profession on each character") }
+    lines = { M.EMPTY_TEXT, color(DIM, L["Open a Midnight profession on each character"]) }
   elseif all_without_data(rows) then
-    lines = { M.EMPTY_TEXT, color(DIM, "This GameData build has no knowledge sources for your professions") }
+    lines = { M.EMPTY_TEXT, color(DIM, L["This GameData build has no knowledge sources for your professions"]) }
   end
   if lines then
     return { lines = lines, tooltip = { lines[1], lines[2], color(DIM, M.CLICK_HINT) } }

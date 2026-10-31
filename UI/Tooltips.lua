@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- Tooltips: extra lines on item tooltips, produced by line providers. A provider is registered as
 -- Tooltips:RegisterLineProvider(id, fn(itemID) -> { {left, right}, ... }); CollectLines(itemID) runs them in
@@ -160,12 +161,12 @@ local function craft_cost_lines(itemID)
   local c = a.cheapest
   if c then
     local notes = { short_name(c.charKey) }
-    if c.estimated then notes[#notes + 1] = "estimate" end
-    if type(c.priceAge) == "number" then notes[#notes + 1] = ns.UI.FormatAge(c.priceAge * SECONDS_PER_DAY) .. " old" end
-    return { { "Craft cost", ns.UI.FormatMoney(c.cost) .. " (" .. table.concat(notes, ", ") .. ")" } }
+    if c.estimated then notes[#notes + 1] = L["estimate"] end
+    if type(c.priceAge) == "number" then notes[#notes + 1] = L["%s old"]:format(ns.UI.FormatAge(c.priceAge * SECONDS_PER_DAY)) end
+    return { { L["Craft cost"], ns.UI.FormatMoney(c.cost) .. " (" .. table.concat(notes, ", ") .. ")" } }
   end
-  if a.unreachable then return { { "Craft cost", "quality not reachable" } } end
-  return { { "Craft cost", "no price" } }
+  if a.unreachable then return { { L["Craft cost"], L["quality not reachable"] } } end
+  return { { L["Craft cost"], L["no price"] } }
 end
 
 local function crafters_lines(itemID)
@@ -174,7 +175,7 @@ local function crafters_lines(itemID)
   if not a then return {} end
   local names = {}
   for i, charKey in ipairs(a.crafters) do names[i] = short_name(charKey) end
-  return { { "Crafters", table.concat(names, ", ") } }
+  return { { L["Crafters"], table.concat(names, ", ") } }
 end
 
 local function clear_cache() analysisCache = {} end

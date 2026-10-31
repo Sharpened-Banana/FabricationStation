@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- MainWindow: the addon's single window. A Blizzard ButtonFrameTemplate frame with a left rail of
 -- tab buttons, a header strip (character, gold, price freshness) and a content area. Tabs register
@@ -120,7 +121,7 @@ local function show_failure(container, err)
   text:SetPoint("TOPLEFT", container, "TOPLEFT", 8, -8)
   text:SetPoint("TOPRIGHT", container, "TOPRIGHT", -8, -8)
   text:SetJustifyH("LEFT")
-  text:SetText("This tab failed to load: " .. tostring(err))
+  text:SetText(L["This tab failed to load: %s"]:format(tostring(err)))
 end
 
 -- The tab's container, created and built on first use. A failed build is logged once and leaves
@@ -401,7 +402,7 @@ local function open_tab(id)
     MainWindow:Show()
     local ids = {}
     for i, tab in ipairs(MainWindow:GetTabs()) do ids[i] = tab.id end
-    print(("FabricationStation: no tab named %q. Tabs: %s"):format(id, table.concat(ids, ", ")))
+    print((L["FabricationStation: no tab named %q. Tabs: %s"]):format(id, table.concat(ids, ", ")))
   end
 end
 

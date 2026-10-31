@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- ProfessionPanel: our own frame docked beside Blizzard's ProfessionsFrame. For the selected recipe it shows the
 -- predicted quality and the skill-vs-threshold bar for the reagents Blizzard has allocated (live prediction), the
@@ -55,11 +56,11 @@ M.APPLY_DISABLED_TOOLTIP = "Enable in Settings " .. RSAQUO .. " Crafting"
 M.APPLY_OFF_NOTE = "Apply is off " .. EM_DASH .. " turn it on in Settings > Crafting after the in-game check."
 -- Status texts for an Apply that wrote nothing, by ApplyAllocation's reason.
 M.APPLY_REFUSED = {
-  off = "Apply is off in Settings",
-  empty = "Nothing to apply for this quality",
-  noTransaction = "Open the recipe in the crafting window first",
+  off = L["Apply is off in Settings"],
+  empty = L["Nothing to apply for this quality"],
+  noTransaction = L["Open the recipe in the crafting window first"],
   recipe = "Recipe changed " .. EM_DASH .. " reselect it",
-  fit = "Reagents don't fit this recipe",
+  fit = L["Reagents don't fit this recipe"],
 }
 
 local view           -- built frames (once per session), nil before the first attach
@@ -152,12 +153,12 @@ end
 ---------------------------------------------------------------------------
 
 local function money(copper)
-  if copper == nil then return "no price" end
+  if copper == nil then return L["no price"] end
   return ns.UI.FormatMoney(copper)
 end
 
 local function points(n)
-  return tostring(math.floor(n + 0.5)) .. " points"
+  return L["%d points"]:format(math.floor(n + 0.5))
 end
 
 -- The flag texts of one result in the Recipes tab's order, and whether any is shown.
@@ -165,15 +166,15 @@ local function flags_text(r)
   local flags = r.flags or {}
   local parts = {}
   if r.profit == nil then
-    parts[#parts + 1] = "no price"
+    parts[#parts + 1] = L["no price"]
   elseif flags.noPrice then
-    parts[#parts + 1] = "some prices missing"
+    parts[#parts + 1] = L["some prices missing"]
   end
-  if flags.stalePrice then parts[#parts + 1] = "stale price" end
-  if flags.staleData then parts[#parts + 1] = "stale data" end
-  if flags.estimated then parts[#parts + 1] = "estimate" end
-  if flags.unreachableTarget then parts[#parts + 1] = "quality unreachable" end
-  if flags.unknownRecipe then parts[#parts + 1] = "unknown recipe" end
+  if flags.stalePrice then parts[#parts + 1] = L["stale price"] end
+  if flags.staleData then parts[#parts + 1] = L["stale data"] end
+  if flags.estimated then parts[#parts + 1] = L["estimate"] end
+  if flags.unreachableTarget then parts[#parts + 1] = L["quality unreachable"] end
+  if flags.unknownRecipe then parts[#parts + 1] = L["unknown recipe"] end
   return table.concat(parts, ", ")
 end
 
@@ -184,17 +185,17 @@ local function tone_of(profit)
 end
 
 local function profit_row(r)
-  if type(r.profit) ~= "number" then return { label = "Profit", value = "no price", tone = "bad" } end
+  if type(r.profit) ~= "number" then return { label = L["Profit"], value = L["no price"], tone = "bad" } end
   if (r.flags or {}).noPrice then
-    return { label = "Profit", value = ns.UI.FormatMoney(r.profit) .. " (some prices missing)", tone = "warn" }
+    return { label = L["Profit"], value = L["%s (some prices missing)"]:format(ns.UI.FormatMoney(r.profit)), tone = "warn" }
   end
-  return { label = "Profit", value = ns.UI.FormatMoney(r.profit), tone = tone_of(r.profit) }
+  return { label = L["Profit"], value = ns.UI.FormatMoney(r.profit), tone = tone_of(r.profit) }
 end
 
 local function price_age_row(r)
-  if type(r.priceAgeDays) ~= "number" then return { label = "Price age", value = "unknown", tone = "dim" } end
+  if type(r.priceAgeDays) ~= "number" then return { label = L["Price age"], value = L["unknown"], tone = "dim" } end
   local tone = (r.flags or {}).stalePrice and "bad" or "plain"
-  return { label = "Price age", value = ns.UI.FormatAge(r.priceAgeDays * SECONDS_PER_DAY) .. " old", tone = tone }
+  return { label = L["Price age"], value = L["%s old"]:format(ns.UI.FormatAge(r.priceAgeDays * SECONDS_PER_DAY)), tone = tone }
 end
 
 -- The profit breakdown, in spec order (§5.2). value is display text; tone colours it.
@@ -204,17 +205,17 @@ local function breakdown_rows(r)
   end
   local concentration = "--"
   if type(r.concentrationCost) == "number" then
-    concentration = r.concentrationCost > 0 and points(r.concentrationCost) or "none"
+    concentration = r.concentrationCost > 0 and points(r.concentrationCost) or L["none"]
   end
   return {
-    priced("Reagents", r.reagentCost),
-    priced("Sale (after AH cut)", r.expectedSale),
-    priced("Multicraft", r.multicraftValue),
-    priced("Resourcefulness", r.resourcefulnessValue),
-    { label = "Ingenuity", tone = "plain",
-      value = type(r.ingenuityValue) == "number" and (("%.1f"):format(r.ingenuityValue) .. " points back") or "--" },
-    { label = "Concentration", value = concentration, tone = "plain" },
-    { label = "Gold / concentration", tone = "plain",
+    priced(L["Reagents"], r.reagentCost),
+    priced(L["Sale (after AH cut)"], r.expectedSale),
+    priced(L["Multicraft"], r.multicraftValue),
+    priced(L["Resourcefulness"], r.resourcefulnessValue),
+    { label = L["Ingenuity"], tone = "plain",
+      value = type(r.ingenuityValue) == "number" and L["%.1f points back"]:format(r.ingenuityValue) or "--" },
+    { label = L["Concentration"], value = concentration, tone = "plain" },
+    { label = L["Gold / concentration"], tone = "plain",
       value = type(r.goldPerConcentration) == "number" and ns.UI.FormatMoney(r.goldPerConcentration) or "--" },
     profit_row(r),
     price_age_row(r),
@@ -236,7 +237,7 @@ local function per_quality_rows(r)
     local missing = e.missingPrice == true or (type(e.flags) == "table" and e.flags.noPrice == true)
     local profitText, profitTone = money(e.profit), tone_of(e.profit)
     if type(e.profit) == "number" and missing then
-      profitText, profitTone = profitText .. " (some prices missing)", "warn"
+      profitText, profitTone = L["%s (some prices missing)"]:format(profitText), "warn"
     end
     rows[i] = { quality = q, cost = e.reagentCost, profit = e.profit, allocation = e.allocation,
       costText = money(e.reagentCost), costTone = e.reagentCost == nil and "bad" or "plain",
@@ -249,14 +250,14 @@ end
 local function concentration_text(r, liveResult, atMax)
   local cost
   if liveResult then cost = liveResult.concentrationCostForAllocation else cost = r.concentrationCost end
-  if type(cost) ~= "number" then return "Concentration: unknown" end
+  if type(cost) ~= "number" then return L["Concentration: unknown"] end
   if liveResult then
-    if liveResult.applyingConcentration then return ("Concentration: %d (applied)"):format(math.floor(cost + 0.5)) end
-    if atMax then return "Concentration: not needed (max quality)" end
-    if cost <= 0 then return "Concentration: not needed" end
-    return ("Concentration: %d for Q%d"):format(math.floor(cost + 0.5), (liveResult.expectedQuality or 0) + 1)
+    if liveResult.applyingConcentration then return (L["Concentration: %d (applied)"]):format(math.floor(cost + 0.5)) end
+    if atMax then return L["Concentration: not needed (max quality)"] end
+    if cost <= 0 then return L["Concentration: not needed"] end
+    return (L["Concentration: %d for Q%d"]):format(math.floor(cost + 0.5), (liveResult.expectedQuality or 0) + 1)
   end
-  return "Concentration: " .. math.floor(cost + 0.5)
+  return (L["Concentration: %d"]):format(math.floor(cost + 0.5))
 end
 
 -- The game's CraftingOperationInfo for Blizzard's current allocation as a live header (the shape BuildModel takes
@@ -315,17 +316,17 @@ function M.BuildModel(r, liveResult)
     local versus = type(difficulty) == "number" and (" / " .. math.floor(difficulty + 0.5)) or ""
     if atMax then
       barFill = 1
-      skillText = ("Skill %d%s %s max quality"):format(shown, versus, EM_DASH)
+      skillText = (L["Skill %d%s %s max quality"]):format(shown, versus, EM_DASH)
     else
       local from = type(lower) == "number" and lower or 0
       local span = nextThreshold - from
       barFill = span > 0 and math.max(0, math.min(1, (skill - from) / span)) or 1
       skillToNext = math.max(0, math.ceil(nextThreshold - skill))
-      skillText = ("Skill %d%s %s %d to next"):format(shown, versus, EM_DASH, skillToNext)
+      skillText = (L["Skill %d%s %s %d to next"]):format(shown, versus, EM_DASH, skillToNext)
     end
   end
   local flagsText = flags_text(r)
-  local qualityLabel = headerSource == "game" and "Quality: " or "Predicted quality: "
+  local qualityLabel = headerSource == "game" and L["Quality: "] or "Predicted quality: "
   local qualityText = qualityLabel .. (type(src.expectedQuality) == "number" and ("Q" .. src.expectedQuality) or "--")
     .. (liveResult and liveResult.applyingConcentration and " (concentration)" or "")
   if headerSource == "game" then
@@ -493,14 +494,14 @@ local function render()
   if not recipeID then
     model = nil
     view.title:SetText("FabricationStation")
-    view.empty:SetText("Select a recipe.")
+    view.empty:SetText(L["Select a recipe."])
     view.empty:Show(); view.body:Hide()
     return
   end
   view.title:SetText(recipe_name(recipeID))
   if not result then
     model = nil
-    view.empty:SetText("No crafting data for this recipe yet.")
+    view.empty:SetText(L["No crafting data for this recipe yet."])
     view.empty:Show(); view.body:Hide()
     return
   end
@@ -742,16 +743,16 @@ local function add_to_queue()
   local quantity = 1
   if type(text) == "string" and text:match("%S") then quantity = tonumber(text:match("^%s*(%d+)%s*$")) end
   if not quantity or quantity < 1 then
-    set_status("Enter a quantity of 1 or more", "bad")
+    set_status(L["Enter a quantity of 1 or more"], "bad")
     return
   end
   local queue = module("Queue")
   local id = queue and queue:Add({ recipeID = recipeID, quantity = quantity, charKey = ns.FS:CharKey(),
     targetQuality = target, useConcentration = useConcentration })
   if id then
-    set_status(("Added %d%s %s to the queue"):format(quantity, TIMES, recipe_name(recipeID)), "good")
+    set_status((L["Added %d%s %s to the queue"]):format(quantity, TIMES, recipe_name(recipeID)), "good")
   else
-    set_status("Could not add to the queue", "bad")
+    set_status(L["Could not add to the queue"], "bad")
   end
 end
 
@@ -759,7 +760,7 @@ end
 local function show_craft_result(r)
   local statusText = ns.UI.QueueTab and ns.UI.QueueTab.StatusText
   if type(r) ~= "table" or not statusText then
-    set_status(statusText and statusText(nil) or "The queue gave no answer", "bad")
+    set_status(statusText and statusText(nil) or L["The queue gave no answer"], "bad")
     return
   end
   local info = {}
@@ -834,9 +835,9 @@ local function create_quality_row(parent)
     if not row.data then return end
     local ok, reason = Panel:ApplyAllocation(row.data.allocation)
     if ok then
-      set_status(("Applied the Q%d reagents"):format(row.data.quality), "good")
+      set_status((L["Applied the Q%d reagents"]):format(row.data.quality), "good")
     else
-      set_status(M.APPLY_REFUSED[reason] or "Apply failed", "bad")
+      set_status(M.APPLY_REFUSED[reason] or L["Apply failed"], "bad")
     end
   end))
   row.apply:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
@@ -845,9 +846,9 @@ local function create_quality_row(parent)
     if not apply_allowed() then
       GameTooltip:SetText(M.APPLY_DISABLED_TOOLTIP)
     elseif not (row.data and row.data.canApply) then
-      GameTooltip:SetText("No reagents to apply for this quality")
+      GameTooltip:SetText(L["No reagents to apply for this quality"])
     else
-      GameTooltip:SetText("Fill Blizzard's reagent slots with these reagents")
+      GameTooltip:SetText(L["Fill Blizzard's reagent slots with these reagents"])
     end
     GameTooltip:Show()
   end))
@@ -869,7 +870,7 @@ local function build_controls(frame, created)
   created.status:SetHeight(LINE * 2)
   created.status:SetJustifyV("TOP")
 
-  created.craftButton = button(frame, "Craft Next", 120, BUTTON_ROW - 2)
+  created.craftButton = button(frame, L["Craft Next"], 120, BUTTON_ROW - 2)
   created.craftButton:SetPoint("BOTTOMLEFT", created.status, "TOPLEFT", 0, 4)
   -- The only reference to the protected action: one craft per click, nothing else runs it.
   created.craftButton:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
@@ -879,7 +880,7 @@ local function build_controls(frame, created)
     show_craft_result(r)
   end))
 
-  created.addButton = button(frame, "Add to Queue", 110, BUTTON_ROW - 2)
+  created.addButton = button(frame, L["Add to Queue"], 110, BUTTON_ROW - 2)
   created.addButton:SetPoint("BOTTOMLEFT", created.craftButton, "TOPLEFT", 0, 4)
   created.addButton:SetScript("OnClick", ns.FS:Wrap(SOURCE, add_to_queue))
 
@@ -906,7 +907,7 @@ local function build_controls(frame, created)
   end))
   local checkLabel = text(frame)
   checkLabel:SetPoint("LEFT", created.concentrationCheck, "RIGHT", 2, 0)
-  checkLabel:SetText("Use concentration")
+  checkLabel:SetText(L["Use concentration"])
 end
 
 local function build_body(frame, created)
@@ -940,7 +941,7 @@ local function build_body(frame, created)
 
   created.qualityHeader = text(body, "GameFontNormalSmall")
   stack(created.qualityHeader, created.flags, 8)
-  created.qualityHeader:SetText("Cheapest reagents per quality")
+  created.qualityHeader:SetText(L["Cheapest reagents per quality"])
   created.applyNote = text(body)
   stack(created.applyNote, created.qualityHeader, 2)
   set_tone(created.applyNote, "warn")
@@ -955,7 +956,7 @@ local function build_body(frame, created)
   end
 
   created.breakdownHeader = text(body, "GameFontNormalSmall")
-  created.breakdownHeader:SetText("Profit per craft")
+  created.breakdownHeader:SetText(L["Profit per craft"])
   created.lines = { frame = CreateFrame("Frame", nil, body), pool = {} }
   stack(created.lines.frame, created.breakdownHeader, 4)
   created.lines.frame:SetPoint("RIGHT", body, "RIGHT", 0, 0)

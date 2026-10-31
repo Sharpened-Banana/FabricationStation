@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- OrdersPanel: our additions to Blizzard's crafting-orders list (ProfessionsFrame.OrdersPage), as three modules that
 -- are each switched on and off by 1a's module toggles (Settings > Modules) and fail on their own:
@@ -76,18 +77,18 @@ local BACKDROP = {
   tile = true, tileSize = 16, edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 },
 }
 local BEST_NONE = {
-  disabled = "Orders module is off",
+  disabled = L["Orders module is off"],
   noProfession = "open a profession",
   alreadyClaimed = "you already have a claimed order",
   none = "none claimable",
 }
 local CLAIM_REFUSED = {
-  disabled = "The Orders module is off",
-  noProfession = "Open a profession first",
-  alreadyClaimed = "You already have a claimed order",
-  busy = "Still waiting for the last claim",
-  none = "No order meets your claim rules",
-  stale = "That order is gone; the list was refreshed",
+  disabled = L["The Orders module is off"],
+  noProfession = L["Open a profession first"],
+  alreadyClaimed = L["You already have a claimed order"],
+  busy = L["Still waiting for the last claim"],
+  none = L["No order meets your claim rules"],
+  stale = L["That order is gone; the list was refreshed"],
 }
 
 ---------------------------------------------------------------------------
@@ -222,12 +223,12 @@ function M.Notes(view)
     notes[1] = "Recraft " .. EM_DASH .. " judge manually"
     return notes
   end
-  if flags.unknownConcentrationValue then notes[#notes + 1] = "Concentration value unknown" end
-  if flags.noPrice then notes[#notes + 1] = is_money(view.net) and "Some prices missing" or "No price" end
-  if flags.unknownRecipe then notes[#notes + 1] = "Recipe not learned" end
-  if flags.estimated then notes[#notes + 1] = "Estimate (no calibration)" end
-  if flags.unpricedReward then notes[#notes + 1] = "Some rewards have no price" end
-  if flags.stalePrice then notes[#notes + 1] = "Prices are old" end
+  if flags.unknownConcentrationValue then notes[#notes + 1] = L["Concentration value unknown"] end
+  if flags.noPrice then notes[#notes + 1] = is_money(view.net) and L["Some prices missing"] or L["No price"] end
+  if flags.unknownRecipe then notes[#notes + 1] = L["Recipe not learned"] end
+  if flags.estimated then notes[#notes + 1] = L["Estimate (no calibration)"] end
+  if flags.unpricedReward then notes[#notes + 1] = L["Some rewards have no price"] end
+  if flags.stalePrice then notes[#notes + 1] = L["Prices are old"] end
   return notes
 end
 
@@ -257,7 +258,7 @@ function M.BestText(itemText, view, benchmark)
   if is_money(tip) and is_money(median) and median > 0 then
     pct = ("%+d%%"):format(math.floor((tip / median - 1) * 100 + 0.5))
   end
-  return ("%s %s net %s %s tip vs your median %s"):format(tostring(itemText), DOT, netText, DOT, pct)
+  return (L["%s %s net %s %s tip vs your median %s"]):format(tostring(itemText), DOT, netText, DOT, pct)
 end
 
 -- The Queue:Add entry for an order (one craft for the order, its customer-provided reagents, the minimum quality as
@@ -290,10 +291,10 @@ function M.AddToQueue(view)
   local queue = ns.FS:GetModule("Queue", true)
   if not (entry and queue) then return nil end
   for _, e in ipairs(queue:GetEntries() or {}) do
-    if e.orderID ~= nil and e.orderID == entry.orderID then return "Already in the queue", "warn" end
+    if e.orderID ~= nil and e.orderID == entry.orderID then return L["Already in the queue"], "warn" end
   end
-  if queue:Add(entry) then return "Added to the queue", "good" end
-  return "Could not add to the queue (saved data is read-only)", "bad"
+  if queue:Add(entry) then return L["Added to the queue"], "good" end
+  return L["Could not add to the queue (saved data is read-only)"], "bad"
 end
 
 -- The order filters as checkbox descriptors, in display order: one per Orders.RISKS ({ key = risk, risk, label =
@@ -313,7 +314,7 @@ function M.FilterChecks()
     }
   end
   list[#list + 1] = {
-    key = "hideUnscored", label = "Hide unscored",
+    key = "hideUnscored", label = L["Hide unscored"],
     get = function(f) return f.hideUnscored == true end,
     set = function(f, on) f.hideUnscored = on end,
   }
@@ -389,7 +390,7 @@ local function hook_target_missing(module, name, path)
   ns.FS:LogError(name, "hook target missing: " .. path)
   if not announced[name] then
     announced[name] = true
-    print(("FabricationStation: %s disabled (Blizzard UI changed)"):format(name))
+    print((L["FabricationStation: %s disabled (Blizzard UI changed)"]):format(name))
   end
   module:Disable()
 end
@@ -476,7 +477,7 @@ local function new_cells(row)
   c.add:SetText("+")
   c.add:SetScript("OnClick", function() M.Guard(ROWS, add_to_queue, c) end)
   c.add:SetScript("OnEnter", function(button)
-    M.Guard(ROWS, show_tooltip, button, { { text = "Add to queue", color = TEXT_COLORS.white } })
+    M.Guard(ROWS, show_tooltip, button, { { text = L["Add to queue"], color = TEXT_COLORS.white } })
   end)
   c.add:SetScript("OnLeave", hide_tooltip)
 
@@ -731,7 +732,7 @@ local pendingClaim     -- orderID of the claim our button started, until its res
 function set_result(message, tone)
   local panel = ns.FS:GetModule(SIDE, true)
   if not (side and panel and panel:IsEnabled()) then
-    print("FabricationStation: " .. message)
+    print(L["FabricationStation: %s"]:format(message))
     return
   end
   side.result:SetText(message)
@@ -812,7 +813,7 @@ function refresh_side()
   local profession = current_profession()
   local info = profession ~= nil and C_CraftingOrders.GetOrderClaimInfo(profession) or nil
   local remaining = type(info) == "table" and info.claimsRemaining or nil
-  side.claims:SetText("Claims remaining: " .. (type(remaining) == "number" and tostring(remaining) or "--"))
+  side.claims:SetText(L["Claims remaining: %s"]:format(type(remaining) == "number" and tostring(remaining) or "--"))
 
   local O = orders()
   local view, reason
@@ -820,10 +821,10 @@ function refresh_side()
   if view then
     local ledger = ns.FS:GetModule("Ledger", true)
     local benchmark = ledger and ledger.Benchmark and ledger:Benchmark(view.recipeID, M.BenchmarkQuality(view)) or nil
-    side.best:SetText("Best: " .. M.BestText(best_item_text(view.itemID), view, benchmark))
+    side.best:SetText(L["Best: %s"]:format(M.BestText(best_item_text(view.itemID), view, benchmark)))
   else
     stop_waiting()
-    side.best:SetText("Best: " .. (BEST_NONE[reason] or "none claimable"))
+    side.best:SetText(L["Best: %s"]:format(BEST_NONE[reason] or L["none claimable"]))
   end
   side.claimEnabled = view ~= nil
   side.claim:SetEnabled(side.claimEnabled)
@@ -847,7 +848,7 @@ local function on_claim_response(_, result, orderID)
   if result == ok_result() then
     set_result("Claimed " .. EM_DASH .. " open it from the order list", "good")
   else
-    set_result(("Claim failed (%s)"):format(result_name(result)), "bad")
+    set_result((L["Claim failed (%s)"]):format(result_name(result)), "bad")
   end
   refresh_side()
 end
@@ -886,7 +887,7 @@ local function build_side()
   v.title:SetText("FabricationStation")
   v.filterHeader = text(frame, "GameFontNormal")
   v.filterHeader:SetPoint("TOPLEFT", v.title, "BOTTOMLEFT", 0, -8)
-  v.filterHeader:SetText("Hide orders with:")
+  v.filterHeader:SetText(L["Hide orders with:"])
 
   local anchor = v.filterHeader
   for _, d in ipairs(M.FilterChecks()) do
@@ -903,7 +904,7 @@ local function build_side()
   v.claim = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   v.claim:SetSize(SIDE_WIDTH - 2 * SIDE_PAD, 22)
   v.claim:SetPoint("TOPLEFT", v.claims, "BOTTOMLEFT", 0, -6)
-  v.claim:SetText("Claim Best Order")
+  v.claim:SetText(L["Claim Best Order"])
   -- The only caller of Orders:ClaimBest, directly in this click handler (design rule 3).
   v.claim:SetScript("OnClick", ns.FS:Wrap(SIDE, function()
     if not SidePanel:IsEnabled() then return end
@@ -1007,7 +1008,7 @@ local function refresh_warning()
     local tags = type(record) == "table" and type(record.tags) == "table" and record.tags or {}
     if tags.VIP then
       local n = type(record.orders) == "table" and #record.orders or 0
-      message, tone = ("VIP customer %s %d previous order%s"):format(DOT, n, n == 1 and "" or "s"), "gold"
+      message, tone = (L["VIP customer %s %d previous order%s"]):format(DOT, n, n == 1 and "" or "s"), "gold"
     end
   end
   warn.tone = tone

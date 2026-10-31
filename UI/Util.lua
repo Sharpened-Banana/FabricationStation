@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Display and input helpers shared by every tab. Money is integer copper everywhere else; it is
 -- formatted and parsed only here.
@@ -74,7 +75,7 @@ end
 
 -- A coarse age: "never" for nil, then "<1m", "Nm", "Nh", "Nd".
 function UI.FormatAge(seconds)
-  if type(seconds) ~= "number" then return "never" end
+  if type(seconds) ~= "number" then return L["never"] end
   if seconds < 60 then return "<1m" end
   if seconds < 3600 then return math.floor(seconds / 60) .. "m" end
   if seconds < 86400 then return math.floor(seconds / 3600) .. "h" end

@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- OrderAlert: when a personal crafting order arrives (Orders sends ns.Msg.PERSONAL_ORDER_ARRIVED(professionName,
 -- count, delta)), play a sound and show a toast. In-game sound and toast only (spec section 7; notifications outside
@@ -67,16 +68,18 @@ end
 
 -- "New personal crafting order: Tailoring (2 waiting)"; the profession and the count are left out when unknown.
 function OrderAlert.ToastText(professionName, count)
-  local text = "New personal crafting order"
-  if type(professionName) == "string" and professionName ~= "" then text = text .. ": " .. professionName end
-  if type(count) == "number" then text = text .. " (" .. count .. " waiting)" end
+  local text = L["New personal crafting order"]
+  if type(professionName) == "string" and professionName ~= "" then
+    text = L["New personal crafting order: %s"]:format(professionName)
+  end
+  if type(count) == "number" then text = L["%s (%d waiting)"]:format(text, count) end
   return text
 end
 
 -- "New personal orders: Tailoring, Alchemy" for several professions at once.
 function OrderAlert.ToastTextMany(names)
   if #names == 0 then return OrderAlert.ToastText(nil, nil) end
-  return "New personal orders: " .. table.concat(names, ", ")
+  return L["New personal orders: %s"]:format(table.concat(names, ", "))
 end
 
 -- The SOUNDKIT id for a settings name; the raid warning for an unknown or non-string name; nil without SOUNDKIT.

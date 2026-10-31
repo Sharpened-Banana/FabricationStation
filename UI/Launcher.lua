@@ -1,4 +1,5 @@
 local _, ns = ...
+local L = ns.L
 
 -- Launcher: a LibDataBroker launcher object plus a minimap button (LibDBIcon). Both libraries are
 -- optional; without either one the addon simply has no launcher and /fs still works.
@@ -30,8 +31,8 @@ end
 
 local function on_tooltip_show(tt)
   tt:AddLine("FabricationStation")
-  tt:AddLine("Left-click: open window")
-  tt:AddLine("Right-click: settings")
+  tt:AddLine(L["Left-click: open window"])
+  tt:AddLine(L["Right-click: settings"])
   local window = main_window()
   if window then tt:AddLine(window:GetHeaderText().prices) end
 end
