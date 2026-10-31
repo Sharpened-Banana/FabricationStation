@@ -12,6 +12,22 @@ describe("Math.Stats", function()
     assert.near(3300, S.ResourcefulnessSaving(40000, 0.25, 0.1), 1e-9)
     assert.equals(0, S.ResourcefulnessSaving(40000, nil))
   end)
+  it("clamps chances to 0..1: a chance above 1 (base chance plus an optional reagent) is a certain proc", function()
+    -- multicraft 1100 from an optional reagent is +1.0 on top of the base chance
+    assert.same({ 2.55, 1.55 }, { S.ExpectedYield(1, 1) })            -- exactly 1.0: 1 + 1 x (1 + 2.1) / 2
+    assert.same({ S.ExpectedYield(2, 1) }, { S.ExpectedYield(2, 1.25) })
+    assert.same({ S.ExpectedYield(2, 1) }, { S.ExpectedYield(2, 2.1) })
+    assert.is_true(S.ExpectedYield(2, 1) > S.ExpectedYield(2, 0.99))
+    assert.same({ 2, 0 }, { S.ExpectedYield(2, -0.3) })
+    assert.equals(S.ResourcefulnessSaving(40000, 1, 0.1), S.ResourcefulnessSaving(40000, 1.4, 0.1))
+    assert.near(12000, S.ResourcefulnessSaving(40000, 3, 0), 1e-9)   -- 100% x 40000 x 0.30
+    assert.equals(0, S.ResourcefulnessSaving(40000, -0.5))
+    -- through ApplyOptionals: 0.2 + 1100 / 1100 = 1.2 is used as 1.0
+    local stats = S.ApplyOptionals({ multicraft = 0.2, resourcefulness = 0.5 },
+      { { stats = { multicraft = 1100, resourcefulness = 900 } } })
+    assert.same({ S.ExpectedYield(3, 1) }, { S.ExpectedYield(3, stats.multicraft) })
+    assert.equals(12000, S.ResourcefulnessSaving(40000, stats.resourcefulness))
+  end)
   it("parses bonus stats by localized name", function()
     local names = { multicraft = "Multicraft", resourcefulness = "Resourcefulness", ingenuity = "Ingenuity" }
     assert.same({ multicraft = 0.125, resourcefulness = 0.2, ingenuity = 0.08 }, S.ParseBonusStats({

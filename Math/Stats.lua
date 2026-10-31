@@ -21,19 +21,27 @@ Stats.RATING_PER_UNIT = { multicraft = 1100, resourcefulness = 900, ingenuity = 
 
 local STAT_KEYS = { "multicraft", "resourcefulness", "ingenuity" }
 
--- Expected items from one craft with baseYield and a multicraft proc chance (fraction).
+-- A proc chance is a probability: base chance plus optional reagents (a real one carries +1.0 multicraft) can pass 1.
+local function clamp_chance(chance)
+  if chance > 1 then return 1 end
+  return chance
+end
+
+-- Expected items from one craft with baseYield and a multicraft proc chance (fraction, clamped to 0..1).
 -- Returns expected total yield, and the expected extra items when multicraft procs.
 function Stats.ExpectedYield(baseYield, mcChance, mcExtra)
   if not mcChance or mcChance <= 0 then return baseYield, 0 end
+  mcChance = clamp_chance(mcChance)
   local C = Stats.MULTICRAFT_CONSTANTS[baseYield] or Stats.MULTICRAFT_CONSTANTS.default
   local maxExtra = C * baseYield * (1 + (mcExtra or 0))
   local extraOnProc = (1 + maxExtra) / 2
   return baseYield + mcChance * extraOnProc, extraOnProc
 end
 
--- Expected reagent cost saved per craft: chance x requiredCost x factor x (1 + extra).
+-- Expected reagent cost saved per craft: chance (clamped to 0..1) x requiredCost x factor x (1 + extra).
 function Stats.ResourcefulnessSaving(requiredCost, resChance, resExtra)
   if not resChance or resChance <= 0 then return 0 end
+  resChance = clamp_chance(resChance)
   return resChance * requiredCost * Stats.RESOURCEFULNESS_SAVE_FACTOR * (1 + (resExtra or 0))
 end
 
