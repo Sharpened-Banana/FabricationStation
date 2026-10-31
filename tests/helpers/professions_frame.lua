@@ -18,7 +18,7 @@
 --
 -- form fields (the recording handle; not a Blizzard object):
 --   frame, craftingPage, schematicForm, transaction, recipeScrollBox (nil with withoutScrollBox)
---   ordersPage, showOrdersCalls  ProfessionsFrame.OrdersPage and the number of ShowOrders calls
+--   ordersPage, showOrdersCalls, showBucketsCalls  ProfessionsFrame.OrdersPage and its ShowOrders/ShowBuckets calls
 --   slotCalls[slotIndex]  "Clear" and "Allocate:<itemID>:<quantity>" in call order, per transaction slot
 --   calls                 "UpdateAllSlots" and "TriggerEvent:<event>" made on the schematic form
 --   manuallyAllocated     the last transaction:SetManuallyAllocated value (false at first)
@@ -166,12 +166,13 @@ local function fake_professions_frame(opts)
   end
   rawset(page, "RecipeList", recorded("RecipeList", list))
 
-  -- Crafting Orders page: ShowOrders(offset, isSorted) counts its calls in form.showOrdersCalls; orderType is the
-  -- shown order type (Personal by default).
-  form.showOrdersCalls = 0
+  -- Crafting Orders page: ShowOrders(offset, isSorted) / ShowBuckets(offset, isSorted) count their calls in
+  -- form.showOrdersCalls / form.showBucketsCalls; orderType is the shown order type (Personal by default).
+  form.showOrdersCalls, form.showBucketsCalls = 0, 0
   local ordersPage = CreateFrame("Frame", nil, frame)
   rawset(ordersPage, "orderType", opts.orderType or 2)
   rawset(ordersPage, "ShowOrders", function() form.showOrdersCalls = form.showOrdersCalls + 1 end)
+  rawset(ordersPage, "ShowBuckets", function() form.showBucketsCalls = form.showBucketsCalls + 1 end)
   form.ordersPage = recorded("OrdersPage", ordersPage)
   rawset(frame, "OrdersPage", form.ordersPage)
   form.craftingPage = recorded("CraftingPage", page)

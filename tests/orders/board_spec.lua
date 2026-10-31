@@ -1,11 +1,12 @@
 local P2 = require("tests.helpers.phase2")
 
 describe("Orders board", function()
-  local ns, O, W, claimed, claimCalls
+  local ns, O, W, claimed, claimCalls, board
   before_each(function()
-    claimed, claimCalls = nil, {}
+    claimed, claimCalls, board = nil, {}, {}
     ns, W = P2.boot({
-      C_CraftingOrders = { GetCraftingOrderTime = function() return 5000 end, GetClaimedOrder = function() return claimed end,
+      C_CraftingOrders = { GetCrafterOrders = function() return board end,   -- what Blizzard's board holds at click time
+        GetCraftingOrderTime = function() return 5000 end, GetClaimedOrder = function() return claimed end,
         GetOrderClaimInfo = function() return {claimsRemaining = 3} end, ClaimOrder = function(id, p) claimCalls[#claimCalls+1] = {id, p} end },
       C_TradeSkillUI = { GetChildProfessionInfo = function() return {profession = 7} end,
         GetItemCraftedQualityByItemInfo = function() return 3 end } })
@@ -43,7 +44,8 @@ describe("Orders board", function()
     W.advance(0.4); assert.spy(s).was_not.called(); W.advance(0.2); assert.spy(s).was.called(1)
   end)
   it("claims the best order once and refuses while one is claimed", function()
-    O:OnBoardShown(2, { P2.raw_order({orderID=10, tipAmount=900000}), P2.raw_order({orderID=11}) })
+    board = { P2.raw_order({orderID=10, tipAmount=900000}), P2.raw_order({orderID=11}) }
+    O:OnBoardShown(2, board)
     assert.equal(10, O:ClaimBest().orderID); assert.same({{10, 7}}, claimCalls)
     claimed = P2.raw_order({orderID=10})
     assert.same({nil, "alreadyClaimed"}, {O:ClaimBest()}); assert.equal(1, #claimCalls)
@@ -190,6 +192,85 @@ describe("Orders board", function()
     end)
   end)
 
+  describe("ClaimBest against the board on screen", function()
+    it("considers only the open profession's views", function()
+      board = { P2.raw_order() }
+      O:OnBoardShown(2, board, 8)   -- seen under another profession
+      assert.same({nil, "none"}, {O:ClaimBest()}); assert.same({}, claimCalls)
+    end)
+    it("skips views that have expired", function()
+      O:Settings().claimBlockingRisks.expiringSoon = false   -- only the expiry itself may keep it out
+      board = { P2.raw_order({expirationTime=5000}) }   -- expiresAt = now
+      O:OnBoardShown(2, board)
+      assert.same({nil, "none"}, {O:ClaimBest()}); assert.same({}, claimCalls)
+    end)
+    it("refuses a best view that is no longer on Blizzard's board and drops it", function()
+      O:OnBoardShown(2, { P2.raw_order({orderID=10, tipAmount=900000}), P2.raw_order({orderID=11}) })
+      board = { P2.raw_order({orderID=11}) }
+      assert.same({nil, "stale"}, {O:ClaimBest()}); assert.same({}, claimCalls)
+      assert.is_nil(O:GetLiveViews()[2]); assert.equal(11, O:GetLiveViews()[1].orderID)
+      assert.equal(11, O:ClaimBest().orderID); assert.same({{11, 7}}, claimCalls)
+    end)
+  end)
+
+  describe("claim responses", function()
+    before_each(function()
+      board = { P2.raw_order({orderID=10, tipAmount=900000}), P2.raw_order({orderID=11}) }
+      O:OnBoardShown(2, board)
+    end)
+    it("is busy until the claim response arrives", function()
+      assert.equal(10, O:ClaimBest().orderID)
+      assert.same({nil, "busy"}, {O:ClaimBest()}); assert.equal(1, #claimCalls)
+      W.fire("CRAFTINGORDERS_CLAIM_ORDER_RESPONSE", 0, 10)
+      assert.equal(10, O:ClaimBest().orderID); assert.equal(2, #claimCalls)
+    end)
+    it("drops an order whose claim failed and announces it", function()
+      O:ClaimBest()
+      local before = #messages("FS_ORDERS_CHANGED")
+      W.fire("CRAFTINGORDERS_CLAIM_ORDER_RESPONSE", 2, 10)   -- AlreadyClaimed
+      assert.is_nil(O:GetLiveViews()[2]); assert.equal(11, O:GetLiveViews()[1].orderID)
+      assert.equal(before + 1, #messages("FS_ORDERS_CHANGED"))
+      assert.equal(11, O:ClaimBest().orderID); assert.same({{10, 7}, {11, 7}}, claimCalls)
+    end)
+    it("stops waiting after 10 seconds without a response", function()
+      O:ClaimBest()
+      W.advance(9); assert.same({nil, "busy"}, {O:ClaimBest()})
+      W.advance(1); assert.equal(10, O:ClaimBest().orderID); assert.equal(2, #claimCalls)
+    end)
+    it("forgets a claim in flight when turned off", function()
+      O:ClaimBest(); O:Disable(); O:Enable()
+      O:OnBoardShown(2, board)
+      assert.equal(10, O:ClaimBest().orderID)
+    end)
+  end)
+
+  describe("board scope", function()
+    it("replaces views per order type and profession, keeping other professions in the snapshot", function()
+      O:OnBoardShown(2, { P2.raw_order({orderID=1}) }, 7)
+      O:OnBoardShown(2, { P2.raw_order({orderID=2}) }, 8)
+      assert.equal(2, #O:GetSnapshot().orders)
+      assert.same({2}, {O:GetLiveViews()[1].orderID}); assert.equal(1, #O:GetLiveViews())   -- live: open profession only
+      assert.equal(8, O:GetView(2).profession); assert.equal(7, O:GetView(1).profession)
+      O:OnBoardShown(2, {}, 7)
+      local snap = O:GetSnapshot()
+      assert.equal(1, #snap.orders); assert.equal(2, snap.orders[1].orderID)
+    end)
+    it("uses the open profession by default and keeps it through rescoring", function()
+      O:OnBoardShown(2, { P2.raw_order() })
+      assert.equal(7, O:GetView(777).profession)
+      O:Rescore()
+      assert.equal(7, O:GetView(777).profession); assert.equal(7, ns.FS.db.global.ordersSnapshot.orders[777].profession)
+      O:OnCustomerNameUpdated("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", "Bad", 777)
+      assert.equal(7, O:GetView(777).profession)
+    end)
+    it("replaces saved views of that type that have no profession", function()
+      ns.FS.db.global.ordersSnapshot.orders[5] = { orderID = 5, orderType = "personal", charKey = "Me-Silvermoon" }
+      ns.FS.db.global.ordersSnapshot.orders[6] = { orderID = 6, orderType = "public", charKey = "Me-Silvermoon" }
+      O:OnBoardShown(2, {}, 7)
+      assert.same({6}, {O:GetSnapshot().orders[1].orderID}); assert.equal(1, #O:GetSnapshot().orders)
+    end)
+  end)
+
   describe("fulfilment", function()
     it("keeps the pending fulfilment after a failure and removes the order on success", function()
       O:OnBoardShown(2, { P2.raw_order() })
@@ -211,6 +292,13 @@ describe("Orders board", function()
       O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
       local f = messages("FS_ORDER_FULFILLED")[1][2]
       assert.same({"npc", nil, 9, 450000}, {f.orderType, f.customer, f.npcCreatureID, f.commission})
+    end)
+    it("drops a pending fulfilment after an hour without a response", function()
+      claimed = P2.raw_order()
+      O:OnFulfillClicked(777, "", 7)
+      W.advance(3601)
+      O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+      assert.equal(0, #messages("FS_ORDER_FULFILLED"))
     end)
     it("sends nothing for an order it knows nothing about", function()
       O:OnFulfillClicked(5, "", 7)
@@ -298,8 +386,9 @@ describe("Orders board", function()
     local page, frame
     local function fake_frame()
       frame = CreateFrame("Frame")
-      page = { orderType = 2, shown = 0 }
+      page = { orderType = 2, shown = 0, buckets = 0 }
       function page.ShowOrders(p) p.shown = p.shown + 1 end
+      function page.ShowBuckets(p) p.buckets = p.buckets + 1 end
       frame.OrdersPage = page
       _G.ProfessionsFrame = frame
     end
@@ -363,6 +452,37 @@ describe("Orders board", function()
       form.hide()
       assert.same({}, O:GetLiveViews())
       assert.same({}, form.assignedFields)
+    end)
+    it("drops live public views when the public bucket list is shown", function()
+      fake_frame()
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      O:OnBoardShown(0, { P2.raw_order({orderID=1, orderType=0}) })
+      O:OnBoardShown(2, { P2.raw_order({orderID=2}) })
+      board = { P2.raw_order({orderID=1, orderType=0}), P2.raw_order({orderID=2}) }
+      local before = #messages("FS_ORDERS_CHANGED")
+      page:ShowBuckets(0, false)
+      assert.equal(1, page.buckets)
+      assert.same({2}, {O:GetLiveViews()[1].orderID}); assert.equal(1, #O:GetLiveViews())
+      assert.equal(2, #O:GetSnapshot().orders)
+      assert.equal(before + 1, #messages("FS_ORDERS_CHANGED"))
+      assert.equal(2, O:ClaimBest().orderID)   -- the public order is not on screen
+    end)
+    it("ignores ShowBuckets while Orders is off", function()
+      fake_frame()
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      local s = spy.on(O, "OnBucketsShown")
+      O:Disable(); page:ShowBuckets()
+      assert.spy(s).was_not.called()
+      O:Enable(); page:ShowBuckets()
+      assert.spy(s).was.called(1)
+    end)
+    it("logs only when ShowBuckets is missing", function()
+      fake_frame(); page.ShowBuckets = nil
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      assert.is_true(O.attached)
+      local errors = ns.FS.db.global.diagnostics.errors
+      assert.equal("hook target missing: ProfessionsFrame.OrdersPage.ShowBuckets", errors[#errors].err)
+      assert.is_true(O:IsEnabled())
     end)
     it("ignores ADDON_LOADED for other addons", function()
       fake_frame()

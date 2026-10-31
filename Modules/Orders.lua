@@ -594,22 +594,29 @@ end
 ---------------------------------------------------------------------------
 -- Board: live views and the saved snapshot
 ---------------------------------------------------------------------------
--- The live set holds the views of the board as it is open now (keyed by orderID; emptied when the Professions frame
--- closes). db.global.ordersSnapshot = { time, charKey, orders = {[orderID] = OrderView} } keeps the last board seen,
--- for the Orders tab and for later sessions. A stored view is a deep copy of plain values whose `result` keeps only
--- SNAPSHOT_RESULT_KEYS (never Recipes' cached result table). While the saved data is read-only (newer version) the
--- snapshot and personal counts live in session-only copies and nothing is written.
+-- The live set holds the views of the board as it is open now (keyed by orderID): only the open profession's, and
+-- no public orders while Blizzard shows the public bucket list; it is emptied when the Professions frame closes.
+-- db.global.ordersSnapshot = { time, charKey, orders = {[orderID] = OrderView} } keeps the last board seen per
+-- (order type, profession), for the Orders tab and later sessions. A stored view is a deep copy of plain values
+-- whose `result` keeps only SNAPSHOT_RESULT_KEYS (never Recipes' cached result table). Every captured view carries
+-- `profession` (Enum.Profession of the open profession; also kept in view.input.profession so rescoring keeps it).
+-- While the saved data is read-only (newer version) the snapshot and personal counts live in session-only copies
+-- and nothing is written.
 
 local PROFESSIONS_ADDON = "Blizzard_Professions"
 local RESCORE_KEY = "orders.rescore"
 local HOOK_MISSING = "hook target missing: ProfessionsFrame.OrdersPage.ShowOrders"
+local BUCKETS_HOOK_MISSING = "hook target missing: ProfessionsFrame.OrdersPage.ShowBuckets"
+local CLAIM_TIMEOUT = 10          -- seconds a claim may wait for CRAFTINGORDERS_CLAIM_ORDER_RESPONSE
+local PENDING_MAX_AGE = 3600      -- seconds a pending fulfilment is kept without a response
 
 local SNAPSHOT_RESULT_KEYS = {
   "expectedQuality", "reagentCost", "expectedSale", "profit", "concentrationCost", "goldPerConcentration", "flags",
 }
 
 local live = {}            -- [orderID] = OrderView (current board)
-local pending = {}         -- [orderID] = FulfilledOrder without time/charKey, from the FulfillOrder post-hook
+local pending = {}         -- [orderID] = { fulfilled = FulfilledOrder without time/charKey, at = Now() }
+local claimInFlight        -- { orderID, at } while a ClaimOrder waits for its response
 local sessionSnapshot      -- snapshot while the saved data is read-only
 local sessionState         -- ordersState while the saved data is read-only
 
@@ -673,26 +680,48 @@ local function by_order_id(a, b)
   return number_or(a.orderID, 0) < number_or(b.orderID, 0)
 end
 
+-- Enum.Profession of the profession open in the Professions frame, or nil.
+local function current_profession()
+  local api = C_TradeSkillUI
+  local info = api and api.GetChildProfessionInfo and api.GetChildProfessionInfo()
+  return type(info) == "table" and info.profession or nil
+end
+
+-- ScoreInput, keeping the profession the order was seen under.
+local function score(self, input, ctx)
+  local view = self:ScoreInput(input, ctx)
+  view.profession = input.profession
+  return view
+end
+
+-- True when a view belongs to (order type, profession); a view saved without a profession matches any profession.
+local function in_scope(view, typeName, profession)
+  return view.orderType == typeName and (view.profession == nil or view.profession == profession)
+end
+
 -- A board page was shown: orders (C_CraftingOrders.GetCrafterOrders(), cumulative across pages) replace every view
--- of that order type, in the live set and in the snapshot. One scoring context for the whole board, one ScoreInput
--- per order. A snapshot made by another character is started afresh (its personal orders are not this one's).
--- Expired stored views are dropped.
-function Orders:OnBoardShown(orderTypeEnum, orders)
+-- of that order type and profession (default: the open one) in the snapshot; the live set keeps only that
+-- profession's views and replaces those of that type. One scoring context for the whole board, one ScoreInput per
+-- order. A snapshot made by another character is started afresh (its personal orders are not this one's). Expired
+-- stored views are dropped.
+function Orders:OnBoardShown(orderTypeEnum, orders, profession)
+  if profession == nil then profession = current_profession() end
   local typeName = self.ORDER_TYPES[orderTypeEnum]
   local charKey = ns.FS:CharKey()
   local snap = snapshot_table()
   if snap.charKey ~= nil and snap.charKey ~= charKey then snap.orders = {} end
   for id, view in pairs(live) do
-    if view.orderType == typeName then live[id] = nil end
+    if view.profession ~= profession or view.orderType == typeName then live[id] = nil end
   end
   for id, view in pairs(snap.orders) do
-    if type(view) ~= "table" or view.orderType == typeName then snap.orders[id] = nil end
+    if type(view) ~= "table" or in_scope(view, typeName, profession) then snap.orders[id] = nil end
   end
   local ctx = self:BuildContext(charKey)
   for _, info in ipairs(type(orders) == "table" and orders or {}) do
     local input = self:Normalize(info)
     if input and input.orderID ~= nil then
-      local view = self:ScoreInput(input, ctx)
+      input.profession = profession
+      local view = score(self, input, ctx)
       live[input.orderID] = view
       snap.orders[input.orderID] = stored_copy(view)
     end
@@ -706,7 +735,21 @@ function Orders:OnBoardShown(orderTypeEnum, orders)
   self:SendMessage(ns.Msg.ORDERS_CHANGED)
 end
 
--- { time, charKey, orders = { OrderView } } (stored views, by orderID, leaving out expired ones).
+-- The public bucket list is shown (no flat public orders on screen): drops the live public views so Claim Best
+-- Order cannot spend a public claim on an order that is not shown. The snapshot keeps them.
+function Orders:OnBucketsShown()
+  local changed = false
+  for id, view in pairs(live) do
+    if view.orderType == "public" then
+      live[id] = nil
+      changed = true
+    end
+  end
+  if changed then self:SendMessage(ns.Msg.ORDERS_CHANGED) end
+end
+
+-- { time, charKey, orders = { OrderView } } (stored views, by orderID, leaving out expired ones). The views are the
+-- stored tables themselves: read-only for callers.
 function Orders:GetSnapshot()
   local snap = snapshot_table()
   local now, list = ns.FS:Now(), {}
@@ -717,7 +760,7 @@ function Orders:GetSnapshot()
   return { time = snap.time, charKey = snap.charKey, orders = list }
 end
 
--- The views of the board as it is open now, by orderID (empty after the Professions frame closes).
+-- The views of the board as it is open now, by orderID (empty after the Professions frame closes). Read-only.
 function Orders:GetLiveViews()
   local list = {}
   for _, view in pairs(live) do list[#list + 1] = view end
@@ -725,7 +768,7 @@ function Orders:GetLiveViews()
   return list
 end
 
--- The live view, else the stored one (nil when unknown or expired).
+-- The live view, else the stored one (nil when unknown or expired). Read-only: it is the live or stored table.
 function Orders:GetView(orderID)
   if orderID == nil then return nil end
   if live[orderID] then return live[orderID] end
@@ -746,13 +789,13 @@ function Orders:Rescore()
   local snap = snapshot_table()
   local ctx = self:BuildContext(snap.charKey or ns.FS:CharKey())
   for id, view in pairs(live) do
-    local fresh = self:ScoreInput(view.input, ctx)
+    local fresh = score(self, view.input, ctx)
     live[id] = fresh
     if snap.orders[id] ~= nil then snap.orders[id] = stored_copy(fresh) end
   end
   for id, view in pairs(snap.orders) do
     if live[id] == nil and type(view) == "table" and type(view.input) == "table" then
-      snap.orders[id] = stored_copy(self:ScoreInput(view.input, ctx))
+      snap.orders[id] = stored_copy(score(self, view.input, ctx))
     end
   end
   self:SendMessage(ns.Msg.ORDERS_CHANGED)
@@ -769,7 +812,7 @@ local function update_order(self, orderID, mutate)
   local base = view or stored
   if not base or type(base.input) ~= "table" then return false end
   mutate(base.input)
-  local fresh = self:ScoreInput(base.input, self:BuildContext(base.charKey or snap.charKey or ns.FS:CharKey()))
+  local fresh = score(self, base.input, self:BuildContext(base.charKey or snap.charKey or ns.FS:CharKey()))
   if view then live[orderID] = fresh end
   if stored then snap.orders[orderID] = stored_copy(fresh) end
   self:SendMessage(ns.Msg.ORDERS_CHANGED)
@@ -798,24 +841,69 @@ function Orders:GetClaimedOrder()
   return self:Normalize(C_CraftingOrders.GetClaimedOrder())
 end
 
--- Claims the best claimable order on the live board (GetBestClaimable) for the open profession, calling
--- C_CraftingOrders.ClaimOrder at most once. ClaimOrder is protected (HasRestrictions): this runs only from the
--- "Claim Best Order" button's OnClick (tests/orders/claim_click_only_spec.lua enforces it).
--- -> view, or nil and "disabled" | "noProfession" | "alreadyClaimed" | "none".
+-- orderIDs on Blizzard's board right now: { [orderID] = true }.
+local function board_order_ids()
+  local ids = {}
+  local orders = C_CraftingOrders.GetCrafterOrders()
+  for _, info in ipairs(type(orders) == "table" and orders or {}) do
+    if type(info) == "table" and info.orderID ~= nil then ids[info.orderID] = true end
+  end
+  return ids
+end
+
+-- True while a claim waits for its response (cleared by the response, or after CLAIM_TIMEOUT seconds).
+local function claim_busy()
+  if claimInFlight and ns.FS:Now() - claimInFlight.at >= CLAIM_TIMEOUT then claimInFlight = nil end
+  return claimInFlight ~= nil
+end
+
+-- Claims the best claimable order (GetBestClaimable) among the live views of the open profession that have not
+-- expired, calling C_CraftingOrders.ClaimOrder at most once. ClaimOrder is protected (HasRestrictions): this runs
+-- only from the "Claim Best Order" button's OnClick (tests/orders/claim_click_only_spec.lua enforces it).
+-- The best view must still be on Blizzard's board (C_CraftingOrders.GetCrafterOrders()); otherwise it is dropped
+-- from the live set and nothing is claimed ("stale"). A second click before the claim response is "busy".
+-- -> view, or nil and "disabled" | "noProfession" | "alreadyClaimed" | "busy" | "none" | "stale".
 function Orders:ClaimBest()
   if not self:IsEnabled() then return nil, "disabled" end
-  local info = C_TradeSkillUI.GetChildProfessionInfo()
-  local profession = type(info) == "table" and info.profession or nil
+  local profession = current_profession()
   if profession == nil then return nil, "noProfession" end
+  if C_CraftingOrders.GetClaimedOrder() ~= nil then return nil, "alreadyClaimed" end
+  if claim_busy() then return nil, "busy" end
   local claimInfo = C_CraftingOrders.GetOrderClaimInfo(profession)
   local claim = {
     claimsRemaining = type(claimInfo) == "table" and claimInfo.claimsRemaining or nil,
-    hasClaimed = C_CraftingOrders.GetClaimedOrder() ~= nil,
+    hasClaimed = false,
   }
-  local view, reason = self:GetBestClaimable(self:GetLiveViews(), claim)
+  local now, candidates = ns.FS:Now(), {}
+  for _, view in ipairs(self:GetLiveViews()) do
+    local fresh = not (type(view.expiresAt) == "number" and view.expiresAt <= now)
+    if fresh and view.profession == profession then candidates[#candidates + 1] = view end
+  end
+  local view, reason = self:GetBestClaimable(candidates, claim)
   if not view then return nil, reason end
+  if not board_order_ids()[view.orderID] then
+    live[view.orderID] = nil
+    self:SendMessage(ns.Msg.ORDERS_CHANGED)
+    return nil, "stale"
+  end
+  claimInFlight = { orderID = view.orderID, at = now }
   C_CraftingOrders.ClaimOrder(view.orderID, profession)
   return view
+end
+
+local function ok_result()
+  local results = Enum and Enum.CraftingOrderResult
+  return type(results) == "table" and results.Ok or 0
+end
+
+-- CRAFTINGORDERS_CLAIM_ORDER_RESPONSE(result, orderID): ends the claim in flight. A failed claim (already claimed by
+-- someone else, cannot claim, ...) drops that order from the live set, so the next click picks another.
+function Orders:OnClaimOrderResponse(_, result, orderID)
+  if claimInFlight and (orderID == nil or claimInFlight.orderID == orderID) then claimInFlight = nil end
+  if result ~= ok_result() and orderID ~= nil and live[orderID] ~= nil then
+    live[orderID] = nil
+    self:SendMessage(ns.Msg.ORDERS_CHANGED)
+  end
 end
 
 ---------------------------------------------------------------------------
@@ -828,10 +916,19 @@ local function crafted_quality(link)
   return type(quality) == "number" and quality or nil
 end
 
+-- Drops pending fulfilments older than PENDING_MAX_AGE (their response never came).
+local function prune_pending(now)
+  for id, entry in pairs(pending) do
+    if now - entry.at > PENDING_MAX_AGE then pending[id] = nil end
+  end
+end
+
 -- Post-hook on C_CraftingOrders.FulfillOrder(orderID, crafterNote, profession): remembers what is being delivered
 -- (the claimed order, else the board view) until the server answers. Quality comes from the crafted item's link
 -- (nil without one).
 function Orders:OnFulfillClicked(orderID, _, _)
+  local now = ns.FS:Now()
+  prune_pending(now)
   local input = self:GetClaimedOrder()
   if not (input and input.orderID == orderID) then
     local view = self:GetView(orderID)
@@ -840,7 +937,7 @@ function Orders:OnFulfillClicked(orderID, _, _)
   if type(input) ~= "table" or orderID == nil then return end
   local tip = input.tipAmount
   local rewardsValue, rewards = self:ValueRewards(input.rewards, orderID)
-  pending[orderID] = {
+  pending[orderID] = { at = now, fulfilled = {
     orderID = orderID,
     orderType = input.orderType,
     customer = input.orderType ~= "npc" and input.customer or nil,
@@ -853,20 +950,21 @@ function Orders:OnFulfillClicked(orderID, _, _)
     commission = type(tip) == "number" and tip - number_or(input.consortiumCut, 0) or nil,
     rewards = rewards,
     rewardsValue = rewardsValue,
-  }
+  } }
 end
 
 -- CRAFTINGORDERS_FULFILL_ORDER_RESPONSE(result, orderID): on Ok sends ns.Msg.ORDER_FULFILLED with the
 -- FulfilledOrder (Customers records the customer's order from it; NPC orders have no customer) and removes the order
 -- from the board and the snapshot. Any other result keeps the pending fulfilment for a retry.
 function Orders:OnFulfillResponse(_, result, orderID)
-  local results = Enum and Enum.CraftingOrderResult
-  local okCode = type(results) == "table" and results.Ok or 0
-  if result ~= okCode then return end
-  local fulfilled = pending[orderID]
+  if result ~= ok_result() then return end
+  local now = ns.FS:Now()
+  prune_pending(now)
+  local entry = pending[orderID]
   pending[orderID] = nil
-  if fulfilled then
-    fulfilled.time = ns.FS:Now()
+  if entry then
+    local fulfilled = entry.fulfilled
+    fulfilled.time = now
     fulfilled.charKey = ns.FS:CharKey()
     self:SendMessage(ns.Msg.ORDER_FULFILLED, fulfilled)
   end
@@ -913,10 +1011,11 @@ end
 -- Hooks and lifecycle
 ---------------------------------------------------------------------------
 
--- Post-hooks ProfessionsFrame.OrdersPage:ShowOrders (capture the board) and ProfessionsFrame OnHide (clear the live
--- set), once per session: hooks cannot be undone, so while Orders is off their bodies return at once. Nothing is
--- written on Blizzard frames. A missing target is logged and announced once; the rest of Orders keeps working.
--- -> true when the hooks are in place.
+-- Post-hooks ProfessionsFrame.OrdersPage:ShowOrders (capture the board for the open profession), :ShowBuckets (no
+-- flat public orders on screen) and ProfessionsFrame OnHide (clear the live set), once per session: hooks cannot be
+-- undone, so while Orders is off their bodies return at once. Nothing is written on Blizzard frames. A missing
+-- ShowOrders is logged and announced once (-> false); the rest of Orders keeps working. A missing ShowBuckets is only
+-- logged. -> true when the board hook is in place.
 function Orders:InstallBoardHook()
   if self.attached then return true end
   local frame = ProfessionsFrame
@@ -932,8 +1031,16 @@ function Orders:InstallBoardHook()
   end
   hooksecurefunc(page, "ShowOrders", ns.FS:Wrap("Orders", function(shownPage)
     if not self:IsEnabled() then return end
-    self:OnBoardShown(shownPage.orderType, C_CraftingOrders.GetCrafterOrders())
+    self:OnBoardShown(shownPage.orderType, C_CraftingOrders.GetCrafterOrders(), current_profession())
   end))
+  if type(page.ShowBuckets) == "function" then
+    hooksecurefunc(page, "ShowBuckets", ns.FS:Wrap("Orders", function()
+      if not self:IsEnabled() then return end
+      self:OnBucketsShown()
+    end))
+  else
+    ns.FS:LogError("Orders", BUCKETS_HOOK_MISSING)
+  end
   frame:HookScript("OnHide", ns.FS:Wrap("Orders", function()
     if not self:IsEnabled() then return end
     self:ClearLive()
@@ -955,6 +1062,7 @@ function Orders:OnEnable()
   end))
   self:RegisterEvent("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", wrap(function(...) self:OnCustomerNameUpdated(...) end))
   self:RegisterEvent("CRAFTINGORDERS_UPDATE_REWARDS", wrap(function(...) self:OnRewardsUpdated(...) end))
+  self:RegisterEvent("CRAFTINGORDERS_CLAIM_ORDER_RESPONSE", wrap(function(...) self:OnClaimOrderResponse(...) end))
   self:RegisterEvent("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", wrap(function(...) self:OnFulfillResponse(...) end))
   self:RegisterEvent("CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS", wrap(personal_counts))
   self:RegisterEvent("CRAFTINGORDERS_UPDATE_ORDER_COUNT", wrap(function(_, orderType)
@@ -978,10 +1086,12 @@ function Orders:OnEnable()
   attach_if_ready(self)
 end
 
--- Hooks stay installed (their bodies return early); the live board and pending fulfilments are dropped.
+-- Hooks stay installed (their bodies return early); the live board, pending fulfilments and a claim in flight are
+-- dropped.
 function Orders:OnDisable()
   ns.FS:CancelDebounce(RESCORE_KEY)
   live = {}
   pending = {}
+  claimInFlight = nil
   self:SendMessage(ns.Msg.ORDERS_CHANGED)
 end

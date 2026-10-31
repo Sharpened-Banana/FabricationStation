@@ -1,10 +1,12 @@
 -- Structural rule (design rule 3; C_CraftingOrders.ClaimOrder is HasRestrictions): ClaimOrder is referenced only
 -- inside `function Orders:ClaimBest` in Modules/Orders.lua, and Orders:ClaimBest is referenced (outside its own
--- definition) only in UI/OrdersPanel.lua, directly inside a SetScript("OnClick", function ... end) handler, never
--- in a closure nested in it (a timer or a pcall(function() ... end) would run it outside the click).
+-- definition) only in UI/OrdersPanel.lua, as a `:ClaimBest(` call directly inside a SetScript("OnClick", function
+-- ... end) handler: never in a closure nested in it (a timer or a pcall(function() ... end) would run it outside the
+-- click) and never passed on as a value.
 -- "Referenced" covers calls, passing the function on (pcall(C_CraftingOrders.ClaimOrder, ...),
 -- Wrap(name, Orders.ClaimBest)), aliases (local claim = C_CraftingOrders.ClaimOrder) and string keys
--- (C_CraftingOrders["ClaimOrder"]); comments (-- and --[[ ]]) do not count.
+-- (C_CraftingOrders["ClaimOrder"]). Identifiers match as exact tokens (OnClaimOrderResponse is another name); string
+-- contents match as substrings. Comments (-- and --[[ ]]) do not count.
 local DIRS = "Core Data Math Modules UI"
 
 -- Every .lua file in the TOC plus every .lua file under DIRS (a file missing from the TOC still counts).
@@ -108,14 +110,23 @@ local function references(text)
       stack[#stack] = nil
     end
     for _, name in ipairs({ "ClaimOrder", "ClaimBest" }) do
-      if (t.kind == "name" or t.kind == "string") and t.text:find(name, 1, true) then
+      if (t.kind == "name" and t.text == name) or (t.kind == "string" and t.text:find(name, 1, true)) then
         local definition = name == "ClaimBest" and t.kind == "name" and is(k - 3, "name", "function")
           and is(k - 2, "name", "Orders") and is(k - 1, "punct", ":")
-        if not definition then refs[#refs + 1] = { name = name, line = t.line, fn = innermost() } end
+        if not definition then
+          local call = t.kind == "name" and is(k - 1, "punct", ":") and is(k + 1, "punct", "(")
+          refs[#refs + 1] = { name = name, line = t.line, fn = innermost(), call = call }
+        end
       end
     end
   end
   return refs, #stack
+end
+
+-- The rule for one reference found in `path`.
+local function accepted(path, r)
+  if r.name == "ClaimOrder" then return path == "Modules/Orders.lua" and r.fn == "claimBest" end
+  return path == "UI/OrdersPanel.lua" and r.fn == "onClick" and r.call
 end
 
 local function read(path)
@@ -144,7 +155,9 @@ button:SetScript("OnClick", ns.FS:Wrap("OrdersSidePanel", function(self)
 end))
 ]==])
       assert.equal(0, depth)
-      assert.same({ { name = "ClaimOrder", line = 2, fn = "claimBest" }, { name = "ClaimBest", line = 6, fn = "onClick" } }, refs)
+      assert.same({ { name = "ClaimOrder", line = 2, fn = "claimBest", call = false },
+                    { name = "ClaimBest", line = 6, fn = "onClick", call = true } }, refs)
+      assert.is_true(accepted("Modules/Orders.lua", refs[1])); assert.is_true(accepted("UI/OrdersPanel.lua", refs[2]))
     end)
     it("flags timers, pcall forms, aliases, string keys and other handlers", function()
       local refs = references([==[
@@ -153,13 +166,28 @@ button:SetScript("OnEnter", function() Orders:ClaimBest() end)
 local ok = pcall(Orders.ClaimBest, Orders)
 local claim = C_CraftingOrders["ClaimOrder"]
 function Orders:ClaimBest() C_Timer.After(0, function() C_CraftingOrders.ClaimOrder(1, 2) end) end
-button:SetScript("OnClick", f) local g = function() Orders:ClaimBestOrder() end
+button:SetScript("OnClick", f) local g = function() Orders:ClaimBest() end
 --[[ Orders:ClaimBest() C_CraftingOrders.ClaimOrder() ]] -- Orders:ClaimBest()
+button:SetScript("OnClick", function() local f = Orders.ClaimBest; f(Orders) end)
+button:SetScript("OnClick", function() Orders["ClaimBest"](Orders); C_Timer.After(0, Orders.ClaimBest) end)
 ]==])
       local lines = {}
-      for _, r in ipairs(refs) do lines[#lines + 1] = r.name .. ":" .. r.line .. ":" .. tostring(r.fn) end
-      assert.same({ "ClaimBest:1:nil", "ClaimBest:2:nil", "ClaimBest:3:nil", "ClaimOrder:4:nil", "ClaimOrder:5:nil",
-        "ClaimBest:6:nil" }, lines)
+      for _, r in ipairs(refs) do
+        lines[#lines + 1] = r.name .. ":" .. r.line .. ":" .. tostring(r.fn) .. ":" .. (r.call and "call" or "value")
+        assert.is_false(accepted("UI/OrdersPanel.lua", r), "line " .. r.line .. " should be flagged")
+        assert.is_false(accepted("Modules/Orders.lua", r), "line " .. r.line .. " should be flagged")
+      end
+      assert.same({ "ClaimBest:1:nil:call", "ClaimBest:2:nil:call", "ClaimBest:3:nil:value", "ClaimOrder:4:nil:value",
+        "ClaimOrder:5:nil:value", "ClaimBest:6:nil:call", "ClaimBest:8:onClick:value", "ClaimBest:9:onClick:value",
+        "ClaimBest:9:onClick:value" }, lines)
+    end)
+    it("matches identifiers as exact tokens and strings as substrings", function()
+      local refs = references([==[
+function Orders:OnClaimOrderResponse(_, result, orderID) end
+self:RegisterEvent("CRAFTINGORDERS_CLAIM_ORDER_RESPONSE", function(...) self:OnClaimOrderResponse(...) end)
+local ClaimBestOrder, x = 1, "call ClaimOrder now"
+]==])
+      assert.same({ { name = "ClaimOrder", line = 3, call = false } }, refs)
     end)
   end)
 
@@ -171,20 +199,20 @@ button:SetScript("OnClick", f) local g = function() Orders:ClaimBestOrder() end
       for _, r in ipairs(refs) do
         if r.name == "ClaimOrder" then
           hits[#hits + 1] = path .. ":" .. r.line
-          assert.is_true(path == "Modules/Orders.lua" and r.fn == "claimBest",
-            path .. ":" .. r.line .. " references ClaimOrder outside Orders:ClaimBest")
+          assert.is_true(accepted(path, r), path .. ":" .. r.line .. " references ClaimOrder outside Orders:ClaimBest")
         end
       end
     end
     assert.equal(1, #hits, "expected exactly one ClaimOrder reference, got: " .. table.concat(hits, ", "))
   end)
 
-  it("references Orders:ClaimBest only directly inside UI/OrdersPanel.lua OnClick handlers", function()
+  it("references Orders:ClaimBest only as a call directly inside UI/OrdersPanel.lua OnClick handlers", function()
     for _, path in ipairs(lua_files()) do
       for _, r in ipairs(references(read(path))) do
         if r.name == "ClaimBest" then
-          assert.is_true(path == "UI/OrdersPanel.lua" and r.fn == "onClick",
-            path .. ":" .. r.line .. " references ClaimBest outside an OnClick handler in UI/OrdersPanel.lua")
+          assert.is_true(accepted(path, r),
+            path .. ":" .. r.line .. " references ClaimBest other than as a :ClaimBest( call directly in an OnClick "
+            .. "handler in UI/OrdersPanel.lua")
         end
       end
     end
