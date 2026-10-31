@@ -47,15 +47,39 @@ describe("Ledger store", function()
       assert.equal(7, e.time); assert.equal("Alt-Silvermoon", e.charKey)
       assert.is_nil(input.cost); assert.same({type="sale", amount=5, time=7, charKey="Alt-Silvermoon"}, input)
     end)
-    it("rejects non-integer, non-number, infinite and missing amounts and bad cost or tip", function()
+    it("rejects a bad type and non-integer, non-number, infinite and missing amounts", function()
       for _, bad in ipairs({1.5, "5", math.huge, -math.huge, 0/0}) do
         assert.has_error(function() L:Add({type="sale", amount=bad}) end)
       end
       assert.has_error(function() L:Add({type="sale"}) end)
-      assert.has_error(function() L:Add({type="sale", amount=1, cost=1.5}) end)
-      assert.has_error(function() L:Add({type="commission", amount=1, tip="x"}) end)
       assert.has_error(function() L:Add(nil) end)
       assert.equal(0, #L:Query({}))
+    end)
+    it("keeps the entry with an unknown cost and a log line when cost is not an integer", function()
+      for i, bad in ipairs({1.5, "x", math.huge, 0/0}) do
+        local e = L:Add({type="sale", amount=100, cost=bad})
+        assert.is_nil(e.cost); assert.is_true(e.incomplete); assert.equal(100, e.amount)
+        assert.equal(i, #ns.FS.db.global.diagnostics.errors)
+      end
+      local last = ns.FS.db.global.diagnostics.errors[4]
+      assert.equal("Ledger:Add", last.source)
+      assert.same({income=400, cost=0, profit=400, n=4, incomplete=4}, L:Unattributed({}))
+    end)
+    it("stores a bad tip as nil and logs it", function()
+      local e = L:Add({type="commission", amount=1, tip=2.5, recipeID=1})
+      assert.is_nil(e.tip); assert.is_nil(e.incomplete)
+      assert.equal(1, #ns.FS.db.global.diagnostics.errors)
+      local e2 = L:Add({type="commission", amount=1, tip="x", recipeID=1})
+      assert.is_nil(e2.tip); assert.equal(2, #ns.FS.db.global.diagnostics.errors)
+    end)
+    it("uses now for a bad time and logs it", function()
+      local e = L:Add({type="sale", amount=1, time="yesterday"})
+      assert.equal(1000, e.time); assert.equal(1, #ns.FS.db.global.diagnostics.errors)
+      assert.equal(1000, L:Add({type="sale", amount=1, time=0/0}).time)
+    end)
+    it("logs nothing for a clean entry", function()
+      L:Add({type="sale", amount=1, cost=2, tip=3, time=4})
+      assert.equal(0, #ns.FS.db.global.diagnostics.errors)
     end)
     it("accepts zero and negative integer amounts", function()
       L:Add({type="craft", amount=-30000}); L:Add({type="sale", amount=0})
@@ -143,6 +167,22 @@ describe("Ledger store", function()
     end)
   end)
 
+  describe("damaged saved rows", function()
+    it("count as incomplete in the sums instead of vanishing", function()
+      local list = ns.FS.db.global.ledger.entries
+      list[#list + 1] = {time=W+1, type="sale", amount=1.5, cost=10, recipeID=1}
+      list[#list + 1] = {time=W+2, type="sale", amount=100, cost="x", recipeID=1}
+      list[#list + 1] = {time=W+3, type="sale", amount=50, cost=5, recipeID=1}
+      assert.same({[1] = {income=150, cost=15, profit=135, n=3, incomplete=2}}, L:ByRecipe({}))
+      assert.same({weekStart=W, income=150, cost=15, profit=135, incomplete=2}, L:Weekly(2000000, 1)[1])
+    end)
+    it("a hole in the saved list does not hide the rows after it", function()
+      local list = ns.FS.db.global.ledger.entries
+      list[1] = {time=1, type="sale", amount=1}; list[3] = {time=3, type="sale", amount=3}
+      assert.equal(2, #L:Query({}))
+    end)
+  end)
+
   describe("ByRecipe", function()
     it("applies the filter, skips craft entries and reports sales with no recipe separately", function()
       L:Add({time=5, type="sale", amount=100, cost=40, recipeID=1})
@@ -179,6 +219,16 @@ describe("Ledger store", function()
       L:Settings().benchmarkMinSamples = 1
       assert.same({median=300, p25=300, p75=300, n=1}, L:Benchmark(1, 3))
     end)
+    it("works with exactly minSamples samples, tied values and ignores a negative tip", function()
+      L:Settings().benchmarkMinSamples = 2
+      for _, t in ipairs({100, 100}) do L:Add({type="commission", amount=t, tip=t, recipeID=1}) end
+      assert.same({median=100, p25=100, p75=100, n=2}, L:Benchmark(1))
+      L:Add({type="commission", amount=-50, tip=-50, recipeID=2})
+      L:Add({type="commission", amount=300, tip=300, recipeID=2})
+      assert.is_nil(L:Benchmark(2))   -- the negative tip is not a sample
+      L:Add({type="commission", amount=500, tip=500, recipeID=2})
+      assert.same({median=400, p25=350, p75=450, n=2}, L:Benchmark(2))
+    end)
     it("uses the gross tip, not the commission", function()
       for _, t in ipairs({100, 200, 300}) do L:Add({type="commission", amount=t - 10, tip=t, recipeID=1}) end
       assert.equal(200, L:Benchmark(1).median)
@@ -205,6 +255,17 @@ describe("Ledger store", function()
       assert.spy(L.SendMessage).was.called(1)
       L:Prune(now)
       assert.spy(L.SendMessage).was.called(1)
+    end)
+    it("keeps the rows after a hole in the saved list", function()
+      local list = ns.FS.db.global.ledger.entries
+      list[1] = {time=1, type="sale", amount=1}; list[3] = {time=1000, type="sale", amount=3}
+      list[4] = {type="sale", amount=4}; list[6] = {time=1000, type="sale", amount=6}
+      L:Settings().keepDays = 0
+      L:Prune(1000)
+      local amounts = {}
+      for _, e in ipairs(L:Query({})) do amounts[#amounts + 1] = e.amount end
+      table.sort(amounts)
+      assert.same({3, 4, 6}, amounts)
     end)
     it("does not prune while the saved data is from a newer version", function()
       L:Add({time=1, type="sale", amount=1})

@@ -68,6 +68,20 @@ local function entries_view()
   if type(list) == "table" then return list end
 end
 
+-- The saved entries that are tables, in order, skipping holes and damaged rows (for reads).
+local function each_saved()
+  local list = entries_view() or {}
+  local last = 0
+  for key in pairs(list) do
+    if type(key) == "number" and key > last then last = key end
+  end
+  local out = {}
+  for i = 1, last do
+    if type(list[i]) == "table" then out[#out + 1] = { entry = list[i], index = i } end
+  end
+  return out
+end
+
 -- The saved entries list for writes (created when missing). Nil while the saved data is read-only.
 local function entries_store()
   if not writable() then return nil end
@@ -103,21 +117,33 @@ end
 ---------------------------------------------------------------------------
 
 -- Stores one LedgerEntry (a copy; `time` defaults to now, `charKey` to this character) and sends FS_LEDGER_CHANGED.
--- Raises an error for a `type` other than craft|sale|commission, an `amount` that is not an integer, a given
--- `time` that is not a number, or a `cost`/`tip` that is not an integer when given. An unknown cost stays nil.
--- Returns the stored entry, or nil while the saved data is read-only (nothing is written or sent).
+-- Raises an error only for a `type` other than craft|sale|commission or an `amount` that is not an integer. A bad
+-- optional field never loses the entry: a `cost` that is not an integer is stored as nil with `incomplete = true`, a
+-- bad `tip` is stored as nil, a bad `time` becomes now; each is logged once (ns.FS:LogError "Ledger:Add").
+-- An unknown cost stays nil. Returns the stored entry, or nil while the saved data is read-only (nothing is
+-- written or sent).
 function Ledger:Add(entry)
   if type(entry) ~= "table" then error("Ledger:Add: entry must be a table", 2) end
   if not Ledger.TYPES[entry.type] then error("Ledger:Add: bad type " .. tostring(entry.type), 2) end
   if not is_integer(entry.amount) then error("Ledger:Add: amount must be an integer, got " .. tostring(entry.amount), 2) end
-  if entry.cost ~= nil and not is_integer(entry.cost) then error("Ledger:Add: cost must be an integer or nil", 2) end
-  if entry.tip ~= nil and not is_integer(entry.tip) then error("Ledger:Add: tip must be an integer or nil", 2) end
-  if entry.time ~= nil and type(entry.time) ~= "number" then error("Ledger:Add: time must be a number", 2) end
 
   local list = entries_store()
   if not list then return nil end
   local stored = {}
   for k, v in pairs(entry) do stored[k] = v end
+  if stored.cost ~= nil and not is_integer(stored.cost) then
+    ns.FS:LogError("Ledger:Add", "cost is not an integer (" .. tostring(stored.cost) .. "); stored as unknown")
+    stored.cost = nil
+    stored.incomplete = true
+  end
+  if stored.tip ~= nil and not is_integer(stored.tip) then
+    ns.FS:LogError("Ledger:Add", "tip is not an integer (" .. tostring(stored.tip) .. "); stored as unknown")
+    stored.tip = nil
+  end
+  if stored.time ~= nil and not (type(stored.time) == "number" and stored.time == stored.time) then
+    ns.FS:LogError("Ledger:Add", "time is not a number (" .. tostring(stored.time) .. "); used now")
+    stored.time = nil
+  end
   if stored.time == nil then stored.time = ns.FS:Now() end
   if stored.charKey == nil then stored.charKey = ns.FS:CharKey() end
   list[#list + 1] = stored
@@ -142,9 +168,10 @@ end
 function Ledger:Query(filter)
   filter = type(filter) == "table" and filter or {}
   local found = {}
-  for index, entry in ipairs(entries_view() or {}) do
-    if type(entry) == "table" and matches(entry, filter) then
-      found[#found + 1] = { entry = entry, index = index, time = number_or(entry.time, 0) }
+  for _, saved in ipairs(each_saved()) do
+    local entry = saved.entry
+    if matches(entry, filter) then
+      found[#found + 1] = { entry = entry, index = saved.index, time = number_or(entry.time, 0) }
     end
   end
   table.sort(found, function(a, b)
@@ -163,16 +190,22 @@ function Ledger:Prune(now)
   if not list then return 0 end
   now = number_or(now, ns.FS:Now())
   local cutoff = now - math.max(0, self:Settings().keepDays) * DAY_SECONDS
-  local kept, removed = {}, 0
-  for _, entry in ipairs(list) do
-    if type(entry) == "table" and type(entry.time) == "number" and entry.time < cutoff then
-      removed = removed + 1
-    else
-      kept[#kept + 1] = entry
+  local kept, removed, last = {}, 0, 0
+  for key in pairs(list) do
+    if type(key) == "number" and key > last then last = key end
+  end
+  for i = 1, last do  -- a hole in the saved list must not hide the rows after it
+    local entry = list[i]
+    if entry ~= nil then
+      if type(entry) == "table" and type(entry.time) == "number" and entry.time < cutoff then
+        removed = removed + 1
+      else
+        kept[#kept + 1] = entry
+      end
     end
   end
   if removed == 0 then return 0 end
-  for i = 1, math.max(#list, #kept) do list[i] = kept[i] end
+  for i = 1, last do list[i] = kept[i] end
   self:SendMessage(ns.Msg.LEDGER_CHANGED)
   return removed
 end
@@ -181,8 +214,9 @@ end
 -- Weekly and per-recipe profit
 ---------------------------------------------------------------------------
 
--- Start of the weekly-reset week that contains `now` (default: now): now + seconds until the reset - one week.
--- Nil when the game gives no reset time (the week boundary is then unknown, not guessed).
+-- Start of the weekly-reset week that contains `now`: now + seconds until the reset - one week. `now` must be the
+-- current time (default: now); the game only tells the time until the next reset, so for a past `now` the result is
+-- not a reset boundary. Nil when the game gives no reset time (the week boundary is then unknown, not guessed).
 function Ledger:WeekStart(now)
   now = number_or(now, ns.FS:Now())
   local api = C_DateAndTime and C_DateAndTime.GetSecondsUntilWeeklyReset
@@ -196,20 +230,22 @@ local function new_totals()
   return { income = 0, cost = 0, profit = 0, n = 0, incomplete = 0 }
 end
 
--- Adds a sale or commission to a running total (see the profit rule at the top of this file).
+-- Adds a sale or commission to a running total (see the profit rule at the top of this file). A damaged saved
+-- entry (amount or cost not an integer) adds nothing for the damaged part but counts in `incomplete`.
 local function accumulate(totals, entry)
-  local income = entry.amount
-  local cost = entry.cost
+  local income, cost = entry.amount, entry.cost
+  local damaged = false
+  if not is_integer(income) then income = 0; damaged = true end
+  if cost ~= nil and not is_integer(cost) then cost = nil; damaged = true end
   totals.income = totals.income + income
   totals.cost = totals.cost + (cost or 0)
   totals.profit = totals.income - totals.cost
   if totals.n then totals.n = totals.n + 1 end
-  if cost == nil or entry.incomplete then totals.incomplete = totals.incomplete + 1 end
+  if damaged or cost == nil or entry.incomplete then totals.incomplete = totals.incomplete + 1 end
 end
 
 local function counts_as_profit(entry)
-  return (entry.type == "sale" or entry.type == "commission") and is_integer(entry.amount)
-    and (entry.cost == nil or is_integer(entry.cost))
+  return entry.type == "sale" or entry.type == "commission"
 end
 
 -- Weekly profit for the last `weeks` reset weeks (default 4), newest first: a row for every week, empty ones
@@ -225,8 +261,9 @@ function Ledger:Weekly(now, weeks)
   for i = 1, weeks do
     rows[i] = { weekStart = current - (i - 1) * WEEK_SECONDS, income = 0, cost = 0, profit = 0, incomplete = 0 }
   end
-  for _, entry in ipairs(entries_view() or {}) do
-    if type(entry) == "table" and type(entry.time) == "number" and counts_as_profit(entry) then
+  for _, saved in ipairs(each_saved()) do
+    local entry = saved.entry
+    if type(entry.time) == "number" and counts_as_profit(entry) then
       local back = entry.time >= current and 0 or math.ceil((current - entry.time) / WEEK_SECONDS)
       local row = rows[back + 1]
       if row then accumulate(row, entry) end
@@ -276,13 +313,15 @@ function Ledger.Percentile(sorted, p)
 end
 
 -- What this recipe's commissions have tipped: { median, p25, p75, n } of the gross `tip` of the player's
--- commission entries for the recipe (`quality` nil = all qualities). Entries with no known tip are not samples.
+-- commission entries for the recipe (`quality` nil = all qualities). Entries with no known (or a negative) tip are
+-- not samples.
 -- Nil when there are fewer than the benchmarkMinSamples setting.
 function Ledger:Benchmark(recipeID, quality)
   local tips = {}
-  for _, entry in ipairs(entries_view() or {}) do
-    if type(entry) == "table" and entry.type == "commission" and entry.recipeID == recipeID
-      and (quality == nil or entry.quality == quality) and is_integer(entry.tip) then
+  for _, saved in ipairs(each_saved()) do
+    local entry = saved.entry
+    if entry.type == "commission" and entry.recipeID == recipeID
+      and (quality == nil or entry.quality == quality) and is_integer(entry.tip) and entry.tip >= 0 then
       tips[#tips + 1] = entry.tip
     end
   end
