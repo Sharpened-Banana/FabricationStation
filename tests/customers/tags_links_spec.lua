@@ -258,6 +258,18 @@ describe("Customers tags/links/search/export", function()
       C:SetNote("Bob", "a\r\nb\rc\nd")
       assert.equal("a b c d", C:Export({"Bob"}):match(",([^,]*)$"))
     end)
+    it("leaves lastSeen empty when the date cannot be formatted, and lists each customer once", function()
+      ns.FS.db.global.customers["Bob-Silvermoon"].lastSeen = 1e300
+      assert.has_no.errors(function() C:Export() end)
+      assert.equal("Bob-Silvermoon,1,500000,,,,", C:Export({"Bob"}):match("\n(.*)$"))
+      ns.FS.db.global.customers["Bob-Silvermoon"].lastSeen = 1000
+      _G.date = function() error("date out of range") end
+      assert.equal("Bob-Silvermoon,1,500000,,,,", C:Export({"Bob"}):match("\n(.*)$"))
+      _G.date = os.date
+      local out = C:Export({"Bob", "Bob-Silvermoon", "Bob"})
+      local _, rows = out:gsub("\nBob%-Silvermoon,", "")
+      assert.equal(1, rows)
+    end)
     it("is a plain string that changes nothing", function()
       local before = ns.FS.db.global.customers["Bob-Silvermoon"].notes
       assert.is_string(C:Export())

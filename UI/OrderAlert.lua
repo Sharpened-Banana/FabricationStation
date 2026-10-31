@@ -181,9 +181,9 @@ local function flush()
   end
 end
 
--- Queues an arrival; a rise of zero or less (delta given) is ignored. Arrivals in the same frame share one alert.
+-- Queues an arrival; a rise of zero or less, or NaN (delta given), is ignored. Arrivals in the same frame share one alert.
 function OrderAlert:OnArrived(_, professionName, count, delta)
-  if type(delta) == "number" and delta <= 0 then return end
+  if type(delta) == "number" and (delta ~= delta or delta <= 0) then return end   -- NaN is no rise either
   local name = type(professionName) == "string" and professionName ~= "" and professionName or nil
   pending = pending or {}
   local entry

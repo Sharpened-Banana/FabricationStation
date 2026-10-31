@@ -133,6 +133,7 @@ describe("OrderAlert", function()
   it("ignores a rise of zero or less", function()
     arrive("Tailoring", 2, 0)
     arrive("Tailoring", 2, -1)
+    arrive("Tailoring", 2, 0 / 0)   -- NaN is no rise either
     assert.same({}, played)
     assert.stub(A.ShowToast).was_not.called()
     arrive("Tailoring", 2, nil)   -- no delta given: still an arrival

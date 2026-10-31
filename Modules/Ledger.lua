@@ -109,7 +109,7 @@ end
 -- Stores one LedgerEntry (a copy; `time` defaults to now, `charKey` to this character) and sends FS_LEDGER_CHANGED.
 -- Raises an error only for a `type` other than craft|sale|commission or an `amount` that is not an integer. A bad
 -- optional field never loses the entry: a `cost` that is not an integer is stored as nil with `incomplete = true`, a
--- bad `tip` is stored as nil, a bad `time` becomes now; each is logged once (ns.FS:LogError "Ledger:Add").
+-- bad `tip` is stored as nil, a bad `time` (not a finite number) becomes now; each is logged once (ns.FS:LogError "Ledger:Add").
 -- An unknown cost stays nil. Returns the stored entry, or nil while the saved data is read-only (nothing is
 -- written or sent).
 function Ledger:Add(entry)
@@ -130,7 +130,8 @@ function Ledger:Add(entry)
     ns.FS:LogError("Ledger:Add", "tip is not an integer (" .. tostring(stored.tip) .. "); stored as unknown")
     stored.tip = nil
   end
-  if stored.time ~= nil and not (type(stored.time) == "number" and stored.time == stored.time) then
+  if stored.time ~= nil and not (type(stored.time) == "number" and stored.time == stored.time
+    and stored.time ~= math.huge and stored.time ~= -math.huge) then
     ns.FS:LogError("Ledger:Add", "time is not a number (" .. tostring(stored.time) .. "); used now")
     stored.time = nil
   end

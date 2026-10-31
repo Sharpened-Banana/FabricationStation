@@ -6,8 +6,9 @@ local ADDON_NAME, ns = ...
 -- Orders are unique by orderID. Records are captured from FS_ORDER_FULFILLED (player orders only: NPC orders have no
 -- customer name). Every change sends FS_CUSTOMERS_CHANGED with the nameRealm. Nothing is written while the saved
 -- data is from a newer version (ns.FS.dbIsNewer), and saved records are never wiped: a damaged record only gets
--- its missing parts filled in. Notes, tags, alt links ("linkedTo" always holds the root of the chain), search and CSV
--- export are below the order store; a record made by a note, tag or link has no firstSeen/lastSeen until an order arrives.
+-- its missing parts filled in. Notes, tags, alt links (Link stores Root(main) in linkedTo, but an older link can
+-- point at a character that was linked below another one later, so Root follows the chain), search and CSV export are
+-- below the order store; a record made by a note, tag or link has no firstSeen/lastSeen until an order arrives.
 local Customers = ns.FS:NewModule("Customers", "AceEvent-3.0")
 
 ---------------------------------------------------------------------------
@@ -366,7 +367,12 @@ local function csv_row(name, record)
     end
   end
   table.sort(tags)
-  local lastSeen = type(record.lastSeen) == "number" and date("!%Y-%m-%d", record.lastSeen) or ""
+  -- A damaged lastSeen (out of range, NaN) must not break the export: date() may throw or return nothing for it.
+  local lastSeen = ""
+  if type(record.lastSeen) == "number" then
+    local ok, text = pcall(date, "!%Y-%m-%d", record.lastSeen)
+    if ok and type(text) == "string" then lastSeen = text end
+  end
   return table.concat({
     csv_field(name),
     #(type(record.orders) == "table" and record.orders or {}),
@@ -379,14 +385,17 @@ local function csv_row(name, record)
 end
 
 -- The customers as CSV text (plain text; nothing here is ever run). `nameRealms` is the list to export in that
--- order (unknown names are skipped); nil exports everyone, sorted by name. Reads only.
+-- order (unknown names are skipped, a repeated name is listed once); nil exports everyone, sorted by name. Reads only.
 function Customers:Export(nameRealms)
   local list = view() or {}
-  local names = {}
+  local names, seen = {}, {}
   if type(nameRealms) == "table" then
     for _, name in ipairs(nameRealms) do
       name = self:NormalizeName(name)
-      if name then names[#names + 1] = name end
+      if name and not seen[name] then   -- each customer once ("Bob" and "Bob-Realm" are the same)
+        seen[name] = true
+        names[#names + 1] = name
+      end
     end
   else
     for name in pairs(list) do names[#names + 1] = name end
