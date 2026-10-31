@@ -847,7 +847,9 @@ P4-19. **Recipe chat-link type (Task 10, ChatMatcher).** Shift-click a recipe fr
 run `/run print((C_TradeSkillUI.GetRecipeLink(<recipeID>) or ""):gsub("|","||"))`. Note the `|H<type>:<id>|h` type
 (`enchant` or `spell`). ChatMatcher accepts both; if it prints another type, add it to the recipe-link kinds in
 `extractLinks` (`Modules/Social/ChatMatcher.lua`). Also post `LF crafter` plus a recipe link and an item link in a public
-channel: once Task 11 lands, ChatScan should name both.
+channel: once Task 11 lands, ChatScan should name both. Also check the colour wrapper of the pasted link: ChatMatcher
+handles both `|cffRRGGBB...|r` and the named form `|cnIQ4:...|r`; if the client prints another form, `plain` or `link` will
+keep junk and `extractLinks`/`normalize` need that form added.
 
 ## Not done here
 

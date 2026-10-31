@@ -23,6 +23,7 @@ ChatMatcher.MAX_KEYWORDS = 100  -- keywords used per list
 local MAX_HITS = 20             -- matches of one keyword that are recorded (they only feed the include mask)
 local MAX_LINK_TRIES = 40       -- |H markers examined per line
 local MAX_NAME_HITS = 20        -- occurrences of one recipe name that are masked
+local MAX_ID = 2147483647       -- ids above this are not real item/recipe ids
 
 local sub, find, match, gsub, lower = string.sub, string.find, string.match, string.gsub, string.lower
 
@@ -119,10 +120,16 @@ local function extractLinks(text)
       local closeH = find(text, "|h", hEnd + 2, true)
       if not closeH then break end
       local first, last = i, closeH + 1
-      if i > 10 and match(sub(text, i - 10, i - 1), "^|c%x%x%x%x%x%x%x%x$") then first = i - 10 end
+      if i > 10 and match(sub(text, i - 10, i - 1), "^|c%x%x%x%x%x%x%x%x$") then
+        first = i - 10
+      else
+        -- named colour code (|cnIQ4:), the form newer clients may use
+        local named = match(sub(text, math.max(1, i - 40), i - 1), "(|cn[^:|]*:)$")
+        if named then first = i - #named end
+      end
       if sub(text, last + 1, last + 2) == "|r" then last = last + 2 end
       local n = tonumber(id)
-      if n and n > 0 then
+      if n and n > 0 and n <= MAX_ID then
         local link = sub(text, first, last)
         if kind == "item" then
           if #itemLinks < ChatMatcher.MAX_LINKS then itemLinks[#itemLinks + 1] = { itemID = n, link = link } end
@@ -146,6 +153,7 @@ local function normalize(text)
   text = gsub(text, "|H[^|]*|h", "")
   text = gsub(text, "|h", "")
   text = gsub(text, "|c%x%x%x%x%x%x%x%x", "")
+  text = gsub(text, "|cn[^:|]*:", "")
   text = gsub(text, "|r", "")
   text = gsub(lower(text), "%s+", " ")
   return (gsub(gsub(text, "^ ", ""), " $", ""))
@@ -204,7 +212,7 @@ local function findRecipeNames(plain, nameIndex, maxHits)
         hit = true
         plain = sub(plain, 1, a - 1) .. ("\0"):rep(b - a + 1) .. sub(plain, b + 1)
       end
-      if hit and not seen[entry.recipeID] then
+      if hit and entry.recipeID ~= nil and not seen[entry.recipeID] then
         seen[entry.recipeID] = true
         out[#out + 1] = entry.recipeID
         if #out >= maxHits then break end
