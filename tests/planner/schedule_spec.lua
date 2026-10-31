@@ -110,6 +110,32 @@ describe("Planner concentration schedule", function()
     assert.same({ "Aria-Silvermoon:1001" }, ids(planner(ns):GetSchedule(NOW)))
   end)
 
+  it("drops another character's result even if Recipes ignores the charKey filter", function()
+    -- Bren also has a Blacksmithing (2907) pool and result. A Recipes that filters by line only returns both
+    -- characters' 2907 results for each 2907 pool; without Planner's own charKey guard every result would be
+    -- collected twice (once per pool) and, with one craft per recipe allowed, planned twice.
+    local list = {
+      { recipeID = 1001, charKey = "Aria-Silvermoon", concentrationCost = 200, goldPerConcentration = 80, flags = {} },
+      { recipeID = 1001, charKey = "Bren-Silvermoon", concentrationCost = 100, goldPerConcentration = 50, flags = {} },
+    }
+    local ns, e = env({ ranked = list })
+    char(ns, "Bren-Silvermoon").professions[2907] = { name = "Midnight Blacksmithing", recipes = { [1001] = true },
+      concentration = { currencyID = 3256, value = 300, max = 1000, time = NOW, perCycle = 1, cycleSeconds = 360 } }
+    e.recipes.GetRanked = function(_, filter)
+      local out = {}
+      for _, r in ipairs(list) do if filter.skillLineID == 2907 then out[#out + 1] = r end end
+      return out
+    end
+    planner(ns):Settings().maxCraftsPerRecipe = 1
+    local rows = planner(ns):GetSchedule(NOW)
+    local got = {}
+    for i, r in ipairs(rows) do
+      got[i] = { r.charKey, r.recipeID, r.crafts, r.concentrationUsed, r.goldPerConcentration }
+    end
+    table.sort(got, function(a, b) return a[1] < b[1] end)
+    assert.same({ { "Aria-Silvermoon", 1001, 1, 200, 80 }, { "Bren-Silvermoon", 1001, 1, 100, 50 } }, got)
+  end)
+
   it("drops hidden characters", function()
     local ns = env()
     alts(ns):SetHidden("Aria-Silvermoon", true)
@@ -269,6 +295,23 @@ describe("Planner cap warnings in chat", function()
     W.advance(20)
     assert.equal(1, #W.printed)
     assert.is_true(planner(ns):IsEnabled())
+  end)
+
+  it("a /reload's loading screen announces nothing but still stops listening", function()
+    local _, _, W = env()
+    W.fire("PLAYER_ENTERING_WORLD", false, true)                         -- isInitialLogin, isReloadingUi
+    W.advance(20)
+    assert.same({}, W.printed)
+    W.fire("PLAYER_ENTERING_WORLD", false, false)
+    W.advance(20)
+    assert.same({}, W.printed)
+  end)
+
+  it("the first login's loading screen announces", function()
+    local _, _, W = env()
+    W.fire("PLAYER_ENTERING_WORLD", true, false)
+    W.advance(10)
+    assert.equal(1, #W.printed)
   end)
 
   it("a later loading screen does not restart the wait", function()

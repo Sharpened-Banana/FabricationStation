@@ -3,15 +3,15 @@ local ADDON_NAME, ns = ...
 -- Planner: what to do next across every character, from saved data (design rule 1: no profession window needed).
 -- This file holds the module object, its settings and options group, the weekly knowledge checklist, the missing
 -- recipe finder, the concentration schedule and the cap warnings (with their once-per-session chat announcement).
--- A later phase-3 task adds spec advice (Modules/PlannerSpec.lua, the same module object).
+-- Spec advice lives in Modules/PlannerSpec.lua (Task 11), on the same module object.
 --
 -- Everything here is a read: Alts supplies the visible characters, their listed professions, knowledge state and
 -- concentration pools; the account-wide recipe catalog (Alts) and the generated RecipeSources table say which recipes
--- exist; 1a's Scanner says which ones a character knows; 1b's Recipes ranks the concentration crafts. Nothing is
--- cached (every call reads the current data: the schedule asks Recipes:GetRanked once per pool, which only filters
--- the results of its last scan pass), so Planner listens to no message; views refresh on FS_ALTS_CHANGED /
--- FS_RECIPES_CHANGED themselves (preflight row 17). The only event is the first PLAYER_ENTERING_WORLD, which starts
--- the chat cap warning.
+-- exist; 1a's Scanner says which ones a character knows; 1b's Recipes ranks the concentration crafts. Nothing here
+-- is cached (every call reads the current data: the schedule asks Recipes:GetRanked once per pool, which only
+-- filters the results of its last scan pass; spec advice is memoised by its inputs in PlannerSpec.lua), so Planner
+-- listens to no message; views refresh on FS_ALTS_CHANGED / FS_RECIPES_CHANGED themselves (preflight row 17). The
+-- only event is the first PLAYER_ENTERING_WORLD, which starts the chat cap warning.
 --
 -- Settings: db.global.settings.planner = { capWarnHours, capWarnChat, maxCraftsPerRecipe, specTopRecipes, section? },
 -- created on first use through 1a's SettingsAccessor (a session-only copy while the saved data is from a newer
@@ -295,10 +295,13 @@ local CAPWARN_DELAY = 10   -- seconds after the first loading screen, so Scanner
 
 -- Registers the first PLAYER_ENTERING_WORLD only (no API calls at enable). Later loading screens fire it again, so
 -- the handler unregisters itself; the cancellable Debounce (not C_Timer.After, preflight row 26) lets OnDisable stop
--- a pending announcement. Both the handler and the announcement run through ns.FS:Wrap("Planner", ...).
+-- a pending announcement. A /reload's loading screen (isReloadingUi) announces nothing: the warning is for a login,
+-- not for every reload (the handler still unregisters). Both the handler and the announcement run through
+-- ns.FS:Wrap("Planner", ...).
 function Planner:OnEnable()
-  self:RegisterEvent("PLAYER_ENTERING_WORLD", ns.FS:Wrap("Planner", function()
+  self:RegisterEvent("PLAYER_ENTERING_WORLD", ns.FS:Wrap("Planner", function(_, _, isReloadingUi)
     self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+    if isReloadingUi then return end
     ns.FS:Debounce(CAPWARN_KEY, CAPWARN_DELAY, ns.FS:Wrap("Planner", function() self:AnnounceCapWarnings() end))
   end))
 end

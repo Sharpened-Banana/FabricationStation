@@ -89,10 +89,19 @@ describe("PlanCalc scheduler", function()
     end)
 
     it("without an expected cost the rank is goldPerConcentration itself", function()
+      -- x and y have no usable expected cost and the best gpc; z has an expected cost and a lower rate per full
+      -- point (40 * 100 / 100 = 40). A rank that read a nil/0 expected cost as 0 would put z first.
       local x = r(1, 200, 60); x.expectedConcentrationCost = nil
       local y = r(2, 100, 50); y.expectedConcentrationCost = 0
-      local rows = P.Schedule({ pool("A", 300, 1000, NOW) }, { y, x }, { maxCraftsPerRecipe = 1 })
-      assert.same({ 1, 2 }, { rows[1].recipeID, rows[2].recipeID })
+      local z = r(3, 100, 40); z.expectedConcentrationCost = 100
+      local rows = P.Schedule({ pool("A", 400, 1000, NOW) }, { z, y, x }, { maxCraftsPerRecipe = 1 })
+      assert.same({ 1, 2, 3 }, { rows[1].recipeID, rows[2].recipeID, rows[3].recipeID })
+      -- With room for only one craft, the gpc-60 result without an expected cost wins it.
+      rows = P.Schedule({ pool("A", 200, 1000, NOW) }, { z, y, x }, { maxCraftsPerRecipe = 1 })
+      assert.same({ 1 }, { rows[1].recipeID })
+      assert.equal(1, #rows)
+      -- Its gain falls back to the full cost: 1 * 60 * 200.
+      assert.equal(12000, rows[1].expectedGain)
     end)
 
     it("a capped pool schedules from its full value", function()
