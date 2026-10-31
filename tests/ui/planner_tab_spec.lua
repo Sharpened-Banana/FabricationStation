@@ -266,6 +266,24 @@ describe("Planner tab", function()
       assert.same({ 263455 }, requested)
     end)
 
+    -- [Task 15, Task 14 follow-up] An uncached name is remembered as false for the row, so two sources with the same
+    -- item look it up once.
+    it("looks an uncached item up once per row when two sources share it", function()
+      local knowledge = ns.GameData.Get("Knowledge")
+      knowledge.sources[#knowledge.sources + 1] = { id = "2907:treatise:93999", skillLineID = 2907,
+        category = "treatise", reset = "weekly", quests = { 93999 }, itemID = 263455, points = 1 }
+      local looked = 0
+      _G.C_Item.GetItemNameByID = function(id) if id == 263455 then looked = looked + 1 end end
+      _G.C_Item.RequestLoadItemDataByID = function() end
+      local v = open()
+      looked = 0
+      reg.planner.refresh(container)
+      assert.equal(1, looked)
+      click(row_frame(v.grids.knowledge, "Aria-Silvermoon:2907"))
+      local _, n = v.grids.knowledge.detailPool[1].text:GetText():gsub("item:263455", "")
+      assert.equal(2, n)
+    end)
+
     -- Fix round 1: only the Knowledge table's own build counts (GameData.TableBuild), never 1a's status.missing.
     it("names the Knowledge table's own build in the footer", function()
       local v = open()
@@ -417,6 +435,26 @@ describe("Planner tab", function()
       -- No rows: under the grid header, the grid down to the footer.
       assert.same({ "TOPLEFT", container, "TOPLEFT", 10, -82 }, point(v.empty, 1))
       assert.same({ "BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 22 }, point(v.grids.concentration.frame, 2))
+    end)
+
+    -- [Task 15, Task 14 follow-up] The message on its own 20 px line above the footer never wraps; hovering it shows the
+    -- whole text. Under the grid header it wraps again and has no hover area.
+    it("keeps the message above the footer on one line, with the whole text on hover", function()
+      boot({ ranked = {} })
+      local v = open()
+      local wraps = {}
+      v.empty.SetWordWrap = function(_, on) wraps[#wraps + 1] = on end
+      select(v, "concentration")
+      assert.same({ "BOTTOMLEFT", container, "BOTTOMLEFT", 10, 24 }, point(v.empty, 1))
+      assert.is_false(wraps[#wraps])
+      assert.is_true(v.emptyHit:IsShown())
+      v.emptyHit:GetScript("OnEnter")(v.emptyHit)
+      assert.equal("Nothing to schedule: no concentration pool has a priced recipe", plain(tooltip.lines[1]))
+      A:Disable()
+      reg.planner.refresh(container)
+      assert.same({ "TOPLEFT", container, "TOPLEFT", 10, -82 }, point(v.empty, 1))
+      assert.is_true(wraps[#wraps])
+      assert.is_false(v.emptyHit:IsShown())
     end)
   end)
 

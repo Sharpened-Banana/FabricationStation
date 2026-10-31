@@ -188,11 +188,11 @@ local CATEGORY_LABELS = { weeklyQuest = "Weekly quest", treatise = "Treatise", t
 local STATE_WORDS = { done = "done", open = "open", closed = "closed (not the faire week)",
   unknown = "unknown (no quest data from this week)" }
 
--- Checklist row (Planner:GetKnowledgeChecklist), names = { [itemID] = item name } (resolved by the caller; this
--- model reads no API) -> the detail lines: a gold "<charKey> <profession>" title, then one line per source in data
--- order, "  <Category>: [<item name> · ]<earned>/<total> KP · <state>[ · <hint>]" (an item without a name as
--- "item:<id>", an unknown state as "?/<total>"), then "  First crafts: N pending" when known. A profession without
--- sources says there is no knowledge data for it.
+-- Checklist row (Planner:GetKnowledgeChecklist), names = { [itemID] = item name | false (not cached) } (resolved by
+-- the caller; this model reads no API) -> the detail lines: a gold "<charKey> <profession>" title, then one line per
+-- source in data order, "  <Category>: [<item name> · ]<earned>/<total> KP · <state>[ · <hint>]" (an item without a
+-- name as "item:<id>", an unknown state as "?/<total>"), then "  First crafts: N pending" when known. A profession
+-- without sources says there is no knowledge data for it.
 function Tab.KnowledgeDetailLines(row, names)
   row = type(row) == "table" and row or {}
   names = type(names) == "table" and names or {}
@@ -459,7 +459,8 @@ local function knowledge_section(P)
     local names = {}
     for _, st in ipairs(type(r.states) == "table" and r.states or {}) do
       local itemID = type(st.source) == "table" and st.source.itemID or nil
-      if finite(itemID) and names[itemID] == nil then names[itemID] = item_name(itemID) end
+      -- false marks an uncached name, so a repeated item is looked up once (KnowledgeDetailLines shows item:<id>).
+      if finite(itemID) and names[itemID] == nil then names[itemID] = item_name(itemID) or false end
     end
     local lines = Tab.KnowledgeDetailLines(r, names)
     out.rows[#out.rows + 1] = {
@@ -687,22 +688,28 @@ local function set_pickers(p)
   end
 end
 
--- The message for the section, or nil. Without rows it sits under the grid header and the grid reaches the footer;
--- under rows (cap warnings above an empty plan) it takes its own line above the footer and the grid ends above that
--- line, so a list that overflows never scrolls it out of view.
+-- The message for the section, or nil. Without rows it sits under the grid header (wrapping) and the grid reaches the
+-- footer; under rows (cap warnings above an empty plan) it takes its own one-line (no wrap) line above the footer and
+-- the grid ends above that line, so a list that overflows never scrolls it out of view; hovering that line shows the
+-- whole message.
 local function show_empty(grid, text, rows)
   local below = text ~= nil and (rows or 0) > 0
   grid.frame:ClearAllPoints()
   grid.frame:SetPoint("TOPLEFT", view.container, "TOPLEFT", 0, -GRID_TOP)
   grid.frame:SetPoint("BOTTOMRIGHT", view.container, "BOTTOMRIGHT", 0, GRID_BOTTOM + (below and MESSAGE_LINE or 0))
   view.empty:ClearAllPoints()
+  view.empty:SetWordWrap(not below)
   if below then
     view.empty:SetPoint("BOTTOMLEFT", view.container, "BOTTOMLEFT", PAD + 4, GRID_BOTTOM + 2)
     view.empty:SetPoint("BOTTOMRIGHT", view.container, "BOTTOMRIGHT", -PAD - 4, GRID_BOTTOM + 2)
+    view.emptyTooltip = { text }
+    view.emptyHit:Show()
   else
     local top = GRID_TOP + Grid().HEADER_HEIGHT + 8
     view.empty:SetPoint("TOPLEFT", view.container, "TOPLEFT", PAD + 4, -top)
     view.empty:SetPoint("TOPRIGHT", view.container, "TOPRIGHT", -PAD - 4, -top)
+    view.emptyTooltip = nil
+    view.emptyHit:Hide()
   end
   if text then
     view.empty:SetText(color(DIM, text))
@@ -868,6 +875,8 @@ local function build(container)
   empty:SetJustifyH("LEFT")
   empty:Hide()
   created.empty = empty
+  created.emptyHit = hover_area(container, empty, function() return view and view.emptyTooltip end)
+  created.emptyHit:Hide()
 
   view = created
   apply_layout()
