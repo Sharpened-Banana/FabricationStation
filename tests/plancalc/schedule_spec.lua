@@ -53,6 +53,20 @@ describe("PlanCalc scheduler", function()
       assert.equal(1, rows[1].expectedGain) -- 1 * 0.5 * 2.5 = 1.25
     end)
 
+    -- [Phase 3 final M2] A pool whose regeneration rate is unknown keeps that on its rows (a pure copy), so the
+    -- views say "?" instead of "not full within 14 days".
+    it("a row keeps its pool's rateUnknown", function()
+      local unknown = pool("A", 300, 1000, nil); unknown.rateUnknown = true
+      local b = r(9, 100, 1); b.charKey = "B"
+      local rows = P.Schedule({ unknown, pool("B", 100, 1000, NOW + 10) }, { r(1, 100, 99), b },
+        { maxCraftsPerRecipe = 10 })
+      assert.same({ "B", "A" }, { rows[1].charKey, rows[2].charKey })
+      assert.same({ 3, 300 }, { rows[2].crafts, rows[2].concentrationUsed })
+      assert.is_true(rows[2].rateUnknown)
+      assert.is_nil(rows[2].fullAt)
+      assert.is_nil(rows[1].rateUnknown)
+    end)
+
     it("a pool with an unknown value (projection unavailable) schedules nothing", function()
       local rows = P.Schedule({ pool("A", nil, 1000, nil), pool("B", nil, nil, nil) }, { r(1, 100, 99) },
         { maxCraftsPerRecipe = 10 })

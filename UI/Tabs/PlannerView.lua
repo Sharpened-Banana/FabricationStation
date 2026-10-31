@@ -67,7 +67,8 @@ end
 ---------------------------------------------------------------------------
 
 -- { Pool } (Alts:GetPools), now, max -> { { left = "<charKey> <profession>", right, urgent } } sorted by fullAt
--- (full pools first), then pools not full within 14 days (">14d"), then unknown concentration ("—", never urgent).
+-- (full pools first), then pools not full within 14 days (">14d") or with an unknown regeneration rate ("?"), then
+-- unknown concentration ("—"); only a known time to full is urgent.
 -- The time left is fullAt - now ("Full" at 0). urgent: full within Planner's capWarnHours. At most max lines (the last "+K more" when some are left out).
 function PV.ConcentrationLines(pools, now, max)
   now = finite(now) and now or ns.FS:Now()
@@ -101,6 +102,8 @@ function PV.ConcentrationLines(pools, now, max)
       right = "Full"
     elseif finite(toFull) then
       right = view().FormatDuration(toFull)
+    elseif p.rateUnknown then
+      right = "?"
     else
       right = ">14d"
     end

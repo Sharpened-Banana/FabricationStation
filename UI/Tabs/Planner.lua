@@ -284,12 +284,15 @@ function Tab.WarningRow(w, now)
 end
 
 -- ScheduleRow (Planner:GetSchedule), now -> a grid row: compact gain and gold per point (full values in the
--- tooltip), the time to full (">14d" when not full within 14 days), and row.schedule for the Queue button.
+-- tooltip), the time to full (">14d" when not full within 14 days, "?" when the regeneration rate is unknown), and
+-- row.schedule for the Queue button.
 function Tab.ScheduleRow(r, now)
   local name, prof = recipe_name(r.recipeID), profession_name(r.skillLineID)
   local toFull = finite(r.fullAt) and math.max(0, r.fullAt - now) or nil
   local caps, capsLine
-  if toFull == nil then
+  if toFull == nil and r.rateUnknown then
+    caps, capsLine = "?", "Full in: unknown"
+  elseif toFull == nil then
     caps, capsLine = ">14d", "Full in: more than 14 days"
   elseif toFull == 0 then
     caps, capsLine = "Full", "Full in: now (full)"

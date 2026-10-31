@@ -78,13 +78,15 @@ local function skill_text(p)
   return "?"
 end
 
--- "400/1000 · 2d 12h", "1000/1000 · Full", "400/1000 · >14d" (not full within PlanCalc's 14-day horizon); "—" when
--- the concentration is unknown.
+-- "400/1000 · 2d 12h", "1000/1000 · Full", "400/1000 · >14d" (not full within PlanCalc's 14-day horizon),
+-- "400/1000 · ?" (regeneration rate unknown); "—" when the concentration is unknown.
 local function conc_text(c)
   if type(c) ~= "table" or not finite(c.now) or not finite(c.max) then return EM_DASH end
   local when
   if c.secondsToFull == 0 then
     when = "Full"
+  elseif c.rateUnknown then
+    when = "?"
   elseif finite(c.secondsToFull) then
     when = V.FormatDuration(c.secondsToFull)
   else
@@ -209,6 +211,7 @@ local function conc_detail(c)
   if type(c) ~= "table" or not finite(c.now) or not finite(c.max) then return "  Concentration: unknown" end
   local value = whole(c.now) .. "/" .. whole(c.max)
   if c.secondsToFull == 0 then return "  Concentration: " .. value .. DOT .. "Full" end
+  if c.rateUnknown then return "  Concentration: " .. value .. DOT .. "fill time unknown (no regeneration data)" end
   if finite(c.secondsToFull) then
     return "  Concentration: " .. value .. DOT .. "full at " .. clock(c.fullAt) .. " (in "
       .. V.FormatDuration(c.secondsToFull) .. ")"

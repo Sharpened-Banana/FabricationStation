@@ -131,14 +131,28 @@ end
 
 local function is_number(v) return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge end
 
--- Concentration projected to now from 1a's Scanner snapshot: { now, max, fullAt|nil, secondsToFull|nil }, or nil when
--- the projection is unavailable or max is nil or <= 0 (as the 1b Dashboard treats it; preflight row 11).
--- secondsToFull is 0 when full (fullAt = now) and nil when it does not fill within PlanCalc's 14-day horizon.
+-- Whether the Scanner record has a positive regeneration rate. Concentration always regenerates, so a perCycle or
+-- cycleSeconds that is not positive (Scanner stores 0 when the game gives none) means the rate is unknown.
+local function rate_known(S, charKey, skillLineID)
+  local p = S:GetProfession(charKey, skillLineID)
+  local c = type(p) == "table" and p.concentration
+  if type(c) ~= "table" then return false end
+  return is_number(c.perCycle) and c.perCycle > 0 and is_number(c.cycleSeconds) and c.cycleSeconds > 0
+end
+
+-- Concentration projected to now from 1a's Scanner snapshot: { now, max, fullAt|nil, secondsToFull|nil,
+-- rateUnknown|nil }, or nil when the projection is unavailable or max is nil or <= 0 (as the 1b Dashboard treats it;
+-- preflight row 11). secondsToFull is 0 when full (fullAt = now) and nil when it does not fill within PlanCalc's 14-day
+-- horizon. [Phase 3 final M2] Below max with an unknown regeneration rate (rate_known): rateUnknown = true and no
+-- secondsToFull/fullAt, so views say "?" instead of "not full within 14 days" (design rule 6).
 local function concentration(charKey, skillLineID, now)
   local S = scanner()
   if not S then return nil end
   local value, max = S:ProjectConcentration(charKey, skillLineID, now)
   if not (is_number(value) and is_number(max) and max > 0) then return nil end
+  if value < max and not rate_known(S, charKey, skillLineID) then
+    return { now = value, max = max, rateUnknown = true }
+  end
   local seconds = ns.PlanCalc.TimeToFull(function(t) return S:ProjectConcentration(charKey, skillLineID, t) end, now)
   return { now = value, max = max, secondsToFull = seconds, fullAt = seconds and now + seconds or nil }
 end
@@ -331,7 +345,8 @@ end
 
 -- One Pool per visible character and listed profession whose Scanner record has a concentration snapshot, in overview
 -- order then skillLineID. value/max (and fullAt/secondsToFull) are nil when the concentration is unknown (projection
--- unavailable or max <= 0): such a pool is never scheduled or warned about (PlanCalc), but stays visible.
+-- unavailable or max <= 0): such a pool is never scheduled or warned about (PlanCalc), but stays visible. rateUnknown
+-- (true or nil) is copied from the concentration: below max with an unknown regeneration rate, no fill time.
 function Alts:GetPools(now)
   now = is_number(now) and now or ns.FS:Now()
   local pools = {}
@@ -341,7 +356,7 @@ function Alts:GetPools(now)
       if type(c.professions[sl].concentration) == "table" then
         local conc = concentration(charKey, sl, now) or {}
         pools[#pools + 1] = { charKey = charKey, skillLineID = sl, value = conc.now, max = conc.max,
-          fullAt = conc.fullAt, secondsToFull = conc.secondsToFull }
+          fullAt = conc.fullAt, secondsToFull = conc.secondsToFull, rateUnknown = conc.rateUnknown }
       end
     end
   end

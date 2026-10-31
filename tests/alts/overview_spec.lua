@@ -241,6 +241,32 @@ describe("Alts overview", function()
       assert.same({ now = 400, max = 1000 }, c)
     end)
 
+    -- [Phase 3 final M2] Concentration always regenerates, so a record without a positive rate (Scanner stores
+    -- rechargingAmountPerCycle / the cycle as 0 when the game gives none) has an unknown fill time: not "not full
+    -- within 14 days". A full pool stays "Full" (0 seconds) whatever its rate.
+    it("an unknown regeneration rate gives rateUnknown and no fill time, not 'not within 14 days'", function()
+      local conc = char(ns, "Aria-Silvermoon").professions[2907].concentration
+      conc.perCycle = 0
+      local c = A:GetAltRow("Aria-Silvermoon", NOW).professions[1].concentration
+      assert.same({ now = 400, max = 1000, rateUnknown = true }, c)
+      assert.is_nil(c.secondsToFull)
+      conc.perCycle, conc.cycleSeconds = 1, 0
+      assert.is_true(A:GetAltRow("Aria-Silvermoon", NOW).professions[1].concentration.rateUnknown)
+      conc.perCycle, conc.cycleSeconds = nil, nil
+      assert.is_true(A:GetAltRow("Aria-Silvermoon", NOW).professions[1].concentration.rateUnknown)
+      local pools = A:GetPools(NOW)
+      assert.same({ charKey = "Aria-Silvermoon", skillLineID = 2907, value = 400, max = 1000, rateUnknown = true },
+        pools[1])
+      -- Still below max without fullAt: no cap warning (only Bren's capped pool).
+      assert.same({ "Bren-Silvermoon" }, { ns.PlanCalc.CapWarnings(pools, NOW, 86400 * 365)[1].charKey,
+        ns.PlanCalc.CapWarnings(pools, NOW, 86400 * 365)[2] })
+      -- A full pool without a rate is still full.
+      local bren = char(ns, "Bren-Silvermoon").professions[2912].concentration
+      bren.perCycle = 0
+      local full = A:GetAltRow("Bren-Silvermoon", NOW).professions[1].concentration
+      assert.same({ now = 1000, max = 1000, secondsToFull = 0, fullAt = NOW }, full)
+    end)
+
     it("pools: a capped pool warns as capped, an unknown pool has nil value and max and is never scheduled", function()
       env.scanner.ProjectConcentration = function(_, charKey, sl)
         if charKey == "Aria-Silvermoon" then return nil end

@@ -75,6 +75,22 @@ describe("CharactersView", function()
     assert.is_true(p.concUrgent)
   end)
 
+  -- [Phase 3 final M2] An unknown regeneration rate is unknown, not "not full within 14 days".
+  it("shows '?' for the fill time when the regeneration rate is unknown", function()
+    local c = ns.FS.db.global.characters["Aria-Silvermoon"].professions[2907].concentration
+    c.perCycle = 0
+    ns.FS:GetModule("Planner"):Settings().capWarnHours = 168
+    local alt = A:GetAltRow("Aria-Silvermoon", NOW)
+    local p = V.Row(alt, NOW).profs[1]
+    assert.same({ "400/1000 · ?", false }, { p.conc, p.concUrgent })
+    local detail = table.concat(V.DetailLines(alt, NOW), "\n")
+    assert.is_truthy(detail:find("  Concentration: 400/1000 · fill time unknown (no regeneration data)", 1, true))
+    assert.is_nil(detail:find("14 days", 1, true))
+    -- A full pool without a rate is still "Full".
+    ns.FS.db.global.characters["Bren-Silvermoon"].professions[2912].concentration.perCycle = 0
+    assert.equal("1000/1000 · Full", V.Row(A:GetAltRow("Bren-Silvermoon", NOW), NOW).profs[1].conc)
+  end)
+
   it("counts ready cooldowns and charges, and shows the soonest pending one", function()
     local cds = ns.FS.db.global.characters["Aria-Silvermoon"].professions[2907].cooldowns
     cds[1002] = { readyAt = NOW - 10, charges = 0, maxCharges = 0, time = NOW }
@@ -266,6 +282,14 @@ describe("PlannerView", function()
     -- Read again a day later from the same pools: the time left follows fullAt - now.
     l = PV.ConcentrationLines(A:GetPools(NOW), NOW + 86400, 6)
     assert.same({ "Full", "1d 12h" }, { l[1][2], l[2][2] })
+  end)
+
+  it("shows '?' for a pool whose regeneration rate is unknown, never urgent", function()
+    ns.FS.db.global.characters["Aria-Silvermoon"].professions[2907].concentration.perCycle = 0
+    PL:Settings().capWarnHours = 168
+    local l = PV.ConcentrationLines(A:GetPools(NOW), NOW, 6)
+    assert.same({ "Bren-Silvermoon Herbalism", "Full" }, { l[1][1], l[1][2] })
+    assert.same({ "Aria-Silvermoon Blacksmithing", "?", false }, { l[2][1], l[2][2], l[2].urgent })
   end)
 
   it("lists unknown concentration last as a dash and caps the list with a +N line", function()

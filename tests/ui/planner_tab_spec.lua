@@ -381,6 +381,28 @@ describe("Planner tab", function()
         "Queue adds the crafts with concentration" }, tooltip.lines)
     end)
 
+    -- [Phase 3 final M2] A pool whose regeneration rate is unknown: "?" in Caps in, "Full in: unknown" in the tooltip
+    -- (not ">14d"); no soon warning for it.
+    it("shows '?' in Caps in when the regeneration rate is unknown", function()
+      ns.FS.db.global.characters["Aria-Silvermoon"].professions[2907].concentration.perCycle = 0
+      PL:Settings().capWarnHours = 168
+      local v = open()
+      select(v, "concentration")
+      local grid = v.grids.concentration
+      assert.same({ "warn:Bren-Silvermoon:2912", "plan:Aria-Silvermoon:2907:1001" }, shown_keys(grid))
+      local plan = row_frame(grid, "plan:Aria-Silvermoon:2907:1001")
+      assert.equal("?", plan.cells.caps:GetText())
+      hover(plan)
+      assert.equal("Full in: unknown", tooltip.lines[6])
+      local T = ns.UI.PlannerTab
+      assert.same({ "?", "Full in: unknown" }, { T.ScheduleRow({ charKey = "A-B", skillLineID = 2907, recipeID = 1,
+        rateUnknown = true }, NOW).cells.caps, T.ScheduleRow({ charKey = "A-B", skillLineID = 2907, recipeID = 1,
+        rateUnknown = true }, NOW).tooltip[6] })
+      assert.same({ ">14d", "Full in: more than 14 days" }, { T.ScheduleRow({ charKey = "A-B", skillLineID = 2907,
+        recipeID = 1 }, NOW).cells.caps, T.ScheduleRow({ charKey = "A-B", skillLineID = 2907, recipeID = 1 },
+        NOW).tooltip[6] })
+    end)
+
     it("adds a schedule row to the Queue on a click and says so", function()
       local v = open()
       select(v, "concentration")

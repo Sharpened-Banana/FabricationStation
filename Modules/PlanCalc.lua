@@ -203,8 +203,8 @@ end
 -- value or a missing/non-positive max (concentration unknown, as in CapWarnings) schedules nothing. Results need a
 -- positive concentrationCost and goldPerConcentration and no noPrice/unknownRecipe flag. concentrationUsed charges
 -- the full concentrationCost per craft; expectedGain uses expectedConcentrationCost (cost after the ingenuity
--- refund, which goldPerConcentration is per point of; falls back to concentrationCost). Rows: soonest-full pool
--- first (no fullAt last), then best gold per point spent.
+-- refund, which goldPerConcentration is per point of; falls back to concentrationCost). Rows carry the pool's fullAt
+-- and rateUnknown (copied as they are). Rows: soonest-full pool first (no fullAt last), then best gold per point spent.
 function PlanCalc.Schedule(pools, results, opts)
   local maxCrafts = opts and positive(opts.maxCraftsPerRecipe) and math.floor(opts.maxCraftsPerRecipe) or math.huge
   local byPool = {}
@@ -234,7 +234,7 @@ function PlanCalc.Schedule(pools, results, opts)
           local used = n * r.concentrationCost
           local row = { charKey = p.charKey, skillLineID = p.skillLineID, recipeID = r.recipeID, crafts = n,
             concentrationUsed = used, expectedGain = math.floor(n * r.goldPerConcentration * expectedCostOf(r)),
-            goldPerConcentration = r.goldPerConcentration, fullAt = p.fullAt }
+            goldPerConcentration = r.goldPerConcentration, fullAt = p.fullAt, rateUnknown = p.rateUnknown }
           rows[#rows + 1], rates[row] = row, entry.rate
           left = left - used
         end
