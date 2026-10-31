@@ -12,7 +12,9 @@ body:
     id: fs_version
     attributes:
       label: FabricationStation version
-      description: Shown in the addon list at the character-select screen.
+      description: |
+        Run `/dump C_AddOns.GetAddOnMetadata("FabricationStation", "Version")` in game.
+        A source checkout shows `@project-version@`; in that case give the commit hash instead.
       placeholder: "1.0.0"
     validations:
       required: true

@@ -134,13 +134,17 @@ What you receive from guildmates is stored in your SavedVariables and dropped af
   It sends nothing and finds guildmates who do not run the addon, but cannot show their quality.
 
 **When sync pauses:** the game blocks addon messages in instances and in some other restricted states, so sync
-pauses there and resumes by itself afterwards. Nothing is lost; what could not be sent is sent later.
+pauses there and resumes by itself afterwards. Messages that could not be sent are queued in memory (up to 50; the
+oldest is dropped when the queue is full) and retried while they last. A message that hits the lockdown three times
+is dropped, and the queue is lost on `/reload` or logout. Anything lost this way is recovered at the next hello and
+request exchange between you and your guildmates.
 
 ## Chat scanner
 
-The chat scanner reads public chat (Trade, Trade (Services), General and guild chat) for a person asking for
-something one of your characters can craft, and shows a small toast with the recipe, who asked and which of your
-characters can make it at what quality.
+The chat scanner reads public chat for a person asking for something one of your characters can craft, and shows a
+small toast with the recipe, who asked and which of your characters can make it at what quality. The module is **on by
+default**, and by default it watches Trade, Trade (Services) and guild chat; General chat is off until you turn it on
+under Settings > Chat requests.
 
 - It **never whispers for you**. The toast's Whisper button only opens the chat box with a prepared text; you read it,
   change it if you like, and press Enter yourself. It sends no chat messages and adds no chat filters.

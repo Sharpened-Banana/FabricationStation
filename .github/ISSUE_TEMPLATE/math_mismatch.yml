@@ -6,9 +6,11 @@ body:
   - type: markdown
     attributes:
       value: |
-        Select the recipe in the profession window, run `/fs capture`, then `/reload`. The capture is saved in
+        Select the recipe in the profession window, run `/fs capture` (or `/fabstation capture` if another addon owns
+        `/fs`), then `/reload`. The capture is saved in
         `WTF/Account/<ACCOUNT>/SavedVariables/FabricationStation.lua` under `FabricationStationDB.global.captures.list`.
-        Paste the entry for this recipe below. Without a capture the numbers cannot be reproduced.
+        Paste only the entry for this recipe below, not the whole file (GitHub limits the size of a field). Without a
+        capture the numbers cannot be reproduced.
   - type: input
     id: recipe
     attributes:

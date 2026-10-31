@@ -46,9 +46,24 @@ describe("public docs and release metadata", function()
 
   it("documents every registered slash command", function()
     local r = read("README.md")
-    for _, s in ipairs({ "/fs", "/fabstation", "/fs settings", "/fs tab <id>", "/fs setup", "/fs guild",
-      "/fs guild selftest", "/fs capture", "/fs help" }) do
-      assert.truthy(r:find(s, 1, true), s)
+    local names, count = {}, 0
+    local pipe = assert(io.popen("grep -rhoE 'RegisterSlash\\(\"[a-z]*\"' Core Modules UI"))
+    for line in pipe:lines() do
+      names[line:match('"([a-z]*)"')] = true
+      count = count + 1
+    end
+    pipe:close()
+    assert.is_true(count >= 7, "found only " .. count .. " RegisterSlash calls")
+    for name in pairs(names) do
+      if name == "" then
+        assert.truthy(r:find("`/fs`", 1, true), "/fs")
+        assert.truthy(r:find("`/fabstation`", 1, true), "/fabstation")
+      else
+        assert.truthy(r:find("/fs " .. name, 1, true), "/fs " .. name)
+      end
+    end
+    for _, sub in ipairs({ "/fs tab <id>", "/fs guild selftest", "/fs help" }) do
+      assert.truthy(r:find(sub, 1, true), sub)
     end
   end)
 
@@ -73,10 +88,12 @@ describe("public docs and release metadata", function()
     assert.truthy(read(".github/ISSUE_TEMPLATE/config.yml"):find("blank_issues_enabled: false", 1, true))
   end)
 
-  it("requires the capture string in the math mismatch form", function()
+  it("requires the capture entry in the math mismatch form", function()
     local s = read(".github/ISSUE_TEMPLATE/math_mismatch.yml")
     assert.truthy(s:find("/fs capture", 1, true))
-    assert.truthy(s:find("required: true", 1, true))
+    local block = s:match("\n  %- type: textarea\n    id: capture\n(.-)\n  %- type:") or s:match("\n  %- type: textarea\n    id: capture\n(.*)$")
+    assert.truthy(block, "no textarea with id: capture")
+    assert.truthy(block:find("required: true", 1, true), "capture is not required")
   end)
 
   it("declares the licence in the TOC", function()

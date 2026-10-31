@@ -52,8 +52,9 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     guild crafters in item tooltips and in the profession window, and optional use of the game's own guild recipe
     list. Sharing covers only the current expansion's professions. It is on by default (recipes and expected quality
     of your characters in that guild) and can be limited or turned off under Settings > Guild. Sync pauses where the game blocks addon chat, for example in instances.
-  - Chat requests: public chat is scanned for people asking for something one of your characters can craft, and a
-    small toast offers a Whisper button that only opens the chat box. Nothing is sent for you.
+  - Chat requests: Trade, Trade (Services) and guild chat (General is off by default) are scanned for people asking
+    for something one of your characters can craft, and a small toast offers a Whisper button that only opens the
+    chat box. The module is on by default. Nothing is sent for you.
   - A first-run setup guide (`/fs setup` reopens it).
   - A localization framework (AceLocale). English is the only language so far.
   - README, MIT licence, third-party notices and GitHub issue forms.
