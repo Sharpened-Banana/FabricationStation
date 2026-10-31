@@ -280,8 +280,7 @@ local function slash_capture()
   else
     -- SavedVariables are account-wide and written on /reload or logout; the account folder can be a number like
     -- 12345678#1.
-    print(("FabricationStation: captured %s (#%d) \226\128\148 /reload, then see "
-      .. "WTF/Account/<account>/SavedVariables/FabricationStation.lua"):format(tostring(capture.recipeName), capture.id))
+    print((L["FabricationStation: captured %s (#%d) \226\128\148 /reload, then see WTF/Account/<account>/SavedVariables/FabricationStation.lua"]):format(tostring(capture.recipeName), capture.id))
   end
 end
 
@@ -358,8 +357,7 @@ local function build_options()
       captures = {
         type = "description", order = 31,
         name = function()
-          return ("Captures: %d. Select a recipe and type /fs capture, /reload, then run "
-            .. "tools/export_captures.lua on the SavedVariables file."):format(#D:GetCaptures())
+          return (L["Captures: %d. Select a recipe and type /fs capture, /reload, then run tools/export_captures.lua on the SavedVariables file."]):format(#D:GetCaptures())
         end,
       },
       clearCaptures = clear_button(32, L["Clear captures"], L["Delete every saved capture?"],

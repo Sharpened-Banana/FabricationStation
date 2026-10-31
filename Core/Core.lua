@@ -62,8 +62,7 @@ local function disable_failed_module(self, moduleName, errText)
   self:SendMessage(ns.Msg.MODULE_FAILED, moduleName, errText)
   if not announced[moduleName] then
     announced[moduleName] = true
-    print(("FabricationStation: %s stopped after an error and was turned off. "
-      .. "Turn it back on in /fs settings > Modules > Stopped modules; the error is in Diagnostics."):format(moduleName))
+    print((L["FabricationStation: %s stopped after an error and was turned off. Turn it back on in /fs settings > Modules > Stopped modules; the error is in Diagnostics."]):format(moduleName))
   end
   local ok, disableErr = pcall(module.Disable, module)
   if not ok then self:LogError(moduleName, tostring(disableErr)) end

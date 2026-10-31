@@ -777,7 +777,7 @@ end
 
 -- The target-quality button's label: "Target: Best" for nil, else "Target: Q<n>".
 function M.TargetLabel(quality)
-  return "Target: " .. (quality and ("Q" .. quality) or "Best")
+  return L["Target: %s"]:format(quality and L["Q%d"]:format(quality) or L["Best"])
 end
 
 local function max_quality()
@@ -821,7 +821,7 @@ local function create_quality_row(parent)
   row.label = text(row)
   row.label:SetPoint("LEFT", row, "LEFT", 0, 0)
   row.label:SetWidth(24)
-  row.apply = button(row, "Apply", 56)
+  row.apply = button(row, L["Apply"], 56)
   row.apply:SetPoint("RIGHT", row, "RIGHT", 0, 0)
   row.apply:SetMotionScriptsWhileDisabled(true)
   row.profit = text(row, nil, "RIGHT")

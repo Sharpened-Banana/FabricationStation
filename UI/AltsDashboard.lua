@@ -61,7 +61,8 @@ local function format_pair(pair, isTotal)
     return pair.tooltip and color(WARN, text) or text
   end
   if right == "" then return color(DIM, left) end
-  if right == L["? KP"] then right = color(DIM, right) end
+  local PV = ns.UI.PlannerView
+  if PV and PV.IsUnknown(pair) then right = color(DIM, right) end
   return right .. "  " .. left
 end
 

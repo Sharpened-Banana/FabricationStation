@@ -206,7 +206,7 @@ function Tab.KnowledgeDetailLines(row, names)
     for _, st in ipairs(states) do
       local source = type(st.source) == "table" and st.source or {}
       local label = source.reset == "once" and "One-time" or CATEGORY_LABELS[source.category]
-        or tostring(source.category or "Source")
+        or tostring(source.category or L["Source"])
       local name = finite(source.itemID) and (names[source.itemID] or ("item:" .. whole(source.itemID))) or nil
       local earned = (st.status ~= "unknown" and finite(st.earned)) and whole(st.earned) or "?"
       local total = finite(st.total) and whole(st.total) or "?"
@@ -239,15 +239,15 @@ end
 -- where the knowledge data comes from.
 function Tab.KnowledgeFooter()
   local kb, client = U.knowledgeBuild(), U.clientBuild()
-  local text = "Knowledge data: " .. (kb and ("build " .. whole(kb)) or L["not generated"])
+  local text = kb and L["Knowledge data: build %s"]:format(whole(kb)) or L["Knowledge data: not generated"]
   local reset = seconds_until_reset()
-  if reset then text = text .. DOT .. "Weekly reset in " .. CV().FormatDuration(reset) end
+  if reset then text = text .. DOT .. L["Weekly reset in %s"]:format(CV().FormatDuration(reset)) end
   local about
   if not kb then
     about = L["No knowledge data in this GameData: knowledge counts show as ?"]
   else
-    about = "Knowledge sources come from GameData build " .. whole(kb)
-    if client and client ~= kb then about = about .. " (this is game build " .. whole(client) .. ")" end
+    about = L["Knowledge sources come from GameData build %s"]:format(whole(kb))
+    if client and client ~= kb then about = L["%s (this is game build %s)"]:format(about, whole(client)) end
   end
   return text, { text, about }
 end
@@ -259,11 +259,9 @@ function Tab.MissingFooter()
   local build = ns.GameData.Get("RecipeSources") ~= nil and ns.GameData.TableBuild("RecipeSources") or nil
   if not finite(build) then
     local text = "Recipe sources: not generated" .. DOT .. base
-    return text, { text, "Without generated recipe sources, only recipes a character has seen in the profession "
-      .. "window are listed, and a source the game did not describe shows as Unknown" }
+    return text, { text, L["Without generated recipe sources, only recipes a character has seen in the profession window are listed, and a source the game did not describe shows as Unknown"] }
   end
-  return base, { base, "Recipe sources come from GameData build " .. whole(build)
-    .. "; the game's own source text wins once a character has seen the recipe" }
+  return base, { base, L["Recipe sources come from GameData build %s; the game's own source text wins once a character has seen the recipe"]:format(whole(build)) }
 end
 
 -- Pool + status (Planner:GetCapWarnings), now -> a grid row: the warning across Recipe ("Capped: concentration is
@@ -272,8 +270,8 @@ function Tab.WarningRow(w, now)
   local capped = w.status == "capped"
   local code = capped and RED or ORANGE
   local toFull = finite(w.fullAt) and math.max(0, w.fullAt - now) or nil
-  local caps = capped and "Full" or CV().FormatDuration(toFull)
-  local text = capped and L["Capped: concentration is full"] or ("Soon: full in " .. caps)
+  local caps = capped and L["Full"] or CV().FormatDuration(toFull)
+  local text = capped and L["Capped: concentration is full"] or L["Soon: full in %s"]:format(caps)
   local prof = profession_name(w.skillLineID)
   return {
     key = "warn:" .. tostring(w.charKey) .. ":" .. tostring(w.skillLineID),

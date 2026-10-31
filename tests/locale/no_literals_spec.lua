@@ -40,13 +40,36 @@ describe("locale coverage", function()
       }, "\n")))
     end)
 
+    it("reports a chain of literals joined by .. as one sentence, but not a chain with a variable in it", function()
+      assert.are.same({ "first half second half of the sentence", "one two three words" }, texts(table.concat({
+        'local a = ("first half "',
+        '  .. "second half of the sentence"):format()',
+        'local b = "one two " .. "three words"',
+        'local c = "left half of " .. name',
+        'local d = ("top part of "',
+        '  .. name .. " tail words")',
+      }, "\n")))
+    end)
+
+    it("flags a one-word literal handed to a display helper, a display field or picked by and/or", function()
+      assert.are.same({ "Apply", "Full", "never", "none", "online" }, texts(table.concat({
+        'local b = button(row, "Apply", 56)',
+        'local t = color(DIM, "none")',
+        'local r = { age = "never" }',
+        'local w = capped and "Full" or other',
+        'local x = current and "online" or other',
+        'local ok = mode == "weekly" and "good" or "bad"',
+        'local k = create_cycle_button(bar, 0, "profession")',
+      }, "\n")))
+    end)
+
     it("ignores translated, concatenated, compared and developer-error literals", function()
       assert.are.same({}, texts(table.concat({
         'local a = L["no price"]',
         'local b = "Last seen " .. name',
         'local c = name .. " ago in the past"',
         'local d = "line one is "',
-        '  .. "line two"',
+        '  .. suffix',
         'if kind == "not scanned yet" then end',
         'error("RegisterTab: invalid arguments")',
         'ns.FS:LogError("Scanner", "something went wrong here")',

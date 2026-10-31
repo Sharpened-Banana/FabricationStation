@@ -188,11 +188,22 @@ local NON_DISPLAY_LINE = {
   "SetAtlas%(", "SetTexture%(", "SetNormalTexture%(", "SetFont%(", "PlaySound%(",
 }
 
+-- Fields of row/cell tables that hold the text shown in a cell.
+local DISPLAY_FIELDS = { age = true, lastSeen = true, when = true, right = true, note = true, expires = true,
+  affordable = true }
+
+-- One-word status values that are shown to the player (a bare `return "now"` or `or "none"`).
+local DISPLAY_WORDS = { now = true, online = true, never = true, none = true, estimate = true, partial = true,
+  full = true, done = true, unknown = true, expired = true }
+
 -- Names of constant tables that hold display text: LABELS, TEXTS, NOTES, REFUSED, NONE, MESSAGES, ...
 local function is_text_table_name(name)
   return name:find("LABEL") or name:find("TEXT") or name:find("NOTE") or name:find("NAMES") or name:find("REFUSED")
     or name:find("_NONE") or name:find("MESSAGE") or name:find("TITLE") or name:find("HINT") or name:find("WORDS")
 end
+
+-- The source text between the end of literal a and the start of literal b on one line.
+local function line_between(line, a, b) return line:sub(a[2], b[1] - 1) end
 
 -- Every string literal on the line: { startPos, endPos(after quote), text, before, after } (comments skipped).
 local function line_literals(line)
@@ -274,8 +285,40 @@ function M.find_literals(paths, allowlistPath)
             local name = code:match("^%s*local%s+([%w_]+)%s*=%s*{") or code:match("^%s*([%w_%.]+)%s*=%s*{")
             if name and is_text_table_name(name) then textDepth = depth + 1 end
           end
-          for _, lit in ipairs(line_literals(line)) do
+          local lits = line_literals(line)
+          for k, lit in ipairs(lits) do
             local before, after, text = lit[4], lit[5], lit[3]
+            -- A chain of literals joined by `..` (across lines too) with no other operand is one complete literal.
+            local chainText
+            local startsChain = not (before:match("%.%.%s*$") or (before:match("^%s*$") and prev:match("%.%.%s*$")))
+            if startsChain and not before:match("%f[%w_]L%[%s*$") and (after:match("^%s*%.%.") or after:match("^%s*$")) then
+              local parts, pure = { text }, true
+              local li, ll, lk = idx, lits, k
+              while true do
+                local cur = ll[lk]
+                local rest = cur[5]
+                local nextLit
+                if rest:match("^%s*%.%.%s*[\"']") then
+                  local nxt = ll[lk + 1]
+                  if nxt and line_between(lines[li], cur, nxt):match("^%s*%.%.%s*$") then nextLit = nxt; lk = lk + 1 end
+                  if not nextLit then pure = false end
+                elseif rest:match("^%s*%.%.%s*$") or (rest:match("^%s*$") and (lines[li + 1] or ""):match("^%s*%.%.%s*[\"']")) then
+                  li = li + 1
+                  ll = line_literals(lines[li] or "")
+                  lk = 1
+                  nextLit = ll[1]
+                  if not (nextLit and nextLit[4]:match("^%s*%.?%.?%s*$")) then pure = false; nextLit = nil end
+                elseif rest:match("^%s*%.%.") then
+                  pure = false
+                end
+                if not nextLit then break end
+                parts[#parts + 1] = nextLit[3]
+              end
+              if pure and #parts >= 2 then chainText = table.concat(parts) end
+            end
+            if chainText and not skipLine and has_words(chainText) and words_of(chainText) >= 2 then
+              hit(file, lineNo, chainText)
+            end
             local concat = before:match("%.%.%s*$") or after:match("^%s*%.%.")
               or (before:match("^%s*$") and prev:match("%.%.%s*$"))
               or (after:match("^%s*[,%)]?%s*$") and nextLine:match("^%s*%.%."))
@@ -283,13 +326,20 @@ function M.find_literals(paths, allowlistPath)
             local ctxKey = before:match("([%w_]+)%s*=%s*$")
             local keyed = false
             if ctxKey then
-              for _, k in ipairs(KEYED) do if ctxKey == k then keyed = true end end
+              for _, key in ipairs(KEYED) do if ctxKey == key then keyed = true end end
             end
+            -- A literal handed to a display helper, or stored in a display field, is display text even as one word.
+            local helperArg = before:match("%f[%w_]color%(%s*[%w_%.]+%s*,%s*$")
+              or (before:match("%f[%w_][%w_]*[bB]utton%([^\"']*$") and not before:find("cycle", 1, true))
+              or DISPLAY_FIELDS[ctxKey or ""]
+            -- A capitalised word, or a status word, picked by `and` / `or` / `return`: a one-word display value.
+            local picked = (before:match("%f[%w_]and%s*$") or before:match("%f[%w_]or%s*$") or before:match("%f[%w_]return%s*$"))
+              and (text:find("^%u%l+$") or DISPLAY_WORDS[text])
             local inTextTable = textDepth and (ctxKey or before:match('%[%s*"[%w_]+"%s*%]%s*=%s*$'))
             if not concat and not direct and not skipLine and not text:find("^Interface") and not text:find("://") then
               if (words_of(text) >= 2 and text:find("%a%a+[ ]+[%a%d%(%[]"))
                   or text:find("^%u[%a ]+:$")
-                  or ((keyed or inTextTable) and has_words(text)) then
+                  or ((keyed or inTextTable or helperArg or picked) and has_words(text)) then
                 hit(file, lineNo, text)
               end
             end

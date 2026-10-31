@@ -594,15 +594,15 @@ end
 
 local function holding_text(entry)
   local parts = {}
-  if entry.bags > 0 then parts[#parts + 1] = "bags " .. entry.bags end
+  if entry.bags > 0 then parts[#parts + 1] = L["bags %d"]:format(entry.bags) end
   if entry.bank == nil then
-    parts[#parts + 1] = "bank ?"
+    parts[#parts + 1] = L["bank ?"]
   elseif entry.bank > 0 then
-    parts[#parts + 1] = "bank " .. entry.bank
+    parts[#parts + 1] = L["bank %d"]:format(entry.bank)
   end
-  if entry.reagentBank > 0 then parts[#parts + 1] = "reagent bank " .. entry.reagentBank end
+  if entry.reagentBank > 0 then parts[#parts + 1] = L["reagent bank %d"]:format(entry.reagentBank) end
   if entry.stale then
-    parts[#parts + 1] = entry.dataAgeSeconds and (format_age(entry.dataAgeSeconds) .. " old") or L["age unknown"]
+    parts[#parts + 1] = entry.dataAgeSeconds and L["%s old"]:format(format_age(entry.dataAgeSeconds)) or L["age unknown"]
   end
   return entry.total .. (entry.bank == nil and "+" or "") .. " (" .. table.concat(parts, ", ") .. ")"
 end

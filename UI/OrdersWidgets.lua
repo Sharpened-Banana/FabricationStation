@@ -147,7 +147,7 @@ function M.OpenOrdersLines(snapshot, now)
     if best then
       lines[#lines + 1] = "Best score: " .. signed(best.score, money(best.score, flags_of(best).estimated))
     else
-      lines[#lines + 1] = "Best score: " .. color(DIM, "none")
+      lines[#lines + 1] = "Best score: " .. color(DIM, L["none"])
     end
     local why = M.UnscoredReasons(orders)
     local parts = {}

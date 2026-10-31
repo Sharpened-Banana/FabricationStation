@@ -68,10 +68,16 @@ ChatScan.SETTINGS_DEFAULTS = {
 }
 
 -- The text typed by the toast's Whisper button: the user's valid template, else the current default.
+-- The default whisper text. The stored setting is "" while the default applies, so the settings code asks here
+-- (the same lookup `GetWhisperTemplate` falls back to) instead of comparing against a literal of its own.
+function ChatScan:DefaultWhisperTemplate()
+  return L["Hi! I can craft %s. Send me a crafting order?"]
+end
+
 function ChatScan:GetWhisperTemplate()
   local template = self:Settings().whisperTemplate
   if type(template) == "string" and template ~= "" then return template end
-  return L["Hi! I can craft %s. Send me a crafting order?"]
+  return self:DefaultWhisperTemplate()
 end
 
 ChatScan.stats = { seen = 0, skippedSecret = 0, matched = 0, deduped = 0 }
@@ -786,7 +792,7 @@ function ChatScan.BuildOptions()
         set = function(_, value)
           if read_only() or not valid_template(value) then return end
           -- The default text is stored as "" so a future default reaches everybody.
-          ChatScan:Settings().whisperTemplate = value == L["Hi! I can craft %s. Send me a crafting order?"] and "" or value
+          ChatScan:Settings().whisperTemplate = value == ChatScan:DefaultWhisperTemplate() and "" or value
         end,
       },
     },

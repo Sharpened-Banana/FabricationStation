@@ -330,7 +330,7 @@ end
 function Tab.CellTexts(row, now)
   local name = tostring(row.nameRealm)
   if row.alts then name = name .. " (+" .. row.alts .. ")" end
-  local lastSeen = "never"
+  local lastSeen = L["never"]
   if type(row.lastSeen) == "number" then lastSeen = ns.UI.FormatAge(math.max(0, now - row.lastSeen)) end
   return {
     name = name,
@@ -1338,9 +1338,9 @@ local function build_detail(container)
   linkLabel:SetText(L["Linked to"])
   d.linkEdit = create_edit(right, 86, MAX_NAME, do_link)
   d.linkEdit:SetPoint("TOPLEFT", right, "TOPLEFT", 60, -164)
-  d.link = create_button(right, "Link", 46, do_link)
+  d.link = create_button(right, L["Link"], 46, do_link)
   d.link:SetPoint("LEFT", d.linkEdit, "RIGHT", GAP, 0)
-  d.unlink = create_button(right, "Unlink", 56, do_unlink)
+  d.unlink = create_button(right, L["Unlink"], 56, do_unlink)
   d.unlink:SetPoint("LEFT", d.link, "RIGHT", GAP, 0)
   d.linkEdit:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
     show_lines(self, { { text = d.linked and ("Linked to " .. d.linked) or L["Not linked to a main character"] },
@@ -1422,7 +1422,7 @@ local function build(container)
     searchText = clean(self:GetText(), MAX_SEARCH)
     refresh()
   end))
-  created.exportButton = create_button(bar, "Export", 70, open_export)
+  created.exportButton = create_button(bar, L["Export"], 70, open_export)
   created.exportButton:SetPoint("RIGHT", bar, "RIGHT", 0, 0)
   created.status = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   created.status:SetPoint("LEFT", created.search, "RIGHT", 8, 0)

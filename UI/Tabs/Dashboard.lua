@@ -350,7 +350,7 @@ local function top_craft_line(row)
   end
   parts[#parts + 1] = recipe_name(row.recipeID) .. " (" .. short_name(row.charKey) .. ")"
   if row.missingPrices then parts[#parts + 1] = color(WARN, L["some prices missing"]) end
-  if row.estimated then parts[#parts + 1] = color(WARN, "estimate") end
+  if row.estimated then parts[#parts + 1] = color(WARN, L["estimate"]) end
   if row.ageDays ~= nil then
     local age = "price " .. ns.UI.FormatAge(row.ageDays * SECONDS_PER_DAY) .. " old"
     parts[#parts + 1] = row.stale and color(BAD, age .. ", stale") or color(DIM, age)
@@ -399,9 +399,9 @@ local function refresh_queue_summary(frame)
   lines[1] = (L["%d entries, %d crafts"]):format(model.entries, model.crafts)
   if model.totalCost ~= nil then
     local age = prices_age_text()
-    lines[2] = "Reagent cost: " .. ns.UI.FormatMoney(model.totalCost) .. (age and color(DIM, "  (" .. age .. ")") or "")
+    lines[2] = L["Reagent cost: %s"]:format(ns.UI.FormatMoney(model.totalCost) .. (age and color(DIM, "  (" .. age .. ")") or ""))
   else
-    lines[2] = "Reagent cost: " .. color(WARN, L["unknown (some prices missing)"])
+    lines[2] = L["Reagent cost: %s"]:format(color(WARN, L["unknown (some prices missing)"]))
   end
   if model.missingItems > 0 then
     lines[3] = color(WARN, (L["%d reagents missing"]):format(model.missingItems))
@@ -451,7 +451,7 @@ end
 local function concentration_line(row, now)
   local status
   if row.full then
-    status = color(GOOD, "full")
+    status = color(GOOD, L["full"])
   elseif row.fullAt then
     status = "full in " .. duration_text(row.fullAt - now)
   else

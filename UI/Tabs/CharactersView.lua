@@ -29,7 +29,7 @@ V.OFF_TEXT = L["Alts is turned off"]
 -- seconds -> "now" (<= 0), "<1m", "45m", "1h 0m", "2d 12h"; "—" for nil or a non-finite value.
 function V.FormatDuration(seconds)
   if not finite(seconds) then return EM_DASH end
-  if seconds <= 0 then return "now" end
+  if seconds <= 0 then return L["now"] end
   if seconds < 60 then return "<1m" end
   if seconds < 3600 then return math.floor(seconds / 60) .. "m" end
   if seconds < 86400 then return math.floor(seconds / 3600) .. "h " .. math.floor(seconds % 3600 / 60) .. "m" end
@@ -85,7 +85,7 @@ local function conc_text(c)
   if type(c) ~= "table" or not finite(c.now) or not finite(c.max) then return EM_DASH end
   local when
   if c.secondsToFull == 0 then
-    when = "Full"
+    when = L["Full"]
   elseif c.rateUnknown then
     when = "?"
   elseif finite(c.secondsToFull) then
@@ -145,7 +145,7 @@ function V.Row(altRow, now)
     isCurrent = current, hidden = altRow.hidden == true,
     gold = ns.UI.FormatMoney(altRow.gold),
     goldShort = U.compactMoney(altRow.gold),
-    age = current and "online" or ns.UI.FormatAge(altRow.dataAgeSeconds),
+    age = current and L["online"] or ns.UI.FormatAge(altRow.dataAgeSeconds),
     neverSeen = not current and type(altRow.dataAgeSeconds) ~= "number",   -- decided on the data, not on the age text
     staleAge = not current and flags.stale == true,
     profs = {},

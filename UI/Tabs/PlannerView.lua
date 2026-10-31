@@ -13,6 +13,11 @@ local L = ns.L
 -- Modules are looked up at call time; durations use ns.UI.CharactersView.FormatDuration (preflight row 37). Shared
 -- helpers: ns.UI.ViewUtil (UI/Tabs/ViewUtil.lua).
 local PV = {}
+
+-- Item pairs whose count is unknown ("? KP"): kept in a weak side table so the pair stays { left, right } and a
+-- consumer decides on this data, never on the (translatable) right-hand text.
+local unknownPairs = setmetatable({}, { __mode = "k" })
+function PV.IsUnknown(pair) return unknownPairs[pair] == true end
 ns.UI = ns.UI or {}
 ns.UI.PlannerView = PV
 
@@ -100,7 +105,7 @@ function PV.ConcentrationLines(pools, now, max)
     if not finite(p.value) or not finite(p.max) then
       right, toFull = EM_DASH, nil
     elseif toFull == 0 then
-      right = "Full"
+      right = L["Full"]
     elseif finite(toFull) then
       right = view().FormatDuration(toFull)
     elseif p.rateUnknown then
@@ -131,7 +136,9 @@ function PV.KnowledgeLines(rows, max)
       if s.weeklyLeft > 0 then items[#items + 1] = { left, whole(s.weeklyLeft) .. " KP" } end
     else
       unknown = true
-      items[#items + 1] = { left, L["? KP"] }
+      local pair = { left, L["? KP"] }
+      unknownPairs[pair] = true
+      items[#items + 1] = pair
     end
   end
   local totalLine = { "Total", (known and (whole(total) .. (unknown and "+?" or "")) or "?") .. " KP" }
@@ -234,7 +241,7 @@ function PV.SpecAdvice(rows, status, ctx)
       points = finite(r.points) and whole(r.points) or "?",
       gain = finite(r.gain) and ns.UI.FormatMoney(r.gain) or "?",
       perPoint = finite(r.gainPerPoint) and ns.UI.FormatMoney(r.gainPerPoint) or "?",
-      affordable = r.affordable == true and "Affordable" or "",
+      affordable = r.affordable == true and L["Affordable"] or "",
     }
   end
   return model

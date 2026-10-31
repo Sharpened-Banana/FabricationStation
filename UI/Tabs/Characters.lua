@@ -140,18 +140,18 @@ function Tab.ResultRow(r, me)
   else
     warband, warbandTip = tostring(r.warband), tostring(r.warband)
     if r.warbandStale then
-      warband = color(ORANGE, warband .. " (old)")
-      warbandTip = warbandTip .. " (" .. ns.UI.FormatAge(r.warbandAgeSeconds) .. " old)"
+      warband = color(ORANGE, L["%s (old)"]:format(warband))
+      warbandTip = L["%s (%s old)"]:format(warbandTip, ns.UI.FormatAge(r.warbandAgeSeconds))
     end
   end
   local tooltip = { name }
   for _, e in ipairs(chars) do
     local parts = {}
-    if e.bags > 0 then parts[#parts + 1] = "bags " .. e.bags end
-    if e.bank == nil then parts[#parts + 1] = "bank ?" elseif e.bank > 0 then parts[#parts + 1] = "bank " .. e.bank end
-    if e.reagentBank > 0 then parts[#parts + 1] = "reagent bank " .. e.reagentBank end
+    if e.bags > 0 then parts[#parts + 1] = L["bags %d"]:format(e.bags) end
+    if e.bank == nil then parts[#parts + 1] = L["bank ?"] elseif e.bank > 0 then parts[#parts + 1] = L["bank %d"]:format(e.bank) end
+    if e.reagentBank > 0 then parts[#parts + 1] = L["reagent bank %d"]:format(e.reagentBank) end
     if e.stale then
-      parts[#parts + 1] = e.dataAgeSeconds and (ns.UI.FormatAge(e.dataAgeSeconds) .. " old") or L["age unknown"]
+      parts[#parts + 1] = e.dataAgeSeconds and L["%s old"]:format(ns.UI.FormatAge(e.dataAgeSeconds)) or L["age unknown"]
     end
     tooltip[#tooltip + 1] = short_name(e.charKey, me) .. ": " .. count_text(e) .. " (" .. table.concat(parts, ", ") .. ")"
   end

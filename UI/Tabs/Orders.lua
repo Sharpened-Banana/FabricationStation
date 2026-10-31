@@ -160,7 +160,7 @@ local function item_name(row)
 end
 
 local function customer_text(row)
-  return row.customer or (row.type == "npc" and "Patron" or nil)
+  return row.customer or (row.type == "npc" and L["Patron"] or nil)
 end
 
 -- Coloured like the board's cells: green for a gain, red for a loss, grey when it shows as "0g" (OrdersPanel.Sign).
@@ -213,7 +213,7 @@ function Tab.CellTexts(row, model)
 
   local expires = "--"
   if type(row.expiresIn) == "number" then
-    expires = row.expiresIn > 0 and ns.UI.FormatAge(row.expiresIn) or "expired"
+    expires = row.expiresIn > 0 and ns.UI.FormatAge(row.expiresIn) or L["expired"]
     if has_risk(row, "expiringSoon") or row.expiresIn <= 0 then expires = color(BAD, expires) end
   end
 

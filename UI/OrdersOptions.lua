@@ -150,8 +150,7 @@ end
 local function scoring_group()
   local args = {
     lowTipMargin = gold(1, "lowTipMargin", L["Low tip margin (gold)"],
-      "An order with no materials provided is flagged \"No mats, low tip\" when its commission (the tip after "
-        .. "the cut) is less than the reagent cost plus this much.", { softMax = 1000 }),
+      L["An order with no materials provided is flagged \"No mats, low tip\" when its commission (the tip after the cut) is less than the reagent cost plus this much."], { softMax = 1000 }),
     knowledgePointValue = gold(2, "knowledgePointValue", L["Value of one knowledge point (gold)"],
       L["What a knowledge point from a patron order reward is worth to you."], { softMax = 5000, bigStep = 10 }),
     moxieValue = gold(3, "moxieValue", L["Value of one Moxie (gold)"],
@@ -204,8 +203,7 @@ local function panel_group()
       note = { type = "description", order = 0,
         name = L["Additions to Blizzard's crafting-orders window. The same switches are in Settings > Modules."] },
       rows = module_toggle(1, "OrdersRowAddons", L["Profit, score and risk on each order row"],
-        "Module OrdersRowAddons: cells on each row of Blizzard's order list, a tint for VIP, repeat and blocked "
-          .. "customers, and a dark overlay on orders your filters hide."),
+        L["Module OrdersRowAddons: cells on each row of Blizzard's order list, a tint for VIP, repeat and blocked customers, and a dark overlay on orders your filters hide."]),
       sidePanel = module_toggle(2, "OrdersSidePanel", L["Side panel with filters and Claim Best Order"],
         L["Module OrdersSidePanel: risk filters, claims remaining, the best claimable order and its button."]),
       orderViewWarning = module_toggle(3, "OrderViewWarning", L["Warning for blocked and VIP customers"],

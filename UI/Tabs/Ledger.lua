@@ -367,7 +367,7 @@ end
 local function customer_of(entry)
   if entry.customer ~= nil then return tostring(entry.customer) end
   if entry.buyer ~= nil then return tostring(entry.buyer) end
-  if entry.orderType == "npc" then return "Patron" end
+  if entry.orderType == "npc" then return L["Patron"] end
   return nil
 end
 
@@ -420,15 +420,15 @@ function Tab.CellTexts(section, data)
       if count(data.incomplete) > 0 then
         cells.note = color(WARN, partial_note(data.incomplete))
       elseif est then
-        cells.note = color(DIM, "estimate")
+        cells.note = color(DIM, L["estimate"])
       end
     else
       cells.recipe = data.unattributed and L["Unattributed sales"] or recipe_name(data.recipeID)
       cells.n = tostring(count(data.n))
       if count(data.incomplete) > 0 then
-        cells.note = color(WARN, "partial")
+        cells.note = color(WARN, L["partial"])
       elseif est then
-        cells.note = color(DIM, "estimate")
+        cells.note = color(DIM, L["estimate"])
       end
     end
     return cells
@@ -455,7 +455,7 @@ function Tab.CellTexts(section, data)
 end
 
 local function full_money(copper, estimated)
-  if not is_money(copper) then return "unknown" end
+  if not is_money(copper) then return L["unknown"] end
   return (estimated and "~" or "") .. ns.UI.FormatMoney(copper)
 end
 
@@ -819,8 +819,7 @@ end
 
 local function empty_text(ledger)
   if not ledger then return L["The Ledger is not available."] end
-  return "No sales recorded yet. Commissions from the crafting orders you fulfil and the auction sales you collect "
-    .. "from the mailbox show here; crafts are kept as their cost."
+  return L["No sales recorded yet. Commissions from the crafting orders you fulfil and the auction sales you collect from the mailbox show here; crafts are kept as their cost."]
 end
 
 local function refresh()
