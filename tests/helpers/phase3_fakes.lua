@@ -4,8 +4,8 @@
 -- Loads Core + GameData runtime + 1a data (through Data/GameData_Manual.lua), UI/Util.lua, Modules/PlanCalc.lua and
 -- opts.files, with fake Scanner/Recipes/Tooltips/Dashboard/MainWindow modules in place of the real ones; defines the
 -- fixture Knowledge table (opts.knowledge = false leaves it undefined), boots, then seeds db.global with the fixture
--- characters (Aria, Bren, Cato on Silvermoon; the logged-in character is Aria-Silvermoon), the warband bank and an
--- empty recipeCatalog. Every call builds a fresh world.
+-- characters (Aria, Bren, Cato on Silvermoon; the logged-in character is Aria-Silvermoon; Aria also carries an
+-- older-expansion record, 2822), the warband bank and an empty recipeCatalog. Every call builds a fresh world.
 --   opts.now           clock (default NOW)
 --   opts.professionOpen false = fake Scanner:IsProfessionOpen() answers false
 --   opts.schematics    { [recipeID] = schematic } for Scanner:GetSchematic
@@ -81,6 +81,10 @@ function P3.characters()
             time = NOW - 60,
           },
         },
+        -- An older-expansion child line (Khaz Algar): 1a's Scanner files a record for every line with a learned
+        -- recipe; phase 3 lists only Knowledge variant lines (preflight row 9).
+        [2822] = { name = "Khaz Algar Blacksmithing", skill = 100, maxSkill = 100, recipes = { [1101] = true },
+          time = NOW - 60 },
       },
       items = { [2001] = { bags = 5, bank = 10, reagentBank = 0 } },
       itemsTime = {},
