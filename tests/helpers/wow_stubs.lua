@@ -18,6 +18,8 @@
 --   * time() and GetServerTime() return W.now unfloored (fractional after a sub-second advance), so
 --     tests can compare stored timestamps with W.now. The client returns whole seconds; tests of
 --     logic that floors or divides time should advance by whole seconds.
+--   * Phase-4 defaults (preflight row 3) are inert: no guild, no restrictions, no secret values, every optional addon
+--     absent, chat sending raises ("auto-send forbidden"). tests/helpers/phase4_stubs.lua makes them controllable.
 --   local W = install_wow_stubs(overrides)
 -- Every call rebuilds all fakes from scratch. `overrides` is deep-merged into the default globals
 -- (plain tables merge key by key, anything else replaces). Returns the handle `W`.
@@ -123,6 +125,7 @@ local function install(overrides)
     auctionator = { prices = {}, ages = {}, vendor = {}, lists = {}, dbCallbacks = {}, exact = {} },
     errors = {},  -- errors reported through geterrorhandler()
     hooks = {},   -- every hooksecurefunc call: { tbl|nil, name, fn }
+    tells = {},   -- ChatFrameUtil.SendTell / SendTellWithMessage calls: { name, text|nil }
   }
 
   ---------------------------------------------------------------------------
@@ -359,6 +362,12 @@ local function install(overrides)
 
   function W.fire(event, ...) dispatch(eventRegs, event, ...) end
 
+  -- Installs a global that the next install_wow_stubs call removes again (for fakes a helper adds after install).
+  function W.defineGlobal(name, value)
+    installedNames[name] = true
+    _G[name] = value
+  end
+
   -- What obj has registered right now: { events = { name... }, messages = { name... } }, each sorted.
   function W.registrations(obj)
     local function names(regs)
@@ -582,6 +591,9 @@ local function install(overrides)
     W.config.opened[#W.config.opened + 1] = { app = app, container = container }
   end
   function AceConfigDialog:Close() end
+  function AceConfigDialog:SelectGroup(app, ...)
+    W.config.selected = { app = app, path = { ... } }
+  end
   function AceConfigDialog:AddToBlizOptions(app, name)
     W.config.blizOptions[#W.config.blizOptions + 1] = { app = app, name = name }
     return CreateFrame("Frame")
@@ -611,6 +623,41 @@ local function install(overrides)
   function DBIcon:Refresh() end
   function DBIcon:GetMinimapButton() return nil end
   libs["LibDBIcon-1.0"] = DBIcon
+
+  -- AceComm: the default is inert (RegisterComm stores nothing, SendCommMessage sends nothing). phase4_stubs.lua
+  -- replaces Embed with the recording, controllable version.
+  local AceComm = {}
+  function AceComm.Embed(_, target)
+    function target:RegisterComm() end
+    function target:UnregisterComm() end
+    function target:UnregisterAllComm() end
+    function target:SendCommMessage() end
+    return target
+  end
+  libs["AceComm-3.0"] = AceComm
+
+  -- AceLocale, "silent" semantics: a missing key reads as the key itself (no error report); `L[key] = true` stores
+  -- the key as its own text. NewLocale returns nil for a non-default locale other than the client's (W.gameLocale).
+  W.gameLocale = "enUS"
+  local AceLocale, localeApps = {}, {}
+  function AceLocale:NewLocale(app, locale, isDefault)
+    if not isDefault and locale ~= W.gameLocale then return nil end
+    local t = localeApps[app]
+    if not t then
+      t = setmetatable({}, {
+        __index = function(tbl, key) rawset(tbl, key, key); return key end,
+        __newindex = function(tbl, key, value) rawset(tbl, key, value == true and key or value) end,
+      })
+      localeApps[app] = t
+    end
+    return t
+  end
+  function AceLocale:GetLocale(app, silent)
+    local t = localeApps[app]
+    if not t and not silent then error(('Cannot find locale for application "%s".'):format(tostring(app)), 2) end
+    return t
+  end
+  libs["AceLocale-3.0"] = AceLocale
 
   ---------------------------------------------------------------------------
   -- Auctionator v1 (signatures from Auctionator v321; see plan "Verified facts")
@@ -754,7 +801,26 @@ local function install(overrides)
     C_Traits = { GetNodeInfo = retNil, GetEntryInfo = retNil, GetDefinitionInfo = retNil, GetTreeCurrencyInfo = emptyList },
     C_Container = { GetContainerNumSlots = retZero, GetContainerItemInfo = retNil },
     C_Bank = { CanViewBank = retFalse },
-    C_AddOns = { IsAddOnLoaded = retFalse },
+    C_AddOns = { IsAddOnLoaded = retFalse, DoesAddOnExist = retFalse, GetAddOnMetadata = function() return "@project-version@" end },
+    -- phase 4 (preflight row 3): safe-empty defaults so full loads boot Guild, ChatScan and Onboarding.
+    C_ChatInfo = {
+      InChatMessagingLockdown = retFalse, AreOutgoingAddonChatMessagesRestricted = retFalse,
+      RegisterAddonMessagePrefix = function() return true end,
+      SendChatMessage = function() error("auto-send forbidden", 2) end,
+    },
+    C_RestrictedActions = { IsAddOnRestrictionActive = retFalse },
+    C_EncodingUtil = {},  -- no codec: Codec.IsAvailable() is false until phase4_stubs.lua installs the reversible fake
+    C_GuildInfo = { GuildRoster = noop, MemberExistsByName = function() return true end, QueryGuildMembersForRecipe = retNil },
+    C_FriendList = { IsIgnored = retFalse },
+    IsInGuild = retFalse, GetGuildInfo = retNil, GetNumGuildMembers = retZero, InCombatLockdown = retFalse,
+    IsInInstance = function() return false, "none" end,
+    issecretvalue = retFalse,
+    Ambiguate = function(name) return name end,
+    SendChatMessage = function() error("auto-send forbidden", 2) end,
+    ChatFrameUtil = {
+      SendTell = function(name) W.tells[#W.tells + 1] = { name } end,
+      SendTellWithMessage = function(name, text) W.tells[#W.tells + 1] = { name, text } end,
+    },
     C_Timer = C_Timer,
     Enum = {
       CraftingReagentType = { Modifying = 0, Basic = 1, Finishing = 2, Automatic = 3 },
@@ -770,12 +836,19 @@ local function install(overrides)
       ProfessionsSpecPathState = { Locked = 0, Progressing = 1, Completed = 2 },
       ProfessionsSpecPerkState = { Unearned = 0, Earned = 1, Pending = 2 },
       TooltipDataType = { Item = 0 },
+      -- phase 4, from wow-ui-source live @ 12.1.5 (70688)
+      CompressionMethod = { Deflate = 0, Zlib = 1, Gzip = 2 },
+      AddOnRestrictionType = { Combat = 0, Encounter = 1, ChallengeMode = 2, PvPMatch = 3, Map = 4, Chat = 5 },
+      AddOnRestrictionState = { Inactive = 0, Activating = 1, Active = 2 },
+      SendAddonMessageResult = { Success = 0, InvalidPrefix = 1, InvalidMessage = 2, AddonMessageThrottle = 3,
+        InvalidChatType = 4, NotInGroup = 5, TargetRequired = 6, InvalidChannel = 7, ChannelThrottle = 8,
+        GeneralError = 9, NotInGuild = 10, AddOnMessageLockdown = 11, TargetOffline = 12 },
     },
     TooltipDataProcessor = TooltipDataProcessor,
     hooksecurefunc = hooksecurefunc,
     GetInboxInvoiceInfo = retNil, GetInboxHeaderInfo = retNil, TakeInboxMoney = noop, AutoLootMailItem = noop,
     PlaySound = noop,
-    SOUNDKIT = { RAID_WARNING = 8959 },
+    SOUNDKIT = { RAID_WARNING = 8959, TELL_MESSAGE = 3081 },
     ScrollUtil = ScrollUtil,
     LibStub = LibStub,
     ButtonFrameTemplate_HidePortrait = noop,

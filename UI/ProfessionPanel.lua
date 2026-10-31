@@ -39,6 +39,7 @@ local SOURCE = "ProfessionPanel"
 local REFRESH_KEY, REFRESH_DELAY = "professionPanel.refresh", 0.5
 
 local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 300, 10, 14, 22, 24
+local PROVIDER_RIGHT_WIDTH = 120   -- the right-hand column of a provider line; longer texts go to the row tooltip
 local MAX_QUALITY_ROWS = 5
 local SECONDS_PER_DAY = 86400
 local EM_DASH, TIMES, RSAQUO = "\226\128\148", "\195\151", "\226\128\186"
@@ -73,6 +74,9 @@ local model          -- the last BuildModel output shown
 local target         -- target quality for Evaluate and Add to Queue; nil = best
 local useConcentration = false
 
+local providers = {}   -- ordered list of { id, fn }; extension point for later phases (Guild adds crafters)
+local providerByID = {}
+
 local function module(name)
   return ns.FS:GetModule(name, true)
 end
@@ -85,6 +89,62 @@ local function recipe_name(id)
   local scanner = module("Scanner")
   local schematic = scanner and scanner:GetSchematic(id)
   return schematic and schematic.name or ("recipe:" .. tostring(id))
+end
+
+---------------------------------------------------------------------------
+-- Line providers
+---------------------------------------------------------------------------
+
+-- Registers (or replaces in place, keeping its position) the provider `id`: fn(recipeID, charKey) returns
+-- { {left, right} } rows for the section below the profit breakdown.
+function Panel:RegisterLineProvider(id, fn)
+  if type(id) ~= "string" or id == "" then error("RegisterLineProvider: id must be a non-empty string", 2) end
+  if type(fn) ~= "function" then error("RegisterLineProvider: fn must be a function", 2) end
+  local entry = providerByID[id]
+  if entry then
+    entry.fn = fn
+  else
+    entry = { id = id, fn = fn }
+    providerByID[id] = entry
+    providers[#providers + 1] = entry
+  end
+end
+
+-- left, right texts of a provider row, or nil when it cannot be shown (a row needs a string left text; a number on
+-- the right becomes text, a nil right becomes "").
+local function line_texts(line)
+  if type(line) ~= "table" or type(line[1]) ~= "string" then return nil end
+  local right = line[2]
+  if right == nil then return line[1], "" end
+  if type(right) == "number" then return line[1], tostring(right) end
+  if type(right) == "string" then return line[1], right end
+  return nil
+end
+
+-- { {left, right} } from every provider, in registration order. A provider that raises is logged as
+-- "ProfessionPanel:<id>" and removed (registering the id again brings it back); the others still answer.
+function Panel:CollectLines(id, charKey)
+  local out, failed = {}, nil
+  for _, entry in ipairs(providers) do
+    local ok, lines = pcall(entry.fn, id, charKey)
+    if not ok then
+      failed = failed or {}
+      failed[#failed + 1] = entry
+      ns.FS:LogError(SOURCE .. ":" .. entry.id, tostring(lines))
+    elseif type(lines) == "table" then
+      for _, line in ipairs(lines) do
+        local left, right = line_texts(line)
+        if left then out[#out + 1] = { left, right } end
+      end
+    end
+  end
+  for _, entry in ipairs(failed or {}) do
+    providerByID[entry.id] = nil
+    for i = #providers, 1, -1 do
+      if providers[i] == entry then table.remove(providers, i) end
+    end
+  end
+  return out
 end
 
 ---------------------------------------------------------------------------
@@ -369,6 +429,58 @@ local function set_lines(lines, rows)
   lines.frame:SetHeight(math.max(1, #rows * LINE))
 end
 
+-- The provider section: pooled rows, a fixed-width right column, the whole line in the row tooltip. Kept out of
+-- BuildModel (GetModel stays the breakdown's).
+local function provider_row_at(section, i)
+  local row = section.pool[i]
+  if row then return row end
+  local frame = CreateFrame("Frame", nil, section.frame)
+  frame:SetHeight(LINE)
+  frame:SetPoint("TOPLEFT", section.frame, "TOPLEFT", 0, -(i - 1) * LINE)
+  frame:SetPoint("TOPRIGHT", section.frame, "TOPRIGHT", 0, -(i - 1) * LINE)
+  frame:EnableMouse(true)
+  row = {
+    frame = frame,
+    left = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"),
+    right = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"),
+  }
+  row.right:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
+  row.right:SetWidth(PROVIDER_RIGHT_WIDTH)
+  row.right:SetJustifyH("RIGHT")
+  row.left:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0)
+  row.left:SetPoint("TOPRIGHT", row.right, "TOPLEFT", -6, 0)
+  row.left:SetJustifyH("LEFT")
+  frame:SetScript("OnEnter", function(self)
+    if not (GameTooltip and row.full) then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:AddDoubleLine(row.full[1], row.full[2], 1, 1, 1, 1, 1, 1)
+    GameTooltip:Show()
+  end)
+  frame:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+  section.pool[i] = row
+  return row
+end
+
+local function render_provider_lines()
+  local section = view and view.providerLines
+  if not section then return end
+  local lines = recipeID and Panel:CollectLines(recipeID, ns.FS:CharKey()) or {}
+  for i, line in ipairs(lines) do
+    local row = provider_row_at(section, i)
+    row.full = line
+    row.left:SetText(line[1])
+    row.right:SetText(line[2])
+    row.frame:Show(); row.left:Show(); row.right:Show()
+  end
+  for i = #lines + 1, #section.pool do
+    section.pool[i].full = nil
+    section.pool[i].frame:Hide(); section.pool[i].left:Hide(); section.pool[i].right:Hide()
+  end
+  section.count = #lines
+  section.frame:SetHeight(math.max(1, #lines * LINE))
+  if #lines > 0 then section.frame:Show() else section.frame:Hide() end
+end
+
 local function render()
   if not view then return end
   view.applyEnabled = apply_allowed()
@@ -418,6 +530,7 @@ local function render()
   view.breakdownHeader:ClearAllPoints()
   view.breakdownHeader:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -6)
   set_lines(view.lines, model.breakdownRows)
+  render_provider_lines()
 end
 
 ---------------------------------------------------------------------------
@@ -478,6 +591,13 @@ end
 
 local function shown()
   return view ~= nil and view.frame:IsShown()
+end
+
+-- Re-renders the provider section for the selected recipe (a provider's data changed). Nothing while the panel is
+-- hidden or shows no recipe result; callers that fire often debounce.
+function Panel:RefreshLines()
+  if not (shown() and recipeID and result) then return end
+  render_provider_lines()
 end
 
 -- Shows the panel while ProfessionsFrame and its CraftingPage are shown; picks up the recipe the form already shows.
@@ -833,6 +953,11 @@ local function build_body(frame, created)
   created.lines = { frame = CreateFrame("Frame", nil, body), pool = {} }
   stack(created.lines.frame, created.breakdownHeader, 4)
   created.lines.frame:SetPoint("RIGHT", body, "RIGHT", 0, 0)
+  -- Rows other modules add through RegisterLineProvider; hidden while no provider has lines.
+  created.providerLines = { frame = CreateFrame("Frame", nil, body), pool = {}, count = 0 }
+  stack(created.providerLines.frame, created.lines.frame, 6)
+  created.providerLines.frame:SetPoint("RIGHT", body, "RIGHT", 0, 0)
+  created.providerLines.frame:Hide()
 end
 
 local function build()

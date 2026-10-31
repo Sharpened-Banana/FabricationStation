@@ -21,3 +21,8 @@ local P3 = require("tests.helpers.phase3_fakes")
 phase3_env = P3.phase3_env
 NOW = P3.NOW
 WS = P3.WS
+
+-- Phase-4 harness (see phase4_stubs.lua): boot_phase4(paths, opts) -> ns, W, p4; install_phase4_stubs(W) -> p4.
+local P4 = require("tests.helpers.phase4_stubs")
+boot_phase4 = P4.boot
+install_phase4_stubs = P4.install

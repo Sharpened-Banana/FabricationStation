@@ -1,5 +1,9 @@
 local _, ns = ...
 
+-- Locale table: the real one (Locales\Locales.xml, AceLocale) when the client has loaded it, else an identity table
+-- so a key reads as its own English text (specs load the addon without the .xml files).
+ns.L = ns.L or setmetatable({}, { __index = function(_, k) return k end })
+
 local FS = LibStub("AceAddon-3.0"):NewAddon("FabricationStation", "AceEvent-3.0", "AceConsole-3.0")
 ns.FS = FS
 
@@ -201,6 +205,12 @@ function FS:SetModuleEnabled(name, enabled)
   end
   notify_options_changed()
   return true
+end
+
+-- Whether the module exists and is enabled right now (false for an unknown name).
+function FS:IsModuleEnabled(name)
+  local module = self:GetModule(name, true)
+  return module ~= nil and module:IsEnabled()
 end
 
 local STOPPED_ORDER = 1000  -- the stopped-modules section goes after every toggle

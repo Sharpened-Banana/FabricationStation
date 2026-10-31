@@ -14,4 +14,8 @@ ns.Msg = {
   -- Phase 2 (sent by Orders)
   ORDER_FULFILLED = "FS_ORDER_FULFILLED",
   PERSONAL_ORDER_ARRIVED = "FS_PERSONAL_ORDER_ARRIVED",
+  -- Phase 4 (Social: guild sync gate, guild directory, chat scan)
+  COMM_GATE_CHANGED = "FS_COMM_GATE_CHANGED",
+  GUILD_CHANGED = "FS_GUILD_CHANGED",
+  CHATSCAN_MATCH = "FS_CHATSCAN_MATCH",
 }
