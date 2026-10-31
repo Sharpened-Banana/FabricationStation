@@ -75,7 +75,7 @@ local function fill(target, defaults)
   return target
 end
 
-local sessionSettings  -- used while there is no writable saved data (before InitDB, or a newer save)
+local settingsTable = ns.Util.SettingsAccessor("orders")  -- a session-only copy while the saved data is read-only
 
 ---------------------------------------------------------------------------
 -- Settings
@@ -84,18 +84,7 @@ local sessionSettings  -- used while there is no writable saved data (before Ini
 -- The orders settings table, with defaults filled in. It is db.global.settings.orders (created on first use);
 -- while the saved data is missing or read-only it is a session-only copy, so callers can always read and set it.
 function Orders:Settings()
-  if writable() then
-    local g = global()
-    if type(g.settings) ~= "table" then g.settings = {} end
-    if type(g.settings.orders) ~= "table" then g.settings.orders = {} end
-    return fill(g.settings.orders, self.SETTINGS_DEFAULTS)
-  end
-  if not sessionSettings then
-    local g = global()
-    local stored = g and type(g.settings) == "table" and g.settings.orders
-    sessionSettings = type(stored) == "table" and copy(stored) or {}
-  end
-  return fill(sessionSettings, self.SETTINGS_DEFAULTS)
+  return settingsTable(self.SETTINGS_DEFAULTS, fill)
 end
 
 ---------------------------------------------------------------------------

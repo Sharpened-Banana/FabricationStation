@@ -59,7 +59,7 @@ local function fill(target, defaults)
   return target
 end
 
-local sessionSettings  -- used while there is no writable saved data (before InitDB, or a newer save)
+local settingsTable = ns.Util.SettingsAccessor("ledger")  -- a session-only copy while the saved data is read-only
 
 -- The saved entries list for reads (nil when there is none; nothing is created).
 local function entries_view()
@@ -99,18 +99,7 @@ end
 -- The ledger settings table with defaults filled in: db.global.settings.ledger (created on first use). While the
 -- saved data is missing or read-only it is a session-only copy, so callers can always read and set it.
 function Ledger:Settings()
-  if writable() then
-    local g = global()
-    if type(g.settings) ~= "table" then g.settings = {} end
-    if type(g.settings.ledger) ~= "table" then g.settings.ledger = {} end
-    return fill(g.settings.ledger, self.SETTINGS_DEFAULTS)
-  end
-  if not sessionSettings then
-    local g = global()
-    local stored = g and type(g.settings) == "table" and g.settings.ledger
-    sessionSettings = type(stored) == "table" and copy(stored) or {}
-  end
-  return fill(sessionSettings, self.SETTINGS_DEFAULTS)
+  return settingsTable(self.SETTINGS_DEFAULTS, fill)
 end
 
 ---------------------------------------------------------------------------

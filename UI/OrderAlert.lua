@@ -40,13 +40,6 @@ local BACKDROP = {
 
 local MIN_TOAST_SECONDS, MAX_TOAST_SECONDS = 1, 60
 
-local function copy(v)
-  if type(v) ~= "table" then return v end
-  local out = {}
-  for k, x in pairs(v) do out[k] = copy(x) end
-  return out
-end
-
 local function is_finite(n) return type(n) == "number" and n == n and n ~= math.huge and n ~= -math.huge end
 
 -- Fills every default `target` is missing or holds with the wrong type, keeping valid values (a stored false stays
@@ -62,27 +55,12 @@ local function fill(target, defaults)
   return target
 end
 
-local sessionSettings  -- used while there is no writable saved data (before InitDB, or a newer save)
-
-local function writable()
-  return ns.FS.db ~= nil and ns.FS.db.global ~= nil and not ns.FS.dbIsNewer
-end
+local settingsTable = ns.Util.SettingsAccessor("alerts")  -- a session-only copy while the saved data is read-only
 
 -- The alert settings table, with defaults filled in. It is db.global.settings.alerts (created on first use); while
 -- the saved data is missing or read-only it is a session-only copy, so callers can always read and set it.
 function OrderAlert:Settings()
-  if writable() then
-    local g = ns.FS.db.global
-    if type(g.settings) ~= "table" then g.settings = {} end
-    if type(g.settings.alerts) ~= "table" then g.settings.alerts = {} end
-    return fill(g.settings.alerts, self.SETTINGS_DEFAULTS)
-  end
-  if not sessionSettings then
-    local g = ns.FS.db and ns.FS.db.global
-    local stored = g and type(g.settings) == "table" and g.settings.alerts
-    sessionSettings = type(stored) == "table" and copy(stored) or {}
-  end
-  return fill(sessionSettings, self.SETTINGS_DEFAULTS)
+  return settingsTable(self.SETTINGS_DEFAULTS, fill)
 end
 
 -- "New personal crafting order: Tailoring (2 waiting)"; the profession and the count are left out when unknown.
