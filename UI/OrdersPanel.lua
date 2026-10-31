@@ -167,9 +167,28 @@ local function compact(copper)
   return "0g"
 end
 
+-- Unsigned compact money for a narrow cell (a tip): "1,234g", "45s" under 1g, "7c" under 1s, rounded down as in
+-- compact; nil for unknown money. A negative amount keeps compact's signed text.
+function M.CompactMoney(copper)
+  local text = compact(copper)
+  if not text or copper < 0 then return text end
+  local digits, unit = text:match("^%+?(%d+)(%a)$")
+  if not digits then return text end
+  local grouped = digits:reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+  return grouped .. unit
+end
+
+-- The colour sign of an amount as its compact cell shows it: 1 (gain), -1 (loss), 0 (shown as "0g", e.g. under a
+-- copper, or unknown). The board's cells and the Orders tab colour by it.
+function M.Sign(copper)
+  if not is_money(copper) or compact(copper) == "0g" then return 0 end
+  return copper > 0 and 1 or -1
+end
+
 local function sign_color(copper)
-  if not is_money(copper) or compact(copper) == "0g" then return TEXT_COLORS.grey end
-  return copper > 0 and TEXT_COLORS.green or TEXT_COLORS.red
+  local sign = M.Sign(copper)
+  if sign == 0 then return TEXT_COLORS.grey end
+  return sign > 0 and TEXT_COLORS.green or TEXT_COLORS.red
 end
 
 -- The profit cell: the order's net ("?" when unknown), "~" before an estimate, "?" after it when a price is missing.
@@ -261,6 +280,30 @@ function M.AddToQueue(view)
   end
   if queue:Add(entry) then return "Added to the queue", "good" end
   return "Could not add to the queue (saved data is read-only)", "bad"
+end
+
+-- The order filters as checkbox descriptors, in display order: one per Orders.RISKS ({ key = risk, risk, label =
+-- its RISK_LABELS text }) then "Hide unscored" ({ key = "hideUnscored" }). get(filters) -> bool, set(filters, on)
+-- write Orders:Settings().filters in place. The side panel and the Orders tab build their checkboxes from it.
+function M.FilterChecks()
+  local O = orders()
+  local list = {}
+  for _, risk in ipairs(O and O.RISKS or {}) do
+    list[#list + 1] = {
+      key = risk, risk = risk, label = (O.RISK_LABELS or {})[risk] or risk,
+      get = function(f) return type(f.hideRisks) == "table" and f.hideRisks[risk] == true end,
+      set = function(f, on)
+        if type(f.hideRisks) ~= "table" then f.hideRisks = {} end
+        f.hideRisks[risk] = on or nil
+      end,
+    }
+  end
+  list[#list + 1] = {
+    key = "hideUnscored", label = "Hide unscored",
+    get = function(f) return f.hideUnscored == true end,
+    set = function(f, on) f.hideUnscored = on end,
+  }
+  return list
 end
 
 ---------------------------------------------------------------------------
@@ -829,25 +872,15 @@ local function build_side()
   v.filterHeader:SetPoint("TOPLEFT", v.title, "BOTTOMLEFT", 0, -8)
   v.filterHeader:SetText("Hide orders with:")
 
-  local O = orders()
   local anchor = v.filterHeader
-  for _, risk in ipairs(O and O.RISKS or {}) do
-    local check = make_check(frame, anchor, (O.RISK_LABELS or {})[risk] or risk,
-      function(f) return type(f.hideRisks) == "table" and f.hideRisks[risk] == true end,
-      function(f, on)
-        if type(f.hideRisks) ~= "table" then f.hideRisks = {} end
-        f.hideRisks[risk] = on or nil
-      end)
+  for _, d in ipairs(M.FilterChecks()) do
+    local check = make_check(frame, anchor, d.label, d.get, d.set)
     v.checks[#v.checks + 1] = check
     anchor = check.button
   end
-  local unscored = make_check(frame, anchor, "Hide unscored",
-    function(f) return f.hideUnscored == true end,
-    function(f, on) f.hideUnscored = on end)
-  v.checks[#v.checks + 1] = unscored
 
   v.claims = text(frame)
-  v.claims:SetPoint("TOPLEFT", unscored.button, "BOTTOMLEFT", 0, -10)
+  v.claims:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -10)
   v.claims:SetPoint("RIGHT", frame, "RIGHT", -SIDE_PAD, 0)
   v.claims:SetJustifyH("LEFT")
 

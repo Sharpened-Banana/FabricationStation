@@ -102,6 +102,22 @@ describe("OrdersPanel", function()
       assert.same({ recipeID = 4444, quantity = 1, orderID = 10, targetQuality = 3 }, unreachable)   -- no concentration
       assert.is_nil(P.QueueEntry({ orderID = 10 })); assert.is_nil(P.QueueEntry(nil))
     end)
+    it("compact unsigned money for a tip and the colour sign of a cell", function()
+      assert.same({ "1,234g", "1,234,567g", "12g", "45s", "7c", "0g" }, { P.CompactMoney(12345678), P.CompactMoney(12345678900),
+        P.CompactMoney(129999), P.CompactMoney(4599), P.CompactMoney(7), P.CompactMoney(0) })
+      assert.is_nil(P.CompactMoney(nil)); assert.equal("-4g", P.CompactMoney(-39000))
+      assert.same({ 1, -1, 0, 0, -1, 0 }, { P.Sign(5), P.Sign(-5), P.Sign(0.4), P.Sign(0), P.Sign(-0.4), P.Sign(nil) })
+    end)
+    it("describes the filter checkboxes: one per risk, then hide unscored", function()
+      local list = P.FilterChecks()
+      local O = ns.FS:GetModule("Orders")
+      assert.equal(#O.RISKS + 1, #list)
+      for i, risk in ipairs(O.RISKS) do assert.same({ risk, risk, O.RISK_LABELS[risk] }, { list[i].key, list[i].risk, list[i].label }) end
+      assert.same({ "hideUnscored", "Hide unscored" }, { list[#list].key, list[#list].label })
+      local filt = {}
+      list[1].set(filt, true); assert.is_true(list[1].get(filt)); list[1].set(filt, false); assert.is_nil(filt.hideRisks[O.RISKS[1]])
+      list[#list].set(filt, true); assert.is_true(list[#list].get(filt))
+    end)
     it("Guard does nothing for an unknown module", function()
       local called = false
       assert.is_false(P.Guard("NoSuchModule", function() called = true end)); assert.is_false(called)
@@ -256,6 +272,16 @@ describe("OrdersPanel on the crafting orders page", function()
       assert.equal("Added to the queue", side():GetView().result:GetText())
       c.add:GetScript("OnClick")(c.add)
       assert.equal(1, #queued); assert.equal("Already in the queue", side():GetView().result:GetText())
+    end)
+    it("says so when the queue cannot be added to (read-only saved data)", function()
+      boot()
+      ns.FS:GetModule("Queue").Add = function() return nil end
+      local raw = P2.raw_order({ orderID = 10 })
+      local row = row_for(raw)
+      show_board({ raw })
+      local c = rows():GetCells(row)
+      c.add:GetScript("OnClick")(c.add)
+      assert.equal("Could not add to the queue (saved data is read-only)", side():GetView().result:GetText())
     end)
     -- Row geometry: the strip's right edge is 760 - (860 - 400) - 6 = 294 from the row's left; the name ends at
     -- 22 + textWidth. [score][risk][+] need 86, the profit cell 46 more, the warning icon 16 more; 4 px gap.

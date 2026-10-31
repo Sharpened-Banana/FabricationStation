@@ -55,6 +55,8 @@ describe("Orders tab models", function()
     assert.same({ "personal", 6, "Bob-Silvermoon", 500, 30, 30, { "expiringSoon" }, 100 },
       { r.type, r.item, r.customer, r.tip, r.net, r.score, r.risks, r.expiresIn })
     assert.is_nil(m.rows[1].expiresIn)
+    assert.is_true(m.seen); assert.equal(3, m.total)
+    assert.is_false(T.Model({ orders = {} }, {}, 1000).seen)
   end)
 
   it("hides switched-off order types and unscored orders", function()
@@ -84,13 +86,14 @@ describe("Orders tab models", function()
     assert.is_truthy(conc.score:find("conc?", 1, true)); assert.is_falsy(conc.score:find("no price", 1, true))
   end)
 
-  it("marks estimates with a tilde and formats type, customer, tip, risks and expiry", function()
-    local cells = T.CellTexts(row({ orderID = 1, orderType = "npc", itemID = 5, tip = 12345, net = 250000, score = 200000,
+  it("marks estimates with a tilde and formats type, customer, compact tip, risk count and expiry", function()
+    local cells = T.CellTexts(row({ orderID = 1, orderType = "npc", itemID = 5, tip = 12345678, net = 250000, score = 200000,
       risks = { "expiringSoon", "noMatsLowTip" }, expiresAt = 1600, flags = { estimated = true } }))
     assert.is_truthy(cells.net:find("~+25g", 1, true)); assert.is_truthy(cells.score:find("~+20g", 1, true))
     assert.equal("NPC", cells.type); assert.equal("Patron", cells.customer)
-    assert.equal(ns.UI.FormatMoney(12345), cells.tip)
-    assert.is_truthy(cells.risk:find("Expiring soon, No mats, low tip", 1, true))
+    assert.equal("1,234g", cells.tip)
+    assert.equal("|cffff4040!2|r", cells.risk)
+    assert.equal("45s", T.CellTexts(row({ orderID = 1, tip = 4500, risks = {} })).tip)
     assert.is_truthy(cells.expires:find("10m", 1, true))
     local plain = T.CellTexts(row({ orderID = 1, orderType = "public", customer = "Bob-Silvermoon", risks = {} }))
     assert.same({ "Public", "Bob-Silvermoon", "", "--" }, { plain.type, plain.customer, plain.risk, plain.expires })
@@ -105,20 +108,46 @@ describe("Orders tab models", function()
     assert.equal("item:6", T.CellTexts(row({ orderID = 1, itemID = 6, recipeID = 1, risks = {} })).item)
   end)
 
-  it("formats the tip benchmark", function()
-    local b = { median = 50000, p25 = 40000, p75 = 60000, n = 7 }
-    assert.equal(("Your tips: median %s (p25 %s, p75 %s, n=7)"):format(ns.UI.FormatMoney(50000), ns.UI.FormatMoney(40000),
-      ns.UI.FormatMoney(60000)), T.BenchmarkText(b))
-    assert.equal("Your tips: no history yet", T.BenchmarkText(nil))
+  it("colours a sub-copper gain plain, like the board", function()
+    local cells = T.CellTexts(row({ orderID = 1, net = 0.4, score = 0.4, risks = {} }))
+    assert.equal("0g", cells.net); assert.equal("0g", cells.score)
+    assert.equal("|cffff4040-1c|r", T.CellTexts(row({ orderID = 1, net = -0.4, risks = {} })).net)
   end)
 
-  it("builds the tooltip: risks, notes and the tip benchmark", function()
+  it("formats the tip benchmark with its quality scope", function()
+    local b = { median = 50000, p25 = 40000, p75 = 60000, n = 7 }
+    assert.equal(("Your tips (Q3): median %s (p25 %s, p75 %s, n=7)"):format(ns.UI.FormatMoney(50000),
+      ns.UI.FormatMoney(40000), ns.UI.FormatMoney(60000)), T.BenchmarkText(b, 3))
+    assert.equal("Your tips (all qualities): no history yet", T.BenchmarkText(nil, nil))
+  end)
+
+  it("builds the tooltip: customer, full tip and net, risks, notes and the tip benchmark", function()
     local r = row({ orderID = 1, orderType = "public", itemID = 5, recipeID = 4444, risks = { "expiringSoon" },
       flags = { noPrice = true } })
-    local lines = T.TooltipLines(r, { median = 1, p25 = 1, p75 = 1, n = 3 })
-    local texts = {}
-    for i, line in ipairs(lines) do texts[i] = line.text end
-    assert.same({ "item:5", "Expiring soon", "No price", T.BenchmarkText({ median = 1, p25 = 1, p75 = 1, n = 3 }) }, texts)
+    local b = { median = 1, p25 = 1, p75 = 1, n = 3 }
+    local function texts(lines)
+      local out = {}
+      for i, line in ipairs(lines) do out[i] = line.text end
+      return out
+    end
+    assert.same({ "item:5", "Tip: --", "Net: no price", "Expiring soon", "No price", T.BenchmarkText(b, nil) },
+      texts(T.TooltipLines(r, b)))
+    local full = row({ orderID = 2, orderType = "personal", customer = "Bob-Silvermoon", itemID = 5, minQuality = 3,
+      tip = 12345678, net = 250000, risks = {}, flags = { estimated = true } })
+    assert.same({ "item:5", "Customer: Bob-Silvermoon", "Tip: " .. ns.UI.FormatMoney(12345678),
+      "Net: ~" .. ns.UI.FormatMoney(250000), "Estimate (no calibration)", T.BenchmarkText(nil, 3) },
+      texts(T.TooltipLines(full, nil)))
+    local recraft = row({ orderID = 3, orderType = "public", risks = {}, flags = { recraft = true } })
+    assert.equal("Net: " .. EM_DASH, texts(T.TooltipLines(recraft, nil))[3])
+  end)
+
+  it("keeps the Item column at 120 px or more: Customer goes first, then Type", function()
+    local at516, at600, at900, at400 = T.Layout(516), T.Layout(600), T.Layout(900), T.Layout(400)
+    assert.same({ { customer = true }, 128 }, { at516.hidden, at516.item })
+    assert.same({ { customer = true }, 212 }, { at600.hidden, at600.item })
+    assert.same({ {}, 418 }, { at900.hidden, at900.item })
+    assert.same({ customer = true, type = true }, at400.hidden)
+    assert.same({}, T.Layout(0).hidden); assert.same({}, T.Layout(nil).hidden)
   end)
 end)
 
@@ -136,16 +165,16 @@ describe("Orders tab frames", function()
       charKey = "Me-Silvermoon", usedConcentration = false, input = { provided = { [1001] = 2 } } }, overrides)
   end
   local function click(button) button:GetScript("OnClick")(button) end
-  local function open()
+  local function open(width)
     container = CreateFrame("Frame")
-    container:SetSize(740, 500)
+    container:SetSize(width or 740, 500)
     reg.orders.build(container)
     reg.orders.refresh(container)
     return ns.FS:GetModule("OrdersTab"):GetView()
   end
 
   before_each(function()
-    reg, refreshed, queued, benchmarks = {}, {}, {}, {}
+    reg, refreshed, queued, benchmarks, container = {}, {}, {}, {}, nil
     tooltip = { lines = {} }
     ns, W = P2.boot({ GameTooltip = {
       SetOwner = function(_, owner) tooltip.owner = owner; tooltip.lines = {} end,
@@ -156,7 +185,10 @@ describe("Orders tab frames", function()
     } })
     P2.fake_module(ns, "MainWindow", {
       RegisterTab = function(_, id, def) reg[id] = def; return true end,
-      RefreshTab = function(_, id) refreshed[#refreshed + 1] = id end,
+      RefreshTab = function(_, id)
+        refreshed[#refreshed + 1] = id
+        if container then reg[id].refresh(container) end
+      end,
     })
     P2.fake_module(ns, "Queue", { Add = function(_, e) queued[#queued + 1] = e; return #queued end,
       GetEntries = function() return queued end })
@@ -241,7 +273,8 @@ describe("Orders tab frames", function()
     r:GetScript("OnEnter")(r)
     assert.same({ 4444, 3 }, benchmarks[#benchmarks])
     assert.is_true(tooltip.shown)
-    assert.equal(T.BenchmarkText({ median = 50000, p25 = 40000, p75 = 60000, n = 4 }), tooltip.lines[#tooltip.lines])
+    assert.equal(T.BenchmarkText({ median = 50000, p25 = 40000, p75 = 60000, n = 4 }, 3), tooltip.lines[#tooltip.lines])
+    assert.equal("Customer: Bob-Silvermoon", tooltip.lines[2])
     r:GetScript("OnLeave")(r)
     assert.is_false(tooltip.shown)
   end)
@@ -274,6 +307,113 @@ describe("Orders tab frames", function()
     W.fire("GET_ITEM_INFO_RECEIVED", 5, true)
     W.advance(1)
     assert.same({ "orders" }, refreshed)
+  end)
+
+  describe("column layout", function()
+    local function point(cell, i) return { cell:GetPoint(i or 1) } end
+    local function resize(width)
+      container:SetSize(width, 500)
+      container:GetScript("OnSizeChanged")(container, width, 500)
+    end
+
+    it("lays Type out from the left edge and Item between Type and Customer, in the header and the rows", function()
+      snapshot({ view() })
+      local v = open(900)
+      for _, set in ipairs({ { parent = v.headerBar, cells = v.headers }, { parent = v.pool[1], cells = v.pool[1].placed } }) do
+        local typeCell, item, customer, action = set.cells[1], set.cells[2], set.cells[3], set.cells[9]
+        assert.same({ "LEFT", set.parent, "LEFT", 6, 0 }, point(typeCell)); assert.equal(48, typeCell:GetWidth())
+        assert.same({ "LEFT", typeCell, "RIGHT", 4, 0 }, point(item, 1))
+        assert.same({ "RIGHT", customer, "LEFT", -4, 0 }, point(item, 2))
+        assert.same({ "RIGHT", set.parent, "RIGHT", -6, 0 }, point(action))
+        assert.same({ "RIGHT", set.cells[4], "LEFT", -4, 0 }, point(customer)); assert.equal(90, customer:GetWidth())
+        assert.is_true(customer:IsShown()); assert.is_true(typeCell:IsShown())
+      end
+    end)
+
+    it("hides Customer at 516 and 600 px, then Type, and brings them back when wider", function()
+      snapshot({ view() })
+      local v = open(516)
+      local r = v.pool[1]
+      for _, cells in ipairs({ v.headers, r.placed }) do
+        assert.is_false(cells[3]:IsShown()); assert.is_true(cells[1]:IsShown())
+        assert.same({ "RIGHT", cells[4], "LEFT", -4, 0 }, point(cells[2], 2))
+      end
+      resize(600)
+      assert.is_false(v.headers[3]:IsShown()); assert.is_false(r.placed[3]:IsShown())
+      resize(400)
+      for _, cells in ipairs({ v.headers, r.placed }) do
+        assert.is_false(cells[1]:IsShown()); assert.is_false(cells[3]:IsShown())
+      end
+      assert.same({ "LEFT", r, "LEFT", 6, 0 }, point(r.placed[2], 1))
+      resize(900)
+      for _, cells in ipairs({ v.headers, r.placed }) do
+        assert.is_true(cells[1]:IsShown()); assert.is_true(cells[3]:IsShown())
+      end
+      assert.same({ "LEFT", r.placed[1], "RIGHT", 4, 0 }, point(r.placed[2], 1))
+    end)
+
+    it("keeps the header and status lines apart: the status takes the right 45%", function()
+      local v = open(740)
+      assert.same({ 327, 397 }, { v.status:GetWidth(), v.header:GetWidth() })
+      resize(516)
+      assert.same({ 226, 274 }, { v.status:GetWidth(), v.header:GetWidth() })
+    end)
+
+    it("builds one checkbox per shared filter, on as many lines as they need", function()
+      local v = open()
+      local descriptors = ns.UI.OrdersPanel.FilterChecks()
+      assert.equal(#descriptors, #v.checks); assert.equal(math.ceil(#descriptors / 3), v.filterLines)
+      for i, d in ipairs(descriptors) do assert.same({ d.key, d.label }, { v.checks[i].key, v.checks[i].label:GetText() }) end
+    end)
+  end)
+
+  it("says when the saved data is read-only", function()
+    ns.FS:GetModule("Queue").Add = function() return nil end
+    snapshot({ view() })
+    local v = open()
+    click(v.pool[1].queue)
+    assert.is_truthy(v.status:GetText():find("Could not add to the queue (saved data is read-only)", 1, true))
+  end)
+
+  it("clears the status on the next refresh after 5 s, or when the tab is shown again", function()
+    snapshot({ view() })
+    local v = open()
+    click(v.pool[1].queue)
+    W.now = W.now + 4; reg.orders.refresh(container)
+    assert.is_truthy(v.status:GetText():find("Added", 1, true))
+    W.now = W.now + 1; reg.orders.refresh(container)
+    assert.equal("", v.status:GetText())
+    click(v.pool[1].queue)
+    assert.is_truthy(v.status:GetText():find("Already", 1, true))
+    container:GetScript("OnShow")(container)
+    reg.orders.refresh(container)
+    assert.equal("", v.status:GetText())
+  end)
+
+  it("refreshes every 30 s while shown, so ages move on and expired orders drop out", function()
+    snapshot({ view(), view({ orderID = 11, expiresAt = 1020 }) })
+    local v = open()
+    assert.equal(2, v.shown)
+    W.advance(29)
+    assert.same({}, refreshed)
+    W.advance(2)
+    assert.same({ "orders" }, refreshed)
+    assert.equal(1, v.shown); assert.equal(10, v.pool[1].data.orderID)
+    W.advance(30)
+    assert.same({ "orders", "orders" }, refreshed)
+  end)
+
+  it("stops listening and cancels the pending refresh and tick when turned off", function()
+    snapshot({ view() })
+    open()
+    ns.FS:SendMessage("FS_ORDERS_CHANGED")
+    ns.FS:GetModule("OrdersTab"):Disable()
+    W.advance(60)
+    assert.same({}, refreshed)
+    ns.FS:SendMessage("FS_ORDERS_CHANGED"); ns.FS:SendMessage("FS_CUSTOMERS_CHANGED")
+    W.fire("GET_ITEM_INFO_RECEIVED", 5, true)
+    W.advance(60)
+    assert.same({}, refreshed)
   end)
 
   it("never claims: the tab has no claim call", function()

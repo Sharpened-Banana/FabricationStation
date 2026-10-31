@@ -208,14 +208,34 @@ local function install(overrides)
     return o
   end
 
-  local function make_fontstring()
+  -- Font strings record their text, show state, anchors and width (GetWidth is nil until SetWidth, as before).
+  local function make_fontstring(parent)
     local fs = new_object()
-    local text, shown = nil, true
+    local text, shown, points, width = nil, true, {}, nil
     function fs:SetText(t) text = t end
     function fs:GetText() return text end
     function fs:Show() shown = true end
     function fs:Hide() shown = false end
     function fs:IsShown() return shown end
+    function fs:SetPoint(point, a, b, c, d)
+      local rel, relPoint, x, y = parent, point
+      if type(a) == "number" then
+        x, y = a, b or 0
+      else
+        if a ~= nil then rel = a end
+        relPoint = b or point
+        x, y = c or 0, d or 0
+      end
+      points[#points + 1] = { point, rel, relPoint, x, y }
+    end
+    function fs:GetPoint(i)
+      local p = points[i or 1]
+      if p then return unpack(p, 1, 5) end
+    end
+    function fs:GetNumPoints() return #points end
+    function fs:ClearAllPoints() points = {} end
+    function fs:SetWidth(w) width = w end
+    function fs:GetWidth() return width end
     return fs
   end
 
@@ -260,7 +280,7 @@ local function install(overrides)
     function f:SetParent(p) par = p end
     function f:GetParent() return par end
     function f:GetName() return name end
-    function f:CreateFontString() return make_fontstring() end
+    function f:CreateFontString() return make_fontstring(f) end
     function f:CreateTexture() return new_object() end
     if name then
       framesByName[name] = true
