@@ -65,8 +65,18 @@ lua tools/gamedata/gen_phase3.lua --build 12.1.5.70575 --cache tools/gamedata/ca
 - The tests use the fixtures in `tests/fixtures/phase3/` (`tests/tools/phase3_gen_spec.lua`).
 - Provenance of the checked-in CSVs (2026-10-31): quest and item IDs come from three MIT-licensed addon data sets, pinned
   to commits: DjinnisDataTexts `32accbf` (IDs and points), choretracker `b9131e5` and AllTheThings `5ee014c` (IDs only).
-  Point values were checked against public guides (search-result snippets; the pages could not be fetched). A row's
-  `credit` names the files and pages that contain its IDs and points. It ends in `unverified (<reason>)` when the IDs
-  or the points come from only one source, or when the sources disagree. No row has been checked in game. Do not take
-  data from WeeklyKnowledge or HandyNotes: Midnight, or from addons derived from them: they have no license.
+  AllTheThings' `00 - Item DB/CharacterItemDB.lua` also confirms the books' item-to-quest pairs. Their MIT notices
+  ship with the addon in `THIRD_PARTY_NOTICES.md` at the repository root, which `.pkgmeta` must not ignore. Keep that
+  file up to date when you add or re-pin a source.
+  Point values were checked against public guides (search-result snippets; the pages could not be fetched).
+  - A row's `credit` names the files and pages that contain its IDs and points.
+  - A per-profession guide value counts as a second source only when the guide's number differs between professions.
+    Templated wording with the same number for every profession does not count.
+  - A guide statement that applies to every profession is marked `(general rule)`. It counts only for the generic
+    categories (treatise, Darkmoon, one-time treasures, renown books).
+  - A row ends in `unverified (<reason>)` when its IDs or points come from only one source, or when the sources
+    disagree (`points conflict: ...`).
+
+  No row has been checked in game. Do not take data from WeeklyKnowledge or HandyNotes: Midnight, or from addons
+  derived from them: they have no license.
   `tests/data/gamedata_phase3_spec.lua` checks the checked-in tables.

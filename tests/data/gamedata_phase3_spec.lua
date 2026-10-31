@@ -35,6 +35,15 @@ describe("phase-3 GameData", function()
     end
   end)
 
+  it("sources are sorted by skillLineID, category, id", function()
+    for i = 2, #K.sources do
+      local a, b = K.sources[i - 1], K.sources[i]
+      local ordered = a.skillLineID < b.skillLineID
+        or (a.skillLineID == b.skillLineID and (a.category < b.category or (a.category == b.category and a.id < b.id)))
+      assert.is_true(ordered, a.id .. " before " .. b.id)
+    end
+  end)
+
   it("every variant has a weekly quest source", function()
     local has = {}
     for _, s in ipairs(K.sources) do if s.category == "weeklyQuest" then has[s.skillLineID] = true end end
@@ -76,6 +85,22 @@ describe("hand-authored knowledge CSVs", function()
       local _, rows = csv.read("tools/gamedata/sources/" .. file)
       assert.is_true(#rows > 0, file)
       for i, row in ipairs(rows) do assert.truthy(row.credit and row.credit ~= "", file .. " row " .. i) end
+    end
+  end)
+
+  it("ship the third-party MIT notices for their sources in the package", function()
+    local f = assert(io.open("THIRD_PARTY_NOTICES.md", "r"), "THIRD_PARTY_NOTICES.md missing")
+    local text = f:read("*a"); f:close()
+    for _, sha in ipairs({ "32accbfd570ab5554e5c74c80ef7f67500916880", "b9131e55b1ae4b60fae31823a254915952242f16",
+      "5ee014cf4cf4c9e4d4c8f3c0d2333e3ac695ad07" }) do
+      assert.truthy(text:find(sha, 1, true), sha)
+    end
+    local _, grants = text:gsub("Permission is hereby granted", "")
+    assert.equal(3, grants)
+    local pkg = assert(io.open(".pkgmeta", "r")); local meta = pkg:read("*a"); pkg:close()
+    local ignore = meta:match("\nignore:\n(.-)\n%S") or meta:match("\nignore:\n(.*)$") or ""
+    for entry in ignore:gmatch("%-%s*(%S+)") do
+      assert.is_falsy(("THIRD_PARTY_NOTICES.md"):find("^" .. entry:gsub("%p", "%%%0")), "ignored by .pkgmeta: " .. entry)
     end
   end)
 end)
