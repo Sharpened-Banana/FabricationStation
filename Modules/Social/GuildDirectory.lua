@@ -20,7 +20,8 @@ local ItemIndex = ns.Social.ItemIndex
 
 local TOOLTIP_NAMES = 3          -- names on the tooltip line before "+N more"
 local PANEL_ROWS = 5             -- crafter rows in the profession panel before "+N more"
-local INDEX_TICK = 200           -- recipes resolved per index tick
+local INDEX_TICK = 200           -- most recipes resolved per index tick (also bounded by a time budget)
+local DEFAULT_BUDGET_MS = 4    -- per index tick when Recipes' scanBudgetMs is unavailable
 local INDEX_RETRY = 300          -- seconds before a recipe that resolved to nothing is tried again (not on a rebuild)
 local SOURCE = "Guild:Directory"
 
@@ -89,8 +90,19 @@ local function context(self)
   return { self = self, own = nil, member = {} }
 end
 
+-- The account's own characters, kept for OWN_TTL seconds (a tooltip must not re-read and re-sort the character list
+-- every time) and dropped on FS_GUILD_CHANGED.
+local OWN_TTL = 10
+local ownCache, ownAt
+
 local function own_chars(ctx)
-  if not ctx.own then ctx.own = Guild._OwnCharSet() end
+  if not ctx.own then
+    local t = ns.FS:Now()
+    if not ownCache or ownAt > t or t - ownAt >= OWN_TTL then
+      ownCache, ownAt = Guild._OwnCharSet(), t
+    end
+    ctx.own = ownCache
+  end
   return ctx.own
 end
 
@@ -114,11 +126,13 @@ end
 
 local function addon_rows(ctx, dir, recipeID, byName, rows)
   if type(dir.profiles) ~= "table" then return end
+  local contested = type(dir.contested) == "table" and dir.contested or {}
   for charKey, profile in pairs(dir.profiles) do
     if type(charKey) == "string" and type(profile) == "table" and type(profile.lines) == "table"
         and type(profile.owner) == "string" and type(profile.rt) == "number" then
       local line = line_for(profile, recipeID)
-      if line and not own_chars(ctx)[charKey] and owner_in_guild(ctx, profile.owner) then
+      -- A contested character (two unverified claimants) has no trustworthy copy: no addon row for it.
+      if line and not contested[charKey] and not own_chars(ctx)[charKey] and owner_in_guild(ctx, profile.owner) then
         local row = { name = charKey, owner = profile.owner, source = "addon", verified = profile.verified == true,
           time = profile.rt }
         if type(line.k) == "number" then row.skill = line.k end
@@ -218,15 +232,19 @@ end
 local function tooltip_lines(self, itemID)
   if not self:IsEnabled() or type(itemID) ~= "number" then return {} end
   -- Runs for every item tooltip: the index lookup comes first, so an item nobody here crafts costs one table lookup.
-  if #self:GetItemIndex():RecipesFor(itemID) == 0 or not self:Settings().tooltipLine then return {} end
+  if not self:GetItemIndex():HasItem(itemID) or not self:Settings().tooltipLine then return {} end
   local groups = self:GetCraftersForItem(itemID)
   if #groups == 0 then return {} end
-  local rows, seen = {}, {}
+  -- One entry per name; when several recipes list the same crafter, the best expected quality wins.
+  local rows, at = {}, {}
   for _, group in ipairs(groups) do
     for _, row in ipairs(group.crafters) do
-      if not seen[row.name] then
-        seen[row.name] = true
+      local i = at[row.name]
+      if not i then
         rows[#rows + 1] = row
+        at[row.name] = #rows
+      elseif (row.expectedQuality or -1) > (rows[i].expectedQuality or -1) then
+        rows[i] = row
       end
     end
   end
@@ -314,16 +332,29 @@ local function schedule()
   tickTimer = C_Timer.NewTimer(0, ns.FS:Wrap(SOURCE, function() tick() end))
 end
 
+local function budget_ms()
+  local ms = Guild._BudgetMs and Guild._BudgetMs()
+  if type(ms) == "number" and ms > 0 then return ms end
+  return DEFAULT_BUDGET_MS
+end
+
+-- One frame: at most INDEX_TICK recipes, and (with debugprofilestop) at most the scan budget in milliseconds, but
+-- always at least one, so the queue cannot stall. Most guild recipes miss the cached schematic and cost an API call.
 tick = function()
   tickTimer = nil
+  local clock = type(debugprofilestop) == "function" and debugprofilestop or nil
+  local started, limit = clock and clock(), budget_ms()
   local last = math.min(queuePos + INDEX_TICK - 1, #queue)
-  for i = queuePos, last do
+  local i = queuePos
+  while i <= last do
     local id = queue[i]
     queued[id] = nil
     attempted[id] = ns.FS:Now()
     index:Add(id)
+    i = i + 1
+    if clock and clock() - started >= limit then break end
   end
-  queuePos = last + 1
+  queuePos = i
   if queuePos > #queue then
     queue, queued, queuePos = {}, {}, 1
   else
@@ -377,6 +408,7 @@ function Guild:RebuildItemIndex()
   self:GetItemIndex()
   cancel_index()
   indexed = {}
+  lastKey = self.guildKey      -- the FS_GUILD_CHANGED that follows a login must not rebuild a second time
   collect(self, true)
   schedule()
 end
@@ -405,6 +437,7 @@ function Guild:_DirectoryEnable()
   -- FS_GUILD_CHANGED is already debounced to 1 s by Guild, so the panel refresh needs no second debounce. Log-only
   -- source: a failing panel or index must not turn Guild off.
   self:RegisterMessage(ns.Msg.GUILD_CHANGED, ns.FS:Wrap(SOURCE, function(_, guildKey)
+    ownCache = nil
     if guildKey ~= lastKey then
       lastKey = guildKey
       self:RebuildItemIndex()
@@ -418,5 +451,5 @@ end
 
 function Guild:_DirectoryDisable()
   cancel_index()
-  indexed, attempted, lastKey = {}, {}, nil
+  indexed, attempted, lastKey, ownCache = {}, {}, nil, nil
 end

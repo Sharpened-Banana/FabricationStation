@@ -55,3 +55,8 @@ end
 function Index:Has(recipeID)
   return self.known[recipeID] == true
 end
+
+-- Whether any recipe is indexed for itemID. Allocates nothing (the tooltip hot path's early exit).
+function Index:HasItem(itemID)
+  return self.byItem[itemID] ~= nil
+end

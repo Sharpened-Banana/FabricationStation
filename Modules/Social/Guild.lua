@@ -578,6 +578,8 @@ local function budget()
   return Guild.DEFAULT_BUDGET_MS
 end
 
+Guild._BudgetMs = budget      -- shared with GuildDirectory's index ticks
+
 local function same_hashes(a, b)
   for k, v in pairs(a) do if b[k] ~= v then return false end end
   for k in pairs(b) do if a[k] == nil then return false end end

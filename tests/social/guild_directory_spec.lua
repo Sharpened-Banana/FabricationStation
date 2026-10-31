@@ -34,6 +34,13 @@ describe("Social.ItemIndex", function()
     assert.are.same({ 3, 1, 2 }, idx:RecipesFor(7))
   end)
 
+  it("answers HasItem without allocating a list", function()
+    local idx = ItemIndex.New(function() return { 7 } end)
+    assert.is_false(idx:HasItem(7))
+    idx:Add(1)
+    assert.is_true(idx:HasItem(7)); assert.is_false(idx:HasItem(8))
+  end)
+
   it("hands out copies and answers an unknown item with an empty list", function()
     local idx = ItemIndex.New(function() return { 7 } end)
     idx:Add(1)
@@ -217,6 +224,55 @@ describe("Guild directory", function()
       p4.advance(0); assert.are.equal(450, indexed())
     end)
 
+    it("stops a tick at the time budget (at least one recipe) and continues next frame", function()
+      local recipes = {}
+      for id = 2000, 2009 do recipes[id] = { 1, 1 } end
+      store("B-Realm", "Peer-Realm", { recipes = recipes })
+      local clock = 0
+      _G.debugprofilestop = function() return clock end
+      finally(function() _G.debugprofilestop = nil end)
+      p4.fake_module(ns, "Recipes", { GetSetting = function() return 4 end })
+      C_TradeSkillUI.GetRecipeSchematic = function(id)         -- every uncached recipe costs 2 ms
+        clock = clock + 2
+        return { outputItemID = id + 100000 }
+      end
+      Guild:RebuildItemIndex()
+      local idx = Guild:GetItemIndex()
+      local function indexed()
+        local n = 0
+        for id = 2000, 2009 do if idx:Has(id) then n = n + 1 end end
+        return n
+      end
+      p4.advance(0); assert.are.equal(2, indexed())              -- 2 ms, then 4 ms >= the 4 ms budget
+      p4.advance(0); assert.are.equal(4, indexed())
+      C_TradeSkillUI.GetRecipeSchematic = function(id) clock = clock + 50; return { outputItemID = id + 100000 } end
+      p4.advance(0); assert.are.equal(5, indexed())              -- one very slow recipe still makes progress
+    end)
+
+    it("falls back to the 200-recipe cap when debugprofilestop is missing", function()
+      _G.debugprofilestop = nil
+      local recipes = {}
+      for id = 3000, 3249 do recipes[id] = { 1, 1 } end
+      store("B-Realm", "Peer-Realm", { recipes = recipes })
+      schematics = setmetatable({}, { __index = function(_, id) return { outputItemIDs = { id + 100000 } } end })
+      Guild:RebuildItemIndex(); p4.advance(0)
+      local n = 0
+      for id = 3000, 3249 do if Guild:GetItemIndex():Has(id) then n = n + 1 end end
+      assert.are.equal(200, n)
+    end)
+
+    it("does the login index work once: the guild-changed message after it is incremental", function()
+      local rebuilds, orig = 0, Guild.RebuildItemIndex
+      Guild.RebuildItemIndex = function(self) rebuilds = rebuilds + 1; return orig(self) end
+      finally(function() Guild.RebuildItemIndex = nil end)
+      W.fire("PLAYER_ENTERING_WORLD", true, false)
+      ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "G-Realm")
+      ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "G-Realm")
+      assert.are.equal(1, rebuilds)
+      ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "Other-Realm")        -- a different guild does rebuild
+      assert.are.equal(2, rebuilds)
+    end)
+
     it("restarts cleanly when a rebuild is asked for during a rebuild", function()
       local recipes = {}
       for id = 1000, 1299 do recipes[id] = { 1, 1 } end
@@ -320,9 +376,21 @@ describe("Guild directory", function()
       assert.is_true(Guild:GetCrafters(100)[1].verified)
     end)
 
-    it("shows nothing for a contested character (no stored copy)", function()
+    it("shows no addon row for a contested character, even with a stored copy", function()
+      store("K-Realm", "Peer-Realm", { recipes = { [100] = { 5, 5 } } })
+      assert.are.equal("K-Realm", Guild:GetCrafters(100)[1].name)
       dir().contested["K-Realm"] = now()
       assert.are.same({ "B-Realm", "D-Realm", "C-Realm" }, names(Guild:GetCrafters(100)))
+    end)
+
+    it("still shows a contested name that the server's native answer lists, without addon quality", function()
+      store("K-Realm", "Peer-Realm", { recipes = { [100] = { 5, 5 } } })
+      dir().contested["K-Realm"] = now()
+      native_members(100, { NATIVE_D, { name = "K-Realm", classFile = "MAGE", online = false } })
+      local k
+      for _, r in ipairs(Guild:GetCrafters(100)) do if r.name == "K-Realm" then k = r end end
+      assert.are.equal("native", k.source)
+      assert.is_nil(k.expectedQuality); assert.is_nil(k.owner)
     end)
 
     it("reads the recipe from any skill line of a profile", function()
@@ -419,6 +487,24 @@ describe("Guild directory", function()
       assert.is_nil(right:find("[^|]|c"))
     end)
 
+    it("keeps the best quality when several recipes list the same crafter", function()
+      schematics[101] = { outputItemIDs = { 5001 } }                      -- a second recipe for 5001
+      store("B-Realm", "Peer-Realm", { recipes = { [100] = { 3, 3 }, [101] = { 5, 5 } } })
+      Guild:RebuildItemIndex(); p4.advance(0)
+      local right = Guild:TooltipLines(5001)[1][2]
+      assert.truthy(right:find("B-Realm (Q5)", 1, true))
+      assert.is_nil(right:find("Q3", 1, true))
+      local first = right:find("B-Realm", 1, true)
+      assert.is_nil(right:find("B-Realm", first + 1, true))        -- listed once
+    end)
+
+    it("escapes pipe sequences in native names", function()
+      native_members(100, { NATIVE_D, { name = "Ev|cffff0000il-Realm", online = true } })
+      local right = Guild:TooltipLines(5001)[1][2]
+      assert.truthy(right:find("Ev||cffff0000il-Realm", 1, true))
+      assert.is_nil(right:find("[^|]|c"))
+    end)
+
     it("returns nothing while Guild is turned off", function()
       ns.FS:SetModuleEnabled("Guild", false)
       assert.are.same({}, Guild:TooltipLines(5001))
@@ -482,6 +568,13 @@ describe("Guild directory", function()
       local lines = Guild:PanelLines(100, "Me-Realm")
       local row = find(lines, "Ev||Tx-Realm")
       assert.truthy(row[1]:find("via Pe||cffer-Realm", 1, true))
+    end)
+
+    it("escapes pipe sequences in native names", function()
+      native_members(100, { { name = "Ev|Tx-Realm", online = true } })
+      local row = find(Guild:PanelLines(100, "Me-Realm"), "Ev||Tx-Realm")
+      assert.is_not_nil(row)
+      assert.is_nil(row[1]:find("[^|]|T"))
     end)
 
     it("is empty without crafters, with the setting off and while Guild is off", function()

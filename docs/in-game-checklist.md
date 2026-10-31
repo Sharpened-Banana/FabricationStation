@@ -792,6 +792,10 @@ Expected: the recipe's output item ID. If it errors or prints nil, the guild too
 your characters has a cached schematic for (open that profession once); then say so in the "Guild crafters tooltip
 line" setting's description (Task 9). Also open a profession window and confirm `FabricationStationDB.global.schematics`
 did not grow by the guild recipes (the index reads `Scanner:GetCachedSchematic`, which never stores).
+Also measure the per-call cost: `/run local t=debugprofilestop() for i=1,50 do C_TradeSkillUI.GetRecipeSchematic(<recipeID>, false) end print((debugprofilestop()-t)/50)`
+prints ms per call. The index resolves guild recipes through this call in ticks bounded by `scanBudgetMs` (4 ms
+default, at least one recipe per tick, at most 200); report the number, and a hitch if one shows right after login
+in a guild with many crafters.
 
 P4-12. **Guild crafters line and panel rows.** Hover a crafted item (an output of a recipe a guildmate knows but your
 characters do not craft) in your bags or the auction house: one extra "Guild crafters" line with up to 3 names,
