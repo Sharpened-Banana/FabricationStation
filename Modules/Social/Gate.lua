@@ -16,10 +16,12 @@ Gate.SEND_FAILED_BACKOFF = 60
 Gate.USE_REALM_FLAG = false
 
 local frame
+local armed = false             -- Init() ran and Stop() has not since
 local lastLocked, lastReason = false, nil
 local chatState = 0              -- last Enum.AddOnRestrictionState seen for the Chat type (0 = Inactive)
 local sendFailedAt               -- Now() of the last AddOnMessageLockdown, nil when none
-local backoffTimer
+
+local BACKOFF_KEY = "Gate:Backoff"   -- ns.FS:Debounce key of the back-off timer
 
 local function enum_value(group, key, fallback)
   local e = Enum and Enum[group]
@@ -58,31 +60,42 @@ end
 
 function Gate:OnRestrictionStateChanged(restrictionType, state)
   if restrictionType ~= chat_type() then return end
-  chatState = state
+  chatState = state or enum_value("AddOnRestrictionState", "Inactive", 0)
   self:Recheck()
 end
 
 -- Only AddOnMessageLockdown (the client refusing addon chat) locks; throttling and the rest are Comm's business.
--- A timer announces the end of the back-off, since nothing else would call Recheck then.
+-- A timer (ns.FS:Debounce, so a second failure replaces it and Stop cancels it) announces the end of the back-off,
+-- since nothing else would call Recheck then.
 function Gate:ReportSendResult(result)
   if result ~= enum_value("SendAddonMessageResult", "AddOnMessageLockdown", 11) then return end
   sendFailedAt = ns.FS:Now()
-  if backoffTimer then backoffTimer:Cancel() end
-  local timer
-  timer = C_Timer.NewTimer(Gate.SEND_FAILED_BACKOFF, ns.FS:Wrap("Gate:Backoff", function()
-    if backoffTimer == timer then backoffTimer = nil end
-    Gate:Recheck()
-  end))
-  backoffTimer = timer
+  ns.FS:Debounce(BACKOFF_KEY, Gate.SEND_FAILED_BACKOFF, ns.FS:Wrap("Gate:Backoff", function() Gate:Recheck() end))
   self:Recheck()
 end
 
--- Idempotent.
+-- Idempotent. Seeds the cached state with a Recheck, so a client that is already restricted at login announces it.
 function Gate:Init()
-  if frame then return end
-  frame = CreateFrame("Frame")
+  if armed then return end
+  armed = true
+  if not frame then
+    frame = CreateFrame("Frame")
+    frame:SetScript("OnEvent", ns.FS:Wrap("Gate:Event", function(_, _, restrictionType, state)
+      Gate:OnRestrictionStateChanged(restrictionType, state)
+    end))
+  end
   frame:RegisterEvent("ADDON_RESTRICTION_STATE_CHANGED")
-  frame:SetScript("OnEvent", ns.FS:Wrap("Gate:Event", function(_, _, restrictionType, state)
-    Gate:OnRestrictionStateChanged(restrictionType, state)
-  end))
+  self:Recheck()
+end
+
+-- Tears the gate down: stops listening, cancels the back-off timer and forgets the event state, the failed send and
+-- the cached transition state, so a later Init starts clean. Sends nothing. Called by Comm (Task 5) from its
+-- OnDisable (it is the gate's only user that outlives a single call; Guild goes through Comm).
+function Gate:Stop()
+  armed = false
+  if frame then frame:UnregisterAllEvents() end
+  ns.FS:CancelDebounce(BACKOFF_KEY)
+  sendFailedAt = nil
+  chatState = enum_value("AddOnRestrictionState", "Inactive", 0)
+  lastLocked, lastReason = false, nil
 end

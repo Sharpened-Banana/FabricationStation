@@ -61,6 +61,25 @@ describe("Social.Gate", function()
     assert.are.same({ { true, "sendFailed" }, { false } }, p4.messages("FS_COMM_GATE_CHANGED"))
   end)
 
+  it("treats a missing state as Inactive", function()
+    Gate:OnRestrictionStateChanged(5, 1)
+    Gate:OnRestrictionStateChanged(5, nil)
+    assert.is_false((Gate:IsLocked()))
+    assert.are.same({ { true, "restriction" }, { false } }, p4.messages("FS_COMM_GATE_CHANGED"))
+  end)
+
+  it("cancels the replaced back-off timer when a second failure arrives", function()
+    local created = {}
+    local real = C_Timer.NewTimer
+    _G.C_Timer.NewTimer = function(...) local h = real(...); created[#created + 1] = h; return h end
+    Gate:ReportSendResult(11)
+    Gate:ReportSendResult(11)
+    _G.C_Timer.NewTimer = real
+    assert.are.equal(2, #created)
+    assert.is_true(created[1]:IsCancelled())
+    assert.is_false(created[2]:IsCancelled())
+  end)
+
   it("honours the realm flag only when enabled", function()
     p4.restriction.realm = true
     Gate.USE_REALM_FLAG = false; assert.is_false((Gate:IsLocked()))
@@ -96,6 +115,33 @@ describe("Social.Gate", function()
     assert.are.same({ { true, "lockdown" }, { false } }, p4.messages("FS_COMM_GATE_CHANGED"))
   end)
 
+  describe("Stop", function()
+    it("cancels the back-off: nothing is sent after it, even past 60 s", function()
+      Gate:ReportSendResult(11)
+      Gate:Stop()
+      p4.advance(120)
+      assert.are.same({ { true, "sendFailed" } }, p4.messages("FS_COMM_GATE_CHANGED"))
+      assert.is_false((Gate:IsLocked()))
+    end)
+
+    it("leaves no pending debounce key", function()
+      local cancelled
+      local real = ns.FS.CancelDebounce
+      ns.FS.CancelDebounce = function(self, key) cancelled = key; return real(self, key) end
+      Gate:ReportSendResult(11)
+      Gate:Stop()
+      assert.are.equal("Gate:Backoff", cancelled)
+    end)
+
+    it("forgets the event state and the cached transition", function()
+      Gate:OnRestrictionStateChanged(5, 2)
+      Gate:Stop()
+      assert.is_false((Gate:IsLocked()))
+      Gate:OnRestrictionStateChanged(5, 1)   -- locks again: a transition is announced afresh
+      assert.are.same({ { true, "restriction" }, { true, "restriction" } }, p4.messages("FS_COMM_GATE_CHANGED"))
+    end)
+  end)
+
   describe("Init", function()
     local made, registered, real
     before_each(function()
@@ -115,6 +161,28 @@ describe("Social.Gate", function()
       Gate:Init(); Gate:Init()
       assert.are.equal(1, #made)
       assert.are.same({ "ADDON_RESTRICTION_STATE_CHANGED" }, registered)
+    end)
+
+    it("announces a client that is already restricted at login", function()
+      p4.restriction.lockdown = true
+      Gate:Init()
+      assert.are.same({ { true, "lockdown" } }, p4.messages("FS_COMM_GATE_CHANGED"))
+      Gate:Init()
+      assert.are.equal(1, #p4.messages("FS_COMM_GATE_CHANGED"))
+    end)
+
+    it("stops listening on Stop and re-arms cleanly on a later Init", function()
+      local unregistered = 0
+      Gate:Init()
+      local frame = made[1]
+      local unreg = frame.UnregisterAllEvents
+      frame.UnregisterAllEvents = function(self, ...) unregistered = unregistered + 1; return unreg(self, ...) end
+      Gate:Stop()
+      assert.are.equal(1, unregistered)
+      Gate:Init()
+      assert.are.same({ "ADDON_RESTRICTION_STATE_CHANGED", "ADDON_RESTRICTION_STATE_CHANGED" }, registered)
+      frame:GetScript("OnEvent")(frame, "ADDON_RESTRICTION_STATE_CHANGED", 5, 1)
+      assert.are.same({ true, "restriction" }, { Gate:IsLocked() })
     end)
 
     it("routes the event to OnRestrictionStateChanged without logging errors", function()
