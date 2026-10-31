@@ -286,21 +286,45 @@ describe("phase 3 integration", function()
     }
 
     -- Source with block and line comments removed (newlines kept). Strings stay: a string key counts.
+    -- [Phase 3 final M4] String-aware: "..." and '...' (with backslash escapes) and [[...]] / [=[...]=] long strings
+    -- are copied as they are, so a "--" inside one starts no comment and the code after it is still scanned.
     local function strip_comments(text)
       local out, i, n = {}, 1, #text
+      local function long_close(at)   -- at = the first "[" of a long bracket; its end index, or nil
+        local eqs = text:match("^%[(=*)%[", at)
+        if not eqs then return nil end
+        local close = "]" .. eqs .. "]"
+        local e = text:find(close, at + 2 + #eqs, true)
+        return e and (e + #close - 1) or n
+      end
       while i <= n do
-        local s = text:find("--", i, true)
+        local s = text:find("[-\"'%[]", i)
         if not s then out[#out + 1] = text:sub(i); break end
         out[#out + 1] = text:sub(i, s - 1)
-        local eqs = text:match("^%[(=*)%[", s + 2)
-        if eqs then
-          local close = "]" .. eqs .. "]"
-          local e = text:find(close, s + 4 + #eqs, true)
-          local stop = e and (e + #close - 1) or n
-          out[#out + 1] = (text:sub(s, stop):gsub("[^\n]", ""))
+        local c = text:sub(s, s)
+        if c == "-" and text:sub(s + 1, s + 1) == "-" then
+          local stop = long_close(s + 2)
+          if stop then
+            out[#out + 1] = (text:sub(s, stop):gsub("[^\n]", ""))
+            i = stop + 1
+          else
+            i = text:find("\n", s, true) or (n + 1)
+          end
+        elseif c == '"' or c == "'" then
+          local j = s + 1
+          while j <= n do
+            local d = text:sub(j, j)
+            if d == "\\" then j = j + 2 elseif d == c or d == "\n" then break else j = j + 1 end
+          end
+          out[#out + 1] = text:sub(s, j)
+          i = j + 1
+        elseif c == "[" then
+          local stop = long_close(s) or s
+          out[#out + 1] = text:sub(s, stop)
           i = stop + 1
         else
-          i = text:find("\n", s, true) or (n + 1)
+          out[#out + 1] = c
+          i = s + 1
         end
       end
       return table.concat(out)
@@ -330,11 +354,19 @@ describe("phase 3 integration", function()
       local path = os.tmpname()
       local f = assert(io.open(path, "w"))
       f:write('-- C_CraftingOrders.ClaimOrder(1)\nlocal x = C_TradeSkillUI["CraftRecipe"]\n'
-        .. "--[[ CastSpellByName() ]] f:OnCraftRecipe() C_TradeSkillUI.CraftRecipe(1)\n")
+        .. "--[[ CastSpellByName() ]] f:OnCraftRecipe() C_TradeSkillUI.CraftRecipe(1)\n"
+        -- [Phase 3 final M4] A "--" inside a string starts no comment: the code after it and the string itself
+        -- are scanned. A comment after a string is still skipped.
+        .. 'local q = x or "--"; C_TradeSkillUI.CraftRecipe(1)\n'
+        .. 'local s = "a -- CraftRecipe"\n'
+        .. "local e = 'it\\'s --' .. C_TradeSkillUI.CraftRecipe\n"
+        .. "local l = [==[ -- ]] ]==] .. C_TradeSkillUI.CraftRecipe\n"
+        .. 'local z = "x" -- C_CraftingOrders.ClaimOrder(1)\n'
+        .. '--[==[ ClaimOrder ]] ClaimOrder ]==] local w = "\\"--" .. C_TradeSkillUI.CraftRecipe\n')
       f:close()
       local found = refs(path)
       os.remove(path)
-      assert.same({ CraftRecipe = 2 }, found)
+      assert.same({ CraftRecipe = 7 }, found)
     end)
 
     it("the phase-3 files reference none of them", function()
