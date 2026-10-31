@@ -1,5 +1,5 @@
--- PlanCalc: pure planning rules for phase 3 (weekly reset, Darkmoon window, time to full; knowledge
--- progress, scheduler and spec ranking follow in later tasks).
+-- PlanCalc: pure planning rules for phase 3 (weekly reset, Darkmoon window, time to full, knowledge
+-- progress; scheduler and spec ranking follow in later tasks).
 -- Pure Lua 5.1: no WoW globals, no ns.FS. Callers pass the clock, API results and projections in.
 local ADDON_NAME, ns = ...
 
@@ -62,4 +62,94 @@ function PlanCalc.TimeToFull(project, now, horizon)
     if isFull(project, now + mid) then hi = mid else lo = mid end
   end
   return hi
+end
+
+-- Knowledge progress ------------------------------------------------------------------------------
+
+local function stateOf(source, earned, total, status)
+  return { source = source, earned = earned, total = total, done = status == "done", status = status }
+end
+
+-- source = KnowledgeSource; snapshot = { time, quests = {[questID] = true} } | nil (a table without time,
+-- like 1a's empty knowledgeWeekly default, counts as no snapshot); ctx = { weekStart, darkmoon = { isOpen, startTime } }.
+-- Weekly flags stored before ctx.weekStart and monthly flags stored before the faire started count as not done;
+-- "once" flags never reset. "unknown" and "closed" states earn 0 and are never done.
+function PlanCalc.SourceProgress(source, snapshot, ctx)
+  local quests = source.quests or {}
+  local cap = source.limit or #quests
+  local points = source.points or 0
+  local total = points * cap
+  if type(snapshot) ~= "table" or type(snapshot.time) ~= "number" then
+    return stateOf(source, 0, total, "unknown")
+  end
+  ctx = ctx or {}
+  local reset = source.reset
+  local current = true -- whether the stored flags belong to the current reset period
+  if reset == "weekly" then
+    if type(ctx.weekStart) ~= "number" then return stateOf(source, 0, total, "unknown") end
+    current = snapshot.time >= ctx.weekStart
+  elseif reset == "monthly" then
+    local dm = ctx.darkmoon or {}
+    if dm.isOpen == nil then return stateOf(source, 0, total, "unknown") end
+    if dm.isOpen == false then return stateOf(source, 0, total, "closed") end
+    if type(dm.startTime) ~= "number" then return stateOf(source, 0, total, "unknown") end
+    current = snapshot.time >= dm.startTime
+  end
+  local completed = 0
+  local flags = snapshot.quests
+  if current and type(flags) == "table" then
+    for _, questID in ipairs(quests) do
+      if flags[questID] then completed = completed + 1 end
+    end
+  end
+  local earned = points * math.min(completed, cap)
+  return stateOf(source, earned, total, earned >= total and "done" or "open")
+end
+
+local DARKMOON = { done = "open", open = "open", closed = "closed", unknown = "unknown" }
+
+-- states = { SourceState } for one character and profession. No states (no knowledge data for the
+-- profession) gives status "noData" with nil counts, never 0. An unknown weekly or one-time state gives
+-- status "unknown"; an unknown Darkmoon window shows only in darkmoon = "unknown".
+-- oneTimeLeft includes firstCraftsPending * firstCraftPoints (nil points add nothing).
+function PlanCalc.Summarize(states, firstCraftsPending, firstCraftPoints)
+  if type(states) ~= "table" or #states == 0 then
+    return { status = "noData", firstCraftsPending = firstCraftsPending, darkmoon = "unknown" }
+  end
+  local status = "ok"
+  local weeklyLeft, weeklyTotal, monthlyLeft, oneTimeLeft = 0, 0, 0, 0
+  local darkmoon
+  for _, st in ipairs(states) do
+    local reset, left = st.source.reset, st.total - st.earned
+    if st.status == "unknown" and reset ~= "monthly" then status = "unknown" end
+    if reset == "weekly" then
+      weeklyLeft, weeklyTotal = weeklyLeft + left, weeklyTotal + st.total
+    elseif reset == "monthly" then
+      if st.status == "open" then monthlyLeft = monthlyLeft + left end
+      darkmoon = darkmoon or DARKMOON[st.status]
+    elseif reset == "once" then
+      oneTimeLeft = oneTimeLeft + left
+    end
+  end
+  oneTimeLeft = oneTimeLeft + (firstCraftsPending or 0) * (firstCraftPoints or 0)
+  return {
+    status = status, weeklyLeft = weeklyLeft, weeklyTotal = weeklyTotal, monthlyLeft = monthlyLeft,
+    oneTimeLeft = oneTimeLeft, firstCraftsPending = firstCraftsPending, darkmoon = darkmoon or "unknown",
+  }
+end
+
+-- Text cleanup -------------------------------------------------------------------------------------
+
+-- Removes WoW UI escape codes (colors, textures, atlases, hyperlink wrappers) from source text, turns
+-- |n line breaks into spaces, collapses whitespace and trims. Non-string input gives "".
+function PlanCalc.StripCodes(text)
+  if type(text) ~= "string" then return "" end
+  text = text:gsub("|c%x%x%x%x%x%x%x%x", "")
+    :gsub("|r", "")
+    :gsub("|T.-|t", "")
+    :gsub("|A.-|a", "")
+    :gsub("|H.-|h(.-)|h", "%1")
+    :gsub("|n", " ")
+    :gsub("%s+", " ")
+  return (text:gsub("^ ", ""):gsub(" $", ""))
 end
