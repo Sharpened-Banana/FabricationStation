@@ -20,6 +20,8 @@ Data\GameData_Difficulty.lua
 Data\GameData_Spec.lua
 Data\GameData_Manual.lua
 Data\OrderRewards.lua
+Data\GameData_Knowledge.lua
+Data\GameData_RecipeSources.lua
 Math\Quality.lua
 Math\Concentration.lua
 Math\Stats.lua
