@@ -38,7 +38,7 @@ local COPPER_PER_SILVER, COPPER_PER_GOLD = 100, 10000
 -- the SkillUps button (26 wide) is anchored LEFT x = -9 and the name (Label) 4 to its right, the craftable count
 -- (Count) right after the name.
 local LOCK_ICON_WIDTH, GAP = 17, 4
-local SKILL_UPS_WIDTH, SKILL_UPS_X, LABEL_X = 26, -9, 4
+local SKILL_UPS_WIDTH, SKILL_UPS_X, LABEL_X, COUNT_X = 26, -9, 4, 0
 local COLORS = {
   green = { 0.25, 1, 0.25 },
   red = { 1, 0.25, 0.25 },
@@ -113,12 +113,18 @@ local function text_end(row)
   local label, count = row.Label, row.Count
   local rowLeft = read_number(row, "GetLeft")
   if rowLeft then
-    local right = (is_shown(count) and read_number(count, "GetRight")) or read_number(label, "GetRight")
+    local countShown = is_shown(count)
+    local right = countShown and read_number(count, "GetRight")
+    if not right then
+      right = read_number(label, "GetRight")
+      -- A shown count not laid out yet ends its string width (plus the template's offset) after the name.
+      if right and countShown then right = right + COUNT_X + (read_number(count, "GetStringWidth") or 0) end
+    end
     if right then return right - rowLeft end
   end
   local labelWidth = read_number(label, "GetWidth")
   if not labelWidth then return nil end
-  local countWidth = is_shown(count) and (read_number(count, "GetStringWidth") or 0) or 0
+  local countWidth = is_shown(count) and (COUNT_X + (read_number(count, "GetStringWidth") or 0)) or 0
   return (read_number(row.SkillUps, "GetWidth") or SKILL_UPS_WIDTH) + SKILL_UPS_X + LABEL_X + labelWidth + countWidth
 end
 
