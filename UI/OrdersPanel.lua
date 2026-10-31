@@ -771,8 +771,8 @@ local function stop_waiting()
 end
 
 -- GET_ITEM_INFO_RECEIVED(itemID, success): the awaited item's data arrived, or cannot load (success false: remembered
--- for the session, so the ID is shown without asking again); the wait ends either way. The event is synchronous and can fire inside RequestLoadItemDataByID: the refresh in progress then
--- reads the link itself.
+-- for the session, so the ID is shown without asking again); the wait ends either way. The event is synchronous and
+-- can fire inside RequestLoadItemDataByID: the refresh in progress then reads the link itself.
 local function on_item_info(_, itemID, success)
   if waitingItem == nil or itemID ~= waitingItem then return end
   if success == false then failedItems[itemID] = true end

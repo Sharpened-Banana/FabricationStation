@@ -310,6 +310,29 @@ describe("Orders tab frames", function()
     assert.same({ "orders" }, refreshed)
   end)
 
+  it("gives the header the whole line when there is no status, and shares it with a status", function()
+    snapshot({ view() })
+    local v = open(740)
+    local inner = 740 - 2 * 6
+    assert.equal(inner, v.header:GetWidth())
+    click(v.pool[1].queue)   -- an Add to Queue message on the status line: laid out at once, no refresh needed
+    local statusWidth = math.floor(inner * 0.45)
+    assert.equal(statusWidth, v.status:GetWidth()); assert.equal(inner - statusWidth - 4, v.header:GetWidth())
+  end)
+
+  it("stops its 30 s tick once the tab is hidden", function()
+    open()
+    local before = #refreshed
+    W.advance(30)
+    assert.equal(before + 1, #refreshed)              -- shown: the tick refreshes and schedules the next one
+    local hidden = function(_, id) refreshed[#refreshed + 1] = id end   -- MainWindow skips a hidden tab's refresh
+    ns.FS:GetModule("MainWindow").RefreshTab = hidden
+    W.advance(30)
+    assert.equal(before + 2, #refreshed)              -- the pending tick asks once, gets no refresh...
+    W.advance(120)
+    assert.equal(before + 2, #refreshed)              -- ...and nothing schedules another
+  end)
+
   it("says on the status line that Orders is off, and the board is not captured", function()
     snapshot({ view() })
     local v = open()
@@ -380,8 +403,11 @@ describe("Orders tab frames", function()
       assert.same({ "LEFT", r.placed[1], "RIGHT", 4, 0 }, point(r.placed[2], 1))
     end)
 
-    it("keeps the header and status lines apart: the status takes the right 45%", function()
+    it("keeps the header and status lines apart: a status takes the right 45%, else the header takes it all", function()
+      snapshot({ view() })
       local v = open(740)
+      assert.same({ 0, 728 }, { v.status:GetWidth(), v.header:GetWidth() })
+      click(v.pool[1].queue)
       assert.same({ 327, 397 }, { v.status:GetWidth(), v.header:GetWidth() })
       resize(516)
       assert.same({ 226, 274 }, { v.status:GetWidth(), v.header:GetWidth() })

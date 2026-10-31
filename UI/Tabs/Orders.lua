@@ -304,14 +304,22 @@ local function off_text(O)
   return ""
 end
 
+local apply_layout   -- below; the status line's width follows its text
+
 local function set_status(message, tone)
   status, statusAt = color(TONES[tone] or "", message), ns.FS:Now()
-  if view then view.status:SetText(status) end
+  if view then
+    view.status:SetText(status)
+    apply_layout()
+  end
 end
 
 local function clear_status()
   status, statusAt = nil, nil
-  if view then view.status:SetText(off_text(module("Orders"))) end
+  if view then
+    view.status:SetText(off_text(module("Orders")))
+    apply_layout()
+  end
 end
 
 -- Add to Queue: the order as it is now (live, else saved) through the board's own path.
@@ -414,8 +422,9 @@ local function layout_key(hidden)
 end
 
 -- Lays the columns out for the container's width (header and every pooled row) when the hidden set changed, and
--- sizes the header and status lines so they cannot overlap (the status takes the right STATUS_SHARE).
-local function apply_layout()
+-- sizes the header and status lines so they cannot overlap: the header takes the whole line without a status, else
+-- the status takes the right STATUS_SHARE (as in the Ledger tab).
+function apply_layout()
   if not view then return end
   local width = view.container:GetWidth()
   local layout = Tab.Layout(width)
@@ -428,9 +437,15 @@ local function apply_layout()
   end
   if type(width) == "number" and width > 0 then
     local inner = width - 2 * PAD
-    local statusWidth = math.floor(inner * STATUS_SHARE)
-    view.status:SetWidth(statusWidth)
-    view.header:SetWidth(inner - statusWidth - GAP)
+    local text = view.status:GetText()
+    if type(text) == "string" and text ~= "" then
+      local statusWidth = math.floor(inner * STATUS_SHARE)
+      view.status:SetWidth(statusWidth)
+      view.header:SetWidth(inner - statusWidth - GAP)
+    else
+      view.status:SetWidth(0)
+      view.header:SetWidth(inner)
+    end
   end
 end
 

@@ -356,6 +356,16 @@ describe("Customers tab frames", function()
       assert.is_false(tab:IsEventRegistered("GLOBAL_MOUSE_DOWN"))
     end)
 
+    it("closes when the tab module is turned off, and never listens for clicks while it is off", function()
+      assert.is_true(v.menu.frame:IsShown())
+      tab:Disable()
+      assert.is_false(v.menu.frame:IsShown())
+      assert.is_false(tab:IsEventRegistered("GLOBAL_MOUSE_DOWN"))
+      v.menu.frame:GetScript("OnShow")(v.menu.frame)   -- shown while off: still not listening
+      assert.is_false(tab:IsEventRegistered("GLOBAL_MOUSE_DOWN"))
+      tab:Enable()
+    end)
+
     it("closes on a click outside it and its chip, not on one over them", function()
       v.menu.frame.mouseOver = true
       W.fire("GLOBAL_MOUSE_DOWN", "LeftButton")

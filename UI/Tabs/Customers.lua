@@ -51,7 +51,8 @@ local WHITE, GREY, GOLD, RED = { 1, 1, 1 }, { 0.62, 0.62, 0.62 }, { 1, 0.82, 0 }
 local SELECTED_TINT = { 0.25, 0.5, 1, 0.3 }
 
 local READ_ONLY = "Saved data is from a newer version of the addon (read-only); nothing was changed"
-local READ_ONLY_NOTICE = "Read-only: saved data is from a newer addon version"   -- fits the ~218 px status at 516 px
+-- At 516 px the status line is ~218 px, so this can be cut there; the status area's tooltip shows it in full.
+local READ_ONLY_NOTICE = "Read-only: saved data is from a newer addon version"
 local LINK_ERRORS = {
   empty = "Type the main character's name first",
   self = "A character cannot be its own alt",
@@ -816,8 +817,10 @@ local function create_menu()
   end
   local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
-  -- GLOBAL_MOUSE_DOWN is only listened to while the menu is shown.
-  f:SetScript("OnShow", function() CustomersTab:RegisterEvent("GLOBAL_MOUSE_DOWN", on_global_mouse_down) end)
+  -- GLOBAL_MOUSE_DOWN is only listened to while the menu is shown, and never while CustomersTab is off.
+  f:SetScript("OnShow", function()
+    if CustomersTab:IsEnabled() then CustomersTab:RegisterEvent("GLOBAL_MOUSE_DOWN", on_global_mouse_down) end
+  end)
   f:SetScript("OnHide", function() CustomersTab:UnregisterEvent("GLOBAL_MOUSE_DOWN") end)
   f:Hide()
   local registered = false
@@ -1500,4 +1503,5 @@ function CustomersTab:OnDisable()
   self:UnregisterAllEvents()
   ns.FS:CancelDebounce(REFRESH_KEY)
   if view and view.dialog then view.dialog.frame:Hide() end
+  if view and view.menu then view.menu.frame:Hide() end
 end
