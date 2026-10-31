@@ -37,6 +37,7 @@ Modules\SelfCheck.lua
 Modules\Customers.lua
 Modules\Orders.lua
 Modules\Ledger.lua
+Modules\PlanCalc.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua

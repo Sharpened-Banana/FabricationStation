@@ -26,7 +26,7 @@ Phases execute in order 1a → 1b → 2 → 3 → 4. Later plans may rely on eve
 - Every addon file begins `local ADDON_NAME, ns = ...`.
 - Addon object: `ns.FS = LibStub("AceAddon-3.0"):NewAddon("FabricationStation", "AceEvent-3.0", "AceConsole-3.0")` created in `Core/Core.lua`. Modules: `local M = ns.FS:NewModule("<Name>", "AceEvent-3.0")`. Access: `ns.FS:GetModule("<Name>")` (`GetModule(name, true)` = silent, nil when absent).
 - `M.coreModule = true` marks a module as not user-toggleable. Core modules: Scanner, Prices, Diagnostics, MainWindow, SettingsTab, Launcher (every feature depends on them). **[phase 2]** Phase-2 modules: `Customers`, `Orders`, `Ledger`, `OrdersRowAddons`, `OrdersSidePanel`, `OrderViewWarning`, `OrderAlert` are user-toggleable (state in `settings.modules[<Name>]`, no separate enable flags); `OrdersTab`, `CustomersTab`, `LedgerTab`, `OrdersWidgets` set `coreModule = true` (registrars). 1b's `Queue`, `QueueCraft` and the tab registrars are core as well. Every other module gets a toggle in Settings › Modules. A core module that stopped after an error is turned back on from Settings › Modules › Stopped modules.
-- Pure-Lua math lives in `ns.Math` (`ns.Math.Round`, `ns.Math.Quality`, `ns.Math.Concentration`, `ns.Math.Stats`, `ns.Math.Optimizer`, `ns.Math.Profit`). Math files, `Data/` files and `Modules/CraftingData.lua` reference no WoW globals and no `ns.FS`; `.luacheckrc` enforces it (`std = "lua51"` for those paths).
+- Pure-Lua math lives in `ns.Math` (`ns.Math.Round`, `ns.Math.Quality`, `ns.Math.Concentration`, `ns.Math.Stats`, `ns.Math.Optimizer`, `ns.Math.Profit`). Math files, `Data/` files, `Modules/CraftingData.lua` and **[phase 3]** `Modules/PlanCalc.lua` (`ns.PlanCalc`) reference no WoW globals and no `ns.FS`; `.luacheckrc` enforces it (`std = "lua51"` for those paths).
 - Directory layout per spec §14.
 - Slash commands: `/fs`, alias `/fabstation`.
 - TOC (`FabricationStation.toc`, backslash paths), 1a + 1b + phase 2 order (**[phase 2]** files marked †):
@@ -35,7 +35,7 @@ Phases execute in order 1a → 1b → 2 → 3 → 4. Later plans may rely on eve
   3. `Data\GameData.lua, Data\GameData_Professions.lua, Data\GameData_Reagents.lua, Data\GameData_Difficulty.lua, Data\GameData_Spec.lua, Data\GameData_Manual.lua, Data\OrderRewards.lua`†
   4. `Math\Quality.lua, Math\Concentration.lua, Math\Stats.lua, Math\Optimizer.lua, Math\Profit.lua`
   5. `Modules\Scanner.lua, Modules\Prices.lua, Modules\Diagnostics.lua`
-  6. `Modules\CraftingData.lua, Modules\Recipes.lua, Modules\RecipeScan.lua, Modules\Queue.lua, Modules\QueueCraft.lua, Modules\SelfCheck.lua, Modules\Customers.lua`†`, Modules\Orders.lua`†`, Modules\Ledger.lua`†
+  6. `Modules\CraftingData.lua, Modules\Recipes.lua, Modules\RecipeScan.lua, Modules\Queue.lua, Modules\QueueCraft.lua, Modules\SelfCheck.lua, Modules\Customers.lua`†`, Modules\Orders.lua`†`, Modules\Ledger.lua`†`, Modules\PlanCalc.lua` **[phase 3 Task 1]**
   7. `UI\Util.lua, UI\MainWindow.lua`
   8. `UI\Tabs\Dashboard.lua, UI\Tabs\Recipes.lua, UI\Tabs\Queue.lua, UI\Tabs\Orders.lua`†`, UI\Tabs\Customers.lua`†`, UI\Tabs\Ledger.lua`†
   9. `UI\Tabs\Settings.lua, UI\Launcher.lua`
@@ -296,6 +296,10 @@ Module `"SelfCheck"`; `ns.SelfCheck.QUALITY_FIELD = "craftingQuality"`; `ns.Self
 - RecipeListLabels (1b): module `"RecipeListLabels"`; own FontStrings on Blizzard recipe-list rows, held in weak-keyed tables.
 - ProfessionPanel, RecipeListLabels and Tooltips are switched on/off by the 1a module toggles; hook bodies run in `ns.FS:SafeCall(moduleName, ...)`.
 - UI framework: own frames + Blizzard templates (no AceGUI for the main window); AceConfig/AceConfigDialog only for Settings. No taint: never assign fields on, replace, hide or reparent Blizzard frames; protected calls only in click handlers.
+
+## PlanCalc (phase 3, pure)
+
+- **[phase 3 Task 1]** `ns.PlanCalc.WeekStart(now, secondsUntilReset) -> int` (`now + secondsUntilReset - 604800`); `ns.PlanCalc.FallbackWeekStart(now, regionID) -> int` (only when `C_DateAndTime.GetSecondsUntilWeeklyReset` is missing; US Tue 15:00 UTC, EU (regionID 3 only) Wed 04:00 UTC; unverified); `ns.PlanCalc.DarkmoonWindow(now, cal) -> { isOpen = bool|nil, startTime = int|nil }` (`cal = { monthDay, weekday (1 = Sunday), hour, minute } | nil`; open from the first Sunday through the following Saturday; `isOpen = nil` = unknown when `cal` or its monthDay/weekday is missing); `ns.PlanCalc.TimeToFull(project, now, horizon = 14 days) -> seconds|nil` (`project(t) -> value|nil, max|nil`, monotone; 0 when full now; nil when value or max is nil or not full within the horizon; else within 60 s, never early).
 
 ## Phase 2 (built; phases 3/4 may depend on it)
 
