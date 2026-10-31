@@ -46,6 +46,9 @@ describe("PlanCalc time rules", function()
       local w = P.DarkmoonWindow(NOW, { monthDay = 6, weekday = 3, hour = 10, minute = 30 })
       assert.is_true(w.isOpen)
       assert.equal(NOW - 210600, w.startTime)
+      -- seconds within the minute are subtracted too, so startTime lands on 00:00:00, not up to 59 s late
+      local late = P.DarkmoonWindow(NOW + 37, { monthDay = 6, weekday = 3, hour = 10, minute = 30 })
+      assert.equal(NOW - 210600, late.startTime)
     end)
     it("is open from the first Sunday through the following Saturday", function()
       -- October 2026: first Sunday is the 4th, so the 4th..10th are open.

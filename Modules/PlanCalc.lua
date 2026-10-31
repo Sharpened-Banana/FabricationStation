@@ -30,6 +30,8 @@ end
 -- Darkmoon Faire runs from the first Sunday of the month through the following Saturday.
 -- cal = { monthDay, weekday (1 = Sunday), hour, minute } from C_DateAndTime.GetCurrentCalendarTime(), or nil.
 -- Returns { isOpen = bool|nil (nil = unknown), startTime = server seconds of that Sunday 00:00 | nil }.
+-- cal has no seconds, so the seconds within the minute come from now % 60 (server time is whole seconds,
+-- and server and calendar clocks share the minute boundary).
 function PlanCalc.DarkmoonWindow(now, cal)
   if type(cal) ~= "table" or type(cal.monthDay) ~= "number" or type(cal.weekday) ~= "number" then
     return { isOpen = nil, startTime = nil }
@@ -39,7 +41,7 @@ function PlanCalc.DarkmoonWindow(now, cal)
   if monthDay < firstSunday or monthDay > firstSunday + 6 then
     return { isOpen = false, startTime = nil }
   end
-  return { isOpen = true, startTime = now - ((monthDay - firstSunday) * DAY + hour * 3600 + minute * 60) }
+  return { isOpen = true, startTime = now - ((monthDay - firstSunday) * DAY + hour * 3600 + minute * 60 + now % 60) }
 end
 
 local function isFull(project, t)
@@ -74,11 +76,19 @@ end
 -- like 1a's empty knowledgeWeekly default, counts as no snapshot); ctx = { weekStart, darkmoon = { isOpen, startTime } }.
 -- Weekly flags stored before ctx.weekStart and monthly flags stored before the faire started count as not done;
 -- "once" flags never reset. "unknown" and "closed" states earn 0 and are never done.
+-- Duplicate quest IDs count once; limit caps at the number of quests; a source with no quests is "unknown".
 function PlanCalc.SourceProgress(source, snapshot, ctx)
-  local quests = source.quests or {}
-  local cap = source.limit or #quests
+  local quests, seen = {}, {}
+  for _, questID in ipairs(type(source.quests) == "table" and source.quests or {}) do
+    if not seen[questID] then
+      seen[questID] = true
+      quests[#quests + 1] = questID
+    end
+  end
+  local cap = source.limit and math.min(source.limit, #quests) or #quests
   local points = source.points or 0
   local total = points * cap
+  if #quests == 0 then return stateOf(source, 0, total, "unknown") end
   if type(snapshot) ~= "table" or type(snapshot.time) ~= "number" then
     return stateOf(source, 0, total, "unknown")
   end
@@ -140,16 +150,26 @@ end
 
 -- Text cleanup -------------------------------------------------------------------------------------
 
--- Removes WoW UI escape codes (colors, textures, atlases, hyperlink wrappers) from source text, turns
--- |n line breaks into spaces, collapses whitespace and trims. Non-string input gives "".
+local PIPE = "\001" -- stands in for an escaped pipe ("||") while the escape codes are removed
+
+-- Removes WoW UI escape codes (|cAARRGGBB and |cn<name>: colors, |r, |T textures, |A atlases, |K protected
+-- strings, |W/|w no-wrap markers, hyperlink wrappers keeping their text) from source text, turns |n line
+-- breaks into spaces, collapses whitespace and trims. An escaped pipe "||" stays as a literal "|".
+-- Non-string input gives "".
 function PlanCalc.StripCodes(text)
   if type(text) ~= "string" then return "" end
-  text = text:gsub("|c%x%x%x%x%x%x%x%x", "")
+  text = text:gsub(PIPE, "") -- a stray \001 in the input would collide with the sentinel; it is a control char, so drop it
+    :gsub("||", PIPE)
+    :gsub("|cn[^:|]*:", "")
+    :gsub("|c%x%x%x%x%x%x%x%x", "")
     :gsub("|r", "")
+    :gsub("|K.-|k", "")
+    :gsub("|[Ww]", "")
     :gsub("|T.-|t", "")
     :gsub("|A.-|a", "")
     :gsub("|H.-|h(.-)|h", "%1")
     :gsub("|n", " ")
     :gsub("%s+", " ")
+    :gsub(PIPE, "|")
   return (text:gsub("^ ", ""):gsub(" $", ""))
 end

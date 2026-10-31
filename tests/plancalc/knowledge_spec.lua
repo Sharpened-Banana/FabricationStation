@@ -104,6 +104,42 @@ describe("PlanCalc knowledge progress", function()
       assert.same({ 0, "unknown" }, { s.earned, s.status })
     end)
 
+    it("limit larger than the quest list caps total at the number of quests", function()
+      local src = { id = "x", skillLineID = 2907, reset = "weekly", quests = { 1, 2 }, limit = 5, points = 2 }
+      local s = P.SourceProgress(src, { time = WS + 1, quests = { [1] = true, [2] = true } }, ctx)
+      assert.same({ 4, 4, true, "done" }, { s.earned, s.total, s.done, s.status })
+    end)
+
+    it("a source with no quests is unknown, never done", function()
+      local snap = { time = WS + 1, quests = {} }
+      for _, quests in ipairs({ {}, false }) do
+        local src = { id = "e", skillLineID = 2907, reset = "once", quests = quests or nil, points = 3 }
+        local s = P.SourceProgress(src, snap, ctx)
+        assert.same({ 0, 0, false, "unknown" }, { s.earned, s.total, s.done, s.status })
+      end
+    end)
+
+    it("duplicate quest IDs are counted once", function()
+      local src = { id = "dup", skillLineID = 2909, reset = "weekly", quests = { 7, 7, 8 }, points = 1 }
+      local s = P.SourceProgress(src, { time = WS + 1, quests = { [7] = true } }, ctx)
+      assert.same({ 1, 2, false, "open" }, { s.earned, s.total, s.done, s.status })
+      local both = P.SourceProgress(src, { time = WS + 1, quests = { [7] = true, [8] = true } }, ctx)
+      assert.same({ 2, 2, true, "done" }, { both.earned, both.total, both.done, both.status })
+    end)
+
+    it("a monthly snapshot taken exactly at the faire start counts", function()
+      local s = P.SourceProgress(DMF, { time = WS - 86400, quests = { [29508] = true } }, ctx)
+      assert.same({ 3, true, "done" }, { s.earned, s.done, s.status })
+      local before = P.SourceProgress(DMF, { time = WS - 86401, quests = { [29508] = true } }, ctx)
+      assert.same({ 0, "open" }, { before.earned, before.status })
+    end)
+
+    it("an open faire without a startTime is unknown", function()
+      local s = P.SourceProgress(DMF, { time = WS, quests = { [29508] = true } },
+        { weekStart = WS, darkmoon = { isOpen = true } })
+      assert.same({ 0, false, "unknown" }, { s.earned, s.done, s.status })
+    end)
+
     it("a snapshot without a quests table counts nothing completed", function()
       local s = P.SourceProgress(BS_WEEKLY, { time = WS + 10 }, ctx)
       assert.same({ 0, "open" }, { s.earned, s.status })
@@ -203,6 +239,21 @@ describe("PlanCalc knowledge progress", function()
 
     it("collapses runs of whitespace and trims", function()
       assert.equal("Trainer Silvermoon", P.StripCodes("  Trainer|n|n  Silvermoon\n"))
+    end)
+
+    it("keeps escaped pipes as literal text", function()
+      assert.equal("a|rb", P.StripCodes("a||rb"))
+      assert.equal("x|n y", P.StripCodes("x||n y"))
+      assert.equal("HP |cFF00ff00 z", P.StripCodes("HP ||cFF00ff00 z"))
+      assert.equal("50| off", P.StripCodes("50|| off"))
+      assert.equal("a|b", P.StripCodes("|cFFFFFFFFa|r||b"))
+    end)
+
+    it("strips named colors, protected strings and no-wrap markers", function()
+      assert.equal("Epic", P.StripCodes("|cnIQ4:Epic|r"))
+      assert.equal("Reward: Epic sword", P.StripCodes("Reward: |cnIQ4:Epic|r sword"))
+      assert.equal("Friend: online", P.StripCodes("Friend: |Kq123|k online"))
+      assert.equal("Cost: 5 gold", P.StripCodes("Cost: |W5 gold|w"))
     end)
 
     it("returns an empty string for nil or non-string input", function()
