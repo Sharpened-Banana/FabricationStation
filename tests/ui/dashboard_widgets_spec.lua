@@ -129,9 +129,12 @@ describe("Dashboard widgets (phase 3)", function()
     local _, env = setup({ wow = { GetBuildInfo = function() return "12.0.5", "70999", "Oct 1 2026", 120005 end } })
     local lines, frame = refreshed_lines(env)
     assert.equal("Total: 5 KP (outdated)", lines[1])
+    -- [Phase 3 final M7] Orange, the colour of the tabs' "Old data" marker (was gold |cffffd100).
+    assert.equal("|cffff8000Total: 5 KP (outdated)|r", frame.lines[1])
     frame:GetScript("OnEnter")(frame)
     local all = plain_all(tooltip.lines)
     assert.truthy(table.concat(all, "\n"):find("Knowledge data build 70575 (outdated)", 1, true))
+    assert.truthy(table.concat(tooltip.lines, "\n"):find("|cffff8000Knowledge data build 70575 (outdated)", 1, true))
   end)
 
   it("takes the outdated marker from the Knowledge table's own build only", function()

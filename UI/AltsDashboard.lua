@@ -28,7 +28,7 @@ local WIDGET_SOURCE = "Dashboard:" .. WIDGET_ID
 local REFRESH_SOURCE = "AltsWidgets:Refresh"
 local REFRESH_KEY, REFRESH_DELAY = "altsWidgets.refresh", 0.5
 local PLANNER_TAB = "planner"
-local DIM, WARN = "|cff9d9d9d", "|cffffd100"
+local DIM, WARN = "|cff9d9d9d", "|cffff8000"   -- WARN: the orange of the tabs' "Old data" marker
 
 M.MAX_LINES = 6
 M.CLICK_HINT = "Click to open the Planner"

@@ -231,9 +231,17 @@ describe("CharactersView", function()
     assert.same({ "Characters: 3 · Gold: 1,234g · Knowledge left: 5 KP", "data build 70575 (outdated)" },
       { h.base, h.note })
     assert.is_truthy(table.concat(h.tooltip, "\n"):find("data build 70575 (outdated)", 1, true))
-    -- The row tooltip marks the knowledge count too.
+    -- The row tooltip marks the knowledge count too. [Phase 3 final M7] After a dot: the note already ends in
+    -- "(outdated)", so wrapping it in parentheses doubled them.
     local all = table.concat(V2.TooltipLines(V2.Row(A2:GetAltRow("Aria-Silvermoon", NOW), NOW)), "\n")
-    assert.is_truthy(all:find("Knowledge left this week: 2 (data build 70575 (outdated))", 1, true))
+    assert.is_truthy(all:find("Knowledge left this week: 2 · data build 70575 (outdated)", 1, true))
+    assert.is_nil(all:find("((", 1, true))
+    all = table.concat(V.TooltipLines(V.Row(A:GetAltRow("Bren-Silvermoon", NOW), NOW), "data build 70575 (outdated)"),
+      "\n")
+    assert.is_truthy(all:find("Knowledge left this week: 3 · data build 70575 (outdated)", 1, true))
+    -- No note: the count alone.
+    all = table.concat(V.TooltipLines(V.Row(A:GetAltRow("Bren-Silvermoon", NOW), NOW), false), "\n")
+    assert.is_truthy(all:find("Knowledge left this week: 3\n", 1, true))
   end)
 
   it("says when Alts is turned off", function()

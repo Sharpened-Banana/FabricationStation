@@ -362,7 +362,7 @@ function V.TooltipLines(row, note)
   for _, p in ipairs(row.profs) do
     lines[#lines + 1] = p.label .. " " .. p.skill
     lines[#lines + 1] = "  Concentration: " .. p.conc
-    lines[#lines + 1] = "  Knowledge left this week: " .. p.kp .. (note and (" (" .. note .. ")") or "")
+    lines[#lines + 1] = "  Knowledge left this week: " .. p.kp .. (note and (DOT .. note) or "")
     lines[#lines + 1] = "  Spec: " .. p.spec
     lines[#lines + 1] = "  Moxie: " .. p.moxie
     local nextIn = p.cdsNext and p.cds:sub(-#p.cdsNext) ~= p.cdsNext and (", next in " .. p.cdsNext) or ""
