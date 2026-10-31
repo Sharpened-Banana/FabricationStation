@@ -732,6 +732,16 @@ value is `true` there while addon messages still arrive (for example a guildmate
 and `true` inside a dungeon or raid, setting `USE_REALM_FLAG = true` is safe and makes Comm stop earlier; report the
 readings either way.
 
+P4-3. **Lockdown between AceComm chunks.** Needs a guildmate running the addon. Start a profile sync that is big enough
+for several 255-byte chunks (a character with many recipes) and zone into a dungeon or raid while it runs. Expected: no Lua
+error in `/fs diagnostics`, the guildmate never shows a half-received profile, and after you leave the restriction (or the
+60 s back-off ends) the whole message is sent again and arrives once. Report what you saw.
+
+P4-4. **Lockdown result value.** Run `/dump Enum.SendAddonMessageResult.AddOnMessageLockdown`. Expected: `11`. Comm and
+the gate read this enum and use 11 only when the enum is missing, so a different number is fine too; report it either way.
+Also confirm AceComm's chunk callback reports the lockdown on the first refused chunk: during P4-3, `/fs diagnostics`
+should show no `Comm:Result` errors.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

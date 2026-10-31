@@ -48,7 +48,7 @@ rm -rf "$LIBS"
 mkdir -p "$LIBS"
 
 fetch "$ACE3/LibStub/LibStub.lua" "$LIBS/LibStub/LibStub.lua"
-for lib in CallbackHandler-1.0 AceAddon-3.0 AceEvent-3.0 AceConsole-3.0 AceLocale-3.0 AceDB-3.0 AceGUI-3.0 AceConfig-3.0; do
+for lib in CallbackHandler-1.0 AceAddon-3.0 AceEvent-3.0 AceConsole-3.0 AceLocale-3.0 AceComm-3.0 AceDB-3.0 AceGUI-3.0 AceConfig-3.0; do
   fetch_xml "$ACE3" "$lib" "$lib.xml"
 done
 fetch "$LDB/LibDataBroker-1.1.lua" "$LIBS/LibDataBroker-1.1/LibDataBroker-1.1.lua"
