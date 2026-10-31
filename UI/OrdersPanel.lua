@@ -62,6 +62,7 @@ local TINTS = {
   blocked = { 1, 0.1, 0.1, 0.25 },
   ["repeat"] = { 0.3, 0.7, 1, 0.12 },
 }
+M.HIGHLIGHT_COLORS = TINTS   -- RowModel highlight -> { r, g, b, a }; read-only (the Orders tab tints rows with it)
 local DIM = { 0, 0, 0, 0.55 }
 local TEXT_COLORS = { green = { 0.25, 1, 0.25 }, red = { 1, 0.25, 0.25 }, grey = { 0.62, 0.62, 0.62 },
   gold = { 1, 0.82, 0 }, white = { 1, 1, 1 } }
@@ -248,6 +249,20 @@ function M.QueueEntry(view)
   return entry
 end
 
+-- Adds the order's QueueEntry to the queue unless an entry for the same order is already queued (the Add to Queue
+-- of the row cells and of the Orders tab). Returns the result line and its tone ("good" | "warn" | "bad"), or nil
+-- when the view cannot be queued (QueueEntry nil) or there is no Queue module.
+function M.AddToQueue(view)
+  local entry = M.QueueEntry(view)
+  local queue = ns.FS:GetModule("Queue", true)
+  if not (entry and queue) then return nil end
+  for _, e in ipairs(queue:GetEntries() or {}) do
+    if e.orderID ~= nil and e.orderID == entry.orderID then return "Already in the queue", "warn" end
+  end
+  if queue:Add(entry) then return "Added to the queue", "good" end
+  return "Could not add to the queue (saved data is read-only)", "bad"
+end
+
 ---------------------------------------------------------------------------
 -- Shared frame helpers
 ---------------------------------------------------------------------------
@@ -375,20 +390,8 @@ end
 local function add_to_queue(c)
   local O = orders()
   local view = O and c.orderID ~= nil and O:GetView(c.orderID) or nil
-  local entry = M.QueueEntry(view)
-  local queue = ns.FS:GetModule("Queue", true)
-  if not (entry and queue) then return end
-  for _, e in ipairs(queue:GetEntries() or {}) do
-    if e.orderID ~= nil and e.orderID == entry.orderID then
-      set_result("Already in the queue", "warn")
-      return
-    end
-  end
-  if queue:Add(entry) then
-    set_result("Added to the queue", "good")
-  else
-    set_result("Could not add to the queue (saved data is read-only)", "bad")
-  end
+  local message, tone = M.AddToQueue(view)
+  if message then set_result(message, tone) end
 end
 
 local function new_cells(row)
