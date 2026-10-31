@@ -219,8 +219,105 @@ describe("Planner spec advice adapters", function()
     ns.GameData.Define("SpecEntryEffects", 70575, { [1000] = { effects = { { type = "skill", amount = 1 } }, labels = { 777 } },
       [9000] = { effects = { { type = "multicraft", amount = 30 }, { type = "type42", amount = 9 } }, labels = { 777 } } })
     ns.GameData.Define("RecipeLabels", 70575, { [1001] = { 777 }, [1002] = { 5 } })
-    assert.same({ skill = 5, multicraft = 30, recipes = { [1001] = true } }, PL:_nodeBonus("Aria-Silvermoon", 2907, 1, 10, 15))
-    assert.same({ skill = 4, recipes = { [1001] = true } }, PL:_nodeBonus("Aria-Silvermoon", 2907, 1, 10, 14))   -- perk at 15 not crossed
+    -- [Task 11 fix round 1] per-entry label scopes: both entries are labelled, so each is its own scoped part.
+    assert.same({ scoped = { { skill = 5, labels = { [777] = true } }, { multicraft = 30, labels = { [777] = true } } },
+      recipes = { [1001] = true } }, PL:_nodeBonus("Aria-Silvermoon", 2907, 1, 10, 15))
+    assert.same({ scoped = { { skill = 4, labels = { [777] = true } } }, recipes = { [1001] = true } },
+      PL:_nodeBonus("Aria-Silvermoon", 2907, 1, 10, 14))   -- perk at 15 not crossed
+  end)
+
+  it("mixed scopes: an unlabelled spend entry applies to every recipe, a labelled perk only to its own", function()
+    ns.GameData.Define("SpecEntryEffects", 70575, { [1000] = { effects = { { type = "skill", amount = 1 } }, labels = {} },
+      [9000] = { effects = { { type = "multicraft", amount = 30 } }, labels = { 777 } } })
+    ns.GameData.Define("RecipeLabels", 70575, { [1001] = { 777 }, [1002] = { 5 } })
+    assert.same({ skill = 5, scoped = { { multicraft = 30, labels = { [777] = true } } } },
+      PL:_nodeBonus("Aria-Silvermoon", 2907, 1, 10, 15))                 -- recipes nil: the skill covers every recipe
+  end)
+
+  it("mixed scopes through GetSpecAdvice: 1001 gets skill 5 + multicraft 30, 1002 skill 5", function()
+    local seen = {}
+    local e = env({ evaluate = function(recipeID, _, o)
+      if o.extraStats then seen[recipeID] = o.extraStats end
+      return { profit = ({ [1001] = 5000, [1002] = 1000 })[recipeID] + (o.extraStats and 1 or 0) }
+    end })
+    e.GameData.Define("SpecEntryEffects", 70575, { [1000] = { effects = { { type = "skill", amount = 1 } }, labels = {} },
+      [9000] = { effects = { { type = "multicraft", amount = 30 } }, labels = { 777 } } })
+    e.GameData.Define("RecipeLabels", 70575, { [1001] = { 777 }, [1002] = { 5 } })
+    local paths = char(e, "Aria-Silvermoon").professions[2907].spec.paths
+    paths[2], paths[3] = nil, nil
+    local rows = planner(e):GetSpecAdvice("Aria-Silvermoon", 2907)
+    assert.same({ [1001] = { skill = 5, multicraft = 30 }, [1002] = { skill = 5 } }, seen)
+    assert.same({ 1, 2 }, { rows[1].pathID, rows[1].gain })
+  end)
+
+  it("different labels: each scoped part applies only to its own recipes", function()
+    ns.GameData.Define("SpecEntryEffects", 70575, { [1000] = { effects = { { type = "skill", amount = 1 } }, labels = { 888 } },
+      [9000] = { effects = { { type = "multicraft", amount = 30 } }, labels = { 777 } } })
+    ns.GameData.Define("RecipeLabels", 70575, { [1001] = { 777 }, [1002] = { 888 }, [1003] = { 5 } })
+    local bonus = PL:_nodeBonus("Aria-Silvermoon", 2907, 1, 10, 15)
+    assert.same({ [1001] = true, [1002] = true }, bonus.recipes)
+    local seen = {}
+    local e = env({ evaluate = function(recipeID, _, o)
+      if o.extraStats then seen[recipeID] = o.extraStats end
+      return { profit = ({ [1001] = 5000, [1002] = 1000 })[recipeID] + (o.extraStats and 1 or 0) }
+    end })
+    e.GameData.Define("SpecEntryEffects", 70575, { [1000] = { effects = { { type = "skill", amount = 1 } }, labels = { 888 } },
+      [9000] = { effects = { { type = "multicraft", amount = 30 } }, labels = { 777 } } })
+    e.GameData.Define("RecipeLabels", 70575, { [1001] = { 777 }, [1002] = { 888 } })
+    local paths = char(e, "Aria-Silvermoon").professions[2907].spec.paths
+    paths[2], paths[3] = nil, nil
+    planner(e):GetSpecAdvice("Aria-Silvermoon", 2907)
+    assert.same({ [1001] = { multicraft = 30 }, [1002] = { skill = 5 } }, seen)
+  end)
+
+  it("a labelled-only bonus is unknown when none of the top recipes has RecipeLabels", function()
+    local asked = 0
+    local e = env({ evaluate = function() asked = asked + 1; return { profit = 1e9 } end })
+    e.GameData.Define("SpecEntryEffects", 70575, { [1000] = { effects = { { type = "skill", amount = 1 } }, labels = { 777 } } })
+    e.GameData.Define("RecipeLabels", 70575, { [4242] = { 777 } })    -- covers a recipe that is not in the top
+    local rows, status = planner(e):GetSpecAdvice("Aria-Silvermoon", 2907)
+    assert.equal("ok", status)
+    assert.same({ 1 }, { rows[1].pathID })
+    assert.is_nil(rows[1].gain); assert.is_nil(rows[1].gainPerPoint)
+    assert.equal(0, asked)
+    -- Once a top recipe has labels (here different ones), path 1's gain is a known 0 and its row is dropped
+    -- (path 2, with no SpecEntryEffects data, stays unknown).
+    e.GameData.Define("RecipeLabels", 70575, { [4242] = { 777 }, [1001] = { 5 } })
+    rows = planner(e):GetSpecAdvice("Aria-Silvermoon", 2907)
+    assert.same({ 2 }, { rows[1].pathID }); assert.equal(1, #rows)
+    assert.equal(0, asked)
+  end)
+
+  it("the baseline is the cached plain evaluation, not the ranked profit", function()
+    -- Prices moved since the scan: the plain evaluation now gives 7000 for 1001 (ranked 5000). The what-if gives
+    -- 7100, so the spec gain is 100, not 2100.
+    local e = env({ evaluate = function(recipeID, _, o)
+      local plain = ({ [1001] = 7000, [1002] = 1000 })[recipeID]
+      return { profit = o.extraStats and plain + 100 or plain }
+    end })
+    e.GameData.Define("SpecEntryEffects", 70575, { [1000] = { effects = { { type = "skill", amount = 1 } }, labels = {} } })
+    local paths = char(e, "Aria-Silvermoon").professions[2907].spec.paths
+    paths[2], paths[3] = nil, nil
+    local rows = planner(e):GetSpecAdvice("Aria-Silvermoon", 2907)
+    assert.equal(200, rows[1].gain)                                     -- 100 on each of 1001 and 1002
+  end)
+
+  it("a plain evaluation without a profit falls back to the ranked profit", function()
+    local e = env({ evaluate = function(_, _, o) return { profit = o.extraStats and 5300 or nil } end })
+    e.GameData.Define("SpecEntryEffects", 70575, { [1000] = { effects = { { type = "skill", amount = 1 } }, labels = {} } })
+    local paths = char(e, "Aria-Silvermoon").professions[2907].spec.paths
+    paths[2], paths[3] = nil, nil
+    assert.equal(300 + 4300, planner(e):GetSpecAdvice("Aria-Silvermoon", 2907)[1].gain)   -- 5300-5000, 5300-1000
+  end)
+
+  it("real adapters on the shipped empty tables: unknown gains, status ok, no evaluation", function()
+    local asked = 0
+    local e = env({ evaluate = function() asked = asked + 1; return { profit = 1 } end })
+    local rows, status = planner(e):GetSpecAdvice("Aria-Silvermoon", 2907)
+    assert.equal("ok", status)
+    assert.same({ 1, 2 }, { rows[1].pathID, rows[2].pathID })
+    for _, row in ipairs(rows) do assert.is_nil(row.gain); assert.is_nil(row.gainPerPoint) end
+    assert.equal(0, asked)
   end)
 
   -- Beyond the brief.
@@ -253,7 +350,7 @@ describe("Planner spec advice adapters", function()
     assert.same({}, PL:_nodeBonus("Aria-Silvermoon", 2907, 1, 10, 15))
   end)
 
-  it("_evaluateWithBonus asks Recipes:Evaluate with extraStats (no ingenuity)", function()
+  it("_evaluateWithBonus asks Recipes:Evaluate with extraStats (STATS only: no ingenuity)", function()
     local seen
     local e = env({ evaluate = function(recipeID, charKey, o)
       seen = { recipeID, charKey, o }
@@ -267,7 +364,7 @@ describe("Planner spec advice adapters", function()
 
   it("end to end: GameData effects through the adapters rank the paths", function()
     local e = env({ evaluate = function(recipeID, _, o)
-      local s = o.extraStats
+      local s = o.extraStats or {}
       local base = ({ [1001] = 5000, [1002] = 1000 })[recipeID]
       return { profit = base + (s.skill or 0) * 100 + (s.multicraft or 0) }
     end })
