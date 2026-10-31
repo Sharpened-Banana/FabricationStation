@@ -12,8 +12,9 @@ local ADDON_NAME, ns = ...
 -- Every setter writes through the owning module's Settings() table, never into db.global directly: while the saved
 -- data is from a newer version (ns.FS.dbIsNewer) Settings() is a session-only copy, so nothing is saved, and the
 -- editable options are shown disabled so the user can see why. Values are checked (a number, finite) and clamped to
--- the option's range. A scoring change rescores the board (Orders:Rescore, which also refreshes the Orders views);
--- it runs through ns.FS:SafeCall("Orders", ...) so a failure turns off Orders instead of escaping into the dialog.
+-- the option's range. A scoring change rescores the board (Orders:ScheduleRescore: one Orders:Rescore 0.5 s after the
+-- last change, which also refreshes the Orders views); it runs through ns.FS:Wrap("Orders", ...) so a failure turns
+-- off Orders instead of escaping into the dialog.
 -- A ledger change only asks the Ledger views to redraw (FS_LEDGER_CHANGED): a shorter keepDays never deletes rows
 -- here (the Ledger prunes on its own schedule).
 local M = {}
@@ -56,12 +57,12 @@ local function disabled_for(name)
   return function() return read_only() or module_of(name) == nil end
 end
 
--- After a scoring change: rescore the board while Orders is on. A failure turns off Orders (1a's SafeCall).
+-- After a scoring change: rescore the board while Orders is on, through Orders:ScheduleRescore (0.5 s after the last
+-- change, sharing Orders' own debounce key, so a slider drag costs one rescore). Orders checks it is still on when
+-- the rescore runs; a failure turns off Orders (1a's SafeCall through Wrap).
 local function rescore()
   local orders = module_of("Orders")
-  if orders and orders.Rescore and orders:IsEnabled() then
-    ns.FS:SafeCall("Orders", function() orders:Rescore() end)
-  end
+  if orders and orders.ScheduleRescore and orders:IsEnabled() then orders:ScheduleRescore() end
 end
 
 local function ledger_changed()

@@ -1,10 +1,10 @@
 local P2 = require("tests.helpers.phase2")
 
 describe("Orders options", function()
-  local ns, g
+  local ns, W, g
 
   local function boot(stubs)
-    ns = P2.boot(stubs)
+    ns, W = P2.boot(stubs)
     P2.load(ns, { "Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua", "Modules/Ledger.lua",
       "UI/OrdersPanel.lua", "UI/OrderAlert.lua", "UI/OrdersOptions.lua" })
     g = ns.UI.OrdersOptions.Build()
@@ -90,30 +90,43 @@ describe("Orders options", function()
     assert.is_true(orders():Settings().claimBlockingRisks.noMatsLowTip)
   end)
 
-  it("rescores the orders after a scoring change", function()
+  it("rescores the orders once, 0.5 s after the last of several scoring changes (a slider drag)", function()
     local O = orders()
     local calls = 0
     local real = O.Rescore
     O.Rescore = function(self) calls = calls + 1; return real(self) end
     g.args.scoring.args.lowTipMargin.set(nil, 20)
+    g.args.scoring.args.lowTipMargin.set(nil, 21)
     g.args.scoring.args.block_noConcentration.set(nil, false)
+    assert.equal(0, calls)
+    W.advance(0.5)
+    assert.equal(1, calls)
+    ns.FS:SendMessage("FS_PRICES_CHANGED"); g.args.scoring.args.lowTipMargin.set(nil, 22)   -- shares Orders' key
+    W.advance(0.5)
     assert.equal(2, calls)
   end)
 
-  it("does not rescore while the Orders module is off", function()
+  it("does not rescore while the Orders module is off, at the change or when the rescore is due", function()
     local O = orders()
-    ns.FS:SetModuleEnabled("Orders", false)
     local calls = 0
     O.Rescore = function() calls = calls + 1 end
+    ns.FS:SetModuleEnabled("Orders", false)
     g.args.scoring.args.lowTipMargin.set(nil, 20)
+    W.advance(1)
     assert.equal(0, calls)
     assert.equal(200000, O:Settings().lowTipMargin)
+    ns.FS:SetModuleEnabled("Orders", true)
+    g.args.scoring.args.lowTipMargin.set(nil, 21)
+    O.IsEnabled = function() return false end   -- off by the time the rescore is due
+    W.advance(1)
+    assert.equal(0, calls)
   end)
 
   it("a failing rescore turns off only Orders instead of escaping into the dialog", function()
     local O = orders()
     O.Rescore = function() error("boom") end
     assert.has_no.errors(function() g.args.scoring.args.lowTipMargin.set(nil, 20) end)
+    assert.has_no.errors(function() W.advance(0.5) end)
     assert.is_false(O:IsEnabled())
     assert.is_truthy(ns.FS.failedModules.Orders)
   end)

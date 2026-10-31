@@ -607,6 +607,7 @@ end
 
 local PROFESSIONS_ADDON = "Blizzard_Professions"
 local RESCORE_KEY = "orders.rescore"
+local RESCORE_DELAY = 0.5   -- seconds of quiet before a scheduled rescore runs
 local HOOK_MISSING = "hook target missing: ProfessionsFrame.OrdersPage.ShowOrders"
 local BUCKETS_HOOK_MISSING = "hook target missing: ProfessionsFrame.OrdersPage.ShowBuckets"
 local CLAIM_TIMEOUT = 10          -- seconds a claim may wait for CRAFTINGORDERS_CLAIM_ORDER_RESPONSE
@@ -801,6 +802,14 @@ function Orders:Rescore()
     end
   end
   self:SendMessage(ns.Msg.ORDERS_CHANGED)
+end
+
+-- Rescores once RESCORE_DELAY after the last request (messages, a settings slider drag): every request shares one
+-- debounce key, so a burst costs one Rescore. It runs only if Orders is still on then; an error turns Orders off.
+function Orders:ScheduleRescore()
+  ns.FS:Debounce(RESCORE_KEY, RESCORE_DELAY, ns.FS:Wrap("Orders", function()
+    if self:IsEnabled() then self:Rescore() end
+  end))
 end
 
 -- Changes one order's input with mutate(input) and scores it once; the live view and the stored copy both take the
@@ -1090,8 +1099,7 @@ function Orders:OnEnable()
     if orderType == (type(types) == "table" and types.Personal or 2) then personal_counts() end
   end))
 
-  local rescore = wrap(function() self:Rescore() end)
-  local function schedule() ns.FS:Debounce(RESCORE_KEY, 0.5, rescore) end
+  local function schedule() self:ScheduleRescore() end
   self:RegisterMessage(ns.Msg.PRICES_CHANGED, wrap(schedule))
   self:RegisterMessage(ns.Msg.RECIPES_CHANGED, wrap(schedule))
   self:RegisterMessage(ns.Msg.CUSTOMERS_CHANGED, wrap(schedule))
