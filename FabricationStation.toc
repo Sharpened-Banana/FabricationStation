@@ -68,3 +68,4 @@ UI\OrderAlert.lua
 UI\OrdersWidgets.lua
 UI\OrdersOptions.lua
 UI\AltsTooltips.lua
+UI\AltsDashboard.lua

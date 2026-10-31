@@ -39,6 +39,14 @@ describe("FabricationStation.toc", function()
     assert.is_truthy(at["UI/AltsTooltips.lua"])
     assert.is_true(at["UI/OrdersOptions.lua"] < at["UI/AltsTooltips.lua"])
   end)
+  -- Phase 3 Task 15: the Dashboard widget registrar last, after the tooltip registrar.
+  it("loads UI/AltsDashboard.lua last, after UI/AltsTooltips.lua", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    assert.is_truthy(at["UI/AltsDashboard.lua"])
+    assert.is_true(at["UI/AltsTooltips.lua"] < at["UI/AltsDashboard.lua"])
+    assert.equal(#toc.files, at["UI/AltsDashboard.lua"])
+  end)
   -- Phase 3 (Tasks 12-14): the shared view helpers before the view files, the view files before the tabs that use
   -- them, all before the Settings tab.
   it("loads the phase-3 grid, view helpers, views and tabs in order", function()
