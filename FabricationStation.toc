@@ -47,6 +47,8 @@ Modules\Planner.lua
 Modules\PlannerSpec.lua
 Modules\Social\Util.lua
 Modules\Social\Gate.lua
+Modules\Social\Codec.lua
+Modules\Social\Protocol.lua
 UI\Util.lua
 UI\MainWindow.lua
 UI\Tabs\Dashboard.lua
