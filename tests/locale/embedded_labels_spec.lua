@@ -99,7 +99,7 @@ local EXEMPT = {
   { "a module's off text, or the word in its ordinary sense", {
     "Planner is turned off", "Recipes is turned off", "Recipes and expected quality", "Recipes only",
     "Recipes compared for spec advice", "Characters that have no profession of the current expansion are never shared.",
-    "Characters listed in a tooltip", "Characters: %d",
+    "Characters listed in a tooltip", "Characters: %d", "Characters: all", "Characters: this one",
     "The reagent search, the Planner, the holdings tooltip lines and the knowledge widget always leave them out." } },
 }
 

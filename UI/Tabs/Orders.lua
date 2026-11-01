@@ -1,19 +1,22 @@
 local _, ns = ...
 local L = ns.L
 
--- Orders tab: the last crafting-order board seen (Orders:GetSnapshot), so it can be read away from the profession
--- table and on another character. A header says when and on which character the board was seen; a checkbox row
--- holds the same filters as the side panel on the order board (OrdersPanel.FilterChecks over
--- Orders:Settings().filters, shared, so a change here hides the same orders there); the list shows Type, Item,
--- Customer, Tip, Net, Score, Risk and Expires per order, best first (Orders:Filter), tinted by the customer highlight
+-- Orders tab: the crafting-order boards seen on every character (Orders:GetOrders), so they can be read away from
+-- the profession table and on another character. A header says when and on which character the board was seen (or,
+-- with several boards, how many characters the orders come from and when the next one expires; a tooltip on it gives
+-- each board's age); a checkbox row holds the same filters as the side panel on the order board
+-- (OrdersPanel.FilterChecks over Orders:Settings().filters, shared, so a change here hides the same orders there)
+-- and two buttons beneath it choose the characters (all, or the one logged in) and the sort (best, expiring,
+-- character), saved in the same filters; the list shows Type, Character, Item, Customer, Tip, Net, Score, Risk and
+-- Expires per order (best first unless sorted otherwise), tinted by the customer highlight
 -- (OrdersPanel.RowModel), with an Add to Queue button (OrdersPanel.QueueEntry / AddToQueue: the same entry and
 -- duplicate check as the board's row cells) and a tooltip with the customer, the full tip and net, the risks, the
 -- reasons numbers are missing and the player's own tip history for the recipe (Ledger:Benchmark). The list is a
 -- pooled virtual list in a plain scroll frame, as in the Recipes and Queue tabs. Own frames only; handlers run
 -- isolated.
 --
--- Width: the Item column keeps at least MIN_ITEM px; when the window is too narrow the Customer column is hidden
--- first, then Type (Tab.Layout, applied to the column headers and the rows again on every size change). The cells
+-- Width: the Item column keeps at least MIN_ITEM px; when the window is too narrow the Character column is hidden
+-- first, then Customer, then Type (Tab.Layout, applied to the column headers and the rows again on every size change). The cells
 -- are compact (tip "1,234g", risk count "!2"); the tooltip carries the full values.
 --
 -- While the tab is shown it refreshes every TICK_SECONDS (ages move on, expired orders drop out): each refresh
@@ -50,12 +53,18 @@ local DIM, WARN, GOOD, BAD = "|cff9d9d9d", "|cffffd100", "|cff40ff40", "|cffff40
 local TONES = { good = GOOD, warn = WARN, bad = BAD }
 local WHITE, RED, GREY, GOLD = { 1, 1, 1 }, { 1, 0.25, 0.25 }, { 0.62, 0.62, 0.62 }, { 1, 0.82, 0 }
 
+local DOT = " \194\183 "
+local SORTS = { "score", "expires", "character" }
+local SORT_LABELS = { score = L["Sort: best"], expires = L["Sort: expiring"], character = L["Sort: character"] }
+local CONTROL_HEIGHT, CONTROL_WIDTH = 22, 140
+
 local TYPE_LABELS = { public = L["Public"], guild = L["Guild"], personal = L["Personal"], npc = L["NPC"] }
 
 -- Left to right. The flexible Item column takes the width the fixed ones leave over; the columns before it are laid
 -- out from the left edge, the ones after it from the right edge.
 local COLUMNS = {
   { key = "type", label = L["Type"], width = 48 },
+  { key = "character", label = L["Character"], width = 80 },
   { key = "item", label = L["Item"], flex = true },
   { key = "customer", label = L["Customer"], width = 90 },
   { key = "tip", label = L["Tip"], width = 60, right = true },
@@ -66,7 +75,7 @@ local COLUMNS = {
   { key = "action", label = "", width = 52 },
 }
 local ACTION = #COLUMNS
-local HIDE_ORDER = { "customer", "type" }   -- dropped in this order when the Item column would get under MIN_ITEM
+local HIDE_ORDER = { "character", "customer", "type" }   -- dropped in this order when the Item column would get under MIN_ITEM
 local FLEX, WIDTHS, HIDEABLE = nil, {}, {}
 for i, col in ipairs(COLUMNS) do
   if col.flex then FLEX = i else WIDTHS[col.key] = col.width end
@@ -103,36 +112,68 @@ end
 -- Models (pure)
 ---------------------------------------------------------------------------
 
--- snapshot = Orders:GetSnapshot() ({ time, charKey, orders }), filters = Orders:Settings().filters shape, now = server
--- seconds -> { header, seen, total, rows }. seen: a board was seen (the snapshot has a time). header: "Orders seen
--- <age> ago on <charKey>", or "No orders seen yet". total: the orders in the snapshot. rows: the orders the filters
--- leave, best first (Orders:Filter), each { orderID, type, item = itemID, customer, tip, net, score, risks,
--- expiresIn = seconds left|nil, view }.
-function Tab.Model(snapshot, filters, now)
-  snapshot = type(snapshot) == "table" and snapshot or {}
-  local orders = type(snapshot.orders) == "table" and snapshot.orders or {}
-  local seen = type(snapshot.time) == "number"
-  local header = L["No orders seen yet"]
-  if seen then
-    local age = ns.UI.FormatAge(now - snapshot.time)
-    header = snapshot.charKey ~= nil and L["Orders seen %s ago on %s"]:format(age, tostring(snapshot.charKey))
-      or L["Orders seen %s ago"]:format(age)
+-- The realm is cut for the current character's realm: "Alt-Silvermoon" reads "Alt" while logged in on Silvermoon.
+local function short_character(charKey)
+  if type(charKey) ~= "string" then return nil end
+  local name, realm = charKey:match("^([^-]+)%-(.+)$")
+  local _, currentRealm = tostring(ns.FS:CharKey()):match("^([^-]+)%-(.+)$")
+  if name and realm == currentRealm then return name end
+  return charKey
+end
+
+-- orders = Orders:GetOrders(filters) (the views the filters leave, in the chosen sort), boardTimes = { [charKey] =
+-- when that board was seen }, filters = Orders:Settings().filters shape (not applied again: GetOrders did), now =
+-- server seconds -> { header, headerTooltip, seen, total, rows }. seen: a board was seen (any board has a time).
+-- header: "Orders seen <age> ago on <charKey>" for one board, "Orders from <n> characters" (and, when an order has
+-- an expiry, " . next expires in <age>") for several, "No orders seen yet" for none. headerTooltip: one line per
+-- board with its order count and age (nil without a board). total: the orders given. rows: one per order, each
+-- { orderID, type, item = itemID, character = charKey, age = seconds since its board was seen|nil, customer, tip,
+-- net, score, risks, expiresIn = seconds left|nil, view }.
+function Tab.Model(orders, boardTimes, _, now)
+  orders = type(orders) == "table" and orders or {}
+  boardTimes = type(boardTimes) == "table" and boardTimes or {}
+  local keys = {}
+  for charKey, time in pairs(boardTimes) do
+    if type(time) == "number" then keys[#keys + 1] = charKey end
   end
-  local O = module("Orders")
-  local rows = {}
-  for i, v in ipairs(O and O:Filter(orders, filters) or {}) do
+  table.sort(keys)
+  local seen = #keys > 0
+  local rows, counts, soonest = {}, {}, nil
+  for i, v in ipairs(orders) do
+    local time = v.charKey ~= nil and boardTimes[v.charKey] or nil
+    local expiresIn = type(v.expiresAt) == "number" and v.expiresAt - now or nil
+    if expiresIn ~= nil and expiresIn > 0 and (soonest == nil or expiresIn < soonest) then soonest = expiresIn end
+    if v.charKey ~= nil then counts[v.charKey] = (counts[v.charKey] or 0) + 1 end
     rows[i] = {
-      orderID = v.orderID, type = v.orderType, item = v.itemID, customer = v.customer, tip = v.tip, net = v.net,
+      orderID = v.orderID, type = v.orderType, item = v.itemID, character = v.charKey,
+      age = type(time) == "number" and math.max(0, now - time) or nil,
+      customer = v.customer, tip = v.tip, net = v.net,
       score = v.score, risks = type(v.risks) == "table" and v.risks or {},
-      expiresIn = type(v.expiresAt) == "number" and v.expiresAt - now or nil,
+      expiresIn = expiresIn,
       view = v,
     }
   end
-  return { header = header, seen = seen, total = #orders, rows = rows }
+  local header, tooltip = L["No orders seen yet"], nil
+  if seen then
+    if #keys == 1 then
+      header = L["Orders seen %s ago on %s"]:format(ns.UI.FormatAge(now - boardTimes[keys[1]]), tostring(keys[1]))
+    else
+      header = L["Orders from %d characters"]:format(#keys)
+      if soonest then header = header .. DOT .. L["next expires in %s"]:format(ns.UI.FormatAge(soonest)) end
+    end
+    local lines = {}
+    for i, charKey in ipairs(keys) do
+      local count = counts[charKey] or 0
+      lines[i] = (count == 1 and L["%s: %d order, seen %s ago"] or L["%s: %d orders, seen %s ago"])
+        :format(charKey, count, ns.UI.FormatAge(now - boardTimes[charKey]))
+    end
+    tooltip = table.concat(lines, "\n")
+  end
+  return { header = header, headerTooltip = tooltip, seen = seen, total = #orders, rows = rows }
 end
 
 -- Content width -> { hidden = { [columnKey] = true }, item = Item column width|nil }. The Item column keeps at least
--- MIN_ITEM px: Customer is hidden first, then Type. An unknown width (not laid out yet) hides nothing.
+-- MIN_ITEM px: Character is hidden first, then Customer, then Type. An unknown width (not laid out yet) hides nothing.
 function Tab.Layout(width)
   local hidden = {}
   if type(width) ~= "number" or width <= 0 then return { hidden = hidden } end
@@ -220,6 +261,7 @@ function Tab.CellTexts(row, model)
 
   return {
     type = TYPE_LABELS[row.type] or (row.type ~= nil and tostring(row.type) or "--"),
+    character = short_character(row.character) or "--",
     item = item_name(row),
     customer = customer_text(row) or "--",
     tip = P.CompactMoney(row.tip) or color(DIM, "?"),   -- unknown money in a compact cell: "?" (board, Ledger tab)
@@ -264,6 +306,10 @@ function Tab.TooltipLines(row, benchmark, model)
   local lines = { { text = item_name(row), color = WHITE } }
   local customer = customer_text(row)
   if customer then lines[#lines + 1] = { text = L["Customer: %s"]:format(customer), color = WHITE } end
+  if row.character ~= nil and row.age ~= nil then
+    lines[#lines + 1] = { text = L["Seen %s ago on %s"]:format(ns.UI.FormatAge(row.age), tostring(row.character)),
+      color = GREY }
+  end
   lines[#lines + 1] = { text = L["Tip: %s"]:format(ns.UI.FormatMoney(row.tip)), color = WHITE }
   lines[#lines + 1] = { text = L["Net: %s"]:format(net_text(v)), color = WHITE }
   for label in (model.riskText or ""):gmatch("[^\n]+") do lines[#lines + 1] = { text = label, color = RED } end
@@ -324,10 +370,25 @@ local function clear_status()
   end
 end
 
--- Add to Queue: the order as it is now (live, else saved) through the board's own path.
+-- The row's order as it is now: the current character's (live, else saved) through GetView; another character's from
+-- that character's own board (the same public order can be on two boards, so the id alone would find the wrong one).
+local function current_view(O, row)
+  if not (O and row.orderID ~= nil) then return nil end
+  if row.character == nil or row.character == ns.FS:CharKey() then return O:GetView(row.orderID) end
+  for _, board in ipairs(O:GetBoards()) do
+    if board.charKey == row.character then
+      for _, v in ipairs(board.orders) do
+        if v.orderID == row.orderID then return v end
+      end
+    end
+  end
+  return nil
+end
+
+-- Add to Queue: the order as it is now through the board's own path (the entry carries the character that saw it).
 local function add_to_queue(row)
   local O = module("Orders")
-  local current = O and row.orderID ~= nil and O:GetView(row.orderID) or nil
+  local current = current_view(O, row)
   if not current then return set_status(L["That order is gone or has expired"], "warn") end
   local message, tone = panel().AddToQueue(current)
   if message then set_status(message, tone) end
@@ -350,6 +411,19 @@ end
 
 local function hide_tooltip()
   if type(GameTooltip) == "table" then GameTooltip:Hide() end
+end
+
+-- The header's tooltip: one line per board (its order count and age).
+local function show_header_tooltip(owner)
+  local text = view and view.headerTooltip
+  if type(GameTooltip) ~= "table" or type(text) ~= "string" or text == "" then return end
+  GameTooltip:SetOwner(owner, "ANCHOR_BOTTOM")
+  local first = true
+  for line in text:gmatch("[^\n]+") do
+    if first then GameTooltip:SetText(line, WHITE[1], WHITE[2], WHITE[3]) else GameTooltip:AddLine(line, 1, 1, 1) end
+    first = false
+  end
+  GameTooltip:Show()
 end
 
 -- Asks the client once per session for an item it has not cached; GET_ITEM_INFO_RECEIVED then refreshes the tab.
@@ -542,12 +616,34 @@ end
 -- Refresh
 ---------------------------------------------------------------------------
 
-local function empty_text(model)
+-- unfiltered = the orders the chosen characters have before the filters hide any.
+local function empty_text(model, unfiltered)
   if not model.seen then
     return L["Open the crafting orders board at a profession table; the orders seen there are kept here."]
   end
-  if model.total == 0 then return L["No open orders were on the last board seen."] end
+  if unfiltered == 0 then return L["No open orders were on the last board seen."] end
   return L["Every order is hidden by the filters."]
+end
+
+local CHARACTERS_LABELS = { all = L["Characters: all"], current = L["Characters: this one"] }
+
+local function characters_choice(f)
+  return f ~= nil and f.characters == "current" and "current" or "all"
+end
+
+local function sort_choice(f)
+  local mode = f ~= nil and f.sort or nil
+  for _, known in ipairs(SORTS) do
+    if mode == known then return mode end
+  end
+  return "score"
+end
+
+-- Writes the two buttons' labels from the filters.
+local function update_controls(f)
+  if not view then return end
+  view.characters:SetText(CHARACTERS_LABELS[characters_choice(f)])
+  view.sort:SetText(SORT_LABELS[sort_choice(f)])
 end
 
 local function refresh()
@@ -556,12 +652,18 @@ local function refresh()
   if statusAt ~= nil and now - statusAt >= STATUS_SECONDS then clear_status() end
   local O = module("Orders")
   local f = filters()
-  local model = Tab.Model(O and O:GetSnapshot() or {}, f, now)
+  local orders, boardTimes = {}, {}
+  if O and f then orders, boardTimes = O:GetOrders(f) end
+  local model = Tab.Model(orders, boardTimes, f, now)
   view.rows = model.rows
+  view.headerTooltip = model.headerTooltip
   view.header:SetText(model.header)
+  update_controls(f)
   for _, check in ipairs(view.checks) do check.button:SetChecked(f ~= nil and check.get(f) or false) end
   if #view.rows == 0 then
-    view.empty:SetText(color(DIM, empty_text(model)))
+    local unfiltered = #orders
+    if model.seen and f then unfiltered = #(O:GetOrders({ characters = f.characters })) end
+    view.empty:SetText(color(DIM, empty_text(model, unfiltered)))
     view.empty:Show()
   else
     view.empty:SetText("")
@@ -610,6 +712,23 @@ local function create_check(bar, index, top, d)
   return check
 end
 
+-- A button over the filters (our own frame; SetScript is deliberate). A click runs change(filters) on the shared
+-- Orders:Settings().filters (a session copy while the saved data is read-only) and refreshes this tab at once.
+local function create_control(bar, left, top, change)
+  local button = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
+  button:SetSize(CONTROL_WIDTH, CONTROL_HEIGHT - 2)
+  button:SetPoint("TOPLEFT", bar, "TOPLEFT", left, -top)
+  button:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
+    local f = filters()
+    if not f then return end
+    change(f)
+    clear_status()
+    update_controls(f)
+    request_refresh()
+  end))
+  return button
+end
+
 local function create_headers(container, top)
   local bar = CreateFrame("Frame", nil, container)
   bar:SetHeight(HEADER_HEIGHT)
@@ -632,7 +751,8 @@ local function build(container)
   local lines = math.max(1, math.ceil(#descriptors / CHECKS_PER_LINE))
   local filterLabelTop = 4 + LINE_HEIGHT
   local checksTop = filterLabelTop + LINE_HEIGHT
-  local headersTop = checksTop + lines * CHECK_SIZE + 2
+  local controlsTop = checksTop + lines * CHECK_SIZE + 2
+  local headersTop = controlsTop + CONTROL_HEIGHT + 2
   local scrollTop = headersTop + HEADER_HEIGHT + 2
 
   local bar = CreateFrame("Frame", nil, container)
@@ -653,6 +773,19 @@ local function build(container)
   created.filterLabel:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, -(filterLabelTop + 2))
   created.filterLabel:SetText(L["Hide orders with:"])
   for i, d in ipairs(descriptors) do created.checks[i] = create_check(bar, i, checksTop, d) end
+  created.headerHit = CreateFrame("Frame", nil, bar)
+  created.headerHit:SetAllPoints(created.header)
+  created.headerHit:EnableMouse(true)
+  created.headerHit:SetScript("OnEnter", ns.FS:Wrap(SOURCE, show_header_tooltip))
+  created.headerHit:SetScript("OnLeave", hide_tooltip)
+  created.characters = create_control(bar, 0, controlsTop, function(f)
+    f.characters = characters_choice(f) == "all" and "current" or "all"
+  end)
+  created.sort = create_control(bar, CONTROL_WIDTH + GAP, controlsTop, function(f)
+    local index = 1
+    for i, known in ipairs(SORTS) do if known == sort_choice(f) then index = i end end
+    f.sort = SORTS[index % #SORTS + 1]
+  end)
   created.headerBar, created.headers = create_headers(container, headersTop)
 
   local scroll = CreateFrame("ScrollFrame", nil, container)

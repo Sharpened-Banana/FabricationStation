@@ -1153,6 +1153,10 @@ P7-3. **Cost per knowledge point.** In Settings > Orders & Ledger set "Most you 
 Expected: a patron order whose reagents cost more than its tip plus 50g per point shows "Reward costs too much" in its
 risks, Claim Best Order skips it, and the row tooltip says "Pays ...g per knowledge point".
 
+P7-4. **One list of every alt's orders.** Open the crafting orders board on two characters. Expected: the Orders tab
+lists both boards' orders with a Character column; "Characters: this one" shows only the logged-in character's;
+"Sort: expiring" puts the soonest first; hovering the header gives each board's age; an expired order is gone.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

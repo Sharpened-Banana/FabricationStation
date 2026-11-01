@@ -36,6 +36,8 @@ Orders.SETTINGS_DEFAULTS = {
     orderTypes = { public = true, guild = true, personal = true, npc = true },
     minScore = nil,
     hideUnscored = false,
+    characters = "all",   -- the Orders tab lists "all" characters' boards or only the "current" one
+    sort = "score",       -- the Orders tab order: "score" (best first), "expires" or "character"
   },
 }
 
@@ -897,6 +899,52 @@ function Orders:GetView(orderID)
     if type(view) == "table" and not expired(view, now) then return view end
   end
   return nil
+end
+
+-- The orders the Orders tab lists, with when each board was seen: filters (default: Settings().filters) pick the
+-- boards (filters.characters == "current": the current character's only; otherwise every board, leaving out the
+-- characters hidden in settings.alts.hidden while Alts is on), Filter keeps the visible views (best first) and
+-- filters.sort orders them: "score" (default, Filter's order), "expires" (expiresAt ascending, unknown last, then
+-- orderID) or "character" (charKey, then Filter's order). Returns views, { [charKey] = board time } (boards without
+-- a time are not in it). The views are the stored tables: read-only for callers.
+function Orders:GetOrders(filters)
+  filters = filters or self:Settings().filters
+  local current = ns.FS:CharKey()
+  local alts = ns.FS:GetModule("Alts", true)
+  local hidden = {}
+  if filters.characters ~= "current" and alts and alts:IsEnabled() then
+    hidden = alts:Settings().hidden
+    if type(hidden) ~= "table" then hidden = {} end
+  end
+  local all, times = {}, {}
+  for _, board in ipairs(self:GetBoards()) do
+    local keep
+    if filters.characters == "current" then keep = board.charKey == current else keep = not hidden[board.charKey] end
+    if keep then
+      if type(board.time) == "number" then times[board.charKey] = board.time end
+      for _, view in ipairs(board.orders) do all[#all + 1] = view end
+    end
+  end
+  local views = self:Filter(all, filters)
+  local mode = filters.sort
+  if mode == "expires" or mode == "character" then
+    local position = {}
+    for i, view in ipairs(views) do position[view] = i end
+    table.sort(views, function(a, b)
+      if mode == "character" then
+        local ka, kb = tostring(a.charKey), tostring(b.charKey)
+        if ka ~= kb then return ka < kb end
+        return position[a] < position[b]
+      end
+      local ea, eb = number_or(a.expiresAt, nil), number_or(b.expiresAt, nil)
+      if ea ~= eb then
+        if ea == nil or eb == nil then return ea ~= nil end
+        return ea < eb
+      end
+      return by_order_id(a, b)
+    end)
+  end
+  return views, times
 end
 
 -- Empties the live set (the Professions frame closed).

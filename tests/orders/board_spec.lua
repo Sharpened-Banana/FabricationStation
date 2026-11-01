@@ -399,6 +399,66 @@ describe("Orders board", function()
     end)
   end)
 
+  describe("GetOrders", function()
+    local function seed(boards)
+      ns.FS.db.global.orderBoards = boards
+    end
+    local function stored(id, extra)
+      return P2.merge({ orderID = id, orderType = "public", score = 10, risks = {}, charKey = "Me-Silvermoon" }, extra)
+    end
+    local function by_id(list) local out = {}; for _, v in ipairs(list) do out[v.orderID] = v end; return out end
+    local function ids(list) local out = {}; for i, v in ipairs(list) do out[i] = v.orderID end; return out end
+
+    it("lists every board's orders best first, with each board's time", function()
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1, { score = 5 }), stored(2, { score = 50 }) }) },
+        ["Alt-Silvermoon"] = { time = 800, orders = by_id({ stored(3, { score = 20, charKey = "Alt-Silvermoon" }) }) } })
+      local views, times = O:GetOrders({})
+      assert.same({ 2, 3, 1 }, ids(views))
+      assert.same({ ["Me-Silvermoon"] = 900, ["Alt-Silvermoon"] = 800 }, times)
+      assert.equal(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[3], views[2])   -- the stored table, read-only
+    end)
+    it("keeps the current character's board only for \"current\"", function()
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1) }) },
+        ["Alt-Silvermoon"] = { time = 800, orders = by_id({ stored(3, { charKey = "Alt-Silvermoon" }) }) } })
+      local views, times = O:GetOrders({ characters = "current" })
+      assert.same({ 1 }, ids(views)); assert.same({ ["Me-Silvermoon"] = 900 }, times)
+      views, times = O:GetOrders({ characters = "all" })
+      assert.same({ 1, 3 }, ids(views)); assert.same({ ["Me-Silvermoon"] = 900, ["Alt-Silvermoon"] = 800 }, times)
+    end)
+    it("sorts by expiry with unknown expiry last, then by orderID", function()
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1), stored(3, { expiresAt = 1400 }),
+        stored(2, { expiresAt = 1300 }), stored(4) }) } })
+      assert.same({ 2, 3, 1, 4 }, ids(O:GetOrders({ sort = "expires" })))
+    end)
+    it("sorts by character, then best first", function()
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1, { score = 5 }), stored(2, { score = 50 }) }) },
+        ["Alt-Silvermoon"] = { time = 800, orders = by_id({ stored(3, { score = 20, charKey = "Alt-Silvermoon" }),
+          stored(4, { score = 30, charKey = "Alt-Silvermoon" }) }) } })
+      assert.same({ 4, 3, 2, 1 }, ids(O:GetOrders({ sort = "character" })))
+      assert.same({ 2, 4, 3, 1 }, ids(O:GetOrders({ sort = "score" })))
+      assert.same({ 2, 4, 3, 1 }, ids(O:GetOrders({})))
+    end)
+    it("applies the filters", function()
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1, { risks = { "expiringSoon" } }), stored(2) }) } })
+      assert.same({ 2 }, ids(O:GetOrders({ hideRisks = { expiringSoon = true } })))
+    end)
+    it("leaves hidden characters out while Alts is on", function()
+      P2.fake_module(ns, "Alts", { Settings = function() return { hidden = { ["Alt-Silvermoon"] = true } } end })
+      ns.FS:SetModuleEnabled("Alts", true)
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1) }) },
+        ["Alt-Silvermoon"] = { time = 800, orders = by_id({ stored(3, { charKey = "Alt-Silvermoon" }) }) } })
+      local views, times = O:GetOrders({})
+      assert.same({ 1 }, ids(views)); assert.same({ ["Me-Silvermoon"] = 900 }, times)
+      ns.FS:SetModuleEnabled("Alts", false)
+      views, times = O:GetOrders({})
+      assert.same({ 1, 3 }, ids(views)); assert.same({ ["Me-Silvermoon"] = 900, ["Alt-Silvermoon"] = 800 }, times)
+    end)
+    it("reads the saved filters without any, and creates nothing", function()
+      assert.same({}, (O:GetOrders()))
+      assert.is_nil(ns.FS.db.global.orderBoards)
+    end)
+  end)
+
   describe("board scope", function()
     it("replaces views per order type and profession, keeping other professions in the snapshot", function()
       O:OnBoardShown(2, { P2.raw_order({orderID=1}) }, 7)

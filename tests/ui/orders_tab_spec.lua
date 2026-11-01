@@ -15,17 +15,18 @@ describe("Orders tab", function()
   it("registers at order 40", function()
     assert.same({"Orders", 40, 2}, {reg.orders.label, reg.orders.order, reg.orders.phase})
   end)
-  it("formats the snapshot age with 1a's FormatAge", function()
-    assert.equal("Orders seen <1m ago on Me-Silvermoon", T.Model({time=970, charKey="Me-Silvermoon", orders={}}, {hideRisks={}, orderTypes={}}, 1000).header)
+  it("formats the board age with 1a's FormatAge", function()
+    assert.equal("Orders seen <1m ago on Me-Silvermoon", T.Model({}, {["Me-Silvermoon"]=970}, {hideRisks={}, orderTypes={}}, 1000).header)
   end)
-  it("builds header and filtered rows", function()
-    local snap = {time=400, charKey="Me-Silvermoon", orders={
-      {orderID=1, orderType="public", itemID=5, score=10, net=10, tip=20, risks={}, expiresAt=5000},
-      {orderID=2, orderType="npc", itemID=6, score=50, net=50, tip=0, risks={"expiringSoon"}, expiresAt=1500}}}
-    local m = T.Model(snap, {hideRisks={expiringSoon=true}, orderTypes={public=true, npc=true}}, 1000)
+  it("builds the header and the rows from the orders it is given", function()
+    local orders = {
+      {orderID=1, orderType="public", itemID=5, score=10, net=10, tip=20, risks={}, expiresAt=5000, charKey="Me-Silvermoon"},
+      {orderID=2, orderType="npc", itemID=6, score=50, net=50, tip=0, risks={"expiringSoon"}, expiresAt=1500, charKey="Me-Silvermoon"}}
+    local m = T.Model(orders, {["Me-Silvermoon"]=400}, {}, 1000)
     assert.equal("Orders seen 10m ago on Me-Silvermoon", m.header)
-    assert.equal(1, #m.rows); assert.same({1, "public", 4000}, {m.rows[1].orderID, m.rows[1].type, m.rows[1].expiresIn})
-    assert.equal("No orders seen yet", T.Model({orders={}}, {hideRisks={}, orderTypes={}}, 1000).header)
+    assert.equal(2, #m.rows)
+    assert.same({1, "public", 4000, "Me-Silvermoon", 600}, {m.rows[1].orderID, m.rows[1].type, m.rows[1].expiresIn, m.rows[1].character, m.rows[1].age})
+    assert.equal("No orders seen yet", T.Model({}, {}, {hideRisks={}, orderTypes={}}, 1000).header)
   end)
 end)
 
@@ -38,33 +39,41 @@ describe("Orders tab models", function()
     T = ns.UI.OrdersTab
   end)
 
+  local ALL = { public = true, guild = true, personal = true, npc = true }
   local function row(view, now)
-    return T.Model({ time = 900, charKey = "Me-Silvermoon", orders = { view } },
-      { hideRisks = {}, orderTypes = { public = true, guild = true, personal = true, npc = true } }, now or 1000).rows[1]
+    return T.Model({ view }, { ["Me-Silvermoon"] = 900 }, { hideRisks = {}, orderTypes = ALL }, now or 1000).rows[1]
+  end
+  -- Orders:GetOrders over one saved board, then the model (what the tab's refresh does).
+  local function listed(views, filters, now)
+    local orders = {}
+    for _, v in ipairs(views) do orders[v.orderID] = v end
+    ns.FS.db.global.orderBoards = { ["Me-Silvermoon"] = { time = 900, orders = orders, scopes = {} } }
+    local f = filters or { hideRisks = {}, orderTypes = ALL }
+    local list, times = ns.FS:GetModule("Orders"):GetOrders(f)
+    return T.Model(list, times, f, now or 1000)
   end
 
   it("sorts best first (nil scores last) and copies the row values", function()
-    local m = T.Model({ time = 900, charKey = "Me-Silvermoon", orders = {
+    local m = listed({
       { orderID = 1, orderType = "public", itemID = 5, score = nil, risks = {} },
       { orderID = 2, orderType = "personal", itemID = 6, customer = "Bob-Silvermoon", tip = 500, net = 30, score = 30,
         risks = { "expiringSoon" }, expiresAt = 1100 },
-      { orderID = 3, orderType = "guild", itemID = 7, score = 90, risks = {} } } },
-      { hideRisks = {}, orderTypes = { public = true, guild = true, personal = true, npc = true } }, 1000)
+      { orderID = 3, orderType = "guild", itemID = 7, score = 90, risks = {} } })
     assert.same({ 3, 2, 1 }, { m.rows[1].orderID, m.rows[2].orderID, m.rows[3].orderID })
     local r = m.rows[2]
     assert.same({ "personal", 6, "Bob-Silvermoon", 500, 30, 30, { "expiringSoon" }, 100 },
       { r.type, r.item, r.customer, r.tip, r.net, r.score, r.risks, r.expiresIn })
     assert.is_nil(m.rows[1].expiresIn)
     assert.is_true(m.seen); assert.equal(3, m.total)
-    assert.is_false(T.Model({ orders = {} }, {}, 1000).seen)
+    assert.is_false(T.Model({}, {}, {}, 1000).seen)
   end)
 
   it("hides switched-off order types and unscored orders", function()
-    local snap = { time = 900, charKey = "Me-Silvermoon", orders = {
+    local snap = {
       { orderID = 1, orderType = "public", score = 5, risks = {} },
-      { orderID = 2, orderType = "npc", score = nil, risks = {} } } }
-    assert.equal(1, #T.Model(snap, { hideRisks = {}, orderTypes = { public = false, npc = true } }, 1000).rows)
-    assert.equal(1, #T.Model(snap, { hideRisks = {}, orderTypes = { public = true, npc = true }, hideUnscored = true }, 1000).rows)
+      { orderID = 2, orderType = "npc", score = nil, risks = {} } }
+    assert.equal(1, #listed(snap, { hideRisks = {}, orderTypes = { public = false, npc = true } }).rows)
+    assert.equal(1, #listed(snap, { hideRisks = {}, orderTypes = { public = true, npc = true }, hideUnscored = true }).rows)
   end)
 
   it("never shows unknown money as 0: no price for an unknown net, some prices missing with a known one", function()
@@ -141,13 +150,65 @@ describe("Orders tab models", function()
     assert.equal("Net: " .. EM_DASH, texts(T.TooltipLines(recraft, nil))[3])
   end)
 
-  it("keeps the Item column at 120 px or more: Customer goes first, then Type", function()
-    local at516, at600, at900, at400 = T.Layout(516), T.Layout(600), T.Layout(900), T.Layout(400)
-    assert.same({ { customer = true }, 128 }, { at516.hidden, at516.item })
-    assert.same({ { customer = true }, 212 }, { at600.hidden, at600.item })
-    assert.same({ {}, 418 }, { at900.hidden, at900.item })
-    assert.same({ customer = true, type = true }, at400.hidden)
+  it("keeps the Item column at 120 px or more: Character goes first, then Customer, then Type", function()
+    local at516, at620, at900, at400 = T.Layout(516), T.Layout(620), T.Layout(900), T.Layout(400)
+    assert.same({ { character = true, customer = true }, 128 }, { at516.hidden, at516.item })
+    assert.same({ { character = true }, 138 }, { at620.hidden, at620.item })
+    assert.same({ {}, 334 }, { at900.hidden, at900.item })
+    assert.same({ character = true, customer = true, type = true }, at400.hidden)
     assert.same({}, T.Layout(0).hidden); assert.same({}, T.Layout(nil).hidden)
+  end)
+
+  it("hides the Character column first when the window is narrow", function()
+    assert.is_true(T.Layout(516).hidden.character)
+    local roomy = T.Layout(620)   -- Item still gets 120 px with only Character gone: Customer stays
+    assert.is_true(roomy.hidden.character); assert.is_nil(roomy.hidden.customer); assert.is_nil(roomy.hidden.type)
+    assert.is_nil(T.Layout(686).hidden.character)
+  end)
+
+  it("shows the character without the current realm, and with another realm's", function()
+    assert.equal("Alt", T.CellTexts(row({ orderID = 1, risks = {}, charKey = "Alt-Silvermoon" })).character)
+    assert.equal("Far-Draenor", T.CellTexts(row({ orderID = 1, risks = {}, charKey = "Far-Draenor" })).character)
+    assert.equal("--", T.CellTexts(row({ orderID = 1, risks = {} })).character)
+  end)
+
+  describe("several characters", function()
+    local f = { hideRisks = {}, orderTypes = ALL }
+    local function two(extra)
+      return {
+        { orderID = 1, orderType = "public", score = 5, risks = {}, charKey = "Me-Silvermoon", expiresAt = 1600 },
+        P2.merge({ orderID = 2, orderType = "public", score = 50, risks = {}, charKey = "Alt-Silvermoon", expiresAt = 1300 }, extra) }
+    end
+    local times = { ["Me-Silvermoon"] = 400, ["Alt-Silvermoon"] = 940 }
+
+    it("headlines the character count and the soonest expiry", function()
+      local m = T.Model(two(), times, f, 1000)
+      assert.equal("Orders from 2 characters \194\183 next expires in 5m", m.header)
+      assert.is_true(m.seen)
+    end)
+    it("leaves the expiry out when no order has one", function()
+      local orders = two(); orders[1].expiresAt = nil; orders[2].expiresAt = nil
+      assert.equal("Orders from 2 characters", T.Model(orders, times, f, 1000).header)
+    end)
+    it("names each board's age and order count in the header tooltip", function()
+      local m = T.Model(two(), times, f, 1000)
+      assert.equal("Alt-Silvermoon: 1 order, seen 1m ago\nMe-Silvermoon: 1 order, seen 10m ago", m.headerTooltip)
+      local none = T.Model({}, { ["Me-Silvermoon"] = 400, ["Alt-Silvermoon"] = 940 }, f, 1000)
+      assert.equal("Alt-Silvermoon: 0 orders, seen 1m ago\nMe-Silvermoon: 0 orders, seen 10m ago", none.headerTooltip)
+      assert.equal("Me-Silvermoon: 2 orders, seen 10m ago",
+        T.Model({ two()[1], two()[1] }, { ["Me-Silvermoon"] = 400 }, f, 1000).headerTooltip)
+    end)
+    it("gives each row its character and the age of that character's board", function()
+      local m = T.Model(two(), times, f, 1000)
+      assert.same({ "Me-Silvermoon", 600, "Alt-Silvermoon", 60 },
+        { m.rows[1].character, m.rows[1].age, m.rows[2].character, m.rows[2].age })
+    end)
+    it("adds the board's age to the row tooltip", function()
+      local m = T.Model(two(), times, f, 1000)
+      local texts = {}
+      for i, line in ipairs(T.TooltipLines(m.rows[2], nil)) do texts[i] = line.text end
+      assert.equal("Seen 1m ago on Alt-Silvermoon", texts[2])
+    end)
   end)
 end)
 
@@ -183,6 +244,17 @@ describe("Orders tab frames", function()
       Show = function() tooltip.shown = true end,
       Hide = function() tooltip.shown = false end,
     } })
+    -- The stub's buttons drop their text; these remember it so the controls' labels can be read.
+    local createFrame = _G.CreateFrame
+    _G.CreateFrame = function(frameType, ...)
+      local frame = createFrame(frameType, ...)
+      if frameType == "Button" then
+        local text
+        function frame:SetText(t) text = t end
+        function frame:GetText() return text end
+      end
+      return frame
+    end
     P2.fake_module(ns, "MainWindow", {
       RegisterTab = function(_, id, def) reg[id] = def; return true end,
       RefreshTab = function(_, id)
@@ -382,40 +454,44 @@ describe("Orders tab frames", function()
       container:GetScript("OnSizeChanged")(container, width, 500)
     end
 
-    it("lays Type out from the left edge and Item between Type and Customer, in the header and the rows", function()
+    it("lays Type out from the left edge and Item between Character and Customer, in the header and the rows", function()
       snapshot({ view() })
       local v = open(900)
       for _, set in ipairs({ { parent = v.headerBar, cells = v.headers }, { parent = v.pool[1], cells = v.pool[1].placed } }) do
-        local typeCell, item, customer, action = set.cells[1], set.cells[2], set.cells[3], set.cells[9]
+        local typeCell, character, item, customer, action = set.cells[1], set.cells[2], set.cells[3], set.cells[4], set.cells[10]
         assert.same({ "LEFT", set.parent, "LEFT", 6, 0 }, point(typeCell)); assert.equal(48, typeCell:GetWidth())
-        assert.same({ "LEFT", typeCell, "RIGHT", 4, 0 }, point(item, 1))
+        assert.same({ "LEFT", typeCell, "RIGHT", 4, 0 }, point(character)); assert.equal(80, character:GetWidth())
+        assert.same({ "LEFT", character, "RIGHT", 4, 0 }, point(item, 1))
         assert.same({ "RIGHT", customer, "LEFT", -4, 0 }, point(item, 2))
         assert.same({ "RIGHT", set.parent, "RIGHT", -6, 0 }, point(action))
-        assert.same({ "RIGHT", set.cells[4], "LEFT", -4, 0 }, point(customer)); assert.equal(90, customer:GetWidth())
-        assert.is_true(customer:IsShown()); assert.is_true(typeCell:IsShown())
+        assert.same({ "RIGHT", set.cells[5], "LEFT", -4, 0 }, point(customer)); assert.equal(90, customer:GetWidth())
+        assert.is_true(customer:IsShown()); assert.is_true(typeCell:IsShown()); assert.is_true(character:IsShown())
       end
     end)
 
-    it("hides Customer at 516 and 600 px, then Type, and brings them back when wider", function()
+    it("hides Character, then Customer, then Type as the window narrows, and brings them back when wider", function()
       snapshot({ view() })
       local v = open(516)
       local r = v.pool[1]
       for _, cells in ipairs({ v.headers, r.placed }) do
-        assert.is_false(cells[3]:IsShown()); assert.is_true(cells[1]:IsShown())
-        assert.same({ "RIGHT", cells[4], "LEFT", -4, 0 }, point(cells[2], 2))
+        assert.is_false(cells[2]:IsShown()); assert.is_false(cells[4]:IsShown()); assert.is_true(cells[1]:IsShown())
+        assert.same({ "LEFT", cells[1], "RIGHT", 4, 0 }, point(cells[3], 1))
+        assert.same({ "RIGHT", cells[5], "LEFT", -4, 0 }, point(cells[3], 2))
       end
-      resize(600)
-      assert.is_false(v.headers[3]:IsShown()); assert.is_false(r.placed[3]:IsShown())
+      resize(620)
+      for _, cells in ipairs({ v.headers, r.placed }) do
+        assert.is_false(cells[2]:IsShown()); assert.is_true(cells[4]:IsShown())
+      end
       resize(400)
       for _, cells in ipairs({ v.headers, r.placed }) do
-        assert.is_false(cells[1]:IsShown()); assert.is_false(cells[3]:IsShown())
+        assert.is_false(cells[2]:IsShown()); assert.is_false(cells[4]:IsShown()); assert.is_false(cells[1]:IsShown())
       end
-      assert.same({ "LEFT", r, "LEFT", 6, 0 }, point(r.placed[2], 1))
+      assert.same({ "LEFT", r, "LEFT", 6, 0 }, point(r.placed[3], 1))
       resize(900)
       for _, cells in ipairs({ v.headers, r.placed }) do
-        assert.is_true(cells[1]:IsShown()); assert.is_true(cells[3]:IsShown())
+        assert.is_true(cells[1]:IsShown()); assert.is_true(cells[2]:IsShown()); assert.is_true(cells[4]:IsShown())
       end
-      assert.same({ "LEFT", r.placed[1], "RIGHT", 4, 0 }, point(r.placed[2], 1))
+      assert.same({ "LEFT", r.placed[2], "RIGHT", 4, 0 }, point(r.placed[3], 1))
     end)
 
     it("keeps the header and status lines apart: a status takes the right 45%, else the header takes it all", function()
@@ -433,6 +509,140 @@ describe("Orders tab frames", function()
       local descriptors = ns.UI.OrdersPanel.FilterChecks()
       assert.equal(#descriptors, #v.checks); assert.equal(math.ceil(#descriptors / 3), v.filterLines)
       for i, d in ipairs(descriptors) do assert.same({ d.key, d.label }, { v.checks[i].key, v.checks[i].label:GetText() }) end
+    end)
+  end)
+
+  describe("several characters", function()
+    local function two_boards(altExtra)
+      local me, alt = view({ score = 100 }), view(P2.merge({ orderID = 20, score = 300, customer = "Cy-Silvermoon",
+        charKey = "Alt-Silvermoon", expiresAt = 5000 }, altExtra))
+      local far = view({ orderID = 30, score = 200, charKey = "Far-Draenor", expiresAt = 9000 })
+      ns.FS.db.global.orderBoards = {
+        ["Me-Silvermoon"] = { time = 400, orders = { [me.orderID] = me }, scopes = {} },
+        ["Alt-Silvermoon"] = { time = 940, orders = { [alt.orderID] = alt }, scopes = {} },
+        ["Far-Draenor"] = { time = 700, orders = { [far.orderID] = far }, scopes = {} } }
+    end
+    local function ids(v)
+      local out = {}
+      for i = 1, v.shown do out[i] = v.pool[i].data.orderID end
+      return out
+    end
+
+    it("lists every character's orders with a Character column", function()
+      two_boards()
+      local v = open()
+      assert.same({ 20, 30, 10 }, ids(v))
+      assert.same({ "Alt", "Far-Draenor", "Me" }, { v.pool[1].cells.character:GetText(), v.pool[2].cells.character:GetText(),
+        v.pool[3].cells.character:GetText() })
+      assert.equal("Character", v.headers[2]:GetText())
+      assert.equal("Orders from 3 characters \194\183 next expires in 1h", v.header:GetText())
+    end)
+
+    it("shows only the current character's board for \"this one\", and back", function()
+      two_boards()
+      local v = open()
+      assert.equal("Characters: all", v.characters:GetText())
+      click(v.characters)
+      assert.equal("current", ns.FS:GetModule("Orders"):Settings().filters.characters)
+      reg.orders.refresh(container)
+      assert.equal("Characters: this one", v.characters:GetText())
+      assert.same({ 10 }, ids(v))
+      assert.equal("Orders seen 10m ago on Me-Silvermoon", v.header:GetText())
+      click(v.characters)
+      assert.equal("all", ns.FS:GetModule("Orders"):Settings().filters.characters)
+      assert.same({ 20, 30, 10 }, ids(v))
+    end)
+
+    it("cycles the sort: best, expiring, character", function()
+      two_boards()
+      local v = open()
+      assert.equal("Sort: best", v.sort:GetText())
+      click(v.sort)
+      assert.equal("expires", ns.FS:GetModule("Orders"):Settings().filters.sort)
+      assert.equal("Sort: expiring", v.sort:GetText())
+      assert.same({ 20, 10, 30 }, ids(v))   -- expiring at 5000, 8000, 9000
+      click(v.sort)
+      assert.equal("Sort: character", v.sort:GetText())
+      assert.same({ 20, 30, 10 }, ids(v))
+      click(v.sort)
+      assert.equal("Sort: best", v.sort:GetText())
+      assert.equal("score", ns.FS:GetModule("Orders"):Settings().filters.sort)
+    end)
+
+    it("sorts by expiry with the soonest first", function()
+      two_boards()
+      ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[10].expiresAt = 4000
+      local v = open()
+      click(v.sort)
+      assert.same({ 10, 20, 30 }, ids(v))
+    end)
+
+    it("sorts by character, then best first", function()
+      two_boards()
+      local v = open()
+      click(v.sort); click(v.sort)
+      assert.same({ 20, 30, 10 }, ids(v))   -- Alt, Far-Draenor, Me
+      ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[21] = view({ orderID = 21, score = 400, charKey = "Alt-Silvermoon" })
+      reg.orders.refresh(container)
+      assert.same({ 21, 20, 30, 10 }, ids(v))
+    end)
+
+    it("leaves hidden characters out while Alts is on", function()
+      two_boards()
+      P2.fake_module(ns, "Alts", { Settings = function() return { hidden = { ["Alt-Silvermoon"] = true } } end })
+      ns.FS:SetModuleEnabled("Alts", true)
+      local v = open()
+      assert.same({ 30, 10 }, ids(v))
+      assert.equal("Orders from 2 characters \194\183 next expires in 1h", v.header:GetText())
+    end)
+
+    it("names each board's age in the header tooltip", function()
+      two_boards()
+      local v = open()
+      v.headerHit:GetScript("OnEnter")(v.headerHit)
+      assert.is_true(tooltip.shown)
+      assert.same({ "Alt-Silvermoon: 1 order, seen 1m ago", "Far-Draenor: 1 order, seen 5m ago",
+        "Me-Silvermoon: 1 order, seen 10m ago" }, tooltip.lines)
+      v.headerHit:GetScript("OnLeave")(v.headerHit)
+      assert.is_false(tooltip.shown)
+    end)
+
+    it("says which board an order was seen on in its row tooltip", function()
+      two_boards()
+      local v = open()
+      v.pool[1]:GetScript("OnEnter")(v.pool[1])
+      assert.equal("Seen 1m ago on Alt-Silvermoon", tooltip.lines[3])
+    end)
+
+    it("adds another character's order to the queue for that character", function()
+      two_boards()
+      local v = open()
+      click(v.pool[1].queue)
+      assert.equal(1, #queued)
+      assert.same({ 4444, "Alt-Silvermoon", 20 }, { queued[1].recipeID, queued[1].charKey, queued[1].orderID })
+    end)
+
+    it("queues the other character's copy of an order both boards hold", function()
+      two_boards()
+      local mine = ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[10]
+      ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[10] = view({ orderID = 10, score = 900, charKey = "Alt-Silvermoon" })
+      ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[20] = nil
+      local v = open()
+      assert.equal("Alt-Silvermoon", v.pool[1].data.character)
+      click(v.pool[1].queue)
+      assert.equal("Alt-Silvermoon", queued[1].charKey)
+      assert.equal("Me-Silvermoon", mine.charKey)
+    end)
+
+    it("keeps a session copy of the choices while the saved data is read-only", function()
+      two_boards()
+      ns.FS.dbIsNewer = true
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      local v = open()
+      click(v.characters); click(v.sort)
+      assert.equal("Characters: this one", v.characters:GetText()); assert.equal("Sort: expiring", v.sort:GetText())
+      assert.same({ 10 }, ids(v))
+      assert.same(before, ns.FS.db.global)
     end)
   end)
 

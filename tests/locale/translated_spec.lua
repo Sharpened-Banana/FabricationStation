@@ -302,10 +302,12 @@ describe("a non-identity ns.L (orders sentences)", function()
   it("translates the Orders tab header", function()
     local Tab = ns.UI.OrdersTab
     local filters = { hideRisks = {}, orderTypes = {} }
-    local snap = { time = 970, charKey = "Me-Silvermoon", orders = {} }
-    assert.equal("T:Orders seen T:<1m ago on Me-Silvermoon", Tab.Model(snap, filters, 1000).header)
-    snap.charKey = nil
-    assert.equal("T:Orders seen T:<1m ago", Tab.Model(snap, filters, 1000).header)
+    assert.equal("T:Orders seen T:<1m ago on Me-Silvermoon", Tab.Model({}, { ["Me-Silvermoon"] = 970 }, filters, 1000).header)
+    assert.equal("T:No orders seen yet", Tab.Model({}, {}, filters, 1000).header)
+    local several = Tab.Model({ { orderID = 1, charKey = "Me-Silvermoon", expiresAt = 1600 } },
+      { ["Me-Silvermoon"] = 970, ["Alt-Silvermoon"] = 970 }, filters, 1000)
+    assert.equal("T:Orders from 2 characters \194\183 T:next expires in T:10m", several.header)
+    assert.equal("T:Alt-Silvermoon: 0 orders, seen T:<1m ago\nT:Me-Silvermoon: 1 order, seen T:<1m ago", several.headerTooltip)
   end)
 
   it("reads the tip benchmark's quality scope through the Q%d key", function()
@@ -322,8 +324,8 @@ describe("a non-identity ns.L (orders sentences)", function()
 
   it("shows order and ledger types through keys", function()
     local Tab = ns.UI.OrdersTab
-    local m = Tab.Model({ time = 900, charKey = "Me-Silvermoon", orders = { { orderID = 1, orderType = "public",
-      itemID = 5, risks = {} } } }, { hideRisks = {}, orderTypes = { public = true } }, 1000)
+    local m = Tab.Model({ { orderID = 1, orderType = "public", itemID = 5, risks = {}, charKey = "Me-Silvermoon" } },
+      { ["Me-Silvermoon"] = 900 }, { hideRisks = {}, orderTypes = { public = true } }, 1000)
     assert.equal("T:Public", Tab.CellTexts(m.rows[1]).type)
   end)
 end)
