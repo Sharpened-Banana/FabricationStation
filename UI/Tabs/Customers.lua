@@ -161,7 +161,7 @@ function Tab.ListModel(records)
         orders = type(record.orders) == "table" and #record.orders or 0,
         tipsTotal = record.tipsTotal,
         lastSeen = record.lastSeen,
-        tagsText = table.concat(sorted_tags(record.tags), ", "),
+        tagsText = ns.UI.JoinList(sorted_tags(record.tags)),
         linkedTo = record.linkedTo,
         alts = type(record.alts) == "number" and record.alts > 0 and record.alts or nil,
         blockedVia = Tab.BlockedVia(record),
@@ -305,6 +305,21 @@ function Tab.HistoryLayout(width)
   return { hidden = hidden, item = item, left = left }
 end
 
+-- `text` cut at every plain occurrence of `sep` (a list joined by ns.UI.JoinList).
+local function split_list(text, sep)
+  if sep == "" then return { text } end
+  local out, start = {}, 1
+  while true do
+    local from, to = text:find(sep, start, true)
+    if not from then
+      out[#out + 1] = text:sub(start)
+      return out
+    end
+    out[#out + 1] = text:sub(start, from - 1)
+    start = to + 1
+  end
+end
+
 -- The Tags cell text: "blocked" reads "blocked (via Name-Realm)" when the group is blocked through another
 -- character ("-Realm" left out when it is the main's realm), or "blocked (alt)" when that would not fit.
 local function tags_cell(row)
@@ -314,16 +329,17 @@ local function tags_cell(row)
   local name, realm = via:match("^(.-)%-([^%-]+)$")
   local mainRealm = type(row.nameRealm) == "string" and row.nameRealm:match("%-([^%-]+)$") or nil
   if name and name ~= "" and realm == mainRealm then via = name end
-  local function with(suffix)
-    local parts = {}
-    for part in (text .. ", "):gmatch("(.-), ") do
-      parts[#parts + 1] = part == "blocked" and ("blocked " .. suffix) or part
+  -- The tags are data, joined with the list separator; the "blocked" tag reads as the whole phrase.
+  local function with(blockedText)
+    local parts = split_list(text, L[", "])
+    for i, part in ipairs(parts) do
+      if part == "blocked" then parts[i] = blockedText end
     end
-    return table.concat(parts, ", ")
+    return ns.UI.JoinList(parts)
   end
-  local full = with("(via " .. via .. ")")
+  local full = with(L["blocked (via %s)"]:format(via))
   if #full <= TAGS_FIT_CHARS then return full end
-  return with("(alt)")
+  return with(L["blocked (alt)"])
 end
 
 -- The display text of one list row's cells, by column key (now = server seconds).
@@ -491,7 +507,7 @@ local function do_link()
     set_status((L["%s is now an alt of %s"]):format(selected, C and C:Root(selected) or "?"), "good")
     view.detail.linkFor = nil   -- show the stored link
   else
-    local message = LINK_ERRORS[err] or ("Could not link (" .. tostring(err) .. ")")
+    local message = LINK_ERRORS[err] or (L["Could not link (%s)"]):format(tostring(err))
     if err == "cycle" then message = message:format(tostring(Tab.LinkInput(box:GetText())), selected) end
     set_status(message, err == "readonly" and "bad" or "warn")
   end
@@ -502,7 +518,7 @@ local function do_unlink()
   local C = module("Customers")
   if not (C and selected) then return end
   if C:Unlink(selected) then
-    set_status(selected .. " is no longer linked", "good")
+    set_status((L["%s is no longer linked"]):format(selected), "good")
     view.detail.linkFor = nil
   else
     report_unchanged()
@@ -537,12 +553,12 @@ local function row_tooltip(owner)
   local row, group = owner.data, owner.group
   if not row then return end
   local lines = { { text = tostring(row.nameRealm) } }
-  lines[#lines + 1] = { text = "Orders: " .. tostring(row.orders or 0) }
-  lines[#lines + 1] = { text = "Tips: " .. money_text(row.tipsTotal, false) }
-  lines[#lines + 1] = { text = "Last seen: " .. date_text(row.lastSeen, "%Y-%m-%d %H:%M") }
+  lines[#lines + 1] = { text = (L["Orders: %s"]):format(tostring(row.orders or 0)) }
+  lines[#lines + 1] = { text = (L["Tips: %s"]):format(money_text(row.tipsTotal, false)) }
+  lines[#lines + 1] = { text = (L["Last seen: %s"]):format(date_text(row.lastSeen, "%Y-%m-%d %H:%M")) }
   if row.tagsText ~= "" then
     local blocked = group and group.tags.blocked
-    lines[#lines + 1] = { text = "Tags: " .. row.tagsText, color = blocked and RED or GOLD }
+    lines[#lines + 1] = { text = (L["Tags: %s"]):format(row.tagsText), color = blocked and RED or GOLD }
   end
   for _, name in ipairs(group and group.blockedBy or {}) do
     if name ~= row.nameRealm then
@@ -550,7 +566,9 @@ local function row_tooltip(owner)
     end
   end
   if group and #group.members > 1 then
-    lines[#lines + 1] = { text = "Alts: " .. table.concat(group.members, ", ", 2), color = GREY }
+    local alts = {}
+    for i = 2, #group.members do alts[#alts + 1] = group.members[i] end
+    lines[#lines + 1] = { text = (L["Alts: %s"]):format(ns.UI.JoinList(alts)), color = GREY }
   end
   local C = module("Customers")
   local record = C and C:Get(row.nameRealm)
@@ -567,15 +585,15 @@ local function history_tooltip(owner)
   local row = owner.data
   if not row then return end
   local lines = { { text = item_name(row.item) } }
-  lines[#lines + 1] = { text = "Fulfilled: " .. date_text(row.time, "%Y-%m-%d %H:%M") }
-  if row.who then lines[#lines + 1] = { text = "Customer: " .. row.who } end
-  if type(row.quality) == "number" then lines[#lines + 1] = { text = "Quality: " .. row.quality } end
-  lines[#lines + 1] = { text = "Tip: " .. money_text(row.tip, false) }
-  if is_money(row.commission) then lines[#lines + 1] = { text = "Commission: " .. ns.UI.FormatMoney(row.commission) } end
+  lines[#lines + 1] = { text = (L["Fulfilled: %s"]):format(date_text(row.time, "%Y-%m-%d %H:%M")) }
+  if row.who then lines[#lines + 1] = { text = (L["Customer: %s"]):format(row.who) } end
+  if type(row.quality) == "number" then lines[#lines + 1] = { text = (L["Quality: %s"]):format(row.quality) } end
+  lines[#lines + 1] = { text = (L["Tip: %s"]):format(money_text(row.tip, false)) }
+  if is_money(row.commission) then lines[#lines + 1] = { text = (L["Commission: %s"]):format(ns.UI.FormatMoney(row.commission)) } end
   if row.orderType ~= nil then
-    lines[#lines + 1] = { text = "Order: " .. (TYPE_LABELS[row.orderType] or tostring(row.orderType)), color = GREY }
+    lines[#lines + 1] = { text = (L["Order: %s"]):format(TYPE_LABELS[row.orderType] or tostring(row.orderType)), color = GREY }
   end
-  if row.who then lines[#lines + 1] = { text = "Click to show " .. row.who, color = GREY } end
+  if row.who then lines[#lines + 1] = { text = (L["Click to show %s"]):format(row.who), color = GREY } end
   show_lines(owner, lines)
 end
 
@@ -1083,7 +1101,7 @@ local function refresh_detail()
   for i, name in ipairs(others) do
     local chip = chip_at(d, "group", d.groupBar, i, function(self) select_customer(self.value) end,
       group_chip_tooltip)
-    chip.value, chip.label = name, name == root and (name .. " (main)") or name
+    chip.value, chip.label = name, name == root and (L["%s (main)"]):format(name) or name
     chip:SetText(chip.label)
   end
   d.groupLabel:SetText(#others > 0 and L["Group:"] or color(DIM, L["No linked characters"]))
@@ -1316,7 +1334,7 @@ local function build_detail(container)
   hint:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
     if not self.value then return end
     show_lines(self, { { text = (L["Blocked because %s is blocked"]):format(self.value), color = RED },
-      { text = "Click to show " .. self.value, color = GREY } })
+      { text = (L["Click to show %s"]):format(self.value), color = GREY } })
   end))
   hint:SetScript("OnLeave", hide_tooltip)
   hint:Hide()
@@ -1343,7 +1361,7 @@ local function build_detail(container)
   d.unlink = create_button(right, L["Unlink"], 56, do_unlink)
   d.unlink:SetPoint("LEFT", d.link, "RIGHT", GAP, 0)
   d.linkEdit:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
-    show_lines(self, { { text = d.linked and ("Linked to " .. d.linked) or L["Not linked to a main character"] },
+    show_lines(self, { { text = d.linked and (L["Linked to %s"]):format(d.linked) or L["Not linked to a main character"] },
       { text = L["Type the name of the main character this one is an alt of (Name or Name-Realm)"], color = GREY } })
   end))
   d.linkEdit:SetScript("OnLeave", hide_tooltip)

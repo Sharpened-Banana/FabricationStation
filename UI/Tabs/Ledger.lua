@@ -343,7 +343,7 @@ local function recipe_name(recipeID)
   local scanner = module("Scanner")
   local schematic = scanner and scanner.GetSchematic and recipeID ~= nil and scanner:GetSchematic(recipeID) or nil
   if type(schematic) == "table" and type(schematic.name) == "string" then return schematic.name end
-  return "Recipe " .. tostring(recipeID)
+  return (L["Recipe %s"]):format(tostring(recipeID))
 end
 
 -- An entry's item: the client's cached name, else the sale mail's item text, else the recipe's name, else
@@ -466,11 +466,11 @@ end
 -- The income / cost / profit lines of a weekly or recipe row, with what makes them partial or estimated.
 local function totals_lines(lines, data)
   local est = count(data.estimated) > 0
-  lines[#lines + 1] = line("Income: " .. full_money(data.income))
-  lines[#lines + 1] = line("Cost: " .. full_money(data.cost, est))
-  lines[#lines + 1] = line("Profit: " .. full_money(data.profit, est))
+  lines[#lines + 1] = line((L["Income: %s"]):format(full_money(data.income)))
+  lines[#lines + 1] = line((L["Cost: %s"]):format(full_money(data.cost, est)))
+  lines[#lines + 1] = line((L["Profit: %s"]):format(full_money(data.profit, est)))
   if count(data.incomplete) > 0 then
-    lines[#lines + 1] = line("Partial: " .. data.incomplete .. " with missing or partial cost", GOLD)
+    lines[#lines + 1] = line((L["Partial: %d with missing or partial cost"]):format(data.incomplete), GOLD)
     lines[#lines + 1] = line(PARTIAL_DETAIL, GOLD)
   end
   if est then
@@ -482,14 +482,14 @@ local function entry_lines(lines, e)
   lines[#lines + 1] = line(item_name(e))
   lines[#lines + 1] = line(date_text(e.time, "%Y-%m-%d %H:%M"), GREY)
   local kind = TYPE_NAMES[e.type] or tostring(e.type)
-  if e.type == "commission" and e.recraft then kind = kind .. " (recraft)" end
+  if e.type == "commission" and e.recraft then kind = (L["%s (recraft)"]):format(kind) end
   lines[#lines + 1] = line(kind)
-  lines[#lines + 1] = line("Amount: " .. full_money(e.amount, e.type == "craft" and e.estimated == true))
+  lines[#lines + 1] = line((L["Amount: %s"]):format(full_money(e.amount, e.type == "craft" and e.estimated == true)))
   if counts_as_profit(e) then
     if e.recraft then
       lines[#lines + 1] = line(L["Cost: not tracked for recrafts"], GREY)
     elseif is_money(e.cost) then
-      lines[#lines + 1] = line("Cost: " .. full_money(e.cost, e.estimated == true))
+      lines[#lines + 1] = line((L["Cost: %s"]):format(full_money(e.cost, e.estimated == true)))
       if e.incomplete then lines[#lines + 1] = line(L["Cost is partial: some reagent prices were missing"], GOLD) end
     else
       lines[#lines + 1] = line(L["Cost: unknown (no cost basis)"], GOLD)
@@ -497,19 +497,19 @@ local function entry_lines(lines, e)
   elseif e.incomplete then
     lines[#lines + 1] = line(L["Cost is partial: some reagent prices were missing"], GOLD)
   end
-  if e.type == "commission" and e.tip ~= nil then lines[#lines + 1] = line("Tip: " .. full_money(e.tip)) end
+  if e.type == "commission" and e.tip ~= nil then lines[#lines + 1] = line((L["Tip: %s"]):format(full_money(e.tip))) end
   if e.customer ~= nil then
-    lines[#lines + 1] = line("Customer: " .. tostring(e.customer))
+    lines[#lines + 1] = line((L["Customer: %s"]):format(tostring(e.customer)))
   elseif e.buyer ~= nil then
-    lines[#lines + 1] = line("Buyer: " .. tostring(e.buyer))
+    lines[#lines + 1] = line((L["Buyer: %s"]):format(tostring(e.buyer)))
   elseif e.orderType == "npc" then
     lines[#lines + 1] = line(L["Customer: Patron (NPC order)"])
   end
-  if e.quality ~= nil then lines[#lines + 1] = line("Quality: " .. tostring(e.quality), GREY) end
+  if e.quality ~= nil then lines[#lines + 1] = line((L["Quality: %s"]):format(tostring(e.quality)), GREY) end
   if type(e.quantity) == "number" and e.quantity ~= 1 then
-    lines[#lines + 1] = line("Quantity: " .. tostring(e.quantity), GREY)
+    lines[#lines + 1] = line((L["Quantity: %s"]):format(tostring(e.quantity)), GREY)
   end
-  if e.charKey ~= nil then lines[#lines + 1] = line("Character: " .. tostring(e.charKey), GREY) end
+  if e.charKey ~= nil then lines[#lines + 1] = line((L["Character: %s"]):format(tostring(e.charKey)), GREY) end
   if e.ambiguous then lines[#lines + 1] = line(L["Several items share this name; no cost was matched"], GREY) end
 end
 
@@ -528,7 +528,7 @@ function Tab.TooltipLines(item)
     if data.total then
       lines[1] = line((L["Last %d reset weeks"]):format(WEEKS))
     else
-      lines[1] = line("Week starting " .. date_text(data.weekStart, "%Y-%m-%d %H:%M"))
+      lines[1] = line((L["Week starting %s"]):format(date_text(data.weekStart, "%Y-%m-%d %H:%M")))
     end
     totals_lines(lines, data)
   elseif item.section == "recipe" then
@@ -538,14 +538,15 @@ function Tab.TooltipLines(item)
     else
       lines[1] = line(recipe_name(data.recipeID))
     end
-    lines[#lines + 1] = line("Sales and commissions: " .. tostring(count(data.n)))
+    lines[#lines + 1] = line((L["Sales and commissions: %s"]):format(tostring(count(data.n))))
     totals_lines(lines, data)
   elseif item.section == "benchmark" then
-    local scope = data.quality ~= nil and ("quality " .. tostring(data.quality)) or L["all qualities"]
-    lines[1] = line(("%s (%s)"):format(recipe_name(data.recipeID), scope))
-    lines[2] = line("Median tip: " .. full_money(data.median))
-    lines[3] = line("A quarter of your tips were below " .. full_money(data.p25))
-    lines[4] = line("A quarter of your tips were above " .. full_money(data.p75))
+    local title = data.quality ~= nil and (L["%s (quality %s)"]):format(recipe_name(data.recipeID), tostring(data.quality))
+      or (L["%s (all qualities)"]):format(recipe_name(data.recipeID))
+    lines[1] = line(title)
+    lines[2] = line((L["Median tip: %s"]):format(full_money(data.median)))
+    lines[3] = line((L["A quarter of your tips were below %s"]):format(full_money(data.p25)))
+    lines[4] = line((L["A quarter of your tips were above %s"]):format(full_money(data.p75)))
     lines[5] = line((L["From %d of your commissions (recrafts not counted)"]):format(count(data.n)), GREY)
   elseif item.section == "entry" then
     entry_lines(lines, data)
@@ -833,9 +834,9 @@ local function refresh()
   if model.count == 0 then
     view.header:SetText(L["No entries yet"])
   else
-    local header = (L["%d entries"]):format(model.count)
-    if model.newest then header = header .. ", newest " .. ns.UI.FormatAge(now - model.newest) .. " ago" end
-    view.header:SetText(header)
+    view.header:SetText(model.newest
+      and (L["%d entries, newest %s ago"]):format(model.count, ns.UI.FormatAge(now - model.newest))
+      or (L["%d entries"]):format(model.count))
   end
   view.status:SetText(status_text(ledger))
   if #view.items == 0 then

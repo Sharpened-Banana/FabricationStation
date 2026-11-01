@@ -208,3 +208,212 @@ describe("a non-identity ns.L (orders sentences)", function()
     assert.equal("T:Recraft \226\128\148 judge manually", notes[1])
   end)
 end)
+
+describe("a non-identity ns.L (customers sentences)", function()
+  local P2 = require("tests.helpers.phase2")
+  local TAB_FILES = { "Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua", "Modules/Ledger.lua",
+    "UI/Tabs/Customers.lua", "UI/OrdersPanel.lua" }
+  local ns, T, C, reg, tooltip
+
+  -- The shared frame stubs keep no text, shown or focus state; the Customers tab needs a little of each to build.
+  local function stateful_frames()
+    local base = _G.CreateFrame
+    _G.CreateFrame = function(...)
+      local f = base(...)
+      local text, checked, shown, enabled = "", false, true, true
+      function f:Show() shown = true end
+      function f:Hide() shown = false end
+      function f:IsShown() return shown end
+      function f:IsVisible() return shown end
+      function f:IsMouseOver() return false end
+      function f:SetText(t) text = t end
+      function f:GetText() return text end
+      function f:SetChecked(v) checked = v and true or false end
+      function f:GetChecked() return checked end
+      function f:SetFocus() end
+      function f:ClearFocus() end
+      function f:HasFocus() return false end
+      function f:HighlightText() end
+      function f:Enable() enabled = true end
+      function f:Disable() enabled = false end
+      function f:IsEnabled() return enabled end
+      return f
+    end
+  end
+
+  before_each(function()
+    reg, tooltip = {}, { lines = {} }
+    ns = P2.boot({ GameTooltip = {
+      SetOwner = function() tooltip.lines = {} end,
+      SetText = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+      AddLine = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+      Show = function() end, Hide = function() end,
+    } })
+    stateful_frames()
+    P2.fake_module(ns, "MainWindow", { RegisterTab = function(_, id, def) reg[id] = def; return true end,
+      RefreshTab = function() end })
+    setmetatable(ns.L, { __index = function(_, key) return "T:" .. key end })   -- before the files load: constants too
+    P2.load(ns, TAB_FILES)
+    T = ns.UI.CustomersTab
+    C = ns.FS:GetModule("Customers")
+  end)
+
+  it("translates the Tags cell, a joined tag list and its blocked phrase included", function()
+    local row = { nameRealm = "B-Silvermoon", orders = 1, tagsText = "blocked", blockedVia = "Al-Silvermoon" }
+    assert.equal("T:blocked (via Al)", T.CellTexts(row, 1000).tags)   -- the main's realm is left out
+    row.blockedVia = "Someone-Area52"
+    assert.equal("T:blocked (alt)", T.CellTexts(row, 1000).tags)   -- the long phrase does not fit
+    -- Two tags: the separator is the list key, "blocked" is replaced inside the list.
+    local both = { nameRealm = "B-Silvermoon", orders = 1, tagsText = "VIPT:, blocked", blockedVia = "Al-Silvermoon" }
+    assert.equal("VIPT:, T:blocked (alt)", T.CellTexts(both, 1000).tags)
+  end)
+
+  it("builds the tag list of a list row with the translated separator", function()
+    C:RecordOrder("Bob-Silvermoon", { orderID = 1, time = 500, itemID = 5, quality = 3, tip = 100 })
+    C:SetTag("Bob-Silvermoon", "VIP", true)
+    C:SetTag("Bob-Silvermoon", "blocked", true)
+    assert.equal("VIPT:, blocked", T.ListModel(T.Groups(""))[1].tagsText)
+  end)
+
+  it("translates the last-seen cell of a customer that was never seen", function()
+    assert.equal("T:never", T.CellTexts({ nameRealm = "B-Silvermoon", orders = 1, tagsText = "" }, 1000).lastSeen)
+  end)
+
+  it("translates every line of the list row and order history tooltips", function()
+    C:RecordOrder("Bob-Silvermoon", { orderID = 1, time = 500, itemID = 5, quality = 3, tip = 100, orderType = "public" })
+    C:RecordOrder("Alt-Silvermoon", { orderID = 2, time = 400, itemID = 5, quality = 3, tip = 5, orderType = "guild",
+      commission = 50 })
+    C:Link("Alt-Silvermoon", "Bob-Silvermoon")
+    C:SetTag("Bob-Silvermoon", "friend", true)
+    local container = CreateFrame("Frame")
+    container:SetSize(740, 500)
+    reg.customers.build(container)
+    reg.customers.refresh(container)
+    local v = ns.FS:GetModule("CustomersTab"):GetView()
+    local row
+    for i = 1, v.list.shown do if v.list.pool[i].data.nameRealm == "Bob-Silvermoon" then row = v.list.pool[i] end end
+    row:GetScript("OnEnter")(row)
+    assert.is_true(#tooltip.lines >= 6, table.concat(tooltip.lines, "|"))
+    for i = 2, #tooltip.lines do
+      assert.equal("T:", plain(tooltip.lines[i]):sub(1, 2), i .. ": " .. plain(tooltip.lines[i]))
+    end
+    assert.truthy(table.concat(tooltip.lines, "\n"):find("T:Alts: Alt-Silvermoon", 1, true))
+    row:GetScript("OnClick")(row)
+    local history
+    for i = 1, v.detail.history.shown do
+      if v.detail.history.pool[i].data.who == "Alt-Silvermoon" then history = v.detail.history.pool[i] end
+    end
+    history:GetScript("OnEnter")(history)
+    assert.is_true(#tooltip.lines >= 8, table.concat(tooltip.lines, "|"))
+    for i = 2, #tooltip.lines do
+      assert.equal("T:", plain(tooltip.lines[i]):sub(1, 2), i .. ": " .. plain(tooltip.lines[i]))
+    end
+    assert.equal("T:Click to show Alt-Silvermoon", tooltip.lines[#tooltip.lines])
+  end)
+
+  it("translates the status line, the group chips and the link tooltip", function()
+    C:RecordOrder("Bob-Silvermoon", { orderID = 1, time = 500, itemID = 5, quality = 3, tip = 100 })
+    C:RecordOrder("Cat-Silvermoon", { orderID = 2, time = 700, itemID = 5, quality = 3, tip = 10 })
+    C:Link("Cat-Silvermoon", "Bob-Silvermoon")
+    local container = CreateFrame("Frame")
+    container:SetSize(740, 500)
+    reg.customers.build(container)
+    reg.customers.refresh(container)
+    local v = ns.FS:GetModule("CustomersTab"):GetView()
+    local d = v.detail
+    local bob
+    for i = 1, v.list.shown do if v.list.pool[i].data.nameRealm == "Bob-Silvermoon" then bob = v.list.pool[i] end end
+    bob:GetScript("OnClick")(bob)
+    assert.equal("Cat-Silvermoon", d.group[1]:GetText())   -- a name is data
+    d.group[1]:GetScript("OnClick")(d.group[1])   -- select the alt
+    assert.equal("T:Bob-Silvermoon (main)", d.group[1]:GetText())
+    d.linkEdit:GetScript("OnEnter")(d.linkEdit)
+    assert.equal("T:Linked to Bob-Silvermoon", tooltip.lines[1])
+    d.unlink:GetScript("OnClick")(d.unlink)
+    assert.equal("T:Cat-Silvermoon is no longer linked", plain(v.status:GetText()))
+  end)
+end)
+
+describe("a non-identity ns.L (ledger sentences)", function()
+  local P2 = require("tests.helpers.phase2")
+  local TAB_FILES = { "Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua", "Modules/Ledger.lua",
+    "UI/Tabs/Ledger.lua", "UI/OrdersPanel.lua", "UI/OrdersWidgets.lua" }
+  local ns, T, reg
+
+  before_each(function()
+    reg = {}
+    ns = P2.boot({ C_DateAndTime = { GetSecondsUntilWeeklyReset = function() return 100 end } })
+    P2.fake_module(ns, "MainWindow", { RegisterTab = function(_, id, def) reg[id] = def; return true end,
+      RefreshTab = function() end })
+    P2.fake_module(ns, "Dashboard", { RegisterWidget = function() return true end })
+    setmetatable(ns.L, { __index = function(_, key) return "T:" .. key end })   -- before the files load: constants too
+    P2.load(ns, TAB_FILES)
+    T = ns.UI.LedgerTab
+  end)
+
+  -- Every line after the title (and, for an entry, its date) must be a translated sentence.
+  local function all_translated(lines, first)
+    assert.is_true(#lines >= first)
+    for i = first, #lines do assert.equal("T:", plain(lines[i].text):sub(1, 2), i .. ": " .. plain(lines[i].text)) end
+  end
+
+  it("translates every line of an income entry's tooltip", function()
+    local lines = T.TooltipLines({ kind = "row", section = "entry", data = { type = "commission", amount = 900,
+      cost = 200, tip = 1000, customer = "Bob-Silvermoon", quality = 3, quantity = 2, time = 0, itemName = "Ore",
+      charKey = "Me-Silvermoon" } })
+    all_translated(lines, 3)   -- 1 is the item, 2 its date
+    assert.equal("T:Order commission", plain(lines[3].text))
+    assert.equal("T:Amount: " .. ns.UI.FormatMoney(900), plain(lines[4].text))
+    assert.equal("T:Cost: " .. ns.UI.FormatMoney(200), plain(lines[5].text))
+    assert.equal("T:Tip: " .. ns.UI.FormatMoney(1000), plain(lines[6].text))
+    assert.equal("T:Customer: Bob-Silvermoon", plain(lines[7].text))
+    assert.equal("T:Character: Me-Silvermoon", plain(lines[#lines].text))
+    local sale = T.TooltipLines({ kind = "row", section = "entry", data = { type = "sale", amount = 9, buyer = "Ann", time = 0 } })
+    all_translated(sale, 3)
+    assert.equal("T:Buyer: Ann", plain(sale[6].text))
+  end)
+
+  it("translates the recraft kind around the translated type name", function()
+    local lines = T.TooltipLines({ kind = "row", section = "entry", data = { type = "commission", amount = 900,
+      recraft = true, tip = 5, time = 0 } })
+    assert.equal("T:T:Order commission (recraft)", plain(lines[3].text))
+    all_translated(lines, 3)
+  end)
+
+  it("translates the weekly and recipe tooltips, partial and estimated lines included", function()
+    local weekly = T.TooltipLines({ kind = "row", section = "weekly", data = { weekStart = 0, income = 900, cost = 100,
+      profit = 800, incomplete = 2, estimated = 1, index = 1 } })
+    assert.truthy(plain(weekly[1].text):find("T:Week starting ", 1, true))
+    all_translated(weekly, 1)
+    assert.equal("T:Partial: 2 with missing or partial cost", plain(weekly[5].text))
+    local recipe = T.TooltipLines({ kind = "row", section = "recipe", data = { recipeID = 77, n = 3, income = 5,
+      cost = 1, profit = 4, incomplete = 0, estimated = 0 } })
+    assert.equal("T:Recipe 77", plain(recipe[1].text))
+    all_translated(recipe, 1)
+    assert.equal("T:Sales and commissions: 3", plain(recipe[2].text))
+  end)
+
+  it("translates the tip benchmark tooltip, with and without a quality", function()
+    local q = T.TooltipLines({ kind = "row", section = "benchmark", data = { recipeID = 77, quality = 3, median = 200,
+      p25 = 150, p75 = 250, n = 3 } })
+    -- The recipe name (here the translated "Recipe %s" fallback) sits inside the whole title key.
+    assert.equal("T:T:Recipe 77 (quality 3)", q[1].text)
+    all_translated(q, 2)
+    assert.equal("T:Median tip: " .. ns.UI.FormatMoney(200), q[2].text)
+    assert.equal("T:A quarter of your tips were below " .. ns.UI.FormatMoney(150), q[3].text)
+    assert.equal("T:A quarter of your tips were above " .. ns.UI.FormatMoney(250), q[4].text)
+    local all = T.TooltipLines({ kind = "row", section = "benchmark", data = { recipeID = 77, median = 200, p25 = 150,
+      p75 = 250, n = 3 } })
+    assert.equal("T:T:Recipe 77 (all qualities)", all[1].text)
+  end)
+
+  it("translates the header with the age of the newest entry", function()
+    local L = ns.FS:GetModule("Ledger")
+    L:Add({ type = "sale", amount = 5000, itemName = "Ore", buyer = "Ann" })
+    local container = CreateFrame("Frame")
+    container:SetSize(740, 500)
+    reg.ledger.build(container)
+    reg.ledger.refresh(container)
+    assert.equal("T:1 entries, newest <1m ago", plain(ns.FS:GetModule("LedgerTab"):GetView().header:GetText()))
+  end)
+end)
