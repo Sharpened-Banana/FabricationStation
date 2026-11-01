@@ -3,7 +3,7 @@
 The author follows this for every release. The implementer of the release tooling never pushes a tag. The first
 tag, `v1.0.0`, is pushed by the author.
 
-How the release works: pushing a tag `vX.Y.Z` (or `vX.Y.Z-beta.N` / `vX.Y.Z-alpha.N`) runs
+How the release works: pushing a tag `vX.Y.Z` (or `vX.Y.Z-beta.N` / `vX.Y.Z-alpha.N`; no other tag starts it) runs
 `.github/workflows/release.yml`. It runs the CI jobs (`luacheck .`, `busted`), then `lua tools/check_release.lua`, then
 the BigWigs packager, which uploads to GitHub, CurseForge, Wago and WoWInterface. A site whose token or project id is
 missing is skipped. A tag containing `alpha` or `beta` is published as that release type, any other tag as a release.
@@ -16,8 +16,8 @@ Every `lua tools/...` command below needs Lua 5.1 or LuaJIT (the game's dialect)
 - [ ] Set the repository **variables** `CF_PROJECT_ID`, `WAGO_PROJECT_ID` and `WOWI_ADDON_ID` (Settings > Secrets and
   variables > Actions > Variables).
 - [ ] Set the repository **secrets** `CF_API_TOKEN`, `WAGO_API_TOKEN` and `WOWI_API_TOKEN` (same page, Secrets).
-- [ ] Set Settings > Actions > General > Workflow permissions to **Read and write permissions** (the release job needs
-  `contents: write` to create the GitHub release).
+- [ ] Leave Settings > Actions > General > Workflow permissions at the read-only default: `release.yml` is read-only at
+  the top level and grants `contents: write` to the release job only (it creates the GitHub release).
 - [ ] On CurseForge, enable localization and import the phrases from `Locales/enUS.lua`.
 - [ ] On CurseForge, set the relation to Auctionator as a **required dependency**. (The TOC lists it as optional; the
   packager's `required-dependencies` entry in `.pkgmeta` sets the store relation.)

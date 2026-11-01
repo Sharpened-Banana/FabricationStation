@@ -5,17 +5,26 @@ name: Package and release
 #
 # Repository secrets (referenced by name only): CF_API_TOKEN, WOWI_API_TOKEN, WAGO_API_TOKEN.
 # Repository variables: CF_PROJECT_ID, WOWI_ADDON_ID, WAGO_PROJECT_ID. GITHUB_TOKEN is supplied by Actions.
+#
+# The tag filter admits the version shapes tools/check_release.lua accepts; the gate stays the authority. The token is
+# read-only by default (the reused CI job runs with it); only the release job may write the repository contents (the
+# GitHub release).
 on:
   push:
-    tags: [ 'v*' ]
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'
 permissions:
-  contents: write
+  contents: read
 jobs:
   test:
     uses: ./.github/workflows/ci.yml
   release:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
       WOWI_API_TOKEN: ${{ secrets.WOWI_API_TOKEN }}

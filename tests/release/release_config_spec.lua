@@ -50,6 +50,35 @@ local function listed_in_toc_or_xml(path)
   return xml:find('file="' .. name .. '"', 1, true) ~= nil
 end
 
+-- The entries of the `ignore:` list of a .pkgmeta text, unquoted.
+local function ignore_entries(pkgmeta)
+  local block = pkgmeta:match("\nignore:\n(.-)\n%S") or pkgmeta:match("\nignore:\n(.*)$") or ""
+  local out = {}
+  for line in (block .. "\n"):gmatch("([^\n]*)\n") do
+    local entry = line:match("^%s*%-%s*(.-)%s*$")
+    if entry and entry ~= "" then out[#out + 1] = (entry:gsub("^[\"']", ""):gsub("[\"']$", "")) end
+  end
+  return out
+end
+
+-- Whether an ignore entry (a path or a glob, as the packager reads it) covers `path` or anything under it:
+-- "Locales", "Locales/", "Locales/*", "Locales/**", "./Locales" and "Loc*" all cover "Locales".
+local function ignores(entry, path)
+  local e = entry:gsub("^%./", ""):gsub("/+$", "")
+  local pattern = "^" .. e:gsub("[%^%$%(%)%%%.%[%]%+%-%?]", "%%%0"):gsub("%*%*", "\1"):gsub("%*", "[^/]*")
+    :gsub("\1", ".*")
+  for _, candidate in ipairs({ path, path .. "/x" }) do
+    if candidate:find(pattern .. "$") or candidate:find(pattern .. "/") then return true end
+  end
+  return false
+end
+
+-- A GitHub Actions tag filter of the shapes release.yml uses ([0-9]+, literal . and -) as an anchored Lua pattern.
+local function tag_filter_pattern(filter)
+  local digits = filter:gsub("%[0%-9%]%+", "\1")
+  return "^" .. digits:gsub("%.", "%%."):gsub("%-", "%%-"):gsub("\1", "%%d+") .. "$"
+end
+
 describe("release configuration", function()
   after_each(function()
     for _, d in ipairs(made) do os.execute("rm -rf " .. shell_quote(d)) end
@@ -118,7 +147,8 @@ describe("release configuration", function()
       assert.truthy(reason:find("FabricationStation.toc", 1, true))
     end)
 
-    it("passes the real repository for the version it is about to ship", function()
+    it("checks the real repository: the TOC has the version token, and a version without a changelog heading fails",
+      function()
       -- The repository carries no release heading until a release is cut, so only the static parts are checked.
       assert.truthy(read("FabricationStation.toc"):find("@project-version@", 1, true))
       local ok, reason = R.check("0.0.1", ".")
@@ -154,12 +184,28 @@ describe("release configuration", function()
     assert.is_nil(s:find("\t", 1, true)) -- YAML forbids tabs
   end)
 
+  it("catches every spelling of an ignore entry that would drop a shipped directory", function()
+    local fake = "package-as: X\nignore:\n  - tests\n  - Locales/\n  - 'Core/*'\n  - \"UI/**\"\n  - Mod*\n"
+      .. "  - ./Data\nmanual-changelog:\n"
+    local entries = ignore_entries(fake)
+    assert.same({ "tests", "Locales/", "Core/*", "UI/**", "Mod*", "./Data" }, entries)
+    for _, path in ipairs({ "Locales", "Core", "UI", "Modules", "Data", "tests" }) do
+      local hit = false
+      for _, e in ipairs(entries) do hit = hit or ignores(e, path) end
+      assert.is_true(hit, path)
+    end
+    assert.is_false(ignores("tests", "Locales"))
+    assert.is_false(ignores("docs", "docs.lua"))
+    assert.is_false(ignores("Loc", "Locales"))
+  end)
+
   it("does not ignore anything that must ship", function()
     local s = read(".pkgmeta")
-    local ignore = s:match("\nignore:\n(.-)\n%S") or s:match("\nignore:\n(.*)$") or ""
-    ignore = ignore .. "\n"
-    for _, shipped in ipairs({ "LICENSE", "README.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "Locales", "Core", "UI" }) do
-      assert.is_nil(ignore:find("- " .. shipped .. "\n", 1, true), shipped)
+    for _, shipped in ipairs({ "LICENSE", "README.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "Locales", "Core", "UI",
+      "Modules", "Math", "Data", "Libs", "embeds.xml", "FabricationStation.toc" }) do
+      for _, entry in ipairs(ignore_entries(s)) do
+        assert.is_false(ignores(entry, shipped), shipped .. " ignored by " .. entry)
+      end
     end
     for _, f in ipairs({ "LICENSE", "README.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "Locales/Locales.xml" }) do
       assert.truthy(io.open(f), f)
@@ -203,7 +249,7 @@ describe("release configuration", function()
     before_each(function() y = read(".github/workflows/release.yml") end)
 
     it("wires the packager workflow", function()
-      for _, k in ipairs({ "BigWigsMods/packager@v2", "actions/checkout@v7", "fetch-depth: 0", "contents: write", "tags:",
+      for _, k in ipairs({ "BigWigsMods/packager@v2", "actions/checkout@v7", "fetch-depth: 0", "tags:",
         "CF_API_TOKEN", "WOWI_API_TOKEN", "WAGO_API_TOKEN", "GITHUB_OAUTH", "needs: test", "tools/check_release.lua",
         "uses: ./.github/workflows/ci.yml", "leafo/gh-actions-lua@v13", 'luaVersion: "5.1.5"' }) do
         assert.truthy(y:find(k, 1, true), k)
@@ -216,16 +262,67 @@ describe("release configuration", function()
       assert.is_nil(y:find("GH_API_TOKEN", 1, true))
     end)
 
-    it("runs only on version tags and gates before packaging", function()
-      assert.truthy(y:find("tags: [ 'v*' ]", 1, true))
-      assert.is_nil(y:find("branches:", 1, true))
-      assert.is_nil(y:find("pull_request", 1, true))
+    -- The non-comment lines of a top-level block ("on", "permissions"), up to the next top-level key.
+    local function block(name)
+      local out, inside = {}, false
+      for line in (y .. "\n"):gmatch("([^\n]*)\n") do
+        if not line:find("^%s*#") and line:find("%S") then
+          if line:find("^%S") then inside = line:find("^" .. name .. ":") ~= nil end
+          if inside then out[#out + 1] = line end
+        end
+      end
+      return out
+    end
+
+    it("runs on a tag push only: the whole on: block is the tag filter", function()
+      assert.same({ "on:", "  push:", "    tags:",
+        "      - 'v[0-9]+.[0-9]+.[0-9]+'",
+        "      - 'v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+'",
+        "      - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'" }, block("on"))
+      for _, k in ipairs({ "workflow_dispatch", "schedule", "branches", "pull_request", "workflow_run", "repository_dispatch" }) do
+        assert.is_nil(y:find(k, 1, true), k)
+      end
+    end)
+
+    it("filters the same version shapes as the release gate (which stays the authority)", function()
+      local R = dofile("tools/check_release.lua")
+      local filters = {}
+      for _, line in ipairs(block("on")) do
+        local f = line:match("^%s*%- '(.*)'$")
+        if f then filters[#filters + 1] = tag_filter_pattern(f) end
+      end
+      local function tag_runs(tag)
+        for _, pattern in ipairs(filters) do if tag:find(pattern) then return true end end
+        return false
+      end
+      for _, v in ipairs({ "1.0.0", "1.1.0-alpha.2", "1.1.0-beta.10", "10.20.30" }) do
+        assert.is_true(tag_runs("v" .. v), v)
+        assert.is_true(R.is_valid_version(v), v)
+      end
+      for _, v in ipairs({ "1.0", "1.0.0-rc.1", "1.0.0-beta", "1.0.0.0", "x1.0.0" }) do
+        assert.is_false(tag_runs("v" .. v), v)
+        assert.is_false(R.is_valid_version(v), v)
+      end
+      assert.is_false(tag_runs("1.0.0"))
+    end)
+
+    it("is read-only by default and lets only the release job write the repository contents", function()
+      assert.same({ "permissions:", "  contents: read" }, block("permissions"))
+      local release = y:match("\n  release:\n(.*)$")
+      assert.truthy(release:find("\n    permissions:\n      contents: write\n", 1, true))
+      local test = y:match("\n  test:\n(.-)\n  release:")
+      assert.is_nil(test:find("permissions", 1, true))
+      local _, writes = y:gsub("contents: write", "")
+      assert.are.equal(1, writes)
+    end)
+
+    it("gates before packaging", function()
       local gate, pack = y:find("tools/check_release.lua", 1, true), y:find("BigWigsMods/packager@v2", 1, true)
       assert.truthy(gate < pack)
       assert.truthy(y:find("GITHUB_REF_NAME#v", 1, true))
     end)
 
-    it("pins nothing to a moving ref other than the packager major", function()
+    it("names a ref or a local path in every uses: line", function()
       for uses in y:gmatch("uses:%s*([^\n]+)") do
         assert.truthy(uses:find("@", 1, true) or uses:find("^%./"), uses)
       end
