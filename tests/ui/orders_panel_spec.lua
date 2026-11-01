@@ -871,6 +871,17 @@ describe("OrdersPanel on the crafting orders page", function()
     end
     local function listening() return side():IsEventRegistered("CURRENCY_DISPLAY_UPDATE") end
 
+    it("sits on a black backdrop that frames the icon and the number", function()
+      setup()
+      local bg = display.background
+      assert.is_truthy(bg, "no backdrop")
+      assert.same(ns.UI.OrdersPanel.CONC_BACKDROP, bg.color)
+      assert.equal(0, bg.color[1]); assert.equal(0, bg.color[2]); assert.equal(0, bg.color[3])
+      local points = {}
+      for i = 1, 3 do local p, rel = bg:GetPoint(i); points[i] = { p, rel } end
+      assert.same({ { "TOPLEFT", display.icon }, { "BOTTOM", display.icon }, { "RIGHT", display.text } }, points)
+    end)
+
     it("is our own frame anchored to the top left of the order list, read only", function()
       setup()
       local A = ns.UI.OrdersPanel.CONC_ANCHOR

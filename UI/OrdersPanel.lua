@@ -1537,6 +1537,9 @@ end
 -- Adjust here if it overlaps Blizzard's UI in game (in-game checklist).
 M.CONC_ANCHOR = { point = "BOTTOMLEFT", relPoint = "TOPLEFT", x = 8, y = 2 }
 local CONC_ICON_SHOWN, CONC_REFRESH_SECONDS, CONC_DEBOUNCE_SECONDS = 16, 60, 0.2
+-- A black backdrop behind the icon and the number, so they read on any window art; it reaches this far past them.
+M.CONC_BACKDROP = { 0, 0, 0, 0.85 }
+local CONC_BACKDROP_PAD_X, CONC_BACKDROP_PAD_Y = 4, 3
 local CONC_KEY = "ordersSidePanel.concentration"
 local concDisplay      -- { frame, icon, text, state } once built
 local concTicker       -- the once-a-minute timer, while the page is shown
@@ -1638,9 +1641,15 @@ local function build_conc(browse)
   local label = text(frame, "GameFontHighlight")
   label:SetPoint("LEFT", icon, "RIGHT", 4, 0)
   label:SetJustifyH("LEFT")
+  local background = frame:CreateTexture(nil, "BACKGROUND")
+  local B = M.CONC_BACKDROP
+  background:SetColorTexture(B[1], B[2], B[3], B[4])
+  background:SetPoint("TOPLEFT", icon, "TOPLEFT", -CONC_BACKDROP_PAD_X, CONC_BACKDROP_PAD_Y)
+  background:SetPoint("BOTTOM", icon, "BOTTOM", 0, -CONC_BACKDROP_PAD_Y)
+  background:SetPoint("RIGHT", label, "RIGHT", CONC_BACKDROP_PAD_X, 0)
   frame:SetScript("OnEnter", function() M.Guard(SIDE, conc_display_tooltip) end)
   frame:SetScript("OnLeave", function() M.Guard(SIDE, hide_tooltip) end)
-  concDisplay = { frame = frame, icon = icon, text = label }
+  concDisplay = { frame = frame, icon = icon, text = label, background = background }
 end
 
 -- Starts what keeps the display fresh while the page is shown: CURRENCY_DISPLAY_UPDATE (debounced) and a minute timer
