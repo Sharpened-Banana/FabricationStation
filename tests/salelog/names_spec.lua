@@ -69,6 +69,19 @@ describe("SaleLog item names and nameless sales", function()
       assert.equal("Potion", log().names[100])
     end)
 
+    it("asks the client for a name that never arrives exactly once per item and session", function()
+      itemNames = {}
+      post(100)
+      W.fire("GET_ITEM_INFO_RECEIVED", 100, true)
+      W.fire("GET_ITEM_INFO_RECEIVED", 100, true)
+      post(100)
+      W.fire("GET_ITEM_INFO_RECEIVED", 100, true)
+      assert.same({ 100 }, requested)
+      assert.is_nil(log().names)
+      post(200)                                    -- another item is asked for on its own
+      assert.same({ 100, 200 }, requested)
+    end)
+
     it("falls back to GetItemInfo", function()
       itemNames = {}
       _G.GetItemInfo = function(id) if id == 100 then return "Potion" end end

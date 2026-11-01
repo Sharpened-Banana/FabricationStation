@@ -29,10 +29,11 @@ local function lines_of(spec, itemID)
   local method = module and module[spec.method]
   if type(method) ~= "function" then return {} end
   local stack
-  local ok, lines = xpcall(method, function(err)
+  -- A closure, not xpcall(f, handler, ...): PUC Lua 5.1 (the CI) takes no extra arguments.
+  local ok, lines = xpcall(function() return method(module, itemID) end, function(err)
     stack = debugstack and debugstack(2) or nil
     return err
-  end, module, itemID)
+  end)
   if ok then return type(lines) == "table" and lines or {} end
   if not logged[spec.id] then
     logged[spec.id] = true

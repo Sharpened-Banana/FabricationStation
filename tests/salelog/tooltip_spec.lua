@@ -153,6 +153,19 @@ describe("SaleLog tooltip lines", function()
   end)
 
   describe("FeatureLines", function()
+    -- PUC Lua 5.1 (CI) has xpcall(f, err) only: extra arguments are dropped, where LuaJIT forwards them.
+    local realXpcall
+    before_each(function()
+      realXpcall = _G.xpcall
+      _G.xpcall = function(f, handler) return realXpcall(f, handler) end
+    end)
+    after_each(function() _G.xpcall = realXpcall end)
+
+    it("calls the module's method with the module and the item under a 5.1 xpcall", function()
+      seed({ event("expire", 5, 1) })
+      assert.equal("0 of 1 sold (0%)", providers.saleLog(5)[1][2])
+    end)
+
     it("is a core registrar that registers the saleLog provider on the Tooltips module", function()
       assert.is_true(ns.FS:GetModule("FeatureLines").coreModule)
       assert.is_true(ns.FS:GetModule("FeatureLines"):IsEnabled())

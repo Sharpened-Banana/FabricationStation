@@ -45,7 +45,8 @@ local DAY_SECONDS = 86400
 local DEFAULT_EXPIRED_SUBJECT = "Auction expired: %s"
 
 local pending = {}      -- FIFO of { itemID, quantity, unitPrice, at } posts not yet confirmed
-local awaitingName = {} -- [itemID] = true for a confirmed post whose item name the client had not cached yet
+local awaitingName = {} -- [itemID] = true while the client is asked for a posted item's name (cleared on the answer)
+local triedName = {}    -- [itemID] = true once asked: never again this session, whether or not the name came
 local tipCache = {}     -- [itemID] = { lines, at, ledgerOn } for TooltipLines; cleared on every change message
 local TIP_SECONDS = 60
 local ownedByID = {}    -- [auctionID] = { itemID, quantity } from the owned auctions seen this session
@@ -180,8 +181,8 @@ end
 local function remember_name(log, itemID)
   local name = item_name_of(itemID)
   if not name then
-    if not awaitingName[itemID] then
-      awaitingName[itemID] = true
+    if not triedName[itemID] then
+      triedName[itemID], awaitingName[itemID] = true, true
       if type(C_Item) == "table" and type(C_Item.RequestLoadItemDataByID) == "function" then
         pcall(C_Item.RequestLoadItemDataByID, itemID)
       end
