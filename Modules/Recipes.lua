@@ -499,44 +499,26 @@ end
 -- extraStats (phase 3 spec what-if, nil = none): { skill, multicraft, resourcefulness, ingenuity } added through
 -- 1b's own optional-reagent path as a free pseudo-optional (Stats.ApplyOptionals adds skill and converts the
 -- ratings with Stats.RATING_PER_UNIT; price 0 adds no cost), so Math needs no change.
--- RecipeResult.optionalAllocation: each requested itemID in the first not yet used optional slot that lists it (as
--- Scanner's optional reagent infos place it), with that slot's quantity; an item no free slot lists has no row.
-local function optional_allocation(optionalSlots, itemIDs)
-  local out, used = {}, {}
-  for _, itemID in ipairs(itemIDs or {}) do
-    for _, slot in ipairs(optionalSlots or {}) do
-      local listed = false
-      for _, id in ipairs(slot.itemIDs) do
-        if id == itemID then listed = true end
-      end
-      if listed and not used[slot] then
-        used[slot] = true
-        out[#out + 1] = { slotIndex = slot.slotIndex, itemID = itemID, quantity = slot.quantity }
-        break
-      end
-    end
-  end
-  return out
-end
-
 local function evaluate(recipeID, charKey, o, schematic, extraStats)
   local input, ctx = build(recipeID, charKey, o, o.optionalItemIDs, schematic)
   if not input then return nil end
-  -- [phase 7 Task 11] Only the requested optionals are applied (EvaluateCraft applies every listed one). A requested
-  -- itemID the schematic does not list has unknown cost and effects: unpriced, flagged, never free.
+  -- [phase 7 Task 11] Only the requested optionals that Math.Optionals.Place puts in a slot are applied (EvaluateCraft
+  -- applies every listed one), so the effects and cost are exactly optionalAllocation's. A requested itemID the
+  -- schematic lists but no free slot can take is left out (flags.unknownOptional); one the schematic does not list has
+  -- unknown cost and effects: unpriced, flagged, never free.
   local unknownOptional = false
   local requested = input.optionals
+  local allocation = {}
   if o.optionalItemIDs then
     local byID = {}
     for _, opt in ipairs(input.optionals or {}) do byID[opt.itemID] = opt end
+    local unplaced
+    allocation, unplaced = ns.Math.Optionals.Place(input.optionalSlots, o.optionalItemIDs)
     requested = {}
-    for _, itemID in ipairs(o.optionalItemIDs) do
-      local opt = byID[itemID]
-      if not opt then
-        opt = { itemID = itemID, price = nil, stats = {} }
-        unknownOptional = true
-      end
-      requested[#requested + 1] = opt
+    for _, row in ipairs(allocation) do requested[#requested + 1] = byID[row.itemID] end
+    for _, itemID in ipairs(unplaced) do
+      unknownOptional = true
+      if not byID[itemID] then requested[#requested + 1] = { itemID = itemID, price = nil, stats = {} } end
     end
     input.optionals = requested
   end
@@ -579,7 +561,7 @@ local function evaluate(recipeID, charKey, o, schematic, extraStats)
     unreachableTarget = mathFlags.unreachableTarget == true,
     unknownOptional = mathFlags.unknownOptional == true or unknownOptional,
   }
-  r.optionalAllocation = optional_allocation(input.optionalSlots, o.optionalItemIDs)
+  r.optionalAllocation = allocation
   return r
 end
 
@@ -688,7 +670,7 @@ function Recipes:BestOptionals(recipeID, charKey, opts)
   for k, v in pairs(o) do withOpts[k] = v end
   withOpts.optionalItemIDs = picked.itemIDs
   local result = self:Evaluate(recipeID, charKey, withOpts)
-  if not base or not result then return nil end
+  if not base or not result then return remember(false) end
   local gain
   if type(result.profit) == "number" and type(base.profit) == "number" then gain = result.profit - base.profit end
   return remember({ itemIDs = picked.itemIDs, result = result, base = base, gain = gain, mode = picked.mode,

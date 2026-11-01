@@ -133,6 +133,44 @@ describe("Math.Optionals", function()
     assert.equals("simple", r.mode); assert.same({ 701 }, r.itemIDs)
     assert.equals(before, #input.optionals)
   end)
+  describe("Place (the one slot-matching rule)", function()
+    local SHARED = { { slotIndex = 4, kind = "optional", quantity = 2, itemIDs = { 7001, 7002 } },
+                     { slotIndex = 6, kind = "optional", quantity = 1, itemIDs = { 7001 } } }
+    it("places a shared item across two slots once, freeing the slot the other item needs", function()
+      local rows, unplaced = Optionals.Place(SHARED, { 7001, 7002 })
+      assert.same({ { slotIndex = 4, itemID = 7002, quantity = 2 }, { slotIndex = 6, itemID = 7001, quantity = 1 } }, rows)
+      assert.same({}, unplaced)
+      rows, unplaced = Optionals.Place(SHARED, { 7001 })
+      assert.same({ { slotIndex = 4, itemID = 7001, quantity = 2 } }, rows); assert.same({}, unplaced)
+    end)
+    it("places one of two items wanted for one slot and reports the other", function()
+      local rows, unplaced = Optionals.Place({ SHARED[1] }, { 7002, 7001 })
+      assert.same({ { slotIndex = 4, itemID = 7001, quantity = 2 } }, rows); assert.same({ 7002 }, unplaced)
+    end)
+    it("reports an item no slot lists and ignores a repeated one", function()
+      local rows, unplaced = Optionals.Place(SHARED, { 424242, 7002, 7002 })
+      assert.same({ { slotIndex = 4, itemID = 7002, quantity = 2 } }, rows); assert.same({ 424242 }, unplaced)
+      assert.same({}, (Optionals.Place(nil, {}))); assert.same({ 1 }, select(2, Optionals.Place(nil, { 1 })))
+    end)
+  end)
+  it("never returns an unplaceable set, and returns its placement", function()
+    -- 701 is listed in both slots, 702 only in the first: both are worth having, so both must be placed
+    local shared = make_input({
+      optionals = { { itemID = 701, price = 1 * G, stats = { skill = 30 } }, { itemID = 702, price = 1 * G, stats = { multicraft = 110 } } },
+      optionalSlots = { { slotIndex = 3, kind = "optional", quantity = 1, itemIDs = { 701, 702 } },
+                        { slotIndex = 4, kind = "optional", quantity = 1, itemIDs = { 701 } } },
+    })
+    for _, mode in ipairs({ "simple", "permutation" }) do
+      local r = Optionals.Best(shared, { mode = mode })
+      local _, unplaced = Optionals.Place(shared.optionalSlots, r.itemIDs)
+      assert.same({}, unplaced, mode)
+      assert.same(Optionals.Place(shared.optionalSlots, r.itemIDs), r.allocation, mode)
+    end
+    assert.same({ 701, 702 }, Optionals.Best(shared, { mode = "permutation" }).itemIDs)
+    local one = make_input({ optionalSlots = { { slotIndex = 3, kind = "optional", quantity = 1, itemIDs = { 701, 702 } } } })
+    local r = Optionals.Best(one, { mode = "permutation" })
+    assert.equals(1, #r.itemIDs); assert.equals(1, #r.allocation)
+  end)
   it("returns the base for an input without optional slots", function()
     input.optionalSlots = nil
     local r = Optionals.Best(input, { mode = "permutation" })

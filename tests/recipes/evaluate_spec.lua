@@ -195,7 +195,7 @@ describe("Recipes:Evaluate", function()
       assert.are_not.equal(both, plain); assert.are_not.equal(both, opt({ 7002 }))
       assert.equals(520, opt({ 7002 }).perQuality[1].skill)     -- 7001 (+40) is not applied
       assert.equals(540, opt({ 7001 }).perQuality[1].skill)
-      assert.equals(560, opt({ 7001, 7002 }).perQuality[1].skill)
+      assert.equals(540, opt({ 7001, 7002 }).perQuality[1].skill)     -- one slot: 7002 is not placed, so not applied
       assert.equals(3000 + 20, opt({ 7002 }).perQuality[1].reagentCost)    -- two copies of 7002 for the slot
       assert.is_false(both.flags.unknownOptional); assert.is_false(both.flags.noPrice)
     end)
@@ -219,6 +219,45 @@ describe("Recipes:Evaluate", function()
         opt({ 7003, 7002 }).optionalAllocation)
       -- one slot takes one item: a second item of the same slot has no free slot
       assert.same({ { slotIndex = 4, itemID = 7001, quantity = 2 } }, opt({ 7001, 7002 }).optionalAllocation)
+    end)
+    it("places a shared item across two slots once", function()
+      local slots = world.schematics[9001].reagentSlots
+      slots[#slots + 1] = { slotIndex = 6, quantity = 1, reagents = { 7001 }, kind = "optional", dataSlotIndex = 16,
+        dataSlotType = 2 }
+      local r = opt({ 7001, 7002 })
+      assert.same({ { slotIndex = 4, itemID = 7002, quantity = 2 }, { slotIndex = 6, itemID = 7001, quantity = 1 } },
+        r.optionalAllocation)
+      assert.is_false(r.flags.unknownOptional); assert.equals(560, r.perQuality[1].skill)
+      assert.same({ { slotIndex = 4, itemID = 7001, quantity = 2 } }, opt({ 7001 }).optionalAllocation)
+    end)
+    it("places one of two items wanted for one slot and treats the other as unknown", function()
+      local r = opt({ 7001, 7002 })
+      assert.same({ { slotIndex = 4, itemID = 7001, quantity = 2 } }, r.optionalAllocation)
+      assert.is_true(r.flags.unknownOptional)
+    end)
+    it("counts the effects and cost of exactly the allocation", function()
+      local r = opt({ 7001, 7002 })
+      local placed = {}
+      for _, row in ipairs(r.optionalAllocation) do placed[#placed + 1] = row.itemID end
+      local same = opt(placed)
+      assert.equals(same.perQuality[1].skill, r.perQuality[1].skill)            -- 540: 7002's +20 is not applied
+      assert.equals(same.perQuality[1].reagentCost, r.perQuality[1].reagentCost)
+      assert.equals(same.reagentCost, r.reagentCost); assert.equals(same.profit, r.profit)
+    end)
+    it("BestOptionals places every item it picks", function()
+      ns.GameData.Define("OptionalReagents", 70575, {
+        [7001] = { categoryID = 60, effects = { { type = "multicraft", amount = 110 } } },
+        [7002] = { categoryID = 60, effects = { { type = "multicraft", amount = 110 } } },
+      })
+      local slots = world.schematics[9001].reagentSlots
+      slots[5] = { slotIndex = 6, quantity = 1, reagents = { 7001 }, kind = "optional", dataSlotIndex = 16, dataSlotType = 2 }
+      world.prices[7001] = { value = 10, source = "auction", ageDays = 1 }
+      ns.FS:GetOptionsTable().args.crafting.args.optionalMode.set(nil, "permutation")
+      local best = R:BestOptionals(9001, "Main-Realm", {})
+      assert.same({ 7001, 7002 }, best.itemIDs)
+      assert.same({ { slotIndex = 4, itemID = 7002, quantity = 2 }, { slotIndex = 6, itemID = 7001, quantity = 1 } },
+        best.result.optionalAllocation)
+      assert.is_false(best.result.flags.unknownOptional)
     end)
     it("counts a bought optional's price age", function()
       world.prices[7002].ageDays = 9

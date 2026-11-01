@@ -59,14 +59,74 @@ local function with(entries, extra)
   return out
 end
 
+-- The one rule for where optional items go: a set is placeable when each item can take its own slot that lists it, at
+-- most one item per slot. A maximum bipartite matching (augmenting paths; recipes have a few slots), items taken in
+-- ascending itemID order and slots in the given (schematic) order, so the answer is deterministic.
+-- slots = { { slotIndex, quantity, itemIDs } } (RecipeInput.optionalSlots). Returns rows = { { slotIndex, itemID,
+-- quantity } } in slot order and unplaced = { itemID } (ascending): items no free slot could take, unlisted ones
+-- included. Repeated itemIDs count once.
+function Optionals.Place(slots, itemIDs)
+  slots = slots or {}
+  local items, seen = {}, {}
+  for _, itemID in ipairs(itemIDs or {}) do
+    if itemID ~= nil and not seen[itemID] then
+      seen[itemID] = true
+      items[#items + 1] = itemID
+    end
+  end
+  table.sort(items, function(a, b)
+    if type(a) ~= type(b) then return type(a) < type(b) end
+    return a < b
+  end)
+  local lists = {}
+  for s, slot in ipairs(slots) do
+    lists[s] = {}
+    for _, itemID in ipairs(slot.itemIDs or {}) do lists[s][itemID] = true end
+  end
+  local owner = {}   -- [slot position] = item position
+  local function augment(i, visited)
+    for s in ipairs(slots) do
+      if not visited[s] and lists[s][items[i]] then
+        visited[s] = true
+        if owner[s] == nil or augment(owner[s], visited) then
+          owner[s] = i
+          return true
+        end
+      end
+    end
+    return false
+  end
+  local placed = {}
+  for i in ipairs(items) do
+    if augment(i, {}) then placed[i] = true end
+  end
+  local rows, unplaced = {}, {}
+  for s, slot in ipairs(slots) do
+    if owner[s] then
+      rows[#rows + 1] = { slotIndex = slot.slotIndex, itemID = items[owner[s]], quantity = slot.quantity }
+    end
+  end
+  for i, itemID in ipairs(items) do
+    if not placed[i] then unplaced[#unplaced + 1] = itemID end
+  end
+  return rows, unplaced
+end
+
+local function placeable(slots, ids)
+  local _, unplaced = Optionals.Place(slots, ids)
+  return #unplaced == 0
+end
+
 -- OptionalsResult = { itemIDs (sorted), result = MathResult, base = MathResult, mode = "simple"|"permutation",
--- evaluated (EvaluateCraft calls, the base included), skipped = { unknownPrice, noEffect } }.
+-- evaluated (EvaluateCraft calls, the base included), skipped = { unknownPrice, noEffect }, allocation = the
+-- itemIDs' Place rows }.
 -- opts = { mode = "simple"|"permutation" (default "simple"), maxCombinations = 64 }.
 -- Candidates per slot: its items whose optionals entry has a number price and a stats table with a non-zero value;
 -- the others are counted once per itemID (no price first, then no modelled effect). "permutation" tries every
 -- combination of at most one item per slot when prod(1 + #candidates) <= maxCombinations, else it runs "simple" and
 -- says so; "simple" goes through the slots in order and keeps, for each, the best of "the current pick plus one
--- candidate" when it beats the current pick. An item is never picked twice. A base without a profit is returned as
+-- candidate" when it beats the current pick. An item is never picked twice, and only sets Place can place are
+-- evaluated. A base without a profit is returned as
 -- the result (nothing can be ranked). The input is not changed.
 function Optionals.Best(input, opts)
   opts = opts or {}
@@ -118,6 +178,7 @@ function Optionals.Best(input, opts)
         if i > #slots then
           if #picked == 0 then return end
           local ids = sorted_ids(picked)
+          if not placeable(input.optionalSlots, ids) then return end
           local r = evaluate(picked)
           if better(ids, r, bestIDs, best) then bestIDs, best = ids, r end
           return
@@ -132,9 +193,9 @@ function Optionals.Best(input, opts)
       for _, candidates in ipairs(slots) do
         local slotPick, slotIDs, slotBest
         for _, c in ipairs(candidates) do
-          if not contains(bestPick, c.itemID) then
-            local picked = with(bestPick, c)
-            local ids = sorted_ids(picked)
+          local picked = not contains(bestPick, c.itemID) and with(bestPick, c) or nil
+          local ids = picked and sorted_ids(picked)
+          if picked and placeable(input.optionalSlots, ids) then
             local r = evaluate(picked)
             if better(ids, r, slotIDs, slotBest) then slotPick, slotIDs, slotBest = picked, ids, r end
           end
@@ -146,5 +207,6 @@ function Optionals.Best(input, opts)
     end
   end
 
-  return { itemIDs = bestIDs, result = best, base = base, mode = mode, evaluated = evaluated, skipped = skipped }
+  return { itemIDs = bestIDs, result = best, base = base, mode = mode, evaluated = evaluated, skipped = skipped,
+    allocation = (Optionals.Place(input.optionalSlots, bestIDs)) }
 end
