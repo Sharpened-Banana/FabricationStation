@@ -5,6 +5,8 @@ local L = ns.L
 --   listings = { [charKey] = { time, items = { [itemID] = quantity } } }   what each character has up now
 --   events   = { { time, kind = "post"|"cancel"|"expire", itemID, quantity, unitPrice?, charKey } }   (cap 2000)
 --   seenMail = { [signature] = time }   expired-auction mail already counted (kept 31 days)
+--   names    = { [itemID] = itemName }  the name of every item a confirmed post was for (created by the first name,
+--                                       at most 2000, pruned with the events): see "sales without an itemID" below
 -- It only watches. FabricationStation never calls an auction-house function that changes state or asks the server for
 -- anything (no QueryOwnedAuctions: Blizzard's Auctions tab does that); the three post-hooks below run after Blizzard's
 -- own PostItem, PostCommodity and CancelAuction calls. Mail is read, never opened or taken.
@@ -20,7 +22,10 @@ local L = ns.L
 --   * expire: MAIL_INBOX_UPDATE (0.5 s debounce) reads the headers; an AUCTION_EXPIRED_MAIL_SUBJECT mail with an
 --             attachment is one "expire" event, counted once across sessions by a signature (subject, itemID, count and
 --             the hour the mail arrived) kept in seenMail. "Auction cancelled" mail is ignored (the cancel hook counted it).
--- Sales are not recorded here: the Ledger records them from sold mail, and GetItemStats reads its "sale" entries.
+-- Sales are not recorded here: the Ledger records them from sold mail, and GetItemStats reads its "sale" entries. The
+-- Ledger only knows the itemID of an item it crafted itself; any other sold-mail entry has just the item's name. Such a
+-- sale is matched by its exact name against `names`; when two itemIDs share a name (quality ranks) the one with the most
+-- recent post wins; a name that matches nothing is ignored.
 --
 -- Every handler runs through ns.FS:Wrap("SaleLog", ...), so a failure turns off only this module. Hooks stay installed
 -- (hooksecurefunc cannot be undone) and do nothing while the module is off. Nothing is written while the saved data is
@@ -31,6 +36,7 @@ local SaleLog = ns.FS:NewModule("SaleLog", "AceEvent-3.0")
 SaleLog.SETTINGS_DEFAULTS = { windowDays = 30, tooltip = true }
 SaleLog.MIN_WINDOW_DAYS, SaleLog.MAX_WINDOW_DAYS = 7, 365
 SaleLog.EVENT_CAP = 2000
+SaleLog.NAMES_CAP = 2000
 
 local PENDING_CAP, PENDING_SECONDS = 20, 60
 local EVENT_KEEP_DAYS, SEEN_KEEP_DAYS = 365, 31
@@ -39,6 +45,9 @@ local DAY_SECONDS = 86400
 local DEFAULT_EXPIRED_SUBJECT = "Auction expired: %s"
 
 local pending = {}      -- FIFO of { itemID, quantity, unitPrice, at } posts not yet confirmed
+local awaitingName = {} -- [itemID] = true for a confirmed post whose item name the client had not cached yet
+local tipCache = {}     -- [itemID] = { lines, at, ledgerOn } for TooltipLines; cleared on every change message
+local TIP_SECONDS = 60
 local ownedByID = {}    -- [auctionID] = { itemID, quantity } from the owned auctions seen this session
 local cancelling = {}   -- [auctionID] = { itemID, quantity } for a CancelAuction call waiting for AUCTION_CANCELED
 
@@ -118,6 +127,74 @@ local function adjust_listing(log, itemID, delta)
   listing.items[itemID] = count > 0 and count or nil
 end
 
+-- The item's name from the client cache (nil when it has none yet).
+local function item_name_of(itemID)
+  if type(C_Item) == "table" and type(C_Item.GetItemNameByID) == "function" then
+    local ok, name = pcall(C_Item.GetItemNameByID, itemID)
+    if ok and type(name) == "string" and name ~= "" then return name end
+  end
+  if type(GetItemInfo) == "function" then
+    local ok, name = pcall(GetItemInfo, itemID)
+    if ok and type(name) == "string" and name ~= "" then return name end
+  end
+  return nil
+end
+
+-- Keeps log.names within NAMES_CAP: names of items no event mentions go first, then (a damaged log) the item seen
+-- longest ago. Returns how many were removed.
+local function trim_names(log)
+  local names = log.names
+  if type(names) ~= "table" then return 0 end
+  local lastSeen = {}   -- [itemID] = newest event time
+  for _, event in pairs(type(log.events) == "table" and log.events or {}) do
+    if type(event) == "table" and positive(event.itemID) then
+      local t = is_finite(event.time) and event.time or 0
+      if lastSeen[event.itemID] == nil or t > lastSeen[event.itemID] then lastSeen[event.itemID] = t end
+    end
+  end
+  local removed, total, keys = 0, 0, {}
+  for itemID in pairs(names) do
+    if lastSeen[itemID] == nil then
+      names[itemID] = nil
+      removed = removed + 1
+    else
+      total = total + 1
+      keys[#keys + 1] = itemID
+    end
+  end
+  if total > SaleLog.NAMES_CAP then
+    table.sort(keys, function(a, b)
+      if lastSeen[a] ~= lastSeen[b] then return lastSeen[a] < lastSeen[b] end
+      return a < b
+    end)
+    for i = 1, total - SaleLog.NAMES_CAP do
+      names[keys[i]] = nil
+      removed = removed + 1
+    end
+  end
+  return removed
+end
+
+-- Stores itemID's name when the client knows it (true when something was written); otherwise asks the client for the
+-- item once and waits for GET_ITEM_INFO_RECEIVED.
+local function remember_name(log, itemID)
+  local name = item_name_of(itemID)
+  if not name then
+    if not awaitingName[itemID] then
+      awaitingName[itemID] = true
+      if type(C_Item) == "table" and type(C_Item.RequestLoadItemDataByID) == "function" then
+        pcall(C_Item.RequestLoadItemDataByID, itemID)
+      end
+    end
+    return false
+  end
+  if type(log.names) ~= "table" then log.names = {} end
+  local changed = log.names[itemID] ~= name
+  log.names[itemID] = name
+  trim_names(log)
+  return changed
+end
+
 local function add_event(log, kind, itemID, quantity, unitPrice)
   ns.Util.PushCapped(log.events, {
     time = ns.FS:Now(), kind = kind, itemID = itemID, quantity = quantity, unitPrice = unitPrice,
@@ -170,7 +247,16 @@ function SaleLog:OnAuctionCreated()
   if not log then return end
   add_event(log, "post", post.itemID, post.quantity, post.unitPrice)
   adjust_listing(log, post.itemID, post.quantity)
+  remember_name(log, post.itemID)
   self:SendMessage(ns.Msg.SALELOG_CHANGED)
+end
+
+-- GET_ITEM_INFO_RECEIVED(itemID): the name of a posted item the client had not cached yet; tried once.
+function SaleLog:OnItemInfo(_, itemID)
+  if not awaitingName[itemID] then return end
+  awaitingName[itemID] = nil
+  local log = log_store()
+  if log and remember_name(log, itemID) then self:SendMessage(ns.Msg.SALELOG_CHANGED) end
 end
 
 function SaleLog:OnCancelAuction(ownedAuctionID)
@@ -311,6 +397,29 @@ local function finish(self, itemID, e, ledgerOn, now)
   return e
 end
 
+-- { [itemName] = itemID } from log.names; two itemIDs with one name go to the one with the most recent post (then the
+-- lower itemID).
+local function name_lookup(log)
+  local names = log and type(log.names) == "table" and log.names
+  if not names then return {} end
+  local lastPost = {}
+  for _, event in pairs(type(log.events) == "table" and log.events or {}) do
+    if type(event) == "table" and event.kind == "post" and positive(event.itemID) and is_finite(event.time)
+      and (lastPost[event.itemID] == nil or event.time > lastPost[event.itemID]) then
+      lastPost[event.itemID] = event.time
+    end
+  end
+  local lookup = {}
+  for itemID, name in pairs(names) do
+    if positive(itemID) and type(name) == "string" then
+      local current = lookup[name]
+      local mine, theirs = lastPost[itemID] or -1, current and (lastPost[current] or -1)
+      if current == nil or mine > theirs or (mine == theirs and itemID < current) then lookup[name] = itemID end
+    end
+  end
+  return lookup
+end
+
 -- ItemSaleStats per item with an event or a sale in the window (onlyItem: just that item). Counts are quantities.
 local function collect(self, now, onlyItem)
   local since = now - self:Settings().windowDays * DAY_SECONDS
@@ -335,8 +444,13 @@ local function collect(self, now, onlyItem)
   local ledger = ledger_if_on()
   if ledger then
     -- Newest first: the first sale seen per item is its last one.
+    local lookup   -- built when the first sale without an itemID needs it
     for _, sale in ipairs(ledger:Query({ type = "sale", since = since })) do
       local itemID = sale.itemID
+      if not positive(itemID) and type(sale.itemName) == "string" then
+        lookup = lookup or name_lookup(log)
+        itemID = lookup[sale.itemName]
+      end
       if positive(itemID) and (onlyItem == nil or itemID == onlyItem) then
         local e = entry(itemID)
         local quantity = positive(sale.quantity) and sale.quantity or 1
@@ -372,9 +486,7 @@ end
 -- sale" "<price> each, <age> ago"; "Listed now" "<n>" when more than 0 are up. Nothing for an item without history, and
 -- {} while this module is off or the `tooltip` setting is false. `now` defaults to the current time. Unknown counts
 -- add no line (never a 0).
-function SaleLog:TooltipLines(itemID, now)
-  if not self:IsEnabled() or self:Settings().tooltip ~= true or not positive(itemID) then return {} end
-  now = is_finite(now) and now or ns.FS:Now()
+local function build_tooltip_lines(self, itemID, now)
   local stats, lines = self:GetItemStats(itemID, now), {}
   local ended = (stats.sold or 0) + stats.expired + stats.cancelled
   if stats.sold ~= nil and ended > 0 then
@@ -387,6 +499,28 @@ function SaleLog:TooltipLines(itemID, now)
   end
   if positive(stats.listed) then lines[#lines + 1] = { L["Listed now"], tostring(stats.listed) } end
   return lines
+end
+
+local function copy_lines(lines)
+  local out = {}
+  for i, line in ipairs(lines) do out[i] = { line[1], line[2] } end
+  return out
+end
+
+function SaleLog:TooltipLines(itemID, now)
+  if not self:IsEnabled() or self:Settings().tooltip ~= true or not positive(itemID) then return {} end
+  -- A call without `now` is a real tooltip: its lines are kept per item for TIP_SECONDS and dropped on every sale log
+  -- or Ledger change (the age moves on, and the Ledger being switched on or off changes what is known).
+  if is_finite(now) then return build_tooltip_lines(self, itemID, now) end
+  now = ns.FS:Now()
+  local ledgerOn = ledger_if_on() ~= nil
+  local cached = tipCache[itemID]
+  if cached and cached.ledgerOn == ledgerOn and now >= cached.at and now - cached.at < TIP_SECONDS then
+    return copy_lines(cached.lines)
+  end
+  local lines = build_tooltip_lines(self, itemID, now)
+  tipCache[itemID] = { lines = lines, at = now, ledgerOn = ledgerOn }
+  return copy_lines(lines)
 end
 
 ---------------------------------------------------------------------------
@@ -434,6 +568,7 @@ function SaleLog:Prune(now)
       end
     end
   end
+  if type(log.names) == "table" then removed = removed + trim_names(log) end
   if removed > 0 then self:SendMessage(ns.Msg.SALELOG_CHANGED) end
   return removed
 end
@@ -441,6 +576,11 @@ end
 function SaleLog:OnEnable()
   local function wrap(fn) return ns.FS:Wrap("SaleLog", fn) end
   wrap(function() self:Prune(ns.FS:Now()) end)()
+
+  local function clear_tips() tipCache = {} end
+  self:RegisterMessage(ns.Msg.SALELOG_CHANGED, wrap(clear_tips))
+  self:RegisterMessage(ns.Msg.LEDGER_CHANGED, wrap(clear_tips))
+  tipCache = {}
 
   local scanMail = wrap(function() self:ScanMail() end)
   -- Registered protected: the client errors on an event it does not know, and that must not stop the module.
@@ -451,6 +591,7 @@ function SaleLog:OnEnable()
   end
   register("MAIL_INBOX_UPDATE", function() ns.FS:Debounce(MAIL_KEY, MAIL_DEBOUNCE, scanMail) end)
   register("AUCTION_HOUSE_AUCTION_CREATED", function() self:OnAuctionCreated() end)
+  register("GET_ITEM_INFO_RECEIVED", function(event, itemID) self:OnItemInfo(event, itemID) end)
   register("OWNED_AUCTIONS_UPDATED", function() self:OnOwnedAuctionsUpdated() end)
   register("AUCTION_CANCELED", function(event, auctionID) self:OnAuctionCanceled(event, auctionID) end)
 
@@ -478,6 +619,9 @@ end
 -- Hooks stay installed (their bodies return early); pending state and the mail timer go.
 function SaleLog:OnDisable()
   ns.FS:CancelDebounce(MAIL_KEY)
+  tipCache = {}
+  for key in pairs(awaitingName) do awaitingName[key] = nil end
+  self:UnregisterAllMessages()
   for i = #pending, 1, -1 do pending[i] = nil end
   for key in pairs(ownedByID) do ownedByID[key] = nil end
   for key in pairs(cancelling) do cancelling[key] = nil end

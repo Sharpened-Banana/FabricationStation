@@ -1217,9 +1217,11 @@ Expected: 1 craft's worth is queued, and the row says "held 9 (mail 0, listed 5)
 shows "mail ?" instead of 0. Set Min profit above the item's profit: the entry goes and the row says "Below min
 profit".
 
-P7-15. **Sales in tooltips and the Ledger.** After selling an item and having one auction of it expire (collect both
-mails), hover the item. Expected: "Your sales: 1 of 2 sold (50%)", "Last sale: <price> each, <age> ago", and "Listed
-now: <n>" while you have some up. The Ledger tab's Auctions page (the Auctions button above the list) shows the same
+P7-15. **Sales in tooltips and the Ledger.** Post an item you did not craft with FabricationStation (or any item: the
+sale is matched by the item's name, which SaleLog stores when it sees the post), let one auction of it sell and one
+expire, then collect both mails and hover the item. A sale of an item posted before this version was installed is
+not matched, because its name was never stored. Expected: "Your sales: 1 of 2 sold (50%)", "Last sale: <price> each,
+<age> ago", and "Listed now: <n>" while you have some up. The Ledger tab's Auctions page (the Auctions button above the list) shows the same
 numbers on the item's row: Sold 1, Expired 1, Rate 50%, Last sale the same price. Turn the Ledger off: Sold and Rate
 become "?" and the row tooltip says "Sales unknown: the Ledger is off". Turn "Show your sales in item tooltips" off
 (/fs settings > Orders & Ledger): the tooltip lines go.

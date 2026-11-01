@@ -878,6 +878,30 @@ describe("Ledger tab Auctions section", function()
     assert.is_true(g.cells.posted:IsShown())
   end)
 
+  it("counts a sale the Ledger could not give an itemID by the name of a posted item", function()
+    seed_auctions()
+    ns.FS.db.global.auctionLog.names = { [7] = "Flask" }
+    L:Add({ type = "sale", itemName = "Flask", quantity = 3, amount = 3000 })   -- sold mail: a name, no itemID
+    local v = open()
+    show(v, "auctions")
+    local flask = cells(v, 7)
+    assert.same({ "3", "100%" }, { flask.sold, flask.rate })
+    assert.equal(plain(ns.UI.OrdersPanel.CompactMoney(1000)), flask.last)
+  end)
+
+  it("shows the page and writes nothing while the saved data is from a newer version", function()
+    seed_auctions({ [5] = 2 })
+    ns.FS.dbIsNewer = true
+    local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+    local v = open()
+    show(v, "auctions")
+    assert.equal(3, #auction_rows(v))
+    assert.equal("Read-only", plain(v.status:GetText()):sub(1, 9))
+    row_of(v, 5):GetScript("OnEnter")(row_of(v, 5))
+    assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+    ns.FS.dbIsNewer = nil
+  end)
+
   it("refreshes when the sale log changes", function()
     seed_auctions()
     local v = open()
