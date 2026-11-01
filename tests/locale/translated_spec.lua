@@ -606,6 +606,7 @@ describe("a non-identity ns.L (characters sentences)", function()
     local row = Tab.ResultRow(rows[1], "Aria-Silvermoon")
     assert.equal("Bismuth Ore", row.tooltip[1])
     for i = 2, #row.tooltip do assert.equal("T:", row.tooltip[i]:sub(1, 2), i .. ": " .. row.tooltip[i]) end
+    assert.equal("T:Aria: 15T:, T:Bren: 3", row.cells.chars)   -- the holder list: "%s: %s" per holder, the list separator
     assert.equal("T:Aria: 15 (T:bags 5T:, T:bank 10)", row.tooltip[2])
     assert.equal("T:Warband bank: 7", row.tooltip[#row.tooltip - 1])
     assert.equal("T:Total: 25", row.tooltip[#row.tooltip])
@@ -921,7 +922,7 @@ describe("a non-identity ns.L (planner sentences)", function()
       all_translated(tooltip.lines, 3)
     end)
 
-    it("translates the one-craft plan and the feedback of a Queue click", function()
+    it("translates the feedback of a Queue click, queued and not queued", function()
       local v = open()
       select(v, "concentration")
       click(row_frame(v.grids.concentration, "plan:Aria-Silvermoon:2907:1001").queueButton)
@@ -949,6 +950,16 @@ describe("a non-identity ns.L (planner sentences)", function()
       assert.same({ "T:Profession: Blacksmithing", "T:Click for the next profession of Aria (1)" }, tooltip.lines)
       click(v.charButton)
       assert.equal("T:Open this profession's specializations on Bren to load spec data", plain(v.empty:GetText()))
+    end)
+
+    it("translates the Spec advice status for one path", function()
+      PL.GetSpecAdvice = function()
+        return { { pathID = 1, name = "Path 1", rank = 1, maxRank = 3, points = 2, gain = 100, gainPerPoint = 50,
+          affordable = true } }, "ok"
+      end
+      local v = open()
+      select(v, "spec")
+      assert.equal("T:Spec advice: 1 path", plain(v.status:GetText()))
     end)
 
     it("translates the Missing recipes status, row tooltip and footer", function()
@@ -990,7 +1001,7 @@ describe("a non-identity ns.L (planner sentences)", function()
         plain(v.empty:GetText()))
     end)
 
-    it("translates the one-craft plan", function()
+    it("translates the status of a plan with one craft", function()
       PL:Settings().maxCraftsPerRecipe = 1
       local v = open()
       select(v, "concentration")

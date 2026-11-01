@@ -131,7 +131,7 @@ function Tab.ResultRow(r, me)
   local chars = type(r.chars) == "table" and r.chars or {}
   local list = {}
   for i = 1, math.min(RESULT_CHARS, #chars) do
-    list[i] = short_name(chars[i].charKey, me) .. ": " .. count_text(chars[i])
+    list[i] = L["%s: %s"]:format(short_name(chars[i].charKey, me), count_text(chars[i]))
   end
   local total = tostring(r.total) .. (r.partial and "+" or "")
   local warband, warbandTip
