@@ -365,12 +365,14 @@ describe("Social.Protocol", function()
         -- 10^6 entries: a validator that walked the whole list would be visibly slow, one that stops at the cap is not
         local t = {}
         for i = 1, 1000000 do t[i] = 1 end
+        -- Build the message outside the timed section: the helpers copy the list, which is not the validator's cost.
+        local msg = rdata("r", t)
         -- Collect first and keep the collector off while timing: the clock is CPU time, and a GC step walking a big heap
         -- is not the validator's cost (on CI it made this call overrun the budget).
         collectgarbage()
         collectgarbage("stop")
         local started = os.clock()
-        local ok = valid(rdata("r", t))
+        local ok = valid(msg)
         local elapsed = os.clock() - started
         collectgarbage("restart")
         assert.is_false(ok)
