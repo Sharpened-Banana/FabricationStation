@@ -102,6 +102,15 @@ describe("FabricationStation.toc", function()
       assert.is_true(at[chain[i - 1]] < at[chain[i]], chain[i - 1] .. " before " .. chain[i])
     end
   end)
+  -- Phase 7 Task 6: the sale log reads the Ledger's sales (it looks the module up at call time, so only the file
+  -- order after it is checked) and loads before the UI.
+  it("loads Modules/SaleLog.lua after Modules/Ledger.lua and before UI/Util.lua", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    assert.is_truthy(at["Modules/SaleLog.lua"])
+    assert.is_true(at["Modules/Ledger.lua"] < at["Modules/SaleLog.lua"])
+    assert.is_true(at["Modules/SaleLog.lua"] < at["UI/Util.lua"])
+  end)
   -- Phase 3 (Tasks 12-14): the shared view helpers before the view files, the view files before the tabs that use
   -- them, all before the Settings tab.
   it("loads the phase-3 grid, view helpers, views and tabs in order", function()

@@ -854,6 +854,11 @@ local function install(overrides)
     },
     C_Traits = { GetNodeInfo = retNil, GetEntryInfo = retNil, GetDefinitionInfo = retNil, GetTreeCurrencyInfo = emptyList },
     C_Container = { GetContainerNumSlots = retZero, GetContainerItemInfo = retNil },
+    -- phase 7 Task 6 (preflight row 15): inert. The sale log only post-hooks these; nothing here answers or records.
+    C_AuctionHouse = {
+      GetNumOwnedAuctions = retZero, GetOwnedAuctionInfo = retNil,
+      PostItem = noop, PostCommodity = noop, CancelAuction = noop,
+    },
     C_Bank = { CanViewBank = retFalse },
     C_AddOns = { IsAddOnLoaded = retFalse, DoesAddOnExist = retFalse, GetAddOnMetadata = function() return "@project-version@" end },
     -- phase 4 (preflight row 3): safe-empty defaults so full loads boot Guild, ChatScan and Onboarding.
@@ -887,6 +892,7 @@ local function install(overrides)
         AccountBankTab_5 = 16,
       },
       BankType = { Character = 0, Account = 2 },
+      AuctionStatus = { Active = 0, Sold = 1 },
       ProfessionsSpecPathState = { Locked = 0, Progressing = 1, Completed = 2 },
       ProfessionsSpecPerkState = { Unearned = 0, Earned = 1, Pending = 2 },
       TooltipDataType = { Item = 0 },
@@ -901,6 +907,7 @@ local function install(overrides)
     TooltipDataProcessor = TooltipDataProcessor,
     hooksecurefunc = hooksecurefunc,
     GetInboxInvoiceInfo = retNil, GetInboxHeaderInfo = retNil, TakeInboxMoney = noop, AutoLootMailItem = noop,
+    GetInboxNumItems = retZero, GetInboxItem = retNil,
     PlaySound = noop,
     FlashClientIcon = function() W.flashes = W.flashes + 1 end,
     SOUNDKIT = { RAID_WARNING = 8959, TELL_MESSAGE = 3081 },

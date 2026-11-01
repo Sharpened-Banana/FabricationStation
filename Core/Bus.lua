@@ -21,4 +21,5 @@ ns.Msg = {
   ONBOARDING_DONE = "FS_ONBOARDING_DONE",   -- the setup guide no longer holds guild sync (finished, skipped or off)
   -- Phase 7
   ORDERS_NEW = "FS_ORDERS_NEW",   -- (sent by Orders) charKey, count, orderTypeName: new matching orders on a scope seen before
+  SALELOG_CHANGED = "FS_SALELOG_CHANGED",   -- (sent by SaleLog) no payload: the auction log or a listing changed
 }

@@ -31,6 +31,11 @@ Modules/Ledger.lua:that action is not recorded
 Modules/Orders.lua:hook target missing: ProfessionsFrame.OrdersPage.ShowOrders
 Modules/Orders.lua:hook target missing: ProfessionsFrame.OrdersPage.ShowBuckets
 Modules/Scanner.lua:dropped professions
+Modules/SaleLog.lua:Auction expired: %s
+Modules/SaleLog.lua:your listings are not recorded
+Modules/SaleLog.lua:expired auctions are not recorded
+Modules/SaleLog.lua:what depends on that event is not recorded
+Modules/SaleLog.lua:that action is not recorded
 Modules/Social/Guild.lua:own profile of %s failed validation (%s); not shared
 Modules/Social/GuildOptions.lua:no codec
 Modules/Social/GuildOptions.lua:no profile

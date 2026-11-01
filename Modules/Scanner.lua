@@ -767,6 +767,66 @@ function Scanner:ScanWarband()
   return true
 end
 
+-- Snapshots the attachments of the open mailbox into characters[me].mail = { time, items = { [itemID] = count } }.
+-- Only while the mailbox is open (the mail API answers from the last mailbox otherwise). Cash-on-delivery mail is
+-- skipped (its items are not the player's yet), and nothing here takes, opens or returns mail. FS_DATA_CHANGED
+-- (charKey, "mail") is sent only when a count changed. `GetInboxItem(index, attachment)` is read as
+-- name, itemID, texture, count (unverified in game: P7-9).
+function Scanner:ScanMail()
+  if not self:IsEnabled() or not writable() or not self.mailOpen then return false end
+  if type(GetInboxNumItems) ~= "function" or type(GetInboxHeaderInfo) ~= "function"
+    or type(GetInboxItem) ~= "function" then
+    return false
+  end
+  local items = {}
+  for i = 1, (GetInboxNumItems()) or 0 do
+    local _, _, _, _, _, cod, _, hasItem = GetInboxHeaderInfo(i)
+    if hasItem and not (type(cod) == "number" and cod > 0) then
+      for j = 1, ATTACHMENTS_MAX_RECEIVE or 12 do
+        local _, itemID, _, count = GetInboxItem(i, j)
+        if type(itemID) == "number" and type(count) == "number" and count > 0 then
+          items[itemID] = (items[itemID] or 0) + count
+        end
+      end
+    end
+  end
+  local charKey = ns.FS:CharKey()
+  local c = ensure_character(charKey)
+  local old = type(c.mail) == "table" and type(c.mail.items) == "table" and c.mail.items or {}
+  local changed = false
+  for itemID, count in pairs(items) do
+    if old[itemID] ~= count then changed = true end
+  end
+  for itemID in pairs(old) do
+    if items[itemID] == nil then changed = true end
+  end
+  c.mail = { time = ns.FS:Now(), items = items }
+  if changed then self:SendMessage(ns.Msg.DATA_CHANGED, charKey, "mail") end
+  return true
+end
+
+-- How many of itemID sit in mail attachments: charKey's last mailbox snapshot (nil = every character's, summed), and
+-- the age in seconds of the oldest of those snapshots that holds the item (nil when none does, or none exists: the
+-- count is then 0). A snapshot is only as current as that character's last visit to a mailbox.
+function Scanner:GetMailCount(itemID, charKey)
+  local g = global()
+  if not g then return 0, nil end
+  local count, oldest = 0, nil
+  local function add(c)
+    local mail = type(c) == "table" and c.mail
+    local n = type(mail) == "table" and type(mail.items) == "table" and mail.items[itemID]
+    if type(n) ~= "number" or n <= 0 then return end
+    count = count + n
+    if type(mail.time) == "number" and (oldest == nil or mail.time < oldest) then oldest = mail.time end
+  end
+  if charKey then
+    add(g.characters[charKey])
+  else
+    for _, c in pairs(g.characters) do add(c) end
+  end
+  return count, oldest and math.max(0, ns.FS:Now() - oldest) or nil
+end
+
 -- Counts of one item: charKey's own bags/bank/reagentBank (nil = every character summed) plus the
 -- warband count once. total is the sum of the four fields; an unknown item is all zeros.
 function Scanner:GetItemCount(itemID, charKey)
@@ -889,6 +949,12 @@ function Scanner:OnEnable()
     ns.FS:Debounce("scanner.bank", SCAN_DEBOUNCE, scanBank)
   end)
   self:RegisterEvent("BANKFRAME_CLOSED", function() self.bankOpen = false end)
+  -- Mail: the snapshot is taken only while the mailbox is open (MAIL_SHOW .. MAIL_CLOSED).
+  self.mailOpen = false
+  local scanMail = ns.FS:Wrap("Scanner", function() self:ScanMail() end)
+  self:RegisterEvent("MAIL_SHOW", function() self.mailOpen = true end)
+  self:RegisterEvent("MAIL_CLOSED", function() self.mailOpen = false end)
+  self:RegisterEvent("MAIL_INBOX_UPDATE", function() ns.FS:Debounce("scanner.mail", SCAN_DEBOUNCE, scanMail) end)
   for _, event in ipairs({ "PLAYERBANKSLOTS_CHANGED", "BANK_TABS_CHANGED" }) do
     self:RegisterEvent(event, function() ns.FS:Debounce("scanner.bank", SCAN_DEBOUNCE, scanBank) end)
   end

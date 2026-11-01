@@ -1187,6 +1187,26 @@ full pool or Moxie above the threshold says nothing. At login, 12 s after
 the loading screen, the concentration and Moxie states already true are announced once (concentration only when the
 Planner's own chat warning is off).
 
+P7-9. **Mail attachments.** Open a mailbox that holds an item mail and a COD mail, then `/reload` and run
+`/dump FabricationStationDB.global.characters["<you>"].mail`. Expected: it lists the item mail's items and not the COD
+one's. Also run `/dump GetInboxItem(1, 1)` with the item mail first in the box. Expected: the item's ID is the second
+value and its count the fourth (report the order if not).
+
+P7-10. **Own listings.** Open the AH Auctions tab. Expected: `FabricationStationDB.global.auctionLog.listings["<you>"]`
+(`/dump`) holds your active auctions with their quantities; sold ones still waiting for pickup are left out.
+
+P7-11. **Posts.** Post one item and one commodity stack. Expected: two `"post"` events in
+`FabricationStationDB.global.auctionLog.events` with the right itemIDs and quantities (and the unit price you set for
+the commodity). If none appears, report whether `AUCTION_HOUSE_AUCTION_CREATED` fires and
+whether `C_Item.GetItemID(location)` answers after `PostItem`.
+
+P7-12. **Cancels.** Cancel one of your auctions. Expected: one `"cancel"` event for it, and its quantity gone from the
+item's count in `auctionLog.listings["<you>"]`.
+
+P7-13. **Expiries.** With an expired-auction mail in the box, open the mailbox twice and `/reload`. Expected: one
+`"expire"` event for the mail's item and count. If none appears, report the mail's subject text (non-English clients:
+`/dump AUCTION_EXPIRED_MAIL_SUBJECT`).
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

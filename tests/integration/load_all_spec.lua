@@ -11,7 +11,7 @@ describe("whole addon", function()
       -- phase 4
       "Guild", "GuildTab", "ChatScan", "ChatToasts", "Onboarding",
       -- phase 7
-      "ReadyAlerts" }) do
+      "ReadyAlerts", "SaleLog" }) do
       assert.is_true(ns.FS:GetModule(name):IsEnabled(), name)
     end
     assert.same({}, ns.FS.db.global.diagnostics.errors)

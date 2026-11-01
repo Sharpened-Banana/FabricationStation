@@ -16,7 +16,8 @@ stds.wow = {
     "RAID_CLASS_COLORS", "C_ChatInfo", "C_RestrictedActions", "C_EncodingUtil", "C_GuildInfo", "GetGuildInfo",
     "IsInGuild", "GetGuildRecipeInfoPostQuery", "GetGuildRecipeMember", "GetNumGuildMembers", "Ambiguate",
     "issecretvalue", "ChatFrameUtil", "ChatEdit_InsertLink", "C_FriendList", "IsInInstance", "InCombatLockdown", "GetTime", "GetItemIcon",
-    "FlashClientIcon", "C_FunctionContainers" },
+    "FlashClientIcon", "C_FunctionContainers", "C_AuctionHouse", "GetInboxNumItems", "GetInboxItem",
+    "AUCTION_EXPIRED_MAIL_SUBJECT", "ATTACHMENTS_MAX_RECEIVE" },
 }
 files["Math/"] = { std = "lua51" }
 files["Data/"] = { std = "lua51" }
