@@ -1,7 +1,7 @@
 local ADDON_NAME, ns = ...
 
 -- QueueCraft: the queue's actions. Adds to the Queue module:
---   Queue:ExportShoppingList      the missing reagents as an Auctionator shopping list
+--   Queue:ExportShoppingList      the missing reagents (of the queue, or of given entries) as an Auctionator shopping list
 --   Queue:CraftNext               crafts one of the next craftable entry (player click only)
 --   Queue:GetCooldownReadyAt      when an entry's recipe is ready again
 -- and counts finished crafts (TRADE_SKILL_ITEM_CRAFTED_RESULT) against the entry Craft Next started.
@@ -33,7 +33,8 @@ local PENDING_KEY = "QueueCraft:pending"
 local pending
 -- operationIDs already counted (a multicraft sends several results for one operation).
 local seenOperations, seenCount = {}, 0
--- The export waiting for item names, or nil: { items = { [itemID] = true } still loading, onRetry = fn|nil }. Session
+-- The export waiting for item names, or nil: { items = { [itemID] = true } still loading, onRetry = fn|nil, opts = the
+-- export's opts|nil }. Session
 -- only; replaced by the next export, dropped by OnDisable.
 local waitingNames
 
@@ -77,30 +78,35 @@ local function on_item_info(_, itemID)
   if w.requesting or next(w.items) ~= nil then return end
   waitingNames = nil
   QueueCraft:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
-  local ok, info = export(false)
+  local ok, info = export(false, nil, w.opts)
   if w.onRetry then w.onRetry(ok, info) end
 end
 
--- Sends the queue's missing reagents (every character) to Auctionator as the list "FabricationStation".
+-- Sends the queue's missing reagents (every character) to Auctionator as the list "FabricationStation". With
+-- opts = { entries?, listName? } the missing reagents and the quality tiers come from opts.entries instead
+-- (Queue:GetMissingForEntries; the stored queue is not read) and the list is named opts.listName (default
+-- "FabricationStation"); the retry after item names arrive uses the same opts.
 -- Returns true, { added, skipped, loading? } or false plus "noAuctionator" | "empty" | "auctionatorError".
 -- skipped: reagents whose names the client has not cached; their load is requested, and while waiting
 -- (loading = true) the export runs again by itself once every requested name has arrived, creating or updating the
 -- list then and calling onRetry(ok, info) with that result. No list is made now when every name is still loading.
-function Queue:ExportShoppingList(onRetry)
+function Queue:ExportShoppingList(onRetry, opts)
   -- A new export replaces any earlier one still waiting for names.
   if waitingNames then
     waitingNames = nil
     QueueCraft:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
   end
-  return export(true, onRetry)
+  return export(true, onRetry, opts)
 end
 
-export = function(wait, onRetry)
+export = function(wait, onRetry, opts)
   local api = prices():AuctionatorAPI()
   if not (api and type(api.ConvertToSearchString) == "function" and type(api.CreateShoppingList) == "function") then
     return false, "noAuctionator"
   end
-  local missing = Queue:GetMissingReagents(nil)
+  local given = type(opts) == "table" and type(opts.entries) == "table" and opts.entries or nil
+  local listName = type(opts) == "table" and type(opts.listName) == "string" and opts.listName or LIST_NAME
+  local missing = given and Queue:GetMissingForEntries(given) or Queue:GetMissingReagents(nil)
   local itemIDs = {}
   for itemID, n in pairs(missing) do
     if n > 0 then itemIDs[#itemIDs + 1] = itemID end
@@ -123,7 +129,7 @@ export = function(wait, onRetry)
   end
   local w
   if #uncached > 0 and wait and QueueCraft:IsEnabled() then
-    w = { items = {}, onRetry = onRetry, requesting = true }
+    w = { items = {}, onRetry = onRetry, opts = opts, requesting = true }
     for _, itemID in ipairs(uncached) do w.items[itemID] = true end
     waitingNames = w
     QueueCraft:RegisterEvent("GET_ITEM_INFO_RECEIVED", ns.FS:Wrap("QueueCraft:ShoppingRetry", on_item_info))
@@ -152,7 +158,7 @@ export = function(wait, onRetry)
     if next(w.items) == nil then stop_waiting() end
   end
 
-  local tiers = reagent_tiers(Queue:GetEntries())
+  local tiers = reagent_tiers(given or Queue:GetEntries())
   local searchStrings, skipped = {}, 0
   for _, itemID in ipairs(itemIDs) do
     local name = name_of(itemID)
@@ -170,7 +176,7 @@ export = function(wait, onRetry)
     end
   end
   if #searchStrings > 0 then
-    local ok, err = pcall(api.CreateShoppingList, CALLER_ID, LIST_NAME, searchStrings)
+    local ok, err = pcall(api.CreateShoppingList, CALLER_ID, listName, searchStrings)
     if not ok then
       ns.FS:LogError("Queue:ShoppingList", "CreateShoppingList: " .. tostring(err))
       stop_waiting()

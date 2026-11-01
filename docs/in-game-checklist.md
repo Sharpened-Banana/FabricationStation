@@ -1157,6 +1157,11 @@ P7-4. **One list of every alt's orders.** Open the crafting orders board on two 
 lists both boards' orders with a Character column; "Characters: this one" shows only the logged-in character's;
 "Sort: expiring" puts the soonest first; hovering the header gives each board's age; an expired order is gone.
 
+P7-5. **Shop selected orders.** Tick three orders in the Orders tab (two characters) and press Shop selected.
+Expected: Auctionator has a list "FabricationStation Orders" with each missing reagent once, summed; the queue's own
+"FabricationStation" list is unchanged. A ticked recraft order is counted on the status line ("1 order skipped"), and at
+the 516 px window width the tick boxes stay while Character, Customer and Type are hidden.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

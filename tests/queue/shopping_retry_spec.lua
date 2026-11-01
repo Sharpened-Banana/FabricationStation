@@ -124,6 +124,45 @@ describe("H1-5b shopping list waits for item names", function()
     assert.equals(0, #rec.lists)
   end)
 
+  describe("given entries and a list name", function()
+    local entry
+    before_each(function()
+      entry = { recipeID = 9001, quantity = 2, charKey = "Alt-Realm" }
+      world.names[1001], world.names[2001], world.names[3001] = "Ore", "Dust", "Flux"
+    end)
+
+    it("exports given entries under the given list name and leaves the queue's list alone", function()
+      local ok, info = Q:ExportShoppingList(nil, { entries = { entry }, listName = "FabricationStation Orders" })
+      assert.is_true(ok); assert.same({ added = 3, skipped = 0 }, info)
+      assert.equals(1, #rec.lists); assert.equals("FabricationStation Orders", rec.lists[1].name)
+      assert.same({ 20, 10, 4 }, { rec.terms[1].quantity, rec.terms[2].quantity, rec.terms[3].quantity })   -- not the queue's 10, 5, 2
+    end)
+
+    it("names the list FabricationStation without a list name, and uses the queue without entries", function()
+      Q:ExportShoppingList(nil, { entries = { entry } })
+      assert.equals("FabricationStation", rec.lists[1].name)
+      Q:ExportShoppingList(nil, { listName = "Other" })
+      assert.equals("Other", rec.lists[2].name); assert.equals(10, rec.terms[4].quantity)
+    end)
+
+    it("says empty when the given entries need nothing", function()
+      assert.same({ false, "empty" }, { Q:ExportShoppingList(nil, { entries = {} }) })
+      assert.equals(0, #rec.lists)
+    end)
+
+    it("retries with the same entries and list name after item names arrive", function()
+      world.names[1001], world.names[2001], world.names[3001] = nil, nil, nil
+      local retried
+      local ok, info = Q:ExportShoppingList(function(...) retried = { ... } end,
+        { entries = { entry }, listName = "FabricationStation Orders" })
+      assert.is_true(ok); assert.same({ added = 0, skipped = 3, loading = true }, info)
+      arrive(1001, "Ore"); arrive(2001, "Dust"); arrive(3001, "Flux")
+      assert.equals(1, #rec.lists); assert.equals("FabricationStation Orders", rec.lists[1].name)
+      assert.same({ 20, 10, 4 }, { rec.terms[1].quantity, rec.terms[2].quantity, rec.terms[3].quantity })
+      assert.same({ true, { added = 3, skipped = 0 } }, retried)
+    end)
+  end)
+
   describe("Queue tab status", function()
     local QT
     before_each(function()

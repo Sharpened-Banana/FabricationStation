@@ -152,18 +152,19 @@ describe("Orders tab models", function()
 
   it("keeps the Item column at 120 px or more: Character goes first, then Customer, then Type", function()
     local at516, at620, at900, at400 = T.Layout(516), T.Layout(620), T.Layout(900), T.Layout(400)
-    assert.same({ { character = true, customer = true }, 128 }, { at516.hidden, at516.item })
-    assert.same({ { character = true }, 138 }, { at620.hidden, at620.item })
-    assert.same({ {}, 334 }, { at900.hidden, at900.item })
+    assert.same({ { character = true, customer = true, type = true }, 156 }, { at516.hidden, at516.item })   -- Select (20 px) never hides
+    assert.same({ { character = true, customer = true }, 208 }, { at620.hidden, at620.item })
+    assert.same({ {}, 310 }, { at900.hidden, at900.item })
     assert.same({ character = true, customer = true, type = true }, at400.hidden)
     assert.same({}, T.Layout(0).hidden); assert.same({}, T.Layout(nil).hidden)
   end)
 
   it("hides the Character column first when the window is narrow", function()
     assert.is_true(T.Layout(516).hidden.character)
-    local roomy = T.Layout(620)   -- Item still gets 120 px with only Character gone: Customer stays
-    assert.is_true(roomy.hidden.character); assert.is_nil(roomy.hidden.customer); assert.is_nil(roomy.hidden.type)
-    assert.is_nil(T.Layout(686).hidden.character)
+    local roomy = T.Layout(620)   -- Item would get 114 px with only Character gone: Customer goes too, Type stays
+    assert.is_true(roomy.hidden.character); assert.is_true(roomy.hidden.customer); assert.is_nil(roomy.hidden.type)
+    assert.is_nil(T.Layout(710).hidden.character); assert.is_true(T.Layout(709).hidden.character)
+    assert.is_nil(T.Layout(400).hidden.select)
   end)
 
   it("shows the character without the current realm, and with another realm's", function()
@@ -213,7 +214,7 @@ describe("Orders tab models", function()
 end)
 
 describe("Orders tab frames", function()
-  local ns, W, T, reg, refreshed, queued, tooltip, benchmarks, container
+  local ns, W, T, reg, refreshed, queued, tooltip, benchmarks, container, exports, exportResult
 
   local function snapshot(views)
     local orders = {}
@@ -235,7 +236,8 @@ describe("Orders tab frames", function()
   end
 
   before_each(function()
-    reg, refreshed, queued, benchmarks, container = {}, {}, {}, {}, nil
+    reg, refreshed, queued, benchmarks, container, exports = {}, {}, {}, {}, nil, {}
+    exportResult = { true, { added = 2, skipped = 0 } }
     tooltip = { lines = {} }
     ns, W = P2.boot({ GameTooltip = {
       SetOwner = function(_, owner) tooltip.owner = owner; tooltip.lines = {} end,
@@ -248,6 +250,12 @@ describe("Orders tab frames", function()
     local createFrame = _G.CreateFrame
     _G.CreateFrame = function(frameType, ...)
       local frame = createFrame(frameType, ...)
+      local enabled, checked = true, false
+      function frame:Enable() enabled = true end
+      function frame:Disable() enabled = false end
+      function frame:IsEnabled() return enabled end
+      function frame:SetChecked(v) checked = v and true or false end
+      function frame:GetChecked() return checked end
       if frameType == "Button" then
         local text
         function frame:SetText(t) text = t end
@@ -263,8 +271,14 @@ describe("Orders tab frames", function()
       end,
     })
     P2.fake_module(ns, "Queue", { Add = function(_, e) queued[#queued + 1] = e; return #queued end,
-      GetEntries = function() return queued end })
-    P2.load(ns, FILES)
+      GetEntries = function() return queued end,
+      ExportShoppingList = function(_, onRetry, opts)
+        exports[#exports + 1] = { onRetry = onRetry, opts = opts }
+        return unpack(exportResult)
+      end })
+    -- UI/Tabs/Queue.lua loads before the Orders tab (the TOC order): ns.UI.QueueTab.ShoppingText words the export's result.
+    P2.load(ns, { "Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua", "Modules/Ledger.lua",
+      "UI/OrdersPanel.lua", "UI/Tabs/Queue.lua", "UI/Tabs/Orders.lua" })
     T = ns.UI.OrdersTab
     ns.FS:GetModule("Ledger").Benchmark = function(_, recipeID, quality)
       benchmarks[#benchmarks + 1] = { recipeID, quality }
@@ -336,6 +350,176 @@ describe("Orders tab frames", function()
     snapshot({ view({ flags = { recraft = true } }), view({ orderID = 11, flags = { unknownRecipe = true } }) })
     local v = open()
     assert.is_false(v.pool[1].queue:IsShown()); assert.is_false(v.pool[2].queue:IsShown())
+  end)
+
+  describe("selecting orders to shop for", function()
+    local function two_boards()
+      local me = view({ orderID = 10, score = 100 })
+      local alt = view({ orderID = 20, score = 300, charKey = "Alt-Silvermoon", recipeID = 5555, minQuality = 1,
+        input = {} })
+      local recraft = view({ orderID = 30, score = 50, flags = { recraft = true } })
+      ns.FS.db.global.orderBoards = {
+        ["Me-Silvermoon"] = { time = 400, orders = { [10] = me, [30] = recraft }, scopes = {} },
+        ["Alt-Silvermoon"] = { time = 940, orders = { [20] = alt }, scopes = {} } }
+    end
+    local function tick(v, slot, on)
+      local box = v.pool[slot].select
+      box:SetChecked(on ~= false)
+      click(box)
+    end
+    local function plain(v) return (v.status:GetText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
+    local function row_of(v, orderID)
+      for i = 1, v.shown do if v.pool[i].data.orderID == orderID then return i end end
+    end
+
+    it("has a Select column first, with a check button on each row", function()
+      two_boards()
+      local v = open()
+      assert.equal("CheckButton", v.pool[1].select.frameType)
+      assert.equal(v.pool[1].select, v.pool[1].placed[1]); assert.equal("", v.headers[1]:GetText())
+    end)
+
+    it("names the count on the button and disables it with nothing selected", function()
+      two_boards()
+      local v = open()
+      assert.equal("Shop selected (0)", v.shop:GetText()); assert.is_false(v.shop:IsEnabled())
+      assert.equal("Clear selection", v.clear:GetText())
+      tick(v, 1)
+      assert.equal("Shop selected (1)", v.shop:GetText()); assert.is_true(v.shop:IsEnabled())
+      tick(v, 2)
+      assert.equal("Shop selected (2)", v.shop:GetText())
+      tick(v, 2, false)
+      assert.equal("Shop selected (1)", v.shop:GetText())
+      tick(v, 1, false)
+      assert.equal("Shop selected (0)", v.shop:GetText()); assert.is_false(v.shop:IsEnabled())
+    end)
+
+    it("clears the selection", function()
+      two_boards()
+      local v = open()
+      tick(v, 1); tick(v, 2)
+      click(v.clear)
+      assert.same({}, v.selected); assert.equal("Shop selected (0)", v.shop:GetText())
+      assert.is_false(v.pool[1].select:GetChecked()); assert.is_false(v.pool[2].select:GetChecked())
+    end)
+
+    it("keeps the tick on a row when the list is bound again", function()
+      two_boards()
+      local v = open()
+      local slot = row_of(v, 20)
+      tick(v, slot)
+      reg.orders.refresh(container)
+      assert.is_true(v.pool[row_of(v, 20)].select:GetChecked())
+      assert.is_false(v.pool[row_of(v, 10)].select:GetChecked())
+    end)
+
+    it("exports the selected orders' missing reagents under the orders list name, each on its own character", function()
+      two_boards()
+      local v = open()
+      tick(v, row_of(v, 10)); tick(v, row_of(v, 20))
+      click(v.shop)
+      assert.equal(1, #exports)
+      local opts = exports[1].opts
+      assert.equal("FabricationStation Orders", opts.listName)
+      table.sort(opts.entries, function(a, b) return a.orderID < b.orderID end)
+      assert.equal(2, #opts.entries)
+      assert.same({ 4444, "Me-Silvermoon", 10, 3 }, { opts.entries[1].recipeID, opts.entries[1].charKey, opts.entries[1].orderID,
+        opts.entries[1].targetQuality })
+      assert.same({ 5555, "Alt-Silvermoon", 20, 1 }, { opts.entries[2].recipeID, opts.entries[2].charKey, opts.entries[2].orderID,
+        opts.entries[2].quantity })
+      assert.is_function(exports[1].onRetry)
+      assert.equal("Shopping list updated (2 items)", plain(v))
+      assert.equal(0, #queued)   -- shopping adds nothing to the queue
+    end)
+
+    it("skips a recraft order in the selection and says how many", function()
+      two_boards()
+      local v = open()
+      tick(v, row_of(v, 10)); tick(v, row_of(v, 30))
+      click(v.shop)
+      assert.equal(1, #exports[1].opts.entries); assert.equal(10, exports[1].opts.entries[1].orderID)
+      assert.is_truthy(plain(v):find("1 order skipped: recraft or unknown recipe", 1, true))
+      assert.is_truthy(plain(v):find("Shopping list updated (2 items)", 1, true))
+    end)
+
+    it("exports nothing and says so when every selected order is skipped", function()
+      two_boards()
+      local v = open()
+      tick(v, row_of(v, 30))
+      click(v.shop)
+      assert.equal(0, #exports)
+      assert.equal("1 order skipped: recraft or unknown recipe", plain(v))
+    end)
+
+    it("counts several skipped orders with the plural text", function()
+      two_boards()
+      ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[31] = view({ orderID = 31, score = 40, flags = { unknownRecipe = true } })
+      local v = open()
+      tick(v, row_of(v, 30)); tick(v, row_of(v, 31)); tick(v, row_of(v, 10))
+      click(v.shop)
+      assert.is_truthy(plain(v):find("2 orders skipped: recraft or unknown recipe", 1, true))
+      assert.equal(1, #exports[1].opts.entries)
+    end)
+
+    it("shows the failure line of an export", function()
+      two_boards()
+      exportResult = { false, "noAuctionator" }
+      local v = open()
+      tick(v, row_of(v, 10))
+      click(v.shop)
+      assert.is_truthy(v.status:GetText():find("Auctionator not available", 1, true))
+    end)
+
+    it("shows the retry's result on the status line when item names arrive later", function()
+      two_boards()
+      exportResult = { true, { added = 0, skipped = 2, loading = true } }
+      local v = open()
+      tick(v, row_of(v, 10))
+      click(v.shop)
+      assert.is_truthy(v.status:GetText():find("Loading item names", 1, true))
+      exports[1].onRetry(true, { added = 2, skipped = 0 })
+      assert.is_truthy(v.status:GetText():find("Shopping list updated (2 items)", 1, true))
+    end)
+
+    it("exports a character's own copy when both boards hold the same order id", function()
+      two_boards()
+      ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[10] = view({ orderID = 10, score = 900,
+        charKey = "Alt-Silvermoon", recipeID = 7777 })
+      local v = open()
+      tick(v, 1)   -- the better-scored copy, the Alt's
+      click(v.shop)
+      assert.equal(1, #exports[1].opts.entries)
+      assert.same({ 7777, "Alt-Silvermoon" }, { exports[1].opts.entries[1].recipeID, exports[1].opts.entries[1].charKey })
+    end)
+
+    it("drops selected orders that left the list", function()
+      two_boards()
+      local v = open()
+      tick(v, row_of(v, 10)); tick(v, row_of(v, 20))
+      assert.equal("Shop selected (2)", v.shop:GetText())
+      ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[20] = nil
+      reg.orders.refresh(container)
+      assert.same({ [10] = true }, v.selected); assert.equal("Shop selected (1)", v.shop:GetText())
+      click(v.shop)
+      assert.equal(1, #exports[1].opts.entries)
+    end)
+
+    it("drops a selection a filter now hides", function()
+      two_boards()
+      local v = open()
+      tick(v, row_of(v, 20))
+      click(v.characters)   -- this character only
+      assert.same({}, v.selected); assert.equal("Shop selected (0)", v.shop:GetText())
+    end)
+
+    it("says so when the queue cannot export", function()
+      two_boards()
+      ns.FS:GetModule("Queue").ExportShoppingList = nil
+      local v = open()
+      tick(v, 1)
+      click(v.shop)
+      assert.is_truthy(v.status:GetText():find("The queue is not available", 1, true))
+    end)
   end)
 
   it("shows the tip benchmark for the recipe and minimum quality in the row tooltip", function()
@@ -454,44 +638,54 @@ describe("Orders tab frames", function()
       container:GetScript("OnSizeChanged")(container, width, 500)
     end
 
-    it("lays Type out from the left edge and Item between Character and Customer, in the header and the rows", function()
+    -- Cell indices: 1 Select, 2 Type, 3 Character, 4 Item, 5 Customer, 6 Tip, ..., 11 the Queue button.
+    it("lays Select out from the left edge and Item between Character and Customer, in the header and the rows", function()
       snapshot({ view() })
       local v = open(900)
       for _, set in ipairs({ { parent = v.headerBar, cells = v.headers }, { parent = v.pool[1], cells = v.pool[1].placed } }) do
-        local typeCell, character, item, customer, action = set.cells[1], set.cells[2], set.cells[3], set.cells[4], set.cells[10]
-        assert.same({ "LEFT", set.parent, "LEFT", 6, 0 }, point(typeCell)); assert.equal(48, typeCell:GetWidth())
+        local select, typeCell, character, item, customer, action = set.cells[1], set.cells[2], set.cells[3], set.cells[4],
+          set.cells[5], set.cells[11]
+        assert.same({ "LEFT", set.parent, "LEFT", 6, 0 }, point(select)); assert.equal(20, select:GetWidth())
+        assert.same({ "LEFT", select, "RIGHT", 4, 0 }, point(typeCell)); assert.equal(48, typeCell:GetWidth())
         assert.same({ "LEFT", typeCell, "RIGHT", 4, 0 }, point(character)); assert.equal(80, character:GetWidth())
         assert.same({ "LEFT", character, "RIGHT", 4, 0 }, point(item, 1))
         assert.same({ "RIGHT", customer, "LEFT", -4, 0 }, point(item, 2))
         assert.same({ "RIGHT", set.parent, "RIGHT", -6, 0 }, point(action))
-        assert.same({ "RIGHT", set.cells[5], "LEFT", -4, 0 }, point(customer)); assert.equal(90, customer:GetWidth())
+        assert.same({ "RIGHT", set.cells[6], "LEFT", -4, 0 }, point(customer)); assert.equal(90, customer:GetWidth())
         assert.is_true(customer:IsShown()); assert.is_true(typeCell:IsShown()); assert.is_true(character:IsShown())
+        assert.is_true(select:IsShown())
       end
     end)
 
-    it("hides Character, then Customer, then Type as the window narrows, and brings them back when wider", function()
+    it("hides Character, then Customer, then Type as the window narrows, keeps Select, and brings them back when wider", function()
       snapshot({ view() })
       local v = open(516)
       local r = v.pool[1]
       for _, cells in ipairs({ v.headers, r.placed }) do
-        assert.is_false(cells[2]:IsShown()); assert.is_false(cells[4]:IsShown()); assert.is_true(cells[1]:IsShown())
-        assert.same({ "LEFT", cells[1], "RIGHT", 4, 0 }, point(cells[3], 1))
-        assert.same({ "RIGHT", cells[5], "LEFT", -4, 0 }, point(cells[3], 2))
+        assert.is_false(cells[3]:IsShown()); assert.is_false(cells[5]:IsShown()); assert.is_false(cells[2]:IsShown())
+        assert.is_true(cells[1]:IsShown())
+        assert.same({ "LEFT", cells[1], "RIGHT", 4, 0 }, point(cells[4], 1))
+        assert.same({ "RIGHT", cells[6], "LEFT", -4, 0 }, point(cells[4], 2))
       end
       resize(620)
       for _, cells in ipairs({ v.headers, r.placed }) do
-        assert.is_false(cells[2]:IsShown()); assert.is_true(cells[4]:IsShown())
+        assert.is_false(cells[3]:IsShown()); assert.is_false(cells[5]:IsShown()); assert.is_true(cells[2]:IsShown())
+      end
+      resize(710)
+      for _, cells in ipairs({ v.headers, r.placed }) do
+        assert.is_true(cells[3]:IsShown()); assert.is_true(cells[5]:IsShown())
       end
       resize(400)
       for _, cells in ipairs({ v.headers, r.placed }) do
-        assert.is_false(cells[2]:IsShown()); assert.is_false(cells[4]:IsShown()); assert.is_false(cells[1]:IsShown())
+        assert.is_false(cells[3]:IsShown()); assert.is_false(cells[5]:IsShown()); assert.is_false(cells[2]:IsShown())
+        assert.is_true(cells[1]:IsShown())
       end
-      assert.same({ "LEFT", r, "LEFT", 6, 0 }, point(r.placed[3], 1))
+      assert.same({ "LEFT", r.placed[1], "RIGHT", 4, 0 }, point(r.placed[4], 1))
       resize(900)
       for _, cells in ipairs({ v.headers, r.placed }) do
-        assert.is_true(cells[1]:IsShown()); assert.is_true(cells[2]:IsShown()); assert.is_true(cells[4]:IsShown())
+        assert.is_true(cells[2]:IsShown()); assert.is_true(cells[3]:IsShown()); assert.is_true(cells[5]:IsShown())
       end
-      assert.same({ "LEFT", r.placed[2], "RIGHT", 4, 0 }, point(r.placed[3], 1))
+      assert.same({ "LEFT", r.placed[3], "RIGHT", 4, 0 }, point(r.placed[4], 1))
     end)
 
     it("keeps the header and status lines apart: a status takes the right 45%, else the header takes it all", function()
@@ -534,7 +728,7 @@ describe("Orders tab frames", function()
       assert.same({ 20, 30, 10 }, ids(v))
       assert.same({ "Alt", "Far-Draenor", "Me" }, { v.pool[1].cells.character:GetText(), v.pool[2].cells.character:GetText(),
         v.pool[3].cells.character:GetText() })
-      assert.equal("Character", v.headers[2]:GetText())
+      assert.equal("Character", v.headers[3]:GetText())
       assert.equal("Orders from 3 characters \194\183 next expires in 1h", v.header:GetText())
     end)
 

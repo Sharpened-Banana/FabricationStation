@@ -338,6 +338,20 @@ function Queue:GetMissingReagents(charKey)
   return missing_total(entries)
 end
 
+-- The same for any list of entries (not the stored queue): { [itemID] = qty } still to get. Only entries with a number
+-- recipeID, a quantity of 1 or more and a charKey count (the others are skipped). Each character's own holdings count
+-- for that character; the warband count is taken off once when queueUseWarband is on. Reads only.
+function Queue:GetMissingForEntries(entries)
+  local usable = {}
+  for _, e in ipairs(type(entries) == "table" and entries or {}) do
+    if type(e) == "table" and type(e.recipeID) == "number" and type(e.quantity) == "number" and e.quantity >= 1
+      and e.charKey ~= nil then
+      usable[#usable + 1] = e
+    end
+  end
+  return missing_total(usable)
+end
+
 -- The same for one entry (real or restock) on its own; empty for an unknown id.
 function Queue:GetEntryMissing(id)
   local e = find_entry(id)

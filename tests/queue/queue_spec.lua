@@ -195,6 +195,23 @@ describe("Queue", function()
       world.schematics[9001] = nil
       assert.same({}, Q:GetMissingReagents(nil))
     end)
+    it("GetMissingForEntries sums several characters' entries and takes off each one's holdings", function()
+      world.items["Main-Realm"][1001] = { bags = 3, bank = 0, reagentBank = 0 }
+      local entries = { { recipeID = 9001, quantity = 2, charKey = "Main-Realm" },
+        { recipeID = 9001, quantity = 1, charKey = "Alt-Realm" } }
+      assert.same({ [1001] = 3, [2002] = 3 }, Q:GetMissingForEntries(entries))   -- 1001: 4 − 3 + 2; 2002: 2 + 1
+      world.warband[1001] = 1
+      assert.same({ [1001] = 2, [2002] = 3 }, Q:GetMissingForEntries(entries))   -- the warband comes off once
+      ns.FS.db.global.settings.crafting = { queueUseWarband = false }
+      assert.same({ [1001] = 3, [2002] = 3 }, Q:GetMissingForEntries(entries))
+    end)
+    it("GetMissingForEntries ignores the queue and skips entries without a recipe, quantity or character", function()
+      assert.same({ [1001] = 2, [2002] = 1 }, Q:GetMissingForEntries({ { recipeID = 9001, quantity = 1, charKey = "Main-Realm" },
+        { quantity = 1, charKey = "Main-Realm" }, { recipeID = 9001, quantity = 0, charKey = "Main-Realm" },
+        { recipeID = 9001, quantity = 1 }, { recipeID = "x", quantity = 1, charKey = "Main-Realm" } }))
+      assert.same({}, Q:GetMissingForEntries({})); assert.same({}, Q:GetMissingForEntries(nil))
+      assert.equals(1, #Q:GetEntries())   -- the stored entry (Alt, 3 crafts) is not part of it
+    end)
     it("reports one entry's shortfall, warband subtracted when enabled", function()
       local id = Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
       world.warband[1001] = 1

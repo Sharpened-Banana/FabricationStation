@@ -9,15 +9,22 @@ local L = ns.L
 -- and two buttons beneath it choose the characters (all, or the one logged in) and the sort (best, expiring,
 -- character), saved in the same filters; the list shows Type, Character, Item, Customer, Tip, Net, Score, Risk and
 -- Expires per order (best first unless sorted otherwise), tinted by the customer highlight
--- (OrdersPanel.RowModel), with an Add to Queue button (OrdersPanel.QueueEntry / AddToQueue: the same entry and
--- duplicate check as the board's row cells) and a tooltip with the customer, the full tip and net, the risks, the
+-- (OrdersPanel.RowModel), with a check button first on each row (the selection, below) and an Add to Queue button
+-- (OrdersPanel.QueueEntry / AddToQueue: the same entry and duplicate check as the board's row cells) and a tooltip with the customer, the full tip and net, the risks, the
 -- reasons numbers are missing and the player's own tip history for the recipe (Ledger:Benchmark). The list is a
 -- pooled virtual list in a plain scroll frame, as in the Recipes and Queue tabs. Own frames only; handlers run
 -- isolated.
 --
+-- Batch prep: the check buttons build a session-only selection (view.selected = { [orderID] = true }, dropped for
+-- orders no longer listed). Shop selected (n) builds the Add to Queue entry of each selected order from the order as
+-- it is now on its own character's board (current_view; recraft and unknown recipes have none and are counted) and
+-- sends them to Queue:ExportShoppingList as the Auctionator list "FabricationStation Orders"; Clear selection empties
+-- it. Nothing is queued and nothing is bought. A public order on two boards has one tick (its id): the best-scored copy
+-- is the one shopped for.
+--
 -- Width: the Item column keeps at least MIN_ITEM px; when the window is too narrow the Character column is hidden
--- first, then Customer, then Type (Tab.Layout, applied to the column headers and the rows again on every size change). The cells
--- are compact (tip "1,234g", risk count "!2"); the tooltip carries the full values.
+-- first, then Customer, then Type, never the check column (Tab.Layout, applied to the column headers and the rows
+-- again on every size change). The cells are compact (tip "1,234g", risk count "!2"); the tooltip carries the full values.
 --
 -- While the tab is shown it refreshes every TICK_SECONDS (ages move on, expired orders drop out): each refresh
 -- reschedules one debounced tick, which asks MainWindow:RefreshTab, a no-op once the tab is hidden, so the ticking
@@ -44,6 +51,8 @@ local STATUS_SECONDS = 5
 local ROW_HEIGHT, HEADER_HEIGHT, LINE_HEIGHT, CHECK_SIZE = 22, 20, 18, 24
 local PAD, GAP = 6, 4
 local CHECKS_PER_LINE, CHECK_COLUMN = 3, 160
+local SELECT_BOX = 20
+local CLEAR_WIDTH = 110
 local STATUS_SHARE = 0.45
 local MIN_ITEM = 120
 local DEFAULT_VIEW_HEIGHT = 400   -- before the scroll frame has a size
@@ -63,6 +72,7 @@ local TYPE_LABELS = { public = L["Public"], guild = L["Guild"], personal = L["Pe
 -- Left to right. The flexible Item column takes the width the fixed ones leave over; the columns before it are laid
 -- out from the left edge, the ones after it from the right edge.
 local COLUMNS = {
+  { key = "select", label = "", width = 20 },
   { key = "type", label = L["Type"], width = 48 },
   { key = "character", label = L["Character"], width = 80 },
   { key = "item", label = L["Item"], flex = true },
@@ -353,6 +363,7 @@ local function off_text(O)
 end
 
 local apply_layout   -- below; the status line's width follows its text
+local update_rows     -- below; a selection change rebinds the rows shown
 
 local function set_status(message, tone)
   status, statusAt = color(TONES[tone] or "", message), ns.FS:Now()
@@ -392,6 +403,76 @@ local function add_to_queue(row)
   if not current then return set_status(L["That order is gone or has expired"], "warn") end
   local message, tone = panel().AddToQueue(current)
   if message then set_status(message, tone) end
+end
+
+-- The selection's buttons: the count on Shop selected, which is off with nothing selected.
+local function update_selection()
+  if not view then return end
+  local n = 0
+  for _ in pairs(view.selected) do n = n + 1 end
+  view.shop:SetText(L["Shop selected (%d)"]:format(n))
+  if n > 0 then view.shop:Enable() else view.shop:Disable() end
+end
+
+local function select_order(orderID, on)
+  if not view or orderID == nil then return end
+  view.selected[orderID] = on and true or nil
+  update_selection()
+  update_rows()
+end
+
+local function clear_selection()
+  if not view then return end
+  view.selected = {}
+  update_selection()
+  update_rows()
+end
+
+-- Shop selected: one Add to Queue entry per selected order (the first listed row of an id, i.e. the best-scored copy; the
+-- order as it is now on that row's own character's board), sent to the shopping list "FabricationStation Orders".
+-- Orders with no entry (recraft, unknown recipe, or gone) are counted on the status line.
+local function shop_selected()
+  if not view then return end
+  local queue = module("Queue")
+  if not (queue and queue.ExportShoppingList) then return set_status(L["The queue is not available"], "bad") end
+  local O = module("Orders")
+  local entries, skipped, handled = {}, 0, {}
+  for _, row in ipairs(view.rows) do
+    local id = row.orderID
+    if id ~= nil and view.selected[id] and not handled[id] then
+      handled[id] = true
+      local current = current_view(O, row)
+      local entry = current and panel().QueueEntry(current) or nil
+      if entry then
+        entry.charKey = entry.charKey or row.character
+        entries[#entries + 1] = entry
+      else
+        skipped = skipped + 1
+      end
+    end
+  end
+  local skippedText = nil
+  if skipped > 0 then
+    skippedText = (skipped == 1 and L["%d order skipped: recraft or unknown recipe"]
+      or L["%d orders skipped: recraft or unknown recipe"]):format(skipped)
+  end
+  if #entries == 0 then
+    if skippedText then set_status(skippedText, "warn") end
+    return
+  end
+  local function show(ok, info)
+    local qt = ns.UI.QueueTab
+    local text = qt and qt.ShoppingText and qt.ShoppingText(ok, info) or ""
+    local loading = type(info) == "table" and info.loading
+    local partial = type(info) == "table" and (info.skipped or 0) > 0
+    local tone = "good"
+    if not ok or skippedText or (partial and not loading) then tone = "warn" elseif partial then tone = "plain" end
+    if skippedText then text = text .. DOT .. skippedText end
+    set_status(text, tone)
+  end
+  -- The second call comes later, when the item names the first export waited for have arrived.
+  local ok, info = queue:ExportShoppingList(show, { entries = entries, listName = L["FabricationStation Orders"] })
+  show(ok, info)
 end
 
 local function show_tooltip(owner)
@@ -533,11 +614,22 @@ local function create_row()
   row.background:SetAllPoints(row)
   row.cells, row.placed = {}, {}
   for i = 1, ACTION - 1 do
-    local cell = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    cell:SetJustifyH(COLUMNS[i].right and "RIGHT" or "LEFT")
-    cell:SetWordWrap(false)
-    row.cells[COLUMNS[i].key] = cell
-    row.placed[i] = cell
+    if COLUMNS[i].key == "select" then
+      local box = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+      box:SetSize(SELECT_BOX, SELECT_BOX)
+      -- SetScript is deliberate: the row and the button are our own.
+      box:SetScript("OnClick", ns.FS:Wrap(SOURCE, function(self)
+        if row.data then select_order(row.data.orderID, self:GetChecked()) end
+      end))
+      row.select = box
+      row.placed[i] = box
+    else
+      local cell = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+      cell:SetJustifyH(COLUMNS[i].right and "RIGHT" or "LEFT")
+      cell:SetWordWrap(false)
+      row.cells[COLUMNS[i].key] = cell
+      row.placed[i] = cell
+    end
   end
   local button = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   button:SetHeight(ROW_HEIGHT - 2)
@@ -570,6 +662,7 @@ local function bind_row(row, data, index)
     row.background:SetColorTexture(1, 1, 1, index % 2 == 0 and 0.04 or 0)
   end
 
+  row.select:SetChecked(data.orderID ~= nil and view.selected[data.orderID] == true)
   request_item(data.item)
   local texts = Tab.CellTexts(data, model)
   for key, cell in pairs(row.cells) do cell:SetText(texts[key]) end
@@ -578,7 +671,7 @@ local function bind_row(row, data, index)
 end
 
 -- Binds the pooled rows to the part of the list in view.
-local function update_rows()
+function update_rows()
   if not view then return end
   local height = view.scroll:GetHeight()
   if type(height) ~= "number" or height <= 0 then height = DEFAULT_VIEW_HEIGHT end
@@ -657,6 +750,15 @@ local function refresh()
   local model = Tab.Model(orders, boardTimes, f, now)
   view.rows = model.rows
   view.headerTooltip = model.headerTooltip
+  -- Ticks of orders no longer listed (expired, claimed, filtered out, left the board) are dropped.
+  local listed = {}
+  for _, r in ipairs(view.rows) do
+    if r.orderID ~= nil then listed[r.orderID] = true end
+  end
+  for orderID in pairs(view.selected) do
+    if not listed[orderID] then view.selected[orderID] = nil end
+  end
+  update_selection()
   view.header:SetText(model.header)
   update_controls(f)
   for _, check in ipairs(view.checks) do check.button:SetChecked(f ~= nil and check.get(f) or false) end
@@ -729,6 +831,15 @@ local function create_control(bar, left, top, change)
   return button
 end
 
+-- A plain button in the bar (our own frame; SetScript is deliberate) whose click runs action.
+local function create_button(bar, left, top, width, action)
+  local button = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
+  button:SetSize(width, CONTROL_HEIGHT - 2)
+  button:SetPoint("TOPLEFT", bar, "TOPLEFT", left, -top)
+  button:SetScript("OnClick", ns.FS:Wrap(SOURCE, action))
+  return button
+end
+
 local function create_headers(container, top)
   local bar = CreateFrame("Frame", nil, container)
   bar:SetHeight(HEADER_HEIGHT)
@@ -752,7 +863,8 @@ local function build(container)
   local filterLabelTop = 4 + LINE_HEIGHT
   local checksTop = filterLabelTop + LINE_HEIGHT
   local controlsTop = checksTop + lines * CHECK_SIZE + 2
-  local headersTop = controlsTop + CONTROL_HEIGHT + 2
+  local selectionTop = controlsTop + CONTROL_HEIGHT + 2
+  local headersTop = selectionTop + CONTROL_HEIGHT + 2
   local scrollTop = headersTop + HEADER_HEIGHT + 2
 
   local bar = CreateFrame("Frame", nil, container)
@@ -760,7 +872,8 @@ local function build(container)
   bar:SetPoint("TOPRIGHT", container, "TOPRIGHT", -PAD, 0)
   bar:SetHeight(headersTop)
 
-  local created = { container = container, rows = {}, pool = {}, shown = 0, checks = {}, filterLines = lines }
+  local created = { container = container, rows = {}, pool = {}, shown = 0, checks = {}, filterLines = lines,
+    selected = {} }
   created.header = bar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   created.header:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, -4)
   created.header:SetJustifyH("LEFT")
@@ -786,6 +899,11 @@ local function build(container)
     for i, known in ipairs(SORTS) do if known == sort_choice(f) then index = i end end
     f.sort = SORTS[index % #SORTS + 1]
   end)
+  view = created   -- the selection buttons' handlers read it
+  created.shop = create_button(bar, 0, selectionTop, CONTROL_WIDTH, shop_selected)
+  created.clear = create_button(bar, CONTROL_WIDTH + GAP, selectionTop, CLEAR_WIDTH, clear_selection)
+  created.clear:SetText(L["Clear selection"])
+  update_selection()
   created.headerBar, created.headers = create_headers(container, headersTop)
 
   local scroll = CreateFrame("ScrollFrame", nil, container)
