@@ -10,10 +10,12 @@ local _, ns = ...
 --
 -- Bar: a search box (recipe or crafter name, 0.3 s after the last keystroke), a profession button that cycles through
 -- the professions the directory knows ("All professions" first; as the Planner's pickers, the stubs have no dropdown)
--- and the "Ask guild" button. A click on a row selects its recipe and opens a whisper to the crafter
--- (ChatFrameUtil.SendTell, from the click only: nothing is sent, the player types and sends). "Ask guild" calls
--- GuildNative:Query for the selected recipe: this tab is the one place that starts native queries (Guild's tooltip
--- and panel lines only read the cache), so it checks settings.guild.useNative itself. It is disabled without a selected
+-- and the "Whisper" and "Ask guild" buttons. A click on a row only selects it (its recipe for "Ask guild", its crafter
+-- for "Whisper"); a double click on a row or the Whisper button opens a whisper (ChatFrameUtil.SendTell, from the click
+-- only: nothing is sent, the player types and sends). The whisper goes to the crafter, or for a copy the character has
+-- not confirmed ("<char> (via <owner>)") to the owner who shared it, who is the one known to be online. "Ask guild"
+-- calls GuildNative:Query for the selected recipe (the profession panel's "Ask guild" is the other caller; Guild's
+-- tooltip and panel lines only read the cache), so it checks settings.guild.useNative itself. It is disabled without a selected
 -- row, while the chat gate is locked ("Sync paused (instance)"), when the setting is off, outside a guild and while
 -- Guild is off. The answer is cached by GuildNative and announced through FS_GUILD_CHANGED, which refreshes the tab.
 --
@@ -42,7 +44,7 @@ local SEARCH_KEY, SEARCH_DELAY = "guildTab.search", 0.3
 local TICK_KEY, TICK_SECONDS = "guildTab.tick", 60
 local PAD = 6
 local LINE_TOP, ROW2_TOP, CONTROL_HEIGHT, CONTROL_GAP = 4, 30, 22, 4
-local SEARCH_WIDTH, PICKER_WIDTH, ASK_WIDTH = 170, 150, 100
+local SEARCH_WIDTH, PICKER_WIDTH, ASK_WIDTH, WHISPER_WIDTH = 170, 150, 100, 72
 local BAR_HEIGHT = ROW2_TOP + CONTROL_HEIGHT + 2                                   -- 54
 local GRID_TOP = BAR_HEIGHT + 2                                                    -- 56
 local FOOTER_HEIGHT, FOOTER_BOTTOM = 18, 2
@@ -177,6 +179,16 @@ function Tab.FooterText(s)
   return table.concat(parts, DOT)
 end
 
+-- A crafter row -> who a whisper goes to: the owner of an unverified addon copy (the "(via owner)" rows: the one who
+-- shared it), otherwise the crafter.
+function Tab.WhisperTarget(crafter)
+  if type(crafter) ~= "table" then return nil end
+  if crafter.source == "addon" and crafter.verified == false and type(crafter.owner) == "string" and crafter.owner ~= "" then
+    return crafter.owner
+  end
+  return crafter.name
+end
+
 -- Guild:Status() -> the footer tooltip lines.
 function Tab.FooterTooltip(s)
   local G = guild()
@@ -279,7 +291,7 @@ local function update_status_line()
   elseif view.selected then
     text = L["Selected: %s"]:format(view.selected.recipeName)
   else
-    text = L["Click a row to whisper the crafter"]
+    text = L["Click a row to select it; double-click it or click Whisper to whisper the crafter"]
   end
   view.status:SetText(tone and (tone .. text .. "|r") or text)
   view.statusText = text
@@ -290,6 +302,7 @@ local function update_ask_button()
   local ok, reason = Tab.AskState(ask_state())
   view.askButton:SetEnabled(ok)
   view.askReason = reason
+  view.whisperButton:SetEnabled(view.selected ~= nil and view.selected.whisper ~= nil)
 end
 
 local function set_notice(text)
@@ -319,16 +332,27 @@ local function whisper(name)
   end
 end
 
+-- A click selects the row: its recipe for "Ask guild", its whisper target for "Whisper". Nothing else happens.
 local function on_row_click(row)
   local entry = row.entry
   local G = guild()
   view.selected = { recipeID = entry.recipeID, skillLineID = entry.skillLineID, recipeName = entry.recipeName,
-    guildKey = G and G:GetGuildKey() or nil }
+    guildKey = G and G:GetGuildKey() or nil, whisper = Tab.WhisperTarget(entry.crafter) }
   notice = nil
-  whisper(entry.crafter.name)
   update_status_line()
   update_ask_button()
   view.grid:Update()
+end
+
+local function whisper_selected()
+  local selected = view and view.selected
+  if selected and selected.whisper then whisper(selected.whisper) end
+end
+
+-- A double click: selects the row and opens the whisper.
+local function on_row_double_click(row)
+  on_row_click(row)
+  whisper_selected()
 end
 
 local function cycle_profession()
@@ -535,6 +559,25 @@ local function build_bar(container, created)
   ask:SetEnabled(false)
   created.askButton = ask
 
+  local tell = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
+  tell:SetSize(WHISPER_WIDTH, CONTROL_HEIGHT)
+  tell:SetPoint("TOPRIGHT", bar, "TOPRIGHT", -(ASK_WIDTH + CONTROL_GAP), -LINE_TOP)
+  tell:SetText(L["Whisper"])
+  tell:SetMotionScriptsWhileDisabled(true)
+  tell:SetScript("OnClick", ns.FS:Wrap(SOURCE, whisper_selected))
+  tell:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
+    local selected = view and view.selected
+    if selected and selected.whisper then
+      show_lines(self, { L["Whisper"], L["Opens a whisper to %s. Nothing is sent: you type and send it yourself."]:format(
+        ns.Social.Util.EscapePipes(selected.whisper)) })
+    else
+      show_lines(self, { L["Whisper"], L["Click a row first"] })
+    end
+  end))
+  tell:SetScript("OnLeave", hide_tooltip)
+  tell:SetEnabled(false)
+  created.whisperButton = tell
+
   local status = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   status:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, -ROW2_TOP)
   status:SetHeight(CONTROL_HEIGHT)
@@ -569,7 +612,7 @@ local function build(container)
 
   local Grid = ns.UI.ExpandGrid
   local grid = Grid.New(container, Tab.COLUMNS, { hideOrder = Tab.HIDE_ORDER, source = SOURCE,
-    onRowClick = on_row_click })
+    onRowClick = on_row_click, onRowDoubleClick = on_row_double_click })
   grid.frame:ClearAllPoints()
   grid.frame:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -GRID_TOP)
   grid.frame:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, GRID_BOTTOM)

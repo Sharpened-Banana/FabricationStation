@@ -736,7 +736,9 @@ describe("Guild tab, settings and diagnostics", function()
       assert.are.equal(150, v.profButton:GetWidth())
       assert.same({ "TOPRIGHT", v.bar, "TOPRIGHT", 0, -4 }, point(v.askButton))
       assert.are.equal(100, v.askButton:GetWidth())
-      assert.is_true(170 + 4 + 150 < 516 - 12 - 100)            -- the three controls never overlap
+      assert.same({ "TOPRIGHT", v.bar, "TOPRIGHT", -104, -4 }, point(v.whisperButton))
+      assert.are.equal(72, v.whisperButton:GetWidth())
+      assert.is_true(170 + 4 + 150 + 4 <= 516 - 12 - 100 - 4 - 72) -- the four controls never overlap
       assert.are.equal(516 - 12, v.status:GetWidth())
       assert.are.equal(178, v.grid.layout.flex)
       resize(716)
@@ -822,15 +824,43 @@ describe("Guild tab, settings and diagnostics", function()
       assert.are.equal(6, v.grid.shownRows)
     end)
 
-    it("whispers the crafter of a clicked row and selects its recipe", function()
+    it("selects a clicked row without whispering anyone", function()
       local v = open()
+      assert.is_false(v.whisperButton:IsEnabled())
       click(row_frame(v.grid, 2))
-      assert.are.same({ { "B-Realm" } }, W.tells)
+      assert.are.same({}, W.tells)
       assert.are.equal(100, v.selected.recipeID)
       assert.truthy(v.status:GetText():find("Everforged Mace", 1, true))
+      assert.is_true(v.whisperButton:IsEnabled())
+    end)
+
+    it("opens a whisper to the crafter only on a double click or the Whisper button", function()
+      local v = open()
+      local row = row_frame(v.grid, 2)
+      row:GetScript("OnDoubleClick")(row)
+      assert.are.same({ { "B-Realm" } }, W.tells)
+      assert.are.equal(100, v.selected.recipeID)
       click(row_frame(v.grid, 5))
+      assert.are.equal(1, #W.tells)
+      click(v.whisperButton)
       assert.are.same({ "B-Realm", "D-Realm" }, { W.tells[1][1], W.tells[2][1] })
       assert.are.equal(200, v.selected.recipeID)
+    end)
+
+    it("whispers the owner of a copy the character did not confirm (a '(via owner)' row)", function()
+      store("Twink-Realm", "Main-Realm", { verified = false, recipes = { [101] = { 5, 5 } } })
+      local v = open()
+      local target
+      for i = 1, v.grid.shownRows do
+        if plain(row_frame(v.grid, i).cells.crafter:GetText()):find("Twink-Realm (via Main-Realm)", 1, true) then
+          target = row_frame(v.grid, i)
+        end
+      end
+      click(target)
+      hover(v.whisperButton)
+      assert.truthy(table.concat(tooltip.lines, "\n"):find("Main-Realm", 1, true))
+      click(v.whisperButton)
+      assert.are.same({ { "Main-Realm" } }, W.tells)
     end)
 
     it("never sends a chat message itself", function()

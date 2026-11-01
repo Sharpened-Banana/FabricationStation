@@ -165,6 +165,19 @@ describe("ExpandGrid.New", function()
     assert.is_false(grid:IsExpanded("k2"))
   end)
 
+  it("hands a double click to opts.onRowDoubleClick (row, frame), and sets none without it", function()
+    local double = {}
+    local grid = G.New(parent, COLS, { onRowClick = function() end,
+      onRowDoubleClick = function(row, frame) double[#double + 1] = { row.key, frame } end })
+    grid:SetRows(rows(3))
+    local r1 = find_row(grid, "k1")
+    r1:GetScript("OnDoubleClick")(r1)
+    assert.same({ { "k1", r1 } }, double)
+    local single = G.New(parent, COLS, {})
+    single:SetRows(rows(1))
+    assert.is_nil(find_row(single, "k1"):GetScript("OnDoubleClick"))
+  end)
+
   it("does not expand a row without detail, and keeps an expansion across SetRows", function()
     local grid = G.New(parent, COLS, {})
     grid:SetRows(rows(3, 2))

@@ -825,16 +825,17 @@ within about a second, "Ask guild" is disabled, and nothing is sent. After leavi
 and queued messages go out. If the footer pauses for a different situation (a world quest area, a scenario) or does not
 pause in a dungeon, report which Gate reason (hover the footer) it showed.
 
-P4-16. **Ask guild.** Click a row, then "Ask guild". Expected: the status line says "Asking the guild...", then "Guild answered:
+P4-16. **Ask guild.** Click a row (it is only selected: no whisper opens), then "Ask guild". Expected: the status line says "Asking the guild...", then "Guild answered:
 N can craft this" within about 5 s, and the guildmates who know the recipe but do not run the addon appear as extra rows
 with Source "Guild query" and no quality. The tab passes the skill line ID of the row (the profile's line key for addon
 rows, the answer's for cached ones) to `GuildNative:Query`; if the game answers nothing for a recipe the guild does know,
 compare that ID with `GetGuildRecipeInfoPostQuery()`'s first return (P4-9) and report both. With "Also use the game's guild
 recipe list" turned off in the Guild settings the button is disabled and asks nothing.
 
-P4-17. **Whisper after a click (preflight row 42).** Click a crafter row: the chat box opens on `/w <name>`. Type a word
-and press Enter, in the open world and again inside an instance. Expected: it sends with no "blocked" or "forbidden"
-message (the tab only calls `ChatFrameUtil.SendTell` from the click). A cross-realm guildmate must open the whisper as
+P4-17. **Whisper after a click (preflight row 42).** Double-click a crafter row, or click it and then "Whisper": the chat
+box opens on `/w <name>` (for a "(via owner)" row on the owner's name). Type a word and press Enter, in the open world
+and again inside an instance. Expected: it sends with no "blocked" or "forbidden" message (the tab only calls
+`ChatFrameUtil.SendTell` from the click). A cross-realm guildmate must open the whisper as
 `Name-Realm`; report if the box opens empty or on the wrong name.
 
 P4-18. **Guild settings.** In `/fs settings` > Guild: switching "What to share" or "Which characters to share" makes

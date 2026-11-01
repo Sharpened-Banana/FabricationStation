@@ -268,6 +268,11 @@ local function create_row(grid)
     local hook = grid.opts.onRowClick
     if hook then hook(self.data, self) else grid:Toggle(self.data.key) end
   end))
+  if grid.opts.onRowDoubleClick then
+    row:SetScript("OnDoubleClick", ns.FS:Wrap(grid.source, function(self)
+      if self.data then grid.opts.onRowDoubleClick(self.data, self) end
+    end))
+  end
   row:SetScript("OnEnter", ns.FS:Wrap(grid.source, function(self) show_tooltip(grid, self) end))
   row:SetScript("OnLeave", hide_tooltip)
   return row
@@ -373,8 +378,9 @@ end
 
 -- parent: the frame to fill (the grid's own frame is anchored to its edges; re-anchor grid.frame to place it).
 -- columns: see the file comment. opts = { rowHeight = 20, hideOrder, minFlex = 120, source = "ExpandGrid",
--- onRowClick = fn(row, frame)|nil }. With onRowClick a click on a row calls it instead of opening the row's detail
--- (the Guild tab's rows whisper a crafter and have no detail).
+-- onRowClick = fn(row, frame)|nil, onRowDoubleClick = fn(row, frame)|nil }. With onRowClick a click on a row calls it
+-- instead of opening the row's detail (the Guild tab's rows select a crafter and have no detail); onRowDoubleClick
+-- gets the double click (the Guild tab whispers the crafter).
 function Grid.New(parent, columns, opts)
   opts = opts or {}
   local grid = setmetatable({
