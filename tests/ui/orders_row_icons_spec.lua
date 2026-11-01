@@ -314,18 +314,23 @@ describe("OrdersPanel row icons", function()
       assert.same({ "LEFT", c.coverContent, "LEFT", 4, 0 }, { c.coverSlots[1].icon:GetPoint(1) })
       assert.same({ S, S }, { c.coverSlots[1].icon:GetSize() })
     end)
-    it("colours a count red when you own less than it needs, white otherwise or when unknown", function()
+    it("shows an icon only for a reagent you are short of or cannot be sure you have", function()
       boot()
-      evalResult = allocation({ itemID = 1001, quantity = 3 }, { itemID = 1002, quantity = 4 }, { itemID = 1003, quantity = 2 })
-      owned[1001], owned[1002] = 2, 4   -- short, exactly enough; 1003 unknown (nil)
+      evalResult = allocation({ itemID = 1001, quantity = 3 }, { itemID = 1002, quantity = 4 }, { itemID = 1003, quantity = 2 },
+        { itemID = 1004, quantity = 1 })
+      owned[1001], owned[1002], owned[1004] = 2, 4, 9   -- short; exactly enough; plenty; 1003 unknown (nil)
       local raw = order()
       show_board({ raw })
       local c = cells_of(row_for(raw))
+      assert.equal("reagents", c.coverMode)
+      assert.same({ 901001, 901003 }, files_of(c.coverSlots))   -- 1002 and 1004 are owned: no icon
       local s = c.coverSlots
-      assert.same({ RED, WHITE, WHITE }, { count_color(s[1]), count_color(s[2]), count_color(s[3]) })
-      assert.same({ 2, 4 }, { c.reagentEntries[1].have, c.reagentEntries[2].have })
-      assert.is_nil(c.reagentEntries[3].have)
-      -- none at all is a known 0: red
+      assert.same({ RED, WHITE }, { count_color(s[1]), count_color(s[2]) })   -- short: red; unknown: white
+      assert.same({ 1001, 1003 }, { c.shortEntries[1].itemID, c.shortEntries[2].itemID })
+      -- the tooltip still has all four, owned ones included
+      assert.same({ 2, 4, nil, 9 }, { c.reagentEntries[1].have, c.reagentEntries[2].have, c.reagentEntries[3].have,
+        c.reagentEntries[4].have })
+      -- none at all is a known 0: short, red
       evalResult = allocation({ itemID = 1005, quantity = 2 })
       owned[1005] = 0
       show_board({ order({ orderID = 11 }) })
@@ -369,6 +374,99 @@ describe("OrdersPanel row icons", function()
       assert.same({ true, "+" .. (7 - n), MW }, { c.coverMore:IsShown(), c.coverMore:GetText(), c.coverMore:GetWidth() })
       assert.same({ "LEFT", c.coverContent, "LEFT", 4 + slot_x(n + 1), 0 }, { c.coverMore:GetPoint(1) })
       assert.is_true(c.cover.clips)
+    end)
+  end)
+
+  describe("the Reagents cover: reagents you already have", function()
+    it("hides a reagent you own enough of and shows one you are short of", function()
+      boot()
+      evalResult = allocation({ itemID = 1001, quantity = 3 }, { itemID = 1002, quantity = 4 })
+      owned[1001], owned[1002] = 3, 3   -- exactly enough; one short
+      local raw = order()
+      show_board({ raw })
+      local c = cells_of(row_for(raw))
+      assert.same({ { i = 1, file = 901002, count = "4" } }, shown(c.coverSlots))
+    end)
+    it("shows a reagent whose owned count is unknown", function()
+      boot()
+      evalResult = allocation({ itemID = 1001, quantity = 3 })
+      local raw = order()
+      show_board({ raw })   -- owned[1001] is nil: the game gave no count
+      local c = cells_of(row_for(raw))
+      assert.same({ 901001 }, files_of(c.coverSlots)); assert.same(WHITE, count_color(c.coverSlots[1]))
+    end)
+    it("shows the green check when you own everything you must supply", function()
+      boot()
+      cached[1001], cached[1002] = "Ore", "Silk"
+      evalResult = allocation({ itemID = 1001, quantity = 3 }, { itemID = 1002, quantity = 4 })
+      owned[1001], owned[1002] = 3, 10
+      local raw = order()
+      show_board({ raw })
+      local c = cells_of(row_for(raw))
+      assert.equal("stocked", c.coverMode); assert.is_true(c.cover:IsShown())
+      assert.same({ true, false, 0 }, { c.coverCheck:IsShown(), c.coverQuestion:IsShown(), #shown(c.coverSlots) })
+      c.cover:GetScript("OnEnter")(c.cover)
+      assert.same({ "You have every reagent this order needs from you", "Reagents to supply",
+        "|Hitem:1001|h[Ore]|h: need 3, have 3", "|Hitem:1002|h[Silk]|h: need 4, have 10" }, tooltip.lines)
+    end)
+    it("keeps the customer-provides line for the all-provided check", function()
+      boot()
+      evalResult = allocation({ itemID = 1001, quantity = 3 })
+      owned[1001] = 50
+      local raw = order({ reagents = { reagent(1001, 3) } })
+      show_board({ raw })
+      local c = cells_of(row_for(raw))
+      assert.equal("provided", c.coverMode)
+      c.cover:GetScript("OnEnter")(c.cover)
+      assert.same({ "The customer provides every reagent" }, tooltip.lines)
+    end)
+    it("lists every reagent in the tooltip, owned ones included, short ones in red", function()
+      boot()
+      cached[1001], cached[1002] = "Ore", "Silk"
+      evalResult = allocation({ itemID = 1001, quantity = 3 }, { itemID = 1002, quantity = 4 })
+      owned[1001], owned[1002] = 8, 1
+      local raw = order()
+      show_board({ raw })
+      local c = cells_of(row_for(raw))
+      c.cover:GetScript("OnEnter")(c.cover)
+      assert.same({ "Reagents to supply", "|Hitem:1001|h[Ore]|h: need 3, have 8", "|Hitem:1002|h[Silk]|h: need 4, have 1" },
+        tooltip.lines)
+    end)
+    it("counts only the hidden short reagents in +N", function()
+      boot()
+      -- 7 reagents; the first four are owned. Three short ones fit as icons only if there is room for them all.
+      evalResult = slots_needed(7)
+      for i = 1, 4 do owned[1000 + i] = 5 end
+      local raw = order()
+      show_board({ raw })
+      local c = cells_of(row_for(raw))
+      assert.equal(3, #c.shortEntries)
+      assert.equal(3, #shown(c.coverSlots)); assert.is_false(c.coverMore:IsShown())   -- 3 icons fit: no "+N"
+      -- a wider need: 7 short ones, 2 owned -> 5 short; "+N" counts those not drawn, never the owned ones
+      boot()
+      evalResult = slots_needed(7)
+      for i = 1, 2 do owned[1000 + i] = 5 end
+      raw = order()
+      show_board({ raw })
+      c = cells_of(row_for(raw))
+      local n = fit_count(90 - 2 * 4)
+      assert.equal(5, #c.shortEntries)
+      assert.same({ n, true, "+" .. (5 - n) }, { #shown(c.coverSlots), c.coverMore:IsShown(), c.coverMore:GetText() })
+    end)
+    it("flips a row to the check when a bag change brings the missing reagent", function()
+      boot()
+      evalResult = allocation({ itemID = 1001, quantity = 3 })
+      owned[1001] = 1
+      local raw = order()
+      show_board({ raw })
+      local c = cells_of(row_for(raw))
+      assert.same({ "reagents", true }, { c.coverMode, #shown(c.coverSlots) == 1 })
+      owned[1001] = 3   -- bought
+      W.fire("BAG_UPDATE_DELAYED"); W.advance(0)
+      assert.same({ "stocked", true, 0 }, { c.coverMode, c.coverCheck:IsShown(), #shown(c.coverSlots) })
+      owned[1001] = 0   -- and sold again
+      W.fire("BAG_UPDATE_DELAYED"); W.advance(0)
+      assert.same({ "reagents", false, 1 }, { c.coverMode, c.coverCheck:IsShown(), #shown(c.coverSlots) })
     end)
   end)
 
@@ -803,7 +901,7 @@ describe("OrdersPanel row icons", function()
   describe("bag changes", function()
     local function listening() return rows():IsEventRegistered("BAG_UPDATE_DELAYED") end
 
-    it("refreshes the owned colours on BAG_UPDATE_DELAYED, but only while the list is shown", function()
+    it("refreshes the owned counts on BAG_UPDATE_DELAYED, but only while the list is shown", function()
       boot()
       evalResult = allocation({ itemID = 1001, quantity = 3 })
       owned[1001] = 1
@@ -812,18 +910,18 @@ describe("OrdersPanel row icons", function()
       local c = cells_of(row_for(raw))
       assert.same(RED, count_color(c.coverSlots[1]))
       assert.is_true(listening())
-      owned[1001] = 5
+      owned[1001] = 2   -- still short, but the count changed
       W.fire("BAG_UPDATE_DELAYED")
-      assert.same(RED, count_color(c.coverSlots[1]))   -- coalesced into the next frame
+      assert.equal(1, c.reagentEntries[1].have)   -- coalesced into the next frame
       W.advance(0)
-      assert.same({ WHITE, 5 }, { count_color(c.coverSlots[1]), c.reagentEntries[1].have })
+      assert.same({ RED, 2 }, { count_color(c.coverSlots[1]), c.reagentEntries[1].have })
       -- the list hides: not listening, nothing recomputed
       local box = form.orderScrollBox
       form.raw(box):Hide(); box:GetScript("OnHide")(box)
       assert.is_false(listening())
-      owned[1001] = 0
+      owned[1001] = 9
       W.fire("BAG_UPDATE_DELAYED"); W.advance(0)
-      assert.same(WHITE, count_color(c.coverSlots[1]))
+      assert.same({ "reagents", 2 }, { c.coverMode, c.reagentEntries[1].have })   -- untouched
       form.raw(box):Show(); box:GetScript("OnShow")(box)
       assert.is_true(listening())
       ns.FS:SetModuleEnabled("OrdersRowAddons", false)

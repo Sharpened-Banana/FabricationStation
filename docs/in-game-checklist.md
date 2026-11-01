@@ -998,8 +998,11 @@ P5-10. **Reward icons and the Reagents cover on the order rows.** Open a profess
 then Public or Personal). Patron orders show their rewards as 20 px icons in the item-name column, left of the row's cells
 (item or currency icon, a count bottom-right when above 1). In the Reagents column (the 90 px one before Expiration) the
 word Blizzard writes there ("Some", "None", "All") is gone, covered by a dark panel with the reagents you must supply as
-icons (the count they need, red while you own fewer, white otherwise; white when the game cannot tell). A green check
-means the customer provides every reagent; a "?" means the reagents are not known (a recraft, or an order the addon
+icons, only for a reagent you are short of (the count still needed in red; white when the game cannot tell your
+count; a reagent you already own enough of has no icon). A green check means the customer provides every reagent, or you
+already own every reagent you must supply (hover it: "You have every reagent this order needs from you", then all the
+reagents with need and have; buy or sell a reagent with the list open and the panel flips between icons and check
+within a moment); a "?" means the reagents are not known (a recraft, or an order the addon
 could not evaluate); a row the addon has no score for (Orders module off) keeps Blizzard's word. Expected: no word shows
 through the panel, and the panel's colour matches the list background (if it does not, change COVER_COLOR in
 UI/OrdersPanel.lua; note the colour you see, and whether the list is one flat colour or striped: compare the panel on an
@@ -1031,8 +1034,8 @@ the reward icons are hidden too (the Reagents panel stays). Dimmed rows (orders 
 the cells.
 
 P5-12. **The tooltips and the mouse.** Hover the reward icons: a "Rewards" header with "<icon> <name> x<count>" lines.
-Hover the Reagents panel: a "Reagents to supply" header with "<name>: need N, have M" (just "need N" when your count is
-unknown; red while M < N), or "The customer provides every reagent" over the check, or "Reagents unknown for this order"
+Hover the Reagents panel: a "Reagents to supply" header with every reagent you supply, owned ones included, as
+"<name>: need N, have M" (just "need N" when your count is unknown; red while M < N), or "The customer provides every reagent" over the check, or "Reagents unknown for this order"
 over the "?". An item the client has not cached reads "item:<id>" and becomes its name within a moment while the tooltip
 stays open (if not, note whether `/dump C_Item.RequestLoadItemDataByID` exists). Clicking an order row where the icons or
 the panel sit still opens the order, and the row beneath still highlights on hover (the addon calls

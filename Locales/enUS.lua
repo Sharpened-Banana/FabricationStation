@@ -423,6 +423,7 @@ L["Week unknown: the game gave no weekly reset time"] = true
 L["What a knowledge point from a patron order reward is worth to you."] = true
 L["What one Moxie from a patron order reward is worth to you."] = true
 L["You already have a claimed order"] = true
+L["You have every reagent this order needs from you"] = true   -- order row Reagents cover tooltip, over the green check
 L["estimate"] = true
 L["never"] = true
 L["none"] = true

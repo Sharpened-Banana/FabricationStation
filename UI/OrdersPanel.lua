@@ -7,9 +7,11 @@ local L = ns.L
 --                     hide, a strip of cells (net profit, score, risk count with a tooltip, Add to Queue), left of it a
 --                     strip of 20 px icons for the rewards of a patron order, and a cover over Blizzard's Reagents
 --                     cell that replaces its "Some" / "None" / "All" with the reagents the crafter must supply (the
---                     allocation minus what the customer provides, as 20 px icons whose count is red while the
---                     character owns fewer), a green check when the customer provides every reagent, or "?" when they are not
---                     known (a recraft, no result). Both have tooltips (setting Orders.showRowIcons turns them off).
+--                     allocation minus what the customer provides) that the character is short of: 20 px icons with
+--                     the count needed in red (white when the owned count is unknown; a reagent already owned gets no
+--                     icon), a green check when the customer provides every reagent or the character owns them all,
+--                     or "?" when they are not known (a recraft, no result). Both have tooltips, the cover's listing
+--                     every reagent (setting Orders.showRowIcons turns them off).
 --   OrdersSidePanel   a panel docked at ProfessionsFrame's right edge while the order list is shown: risk filters,
 --                     public claims remaining, the best claimable order and the Claim Best Order button.
 --   OrderViewWarning  a line above the order detail view for a blocked or VIP customer.
@@ -489,11 +491,22 @@ function M.ReagentEntries(view, owned)
   return out
 end
 
--- ReagentEntries -> what the Reagents cover shows: "reagents" (icons), "provided" (a check: the customer provides
--- every reagent) or "unsure" ("?"). Nil for a value that is not a view.
+-- The reagents you must supply and are short of: owned < need, or owned unknown (nil: we cannot confirm you have it).
+-- These are the ones the Reagents cover draws as icons; the tooltip lists them all.
+function M.ShortEntries(entries)
+  local out = {}
+  for _, entry in ipairs(entries or {}) do
+    if entry.have == nil or entry.have < entry.count then out[#out + 1] = entry end
+  end
+  return out
+end
+
+-- ReagentEntries -> what the Reagents cover shows: "reagents" (icons for those you are short of), "stocked" (a check:
+-- you own every reagent you must supply), "provided" (a check: the customer provides every reagent) or "unsure" ("?").
 local function reagent_state(entries)
   if entries == nil then return "unsure" end
-  return #entries == 0 and "provided" or "reagents"
+  if #entries == 0 then return "provided" end
+  return #M.ShortEntries(entries) == 0 and "stocked" or "reagents"
 end
 
 function M.ReagentState(view)
@@ -648,11 +661,14 @@ local function icons_tooltip(c)
   show_tooltip(c.icons, icon_lines(c.iconEntries))
 end
 
--- The Reagents cover's tooltip: the reagents to supply, or why there is a check or a "?".
+-- The Reagents cover's tooltip: every reagent to supply (owned ones too), or why there is a check or a "?".
 local function cover_tooltip(c)
   local lines
   if c.coverMode == "reagents" then
     lines = icon_lines(c.reagentEntries)
+  elseif c.coverMode == "stocked" then
+    lines = icon_lines(c.reagentEntries)
+    table.insert(lines, 1, { text = L["You have every reagent this order needs from you"], color = TEXT_COLORS.white })
   elseif c.coverMode == "provided" then
     lines = { { text = L["The customer provides every reagent"], color = TEXT_COLORS.white } }
   elseif c.coverMode == "unsure" then
@@ -776,7 +792,7 @@ local function draw_bank(bank, entries, layout, x0)
 end
 
 local function new_cells(row)
-  local c = { dimmed = false, warnShown = false, fit = "all", iconEntries = {}, reagentEntries = {} }
+  local c = { dimmed = false, warnShown = false, fit = "all", iconEntries = {}, reagentEntries = {}, shortEntries = {} }
   local frame = CreateFrame("Frame", nil, container)
   frame:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
   frame:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, 0)
@@ -1042,7 +1058,7 @@ local function place_cover(c, row)
   return width
 end
 
--- Shows the Reagents cover for the row's mode (c.coverMode: "reagents" | "provided" | "unsure" | nil for none), over
+-- Shows the Reagents cover for the row's mode (c.coverMode: "reagents" | "stocked" | "provided" | "unsure" | nil), over
 -- the column place_cover identifies; no cover when there is none to show or the column cannot be told.
 local function render_cover(c, row)
   local width = c.coverMode and place_cover(c, row) or nil
@@ -1054,9 +1070,9 @@ local function render_cover(c, row)
   local mode = c.coverMode
   set_shown(c.coverDim, c.dimmed)
   c.coverContent:SetAlpha(c.dimmed and 0.6 or 1)
-  set_shown(c.coverCheck, mode == "provided")
+  set_shown(c.coverCheck, mode == "provided" or mode == "stocked")
   set_shown(c.coverQuestion, mode == "unsure")
-  local entries = mode == "reagents" and c.reagentEntries or {}
+  local entries = mode == "reagents" and c.shortEntries or {}
   draw_bank(c.coverBank, entries, M.IconLayout(entries, width - 2 * COVER_PAD), COVER_PAD)
   c.cover:Show()
 end
@@ -1183,6 +1199,7 @@ local function show_row(row, elementData)
   local reagents = M.ReagentEntries(view, owned_count)
   c.iconEntries = on and M.RewardEntries(view) or {}
   c.reagentEntries = on and reagents or {}
+  c.shortEntries = M.ShortEntries(c.reagentEntries)
   c.coverMode = on and reagent_state(reagents) or nil
 
   c.profit:SetText(M.ProfitText(view))
