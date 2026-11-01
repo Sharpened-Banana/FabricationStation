@@ -188,16 +188,41 @@ local function attach_tooltip(frame, title, body)
   end))
 end
 
+-- The full width of a font string's text, not cut at its box: GetUnboundedStringWidth when the client has it (a
+-- one-line, fixed-width string answers GetStringWidth bounded by its width), else GetStringWidth. Guarded; nil when
+-- nothing answers a number. Shared by the buttons and the scan rows.
+local function unbounded_width(fs)
+  if type(fs) ~= "table" or type(fs.GetUnboundedStringWidth) ~= "function" then return nil end
+  local ok, width = pcall(fs.GetUnboundedStringWidth, fs)
+  if ok and type(width) == "number" then return width end
+  return nil
+end
+
+local function string_width(fs)
+  local width = unbounded_width(fs)
+  if width then return width end
+  if type(fs) ~= "table" or type(fs.GetStringWidth) ~= "function" then return nil end
+  local ok, plain = pcall(fs.GetStringWidth, fs)
+  if ok and type(plain) == "number" then return plain end
+  return nil
+end
+
+-- True when the client says the font string's text is cut (IsTruncated, when it has it) or its full width is over its box.
+local function is_cut(fs)
+  if type(fs.IsTruncated) == "function" then
+    local ok, cut = pcall(fs.IsTruncated, fs)
+    if ok and cut then return true end
+  end
+  local width, box = string_width(fs), fs:GetWidth()
+  return type(width) == "number" and type(box) == "number" and width > box
+end
+
 -- The width of a button's text: the font string's unbounded width when the client has it (GetTextWidth can be cut at
 -- the width the button had), else GetTextWidth. Every call is guarded; 0 when nothing measures.
 local function button_text_width(b)
-  local ok, width = pcall(function()
-    if type(b.GetFontString) ~= "function" then return nil end
-    local fs = b:GetFontString()
-    if type(fs) ~= "table" or type(fs.GetUnboundedStringWidth) ~= "function" then return nil end
-    return fs:GetUnboundedStringWidth()
-  end)
-  if ok and type(width) == "number" then return width end
+  local ok, fs = pcall(function() return type(b.GetFontString) == "function" and b:GetFontString() or nil end)
+  local width = ok and unbounded_width(fs) or nil
+  if width then return width end
   return tonumber(b.GetTextWidth and b:GetTextWidth()) or 0
 end
 
@@ -400,6 +425,10 @@ function refreshers.scan(c)
       hit:SetScript("OnLeave", ns.FS:Wrap(TOOLTIP_SOURCE, function()
         if GameTooltip then GameTooltip:Hide() end
       end))
+      -- A row that hides while hovered (the list changed) takes its tooltip with it; another owner's is left alone.
+      hit:SetScript("OnHide", ns.FS:Wrap(TOOLTIP_SOURCE, function(self)
+        if GameTooltip and GameTooltip.GetOwner and GameTooltip:GetOwner() == self then GameTooltip:Hide() end
+      end))
       c.rowHits[i] = hit
     end
     local indent = row.indent and 14 or 0
@@ -409,8 +438,7 @@ function refreshers.scan(c)
     fs:SetHeight(ROW_HEIGHT)
     fs:SetText(ROW_COLOR[row.kind] .. row.text .. "|r")
     fs:Show()
-    local width, box = fs:GetStringWidth(), fs:GetWidth()
-    hit.text = (type(width) == "number" and type(box) == "number" and width > box) and row.text or nil
+    hit.text = is_cut(fs) and row.text or nil
     hit:Show()
   end
   for i = #rows + 1, #c.rows do

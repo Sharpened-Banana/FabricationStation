@@ -507,6 +507,12 @@ describe("OnboardingWizard", function()
     Wizard = ns.UI.OnboardingWizard
   end)
 
+  -- Every key reads as its English text plus about half again as many "w" letters (a German-length translation).
+  local function long_locale(factor)
+    for key in pairs(ns.L) do rawset(ns.L, key, nil) end   -- keys read before this call are cached as English
+    setmetatable(ns.L, { __index = function(_, key) return key .. " " .. ("w"):rep(math.ceil(#key * (factor or 1) / 2)) end })
+  end
+
   local function step_id() return Onboarding:GetSteps()[Wizard:GetStep()].id end
   local function goto_step(id)
     for i, step in ipairs(Onboarding:GetSteps()) do
@@ -850,10 +856,6 @@ describe("OnboardingWizard", function()
     end
 
     it("shows a cut row's full text on hover and nothing for a row that fits", function()
-      local function long_locale(factor)
-        for key in pairs(ns.L) do rawset(ns.L, key, nil) end
-        setmetatable(ns.L, { __index = function(_, key) return key .. " " .. ("w"):rep(math.ceil(#key * factor / 2)) end })
-      end
       long_locale(3)
       scan_chars()
       Wizard:Open(); goto_step("scan")
@@ -887,6 +889,82 @@ describe("OnboardingWizard", function()
       fitting:GetScript("OnEnter")(fitting)
       assert.is_false(tooltip.visible)
       assert.are.same({}, tooltip.shown)
+    end)
+
+    -- Rows the client reports as cut: a one-line, fixed-width font string answers GetStringWidth bounded by its width.
+    local function bound_rows(scan, unbounded)
+      for i, fs in ipairs(scan.rows) do
+        local full = unbounded[i] or 10
+        fs.GetUnboundedStringWidth = function() return full end
+        fs.GetStringWidth = function(self) return math.min(full, self:GetWidth()) end
+      end
+    end
+
+    it("shows the full text of a row whose GetStringWidth is bounded but whose unbounded width is over its box", function()
+      scan_chars()
+      Wizard:Open(); goto_step("scan")
+      local scan = Wizard:GetControls().steps.scan
+      bound_rows(scan, { [2] = 1000 })
+      goto_step("scan")
+      local rows = Wizard.ScanRows(Onboarding:ScanStatus())
+      assert.are.equal(rows[2].text, scan.rowHits[2].text)
+      assert.is_nil(scan.rowHits[1].text)
+      assert.is_nil(scan.rowHits[3].text)
+      local hit = scan.rowHits[2]
+      hit:GetScript("OnEnter")(hit)
+      assert.is_true(tooltip.visible)
+      assert.are.equal(rows[2].text, tooltip.shown[1])
+    end)
+
+    it("takes the client's own IsTruncated answer for a cut row", function()
+      scan_chars()
+      Wizard:Open(); goto_step("scan")
+      local scan = Wizard:GetControls().steps.scan
+      bound_rows(scan, {})
+      scan.rows[3].IsTruncated = function() return true end
+      scan.rows[2].IsTruncated = function() return false end
+      scan.rows[4].IsTruncated = function() error("boom") end
+      goto_step("scan")
+      local rows = Wizard.ScanRows(Onboarding:ScanStatus())
+      assert.are.equal(rows[3].text, scan.rowHits[3].text)
+      assert.is_nil(scan.rowHits[2].text)
+      assert.is_nil(scan.rowHits[4].text)
+      local hit = scan.rowHits[3]
+      hit:GetScript("OnEnter")(hit)
+      assert.is_true(tooltip.visible)
+      assert.same({}, ns.FS.db.global.diagnostics.errors)
+    end)
+
+    it("falls back to GetStringWidth when the client has neither IsTruncated nor the unbounded width", function()
+      scan_chars()
+      Wizard:Open(); goto_step("scan")
+      local scan = Wizard:GetControls().steps.scan
+      for i, fs in ipairs(scan.rows) do
+        fs.GetUnboundedStringWidth, fs.IsTruncated = nil, nil
+        fs.GetStringWidth = function() return i == 2 and 1000 or 10 end
+      end
+      goto_step("scan")
+      local rows = Wizard.ScanRows(Onboarding:ScanStatus())
+      assert.are.equal(rows[2].text, scan.rowHits[2].text)
+      assert.is_nil(scan.rowHits[1].text)
+    end)
+
+    it("hides the tooltip when the hovered row's hover frame hides", function()
+      scan_chars()
+      Wizard:Open(); goto_step("scan")
+      local scan = Wizard:GetControls().steps.scan
+      bound_rows(scan, { [2] = 1000 })
+      goto_step("scan")
+      local hit = scan.rowHits[2]
+      _G.GameTooltip.GetOwner = function() return tooltip.owner end
+      hit:GetScript("OnEnter")(hit)
+      assert.is_true(tooltip.visible)
+      hit:GetScript("OnHide")(hit)
+      assert.is_false(tooltip.visible)
+      -- another owner's tooltip is left alone
+      tooltip.visible, tooltip.owner = true, {}
+      hit:GetScript("OnHide")(hit)
+      assert.is_true(tooltip.visible)
     end)
 
     it("hides a row's hover frame with the row and re-reads its text when the row is reused", function()
@@ -1020,11 +1098,6 @@ describe("OnboardingWizard", function()
   end)
 
   describe("layout from the measured text", function()
-    -- Every key reads as its English text plus about half again as many "w" letters (a German-length translation).
-    local function long_locale(factor)
-      for key in pairs(ns.L) do rawset(ns.L, key, nil) end   -- keys read before this call are cached as English
-      setmetatable(ns.L, { __index = function(_, key) return key .. " " .. ("w"):rep(math.ceil(#key * (factor or 1) / 2)) end })
-    end
     local function top(region) return -select(5, region:GetPoint(1)) end
     local function height_of(item)
       return item.kind == "button" and select(2, item.region:GetSize()) or item.region:GetHeight()
