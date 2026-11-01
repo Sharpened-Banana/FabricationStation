@@ -151,7 +151,8 @@ end
 
 function SaleLog:OnPostItem(item, _, quantity, _, buyout)
   local unitPrice
-  if is_finite(buyout) and positive(quantity) then unitPrice = math.floor(buyout / quantity) end
+  -- An item post without a quantity is one item (queue_post says the same), so its buyout is the unit price.
+  if is_finite(buyout) then unitPrice = math.floor(buyout / (positive(quantity) and quantity or 1)) end
   queue_post(item, quantity, unitPrice)
 end
 
@@ -377,22 +378,26 @@ function SaleLog:Prune(now)
   now = is_finite(now) and now or ns.FS:Now()
   local removed = 0
   if type(log.events) == "table" then
-    local cutoff, kept, last = now - EVENT_KEEP_DAYS * DAY_SECONDS, {}, 0
+    -- Walk the entries that are there (sorted by index), never up to the largest numeric key: a damaged saved key such
+    -- as 1e9 must not make enabling the module spin. Holes close up when something is removed.
+    local cutoff, keys, kept = now - EVENT_KEEP_DAYS * DAY_SECONDS, {}, {}
     for key in pairs(log.events) do
-      if type(key) == "number" and key > last then last = key end
+      if type(key) == "number" and is_finite(key) and key >= 1 and key == math.floor(key) then keys[#keys + 1] = key end
     end
-    for i = 1, last do   -- a hole in the saved list must not hide the rows after it
-      local event = log.events[i]
-      if event ~= nil then
-        if type(event) == "table" and is_finite(event.time) and event.time < cutoff then
-          removed = removed + 1
-        else
-          kept[#kept + 1] = event
-        end
+    table.sort(keys)
+    local dropped = 0
+    for _, key in ipairs(keys) do
+      local event = log.events[key]
+      if type(event) == "table" and is_finite(event.time) and event.time < cutoff then
+        dropped = dropped + 1
+      else
+        kept[#kept + 1] = event
       end
     end
-    if removed > 0 then
-      for i = 1, last do log.events[i] = kept[i] end
+    if dropped > 0 then
+      for _, key in ipairs(keys) do log.events[key] = nil end
+      for i, event in ipairs(kept) do log.events[i] = event end
+      removed = removed + dropped
     end
   end
   if type(log.seenMail) == "table" then

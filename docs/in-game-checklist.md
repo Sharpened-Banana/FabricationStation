@@ -1205,7 +1205,11 @@ item's count in `auctionLog.listings["<you>"]`.
 
 P7-13. **Expiries.** With an expired-auction mail in the box, open the mailbox twice and `/reload`. Expected: one
 `"expire"` event for the mail's item and count. If none appears, report the mail's subject text (non-English clients:
-`/dump AUCTION_EXPIRED_MAIL_SUBJECT`).
+`/dump AUCTION_EXPIRED_MAIL_SUBJECT`). Then check that the same expiry mail is not counted again within one session:
+keep the mailbox open past the next full hour (or until the clock's hour changes) and take another item, so the box
+updates again. Expected: still one `"expire"` event for that mail. If a second one appears, `daysLeft` of
+`GetInboxHeaderInfo` is not refreshed between updates (the mail signature drifts): report it, with the two `daysLeft`
+values from `/dump select(7, GetInboxHeaderInfo(1))` taken an hour apart.
 
 ## Not done here
 

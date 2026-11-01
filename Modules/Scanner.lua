@@ -806,24 +806,32 @@ function Scanner:ScanMail()
 end
 
 -- How many of itemID sit in mail attachments: charKey's last mailbox snapshot (nil = every character's, summed), and
--- the age in seconds of the oldest of those snapshots that holds the item (nil when none does, or none exists: the
--- count is then 0). A snapshot is only as current as that character's last visit to a mailbox.
+-- the age in seconds of the snapshot data behind the answer: the oldest of those snapshots that holds the item, or,
+-- when none does, the oldest snapshot in scope. nil, nil when no character in scope has a mail snapshot (unknown, not
+-- none); 0 with an age when snapshots exist and none holds the item. A snapshot is only as current as that
+-- character's last visit to a mailbox.
 function Scanner:GetMailCount(itemID, charKey)
   local g = global()
-  if not g then return 0, nil end
-  local count, oldest = 0, nil
+  if not g then return nil, nil end
+  local count, oldestHolding, oldestAny, known = 0, nil, nil, false
   local function add(c)
     local mail = type(c) == "table" and c.mail
-    local n = type(mail) == "table" and type(mail.items) == "table" and mail.items[itemID]
+    if type(mail) ~= "table" or type(mail.items) ~= "table" then return end
+    known = true
+    local time = type(mail.time) == "number" and mail.time or nil
+    if time and (oldestAny == nil or time < oldestAny) then oldestAny = time end
+    local n = mail.items[itemID]
     if type(n) ~= "number" or n <= 0 then return end
     count = count + n
-    if type(mail.time) == "number" and (oldest == nil or mail.time < oldest) then oldest = mail.time end
+    if time and (oldestHolding == nil or time < oldestHolding) then oldestHolding = time end
   end
   if charKey then
     add(g.characters[charKey])
   else
     for _, c in pairs(g.characters) do add(c) end
   end
+  if not known then return nil, nil end
+  local oldest = oldestHolding or oldestAny
   return count, oldest and math.max(0, ns.FS:Now() - oldest) or nil
 end
 

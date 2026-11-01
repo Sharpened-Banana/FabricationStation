@@ -124,6 +124,12 @@ describe("SaleLog", function()
       assert.is_nil(events()[1].unitPrice)
     end)
 
+    it("keeps the unit price of an item post that has a buyout but no quantity", function()
+      C_AuctionHouse.PostItem(item(100), 2, nil, 50, 900)
+      W.fire("AUCTION_HOUSE_AUCTION_CREATED", 1)
+      assert.same({ 100, 1, 900 }, { events()[1].itemID, events()[1].quantity, events()[1].unitPrice })
+    end)
+
     it("drops a pending post older than 60 s", function()
       C_AuctionHouse.PostItem(item(100), 2, 1, nil, 500)
       W.now = W.now + 61
@@ -484,6 +490,21 @@ describe("SaleLog", function()
       assert.equals(now - 30 * DAY, list.seenMail.fresh)
       assert.equals(now, list.seenMail.damaged)
       assert.equals(before + 1, changes())
+    end)
+
+    it("prunes without walking up to a huge damaged key", function()
+      local now = W.now
+      ns.FS.db.global.auctionLog = { listings = {}, seenMail = {}, events = {
+        { time = now - 400 * DAY, kind = "post", itemID = 1, quantity = 1, charKey = ME },
+        { time = now - DAY, kind = "post", itemID = 2, quantity = 1, charKey = ME },
+        [1e9] = { time = now - 400 * DAY, kind = "post", itemID = 3, quantity = 1, charKey = ME },
+        [1e9 + 1] = { time = now, kind = "post", itemID = 4, quantity = 1, charKey = ME },
+        [4] = { time = now, kind = "post", itemID = 5, quantity = 1, charKey = ME },   -- a hole at 3
+      } }
+      ns.FS:SetModuleEnabled("SaleLog", false); ns.FS:SetModuleEnabled("SaleLog", true)   -- returns, does not spin
+      local list = ns.FS.db.global.auctionLog.events
+      assert.same({ 2, 5, 4 }, { list[1].itemID, list[2].itemID, list[3].itemID })
+      assert.is_nil(list[4]); assert.is_nil(list[1e9]); assert.is_nil(list[1e9 + 1])
     end)
 
     it("repairs a damaged log without wiping what is sound", function()

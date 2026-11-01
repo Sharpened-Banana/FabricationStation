@@ -84,10 +84,26 @@ describe("Scanner mail snapshot", function()
     assert.same({ 4, 1000 }, { Scanner:GetMailCount(2001, "Aria-Silvermoon") })
     assert.same({ 6, 500 }, { Scanner:GetMailCount(2001, "Bren-Silvermoon") })
     assert.same({ 1, 1000 }, { Scanner:GetMailCount(2005) })
-    local none, noneAge = Scanner:GetMailCount(9999)
-    assert.same({ 0, nil }, { none, noneAge })                                  -- known snapshots, none holds it
-    assert.same({ 0, nil }, { Scanner:GetMailCount(2001, "Cato-Silvermoon") })
-    assert.same({ 0, nil }, { Scanner:GetMailCount(2001, "Nobody-Nowhere") })
+    -- snapshots exist but none holds the item: a known 0, aged by the oldest snapshot in scope
+    assert.same({ 0, 1000 }, { Scanner:GetMailCount(9999) })
+    assert.same({ 0, 500 }, { Scanner:GetMailCount(9999, "Bren-Silvermoon") })
+  end)
+
+  it("GetMailCount is unknown (nil, nil) while no character in scope has a mail snapshot", function()
+    local g = ns.FS.db.global
+    g.characters["Cato-Silvermoon"] = { professions = {}, items = {}, itemsTime = {}, knowledgeWeekly = {} }  -- never opened
+    assert.same({ nil, nil }, { Scanner:GetMailCount(2001) })                       -- no snapshot anywhere
+    assert.same({ nil, nil }, { Scanner:GetMailCount(2001, "Cato-Silvermoon") })
+    assert.same({ nil, nil }, { Scanner:GetMailCount(2001, "Nobody-Nowhere") })
+    g.characters["Cato-Silvermoon"].mail = "damaged"
+    assert.same({ nil, nil }, { Scanner:GetMailCount(2001) })
+    local db = ns.FS.db; ns.FS.db = nil                                              -- no saved data at all
+    assert.same({ nil, nil }, { Scanner:GetMailCount(2001) })
+    ns.FS.db = db
+    g.characters["Bren-Silvermoon"] = { professions = {}, items = {}, itemsTime = {}, knowledgeWeekly = {},
+      mail = { time = W.now - 30, items = {} } }                                    -- a visit that found no item mail
+    assert.same({ 0, 30 }, { Scanner:GetMailCount(2001) })                           -- known: none held
+    assert.same({ nil, nil }, { Scanner:GetMailCount(2001, "Cato-Silvermoon") })     -- still unknown for Cato
   end)
 
   it('Recipes ignore the "mail" kind', function()
