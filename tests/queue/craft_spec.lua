@@ -476,9 +476,10 @@ end)
 -- Queue:CraftNext, and Queue:CraftNext is referenced only from OnClick handlers (a call, or the
 -- function passed on, as in pcall(Queue.CraftNext, Q) or Wrap(name, Queue.CraftNext)).
 -- CraftRecipe matches as an exact token (Ledger:OnCraftRecipe and C_TradeSkillUI.RecraftRecipe are other names).
--- The one allowed reference outside Queue:CraftNext is the Ledger's post-hook (phase 2 Task 7), exactly the line
--- hook(C_TradeSkillUI, "CraftRecipe", function(...) self:OnCraftRecipe(...) end) in Modules/Ledger.lua, whose local
--- `hook` only passes the target on to hooksecurefunc: a hook runs after Blizzard's call and never calls CraftRecipe.
+-- The allowed references outside Queue:CraftNext are the post-hooks of the Ledger (phase 2 Task 7) and the CraftLog
+-- (phase 7 Task 9): in each of POSTHOOK_FILES exactly the line
+-- hook(C_TradeSkillUI, "CraftRecipe", function(...) self:OnCraftRecipe(...) end), whose local `hook` only passes the
+-- target on to hooksecurefunc: a hook runs after Blizzard's call and never calls CraftRecipe.
 describe("click-only crafting", function()
   local DIRS = "Core Data Math Modules UI"
 
@@ -534,6 +535,9 @@ describe("click-only crafting", function()
   -- The helper's body: a guard line, then the hooksecurefunc-only line (an else branch only logs a missing target).
   local LEDGER_HOOK_GUARD = '^%s*if type%(tbl%) == "table" and type%(tbl%[name%]%) == "function" then%s*$'
   local LEDGER_HOOK_HELPER = '^%s*hooksecurefunc%(tbl, name, body%(fn%)%)%s*$'
+  local POSTHOOK_FILES = { "Modules/Ledger.lua", "Modules/CraftLog.lua" }
+  local IS_POSTHOOK_FILE = {}
+  for _, path in ipairs(POSTHOOK_FILES) do IS_POSTHOOK_FILE[path] = true end
 
   it("matches CraftRecipe references as whole tokens", function()
     for _, line in ipairs({ "C_TradeSkillUI.CraftRecipe(1, 1)", "local craft = C_TradeSkillUI.CraftRecipe",
@@ -546,30 +550,35 @@ describe("click-only crafting", function()
     end
   end)
 
-  it("allows exactly one CraftRecipe post-hook line in Modules/Ledger.lua, through a hooksecurefunc-only helper", function()
-    local posthooks, helpers = 0, 0
-    for _, line in ipairs(code_lines("Modules/Ledger.lua")) do
-      if line:match(LEDGER_POSTHOOK) then posthooks = posthooks + 1 end
-      if line:match(LEDGER_HOOK_HELPER) then helpers = helpers + 1 end
-      assert.is_nil(line:find("tbl[name](", 1, true), "the hook helper must not call its target")
+  it("allows exactly one CraftRecipe post-hook line in each of Ledger and CraftLog", function()
+    for _, path in ipairs(POSTHOOK_FILES) do
+      local posthooks, helpers = 0, 0
+      for _, line in ipairs(code_lines(path)) do
+        if line:match(LEDGER_POSTHOOK) then posthooks = posthooks + 1 end
+        if line:match(LEDGER_HOOK_HELPER) then helpers = helpers + 1 end
+        assert.is_nil(line:find("tbl[name](", 1, true), path .. ": the hook helper must not call its target")
+      end
+      assert.equals(1, posthooks, path); assert.equals(1, helpers, path)
     end
-    assert.equals(1, posthooks); assert.equals(1, helpers)
   end)
 
   it("binds that post-hook's `hook` to the guarded local helper and nothing else", function()
-    local defs, others, defLine, helperLine = 0, {}, nil, nil
-    for i, line in ipairs(code_lines("Modules/Ledger.lua")) do
-      if line:match("^%s*local function hook%(tbl, name, fn%)%s*$") then
-        defs, defLine = defs + 1, i
-      elseif line:match("%f[%w_]hook%s*=[^=]") or line:match("function%s+hook%f[^%w_]")
-        or line:match("local%s+hook%f[^%w_]") or line:match("[,%s]hook%s*,[^)]*=") then
-        others[#others + 1] = i .. ": " .. line
+    for _, path in ipairs(POSTHOOK_FILES) do
+      local defs, others, defLine, helperLine = 0, {}, nil, nil
+      for i, line in ipairs(code_lines(path)) do
+        if line:match("^%s*local function hook%(tbl, name, fn%)%s*$") then
+          defs, defLine = defs + 1, i
+        elseif line:match("%f[%w_]hook%s*=[^=]") or line:match("function%s+hook%f[^%w_]")
+          or line:match("local%s+hook%f[^%w_]") or line:match("[,%s]hook%s*,[^)]*=") then
+          others[#others + 1] = i .. ": " .. line
+        end
+        if line:match(LEDGER_HOOK_HELPER) then helperLine = i end
       end
-      if line:match(LEDGER_HOOK_HELPER) then helperLine = i end
+      assert.equals(1, defs, path); assert.same({}, others, path)
+      -- the helper's body is the hooksecurefunc-only line, under its guard
+      assert.equals(defLine + 2, helperLine, path)
+      assert.truthy(code_lines(path)[defLine + 1]:match(LEDGER_HOOK_GUARD), path)
     end
-    assert.equals(1, defs); assert.same({}, others)
-    assert.equals(defLine + 2, helperLine)   -- the helper's body is the hooksecurefunc-only line, under its guard
-    assert.truthy(code_lines("Modules/Ledger.lua")[defLine + 1]:match(LEDGER_HOOK_GUARD))
   end)
 
   it("calls CraftRecipe only inside Queue:CraftNext", function()
@@ -579,7 +588,7 @@ describe("click-only crafting", function()
       for i, line in ipairs(code_lines(path)) do
         if line:match("^function Queue:CraftNext%(") then inside = true
         elseif line:match("^end") then inside = false end
-        local posthook = path == "Modules/Ledger.lua" and line:match(LEDGER_POSTHOOK) ~= nil
+        local posthook = IS_POSTHOOK_FILE[path] and line:match(LEDGER_POSTHOOK) ~= nil
         local refs = craft_recipe_refs(line)
         if refs > 0 and not (posthook and refs == 1) then
           hits[#hits + 1] = path .. ":" .. i

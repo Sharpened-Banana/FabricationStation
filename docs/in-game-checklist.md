@@ -1226,6 +1226,17 @@ numbers on the item's row: Sold 1, Expired 1, Rate 50%, Last sale the same price
 become "?" and the row tooltip says "Sales unknown: the Ledger is off". Turn "Show your sales in item tooltips" off
 (/fs settings > Orders & Ledger): the tooltip lines go.
 
+P7-16. **Craft result fields.** Craft one quality recipe with concentration, then `/reload` and
+`/dump FabricationStationDB.global.craftLog.entries[#FabricationStationDB.global.craftLog.entries]`. Expected:
+`actual.quality` matches the item you made, `game.quality` and `predicted.quality` are filled. Report whether
+`actual.concentrationSpent`, `actual.ingenuityRefund`, `actual.ingenuityProc` and a `multicraft` number from the game
+are present (a missing one stays nil; `multicraft` 0 only means no extra items were seen).
+
+P7-17. **Multicraft extras.** Craft until a Multicraft proc. Expected: one entry for that craft with
+`actual.multicraft` equal to the extra items (and `actual.quantity` the base plus the extras), not a second entry.
+Also craft once from Blizzard's own Craft button with another recipe selected before (or a different recipe than
+FabricationStation's panel last showed): the entry's `recipeID` is the recipe actually crafted.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in
