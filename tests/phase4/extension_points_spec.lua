@@ -162,6 +162,33 @@ describe("phase4 extension points", function()
       assert.are.same({ { "A very long crafter list", "Alice, Bob, Carol (Q3)" } }, tip.lines)
     end)
 
+    it("draws a registered action as a button below the rows; a click runs it once and redraws", function()
+      local clicks, state = 0, { text = "Ask guild", enabled = true }
+      state.onClick = function() clicks = clicks + 1; state.enabled = false; state.status = "Asking..." end
+      P:RegisterLineAction("ask", function(id) return id == 9001 and state or nil end)
+      form.selectRecipe({ recipeID = 9001 })
+      local row = P:GetView().actions.pool[1]
+      assert.is_true(P:GetView().actions.frame:IsShown())
+      assert.are.equal("Ask guild", row.text)                -- the frame fake keeps no button text or state
+      assert.is_true(row.enabled)
+      assert.are.equal(0, clicks)                            -- drawing runs nothing
+      row.button:GetScript("OnClick")(row.button)
+      assert.are.equal(1, clicks)
+      assert.is_false(row.enabled)                           -- redrawn from the new state
+      assert.are.equal("Asking...", row.status:GetText())
+      row.button:GetScript("OnClick")(row.button)            -- a disabled action is not run
+      assert.are.equal(1, clicks)
+    end)
+
+    it("hides the actions without one, and drops a failing action to the log", function()
+      P:RegisterLineAction("bad", function() error("boom") end)
+      form.selectRecipe({ recipeID = 9001 })
+      assert.is_false(P:GetView().actions.frame:IsShown())
+      assert.are.equal("ProfessionPanel:bad", ns.FS.db.global.diagnostics.errors[1].source)
+      assert.are.same({}, P:CollectActions(9001, "Me-Realm"))
+      assert.has_errors(function() P:RegisterLineAction("", function() end) end)
+    end)
+
     it("RefreshLines is a no-op before a recipe is selected", function()
       assert.has_no.errors(function() P:RefreshLines() end)
     end)

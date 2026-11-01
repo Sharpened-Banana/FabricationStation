@@ -176,6 +176,15 @@ end
 -- Number of waiting queries (the one in flight is not counted).
 function GuildNative:QueueSize() return #queue end
 
+-- Whether a query about recipeID is waiting or in flight.
+function GuildNative:IsPending(recipeID)
+  if inflight and inflight.recipeID == recipeID then return true end
+  for _, item in ipairs(queue) do
+    if item.recipeID == recipeID then return true end
+  end
+  return false
+end
+
 -- Cancels the timers and fails everything pending with err (default "unavailable"). Guild calls it on a key change
 -- ("noguild") and from OnDisable.
 function GuildNative:Stop(err)

@@ -135,7 +135,8 @@ one list from one sender. Choose "Only the character I am playing" if you do not
 - Or turn the Guild module off under Settings > Modules, which stops all guild addon messages.
 - "Forget this guild's crafter data" deletes what you have stored about the guild's other members.
 - "Also use the game's guild recipe list" is separate: it only asks the game who in your guild knows a recipe.
-  It sends nothing and finds guildmates who do not run the addon, but cannot show their quality.
+  It sends nothing and finds guildmates who do not run the addon, but cannot show their quality. It asks only when
+  you click "Ask guild", in the Guild tab or under the selected recipe in the profession window.
 
 **When sync pauses:** the game blocks addon messages in instances and in some other restricted states, so sync
 pauses there and resumes by itself afterwards. Messages that could not be sent are queued in memory (up to 50; the

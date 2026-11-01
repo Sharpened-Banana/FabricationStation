@@ -41,6 +41,7 @@ local REFRESH_KEY, REFRESH_DELAY = "professionPanel.refresh", 0.5
 
 local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 300, 10, 14, 22, 24
 local PROVIDER_RIGHT_WIDTH = 120   -- the right-hand column of a provider line; longer texts go to the row tooltip
+local ACTION_BUTTON_WIDTH = 90     -- an action's button; its status line takes the rest of the row
 local MAX_QUALITY_ROWS = 5
 local SECONDS_PER_DAY = 86400
 local EM_DASH, TIMES, RSAQUO = "\226\128\148", "\195\151", "\226\128\186"
@@ -77,6 +78,8 @@ local useConcentration = false
 
 local providers = {}   -- ordered list of { id, fn }; extension point for later phases (Guild adds crafters)
 local providerByID = {}
+local actions = {}     -- ordered list of { id, fn }: buttons under the provider rows (Guild adds "Ask guild")
+local actionByID = {}
 
 local function module(name)
   return ns.FS:GetModule(name, true)
@@ -120,6 +123,46 @@ local function line_texts(line)
   if type(right) == "number" then return line[1], tostring(right) end
   if type(right) == "string" then return line[1], right end
   return nil
+end
+
+-- Registers (or replaces in place) the action `id`: fn(recipeID, charKey) returns nil (no button for this recipe) or
+-- { text, enabled = boolean, status = string|nil, onClick = function }. The panel draws one button per action under
+-- the provider rows and calls onClick only from a click on an enabled button, then redraws. The status line sits next
+-- to the button (whole text in its tooltip).
+function Panel:RegisterLineAction(id, fn)
+  if type(id) ~= "string" or id == "" then error("RegisterLineAction: id must be a non-empty string", 2) end
+  if type(fn) ~= "function" then error("RegisterLineAction: fn must be a function", 2) end
+  local entry = actionByID[id]
+  if entry then
+    entry.fn = fn
+  else
+    entry = { id = id, fn = fn }
+    actionByID[id] = entry
+    actions[#actions + 1] = entry
+  end
+end
+
+-- The action specs for a recipe, in registration order (malformed ones skipped). An action that raises is logged as
+-- "ProfessionPanel:<id>" and removed, like a failing provider.
+function Panel:CollectActions(id, charKey)
+  local out, failed = {}, nil
+  for _, entry in ipairs(actions) do
+    local ok, spec = pcall(entry.fn, id, charKey)
+    if not ok then
+      failed = failed or {}
+      failed[#failed + 1] = entry
+      ns.FS:LogError(SOURCE .. ":" .. entry.id, tostring(spec))
+    elseif type(spec) == "table" and type(spec.text) == "string" then
+      out[#out + 1] = spec
+    end
+  end
+  for _, entry in ipairs(failed or {}) do
+    actionByID[entry.id] = nil
+    for i = #actions, 1, -1 do
+      if actions[i] == entry then table.remove(actions, i) end
+    end
+  end
+  return out
 end
 
 -- { {left, right} } from every provider, in registration order. A provider that raises is logged as
@@ -469,9 +512,12 @@ local function provider_row_at(section, i)
   return row
 end
 
+local render_actions   -- below
+
 local function render_provider_lines()
   local section = view and view.providerLines
   if not section then return end
+  render_actions()
   local lines = recipeID and Panel:CollectLines(recipeID, ns.FS:CharKey()) or {}
   for i, line in ipairs(lines) do
     local row = provider_row_at(section, i)
@@ -487,6 +533,66 @@ local function render_provider_lines()
   section.count = #lines
   section.frame:SetHeight(math.max(1, #lines * LINE))
   if #lines > 0 then section.frame:Show() else section.frame:Hide() end
+end
+
+-- A click on an action's button: runs the spec it was drawn from when that spec was enabled, then redraws the section.
+local function run_action(row)
+  local spec = row.spec
+  if not (spec and spec.enabled and type(spec.onClick) == "function") then return end
+  spec.onClick()
+  render_provider_lines()
+end
+
+local function action_row_at(section, i)
+  local row = section.pool[i]
+  if row then return row end
+  local frame = CreateFrame("Frame", nil, section.frame)
+  frame:SetHeight(ROW)
+  frame:SetPoint("TOPLEFT", section.frame, "TOPLEFT", 0, -(i - 1) * ROW)
+  frame:SetPoint("TOPRIGHT", section.frame, "TOPRIGHT", 0, -(i - 1) * ROW)
+  local b = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  b:SetSize(ACTION_BUTTON_WIDTH, ROW - 2)
+  b:SetPoint("LEFT", frame, "LEFT", 0, 0)
+  b:SetMotionScriptsWhileDisabled(true)
+  row = { frame = frame, button = b, status = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall") }
+  row.status:SetPoint("LEFT", b, "RIGHT", 6, 0)
+  row.status:SetPoint("RIGHT", frame, "RIGHT", 0, 0)
+  row.status:SetJustifyH("LEFT")
+  row.status:SetWordWrap(false)
+  row.status:SetMaxLines(1)
+  b:SetScript("OnClick", ns.FS:Wrap(SOURCE .. ":Action", function() run_action(row) end))
+  b:SetScript("OnEnter", function(self)
+    if not (GameTooltip and row.spec) then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(row.spec.text, 1, 1, 1)
+    if row.spec.status then GameTooltip:AddLine(row.spec.status, 0.8, 0.8, 0.8, true) end
+    GameTooltip:Show()
+  end)
+  b:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+  section.pool[i] = row
+  return row
+end
+
+function render_actions()
+  local section = view and view.actions
+  if not section then return end
+  local specs = recipeID and Panel:CollectActions(recipeID, ns.FS:CharKey()) or {}
+  for i, spec in ipairs(specs) do
+    local row = action_row_at(section, i)
+    row.spec, row.text, row.enabled = spec, spec.text, spec.enabled == true
+    row.button:SetText(spec.text)
+    if row.enabled then row.button:Enable() else row.button:Disable() end
+    row.status:SetText(spec.status or "")
+    row.frame:Show(); row.button:Show(); row.status:Show()
+  end
+  for i = #specs + 1, #section.pool do
+    local row = section.pool[i]
+    row.spec, row.text, row.enabled = nil, nil, false
+    row.frame:Hide(); row.button:Hide(); row.status:Hide()
+  end
+  section.count = #specs
+  section.frame:SetHeight(math.max(1, #specs * ROW))
+  if #specs > 0 then section.frame:Show() else section.frame:Hide() end
 end
 
 local function render()
@@ -966,6 +1072,11 @@ local function build_body(frame, created)
   stack(created.providerLines.frame, created.lines.frame, 6)
   created.providerLines.frame:SetPoint("RIGHT", body, "RIGHT", 0, 0)
   created.providerLines.frame:Hide()
+  -- Buttons other modules add through RegisterLineAction (Guild's "Ask guild"); hidden while none applies.
+  created.actions = { frame = CreateFrame("Frame", nil, body), pool = {}, count = 0 }
+  stack(created.actions.frame, created.providerLines.frame, 4)
+  created.actions.frame:SetPoint("RIGHT", body, "RIGHT", 0, 0)
+  created.actions.frame:Hide()
 end
 
 local function build()

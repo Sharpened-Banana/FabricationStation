@@ -11,7 +11,8 @@ local ADDON_NAME, ns = ...
 --   * An addon copy counts only while its owner is still in the guild (Guild:IsGuildMember); an unverified copy is
 --     shown as reported by its owner, never as if the character confirmed it; ages come from rt (receive time).
 --   * Native rows are merged only while settings.guild.useNative is on. TooltipLines and PanelLines never query the
---     server: they show what is already cached (the Guild tab asks).
+--     server: they show what is already cached. Only a click asks: the Guild tab's "Ask guild" for a row, and the
+--     profession panel's "Ask guild" action (PanelAction) for the selected recipe, both through GuildNative:Query.
 --   * Guild turned off: every read answers empty. The tooltip and panel providers never raise (Tooltips would stop
 --     calling a raising provider for the rest of the session).
 local Guild = ns.FS:GetModule("Guild")
@@ -456,6 +457,107 @@ function Guild:PanelLines(recipeID, charKey)
 end
 
 ---------------------------------------------------------------------------
+-- "Ask guild" in the profession panel (the native fallback for any selected recipe)
+---------------------------------------------------------------------------
+
+-- The Guild tab's hint for a reason it cannot ask (looked up at call time: ns.L may be replaced in specs).
+local function ask_reason_text(reason)
+  if reason == "off" then return L("Guild sync is turned off") end
+  if reason == "readonly" then return L("Read-only: the saved data is from a newer version of the addon") end
+  if reason == "noguild" then return L("Not in a guild") end
+  if reason == "native" then return L("Turned off in the Guild settings (\"Also use the game's guild recipe list\")") end
+  if reason == "locked" then return L("Sync paused (instance)") end
+  return L("The game's guild recipe query is not available")
+end
+
+local panelAnswers = {}   -- [guildKey .. " " .. recipeID] = the feedback of the last panel question (session only)
+
+-- GuildNative:Query's answer -> the feedback line (the Guild tab's wording).
+function Guild.NativeQueryNotice(members, err)
+  if members then
+    if #members == 0 then return L("Guild answered: nobody knows this recipe") end
+    return L("Guild answered: %d can craft this"):format(#members)
+  end
+  if err == "locked" then return L("Sync paused (instance)") end
+  if err == "timeout" then return L("The guild did not answer in time") end
+  if err == "full" then return L("Too many guild questions are waiting") end
+  if err == "noguild" then return L("Not in a guild") end
+  if err == "unavailable" then return L("The game's guild recipe query is not available") end
+  return L("The guild question failed")
+end
+
+-- The skill line to ask about: the cached schematic's (read-only), else the open profession window's.
+local function recipe_line(recipeID)
+  local S = ns.FS:GetModule("Scanner", true)
+  local ok, schematic = false, nil
+  if S and type(S.GetCachedSchematic) == "function" then ok, schematic = pcall(S.GetCachedSchematic, S, recipeID) end
+  if ok and type(schematic) == "table" and type(schematic.skillLineID) == "number" then return schematic.skillLineID end
+  local api = C_TradeSkillUI
+  if type(api) == "table" and type(api.GetChildProfessionInfo) == "function" then
+    local okInfo, info = pcall(api.GetChildProfessionInfo)
+    if okInfo and type(info) == "table" and type(info.professionID) == "number" and info.professionID > 0 then
+      return info.professionID
+    end
+  end
+end
+
+-- -> skillLineID|nil, reason|nil: why the guild cannot be asked about recipeID now (the Guild tab's reasons).
+local function ask_state(self, recipeID)
+  local N = ns.Social.GuildNative
+  if not self:IsEnabled() then return nil, "off" end
+  if ns.FS.dbIsNewer then return nil, "readonly" end
+  if not self.guildKey then return nil, "noguild" end
+  if not self:Settings().useNative then return nil, "native" end
+  if not (N and N:IsAvailable()) then return nil, "unavailable" end
+  if ns.Social.Gate:IsLocked() then return nil, "locked" end
+  local line = recipe_line(recipeID)
+  if not line then return nil, "unavailable" end
+  return line, nil
+end
+
+local function refresh_panel()
+  local panel = ns.FS:GetModule("ProfessionPanel", true)
+  if panel and panel.RefreshLines then panel:RefreshLines() end
+end
+
+-- Asks the guild (GuildNative:Query: its queue, interval and gate) who knows recipeID. Only the action's onClick
+-- calls this. The answer is cached by GuildNative, so PanelLines lists the crafters it found.
+function Guild:AskGuildForRecipe(recipeID)
+  local line = ask_state(self, recipeID)
+  local N = ns.Social.GuildNative
+  if not line or N:IsPending(recipeID) then return false end
+  local key = self.guildKey .. " " .. tostring(recipeID)
+  panelAnswers[key] = nil
+  N:Query(line, recipeID, function(members, err)
+    panelAnswers[key] = Guild.NativeQueryNotice(members, err)
+    refresh_panel()
+  end)
+  return true
+end
+
+-- The profession panel's action for the selected recipe: nil while Guild is off, outside a guild or with the
+-- profession window line turned off (settings.guild.panelLine), otherwise { text = "Ask guild", enabled, status,
+-- onClick }. Disabled with the reason while it cannot ask, and with "Asking the guild..." while a question about this
+-- recipe is waiting or in flight; status shows the last answer this session. Never queries.
+function Guild:PanelAction(recipeID)
+  if not self:IsEnabled() or not self.guildKey or type(recipeID) ~= "number" then return nil end
+  if not self:Settings().panelLine then return nil end
+  local N = ns.Social.GuildNative
+  local action = { text = L("Ask guild"), enabled = false,
+    onClick = function() Guild:AskGuildForRecipe(recipeID) end }
+  local line, reason = ask_state(self, recipeID)
+  if N and N:IsPending(recipeID) then
+    action.status = L("Asking the guild...")
+  elseif not line then
+    action.status = ask_reason_text(reason)
+  else
+    action.enabled = true
+    action.status = panelAnswers[self.guildKey .. " " .. tostring(recipeID)]
+  end
+  return action
+end
+
+---------------------------------------------------------------------------
 -- Item index
 ---------------------------------------------------------------------------
 
@@ -588,6 +690,9 @@ function Guild:_DirectoryEnable()
   local panel = ns.FS:GetModule("ProfessionPanel", true)
   if panel then
     panel:RegisterLineProvider("guildCrafters", function(recipeID, charKey) return Guild:PanelLines(recipeID, charKey) end)
+    if panel.RegisterLineAction then
+      panel:RegisterLineAction("guildAsk", function(recipeID) return Guild:PanelAction(recipeID) end)
+    end
   end
   -- FS_GUILD_CHANGED is already debounced to 1 s by Guild, so the panel refresh needs no second debounce. Log-only
   -- source: a failing panel or index must not turn Guild off.

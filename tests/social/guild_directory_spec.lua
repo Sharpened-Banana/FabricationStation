@@ -588,6 +588,106 @@ describe("Guild directory", function()
   end)
 
   ---------------------------------------------------------------------------
+  -- "Ask guild" in the profession panel: the native fallback for any selected recipe
+  ---------------------------------------------------------------------------
+
+  describe("PanelAction", function()
+    local function answer(recipeID, list)
+      p4.guild.postQuery = { skillLineID = 2907, recipeID = recipeID, list = list }
+      ns.Social.GuildNative:OnRecipeKnownByMembers()
+    end
+
+    before_each(function()
+      schematics[300] = { skillLineID = 2907, outputItemIDs = { [1] = 7001 } }   -- a recipe nobody listed
+    end)
+
+    it("offers Ask guild for a recipe the directory does not list, and asks only when clicked", function()
+      local a = Guild:PanelAction(300)
+      for _ = 1, 3 do Guild:PanelAction(300) end
+      assert.are.equal(0, p4.guild.queryCount)                 -- drawing the panel never asks
+      assert.are.equal("Ask guild", a.text)
+      assert.is_true(a.enabled)
+      assert.is_nil(a.status)
+      a.onClick()
+      assert.are.equal(1, p4.guild.queryCount)
+      assert.are.same({ skillLineID = 2907, recipeID = 300 }, { skillLineID = p4.guild.lastQuery.skillLineID,
+        recipeID = p4.guild.lastQuery.recipeID })
+    end)
+
+    it("says a question is pending, then shows the answer and the crafters it found", function()
+      Guild:PanelAction(300).onClick()
+      local pending = Guild:PanelAction(300)
+      assert.is_false(pending.enabled)
+      assert.are.equal("Asking the guild...", pending.status)
+      answer(300, { { "Bob", "Bob-Realm", "MAGE", true } })
+      local done = Guild:PanelAction(300)
+      assert.is_true(done.enabled)
+      assert.are.equal("Guild answered: 1 can craft this", done.status)
+      local found
+      for _, l in ipairs(Guild:PanelLines(300, "Me-Realm")) do if l[1]:find("Bob-Realm", 1, true) then found = l end end
+      assert.is_not_nil(found)
+    end)
+
+    it("goes through GuildNative's queue: a second recipe waits for the first", function()
+      schematics[301] = { skillLineID = 2907 }
+      Guild:PanelAction(300).onClick()
+      Guild:PanelAction(301).onClick()
+      assert.are.equal(1, p4.guild.queryCount)
+      assert.are.equal("Asking the guild...", Guild:PanelAction(301).status)
+      answer(300, {})
+      p4.advance(ns.Social.GuildNative.MIN_INTERVAL)
+      assert.are.equal(2, p4.guild.queryCount)
+      assert.are.equal("Guild answered: nobody knows this recipe", Guild:PanelAction(300).status)
+    end)
+
+    it("is disabled with the reason while the gate is locked, and the click asks nothing", function()
+      p4.restriction.chatActive = true
+      local a = Guild:PanelAction(300)
+      assert.is_false(a.enabled)
+      assert.are.equal("Sync paused (instance)", a.status)
+      a.onClick()
+      assert.are.equal(0, p4.guild.queryCount)
+    end)
+
+    it("names every other reason it cannot ask", function()
+      settings.useNative = false
+      assert.are.equal("Turned off in the Guild settings (\"Also use the game's guild recipe list\")",
+        Guild:PanelAction(300).status)
+      settings.useNative = true
+      local query = C_GuildInfo.QueryGuildMembersForRecipe
+      C_GuildInfo.QueryGuildMembersForRecipe = nil
+      assert.are.equal("The game's guild recipe query is not available", Guild:PanelAction(300).status)
+      C_GuildInfo.QueryGuildMembersForRecipe = query
+      assert.are.equal("The game's guild recipe query is not available", Guild:PanelAction(999).status) -- no line
+      ns.FS.dbIsNewer = true
+      assert.are.equal("Read-only: the saved data is from a newer version of the addon", Guild:PanelAction(300).status)
+      ns.FS.dbIsNewer = nil
+      assert.is_false(Guild:PanelAction(999).enabled)
+      assert.is_true(Guild:PanelAction(300).enabled)
+    end)
+
+    it("offers nothing while Guild is off, outside a guild or with the profession window line off", function()
+      settings.panelLine = false
+      assert.is_nil(Guild:PanelAction(300))
+      settings.panelLine = true
+      p4.guild.key = nil; Guild:OnGuildUpdate()
+      assert.is_nil(Guild:PanelAction(300))
+      p4.guild.key = { "G", "Realm" }; Guild:OnGuildUpdate()
+      assert.is_not_nil(Guild:PanelAction(300))
+      ns.FS:SetModuleEnabled("Guild", false)
+      assert.is_nil(Guild:PanelAction(300))
+    end)
+
+    it("is registered as the profession panel's action", function()
+      local actions = panel:CollectActions(300, "Me-Realm")
+      assert.are.equal(1, #actions)
+      assert.are.equal("Ask guild", actions[1].text)
+      ns.FS:SetModuleEnabled("Guild", false)
+      assert.are.same({}, panel:CollectActions(300, "Me-Realm"))
+    end)
+  end)
+
+  ---------------------------------------------------------------------------
   -- Providers and refresh
   ---------------------------------------------------------------------------
 
