@@ -213,6 +213,36 @@ Per character: known recipes, skill, spec state, concentration snapshot, item co
 - First-run setup wizard.
 - CurseForge/Wago release.
 
+## 9a. Phase 5 — pre-1.0 hardening
+
+The work deferred from phase 4 that must settle before the first `v1.0.0` tag. Nothing here adds a feature area; it
+changes how phase 4 data is stored, closes gaps the phase 4 review found, and finishes localization. Priority order:
+
+1. **Compact stored guild profiles and a crafter index** (review M3, M5). Guildmates' profiles are saved in a compact
+   form (the validated wire profile, each profession line's recipes packed into one string) instead of three
+   per-recipe maps, with a forward SavedVariables migration that converts the old shape in place and never wipes
+   data, and a per-guild cap on stored profiles that drops the least recently seen first. Lookups go through a
+   `recipeID -> characters` index kept next to the item index and rebuilt in the same time-sliced ticks, so a tooltip
+   no longer scans every stored profile. The sync wire format and `Protocol.VERSION` do not change.
+2. **Hiding the setup guide is not skipping it.** Only Skip, the close button and finishing record a choice. When the
+   guide is hidden any other way (the UI hidden with Alt+Z, a cinematic, Escape) it stays pending: it comes back with
+   the UI, or at the next login. Guild sync stays held until a real choice, and the hold is still never permanent for
+   a user who is not offered the guide.
+3. **Typed search in the Guild tab.** A recipe name or a shift-clicked item link resolves to recipes, shows their
+   guild crafters, and lists a recipe nobody is known to craft so "Ask guild" can ask the game about it (a click,
+   through the native query's queue and gate).
+4. **Setup guide text fits any language** (review M6): wrapped text boxes are sized from the measured text, and the
+   window grows to fit; a test under an artificially long locale proves nothing is cut off.
+5. **Whole-sentence localization.** Display text built by joining pieces (`"Income: " .. money`, plural endings,
+   bracketed qualifiers) becomes one format-string key per sentence, area by area, with a checker that keeps it that
+   way. English output does not change.
+6. **Small deferred items:** the release gate also checks the `## Interface` line and the licence/notices files; long
+   CHANGELOG and comment lines; the setup guide's duplicate profession row and greyed labels; a missing utility test.
+
+Out of scope for phase 5: the guild privacy defaults (`share = true`, `shareAlts = "guild"`, the user's decision);
+anything that needs the game client to verify (it becomes `P5-` lines in `docs/in-game-checklist.md`); releasing,
+tagging or pushing; Classic; everything in §10.
+
 ## 10. Out of scope
 
 - Classic clients.
