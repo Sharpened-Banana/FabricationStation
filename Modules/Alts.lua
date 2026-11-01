@@ -261,7 +261,7 @@ local function profession_name(skillLineID, record)
   if type(info) == "table" and type(info.professionName) == "string" and info.professionName ~= "" then
     return info.professionName
   end
-  return "Skill " .. tostring(skillLineID)
+  return L["Skill %s"]:format(tostring(skillLineID))
 end
 
 function Alts:ProfessionName(skillLineID)
@@ -604,7 +604,7 @@ local function holding_text(entry)
   if entry.stale then
     parts[#parts + 1] = entry.dataAgeSeconds and L["%s old"]:format(format_age(entry.dataAgeSeconds)) or L["age unknown"]
   end
-  return entry.total .. (entry.bank == nil and "+" or "") .. " (" .. table.concat(parts, ", ") .. ")"
+  return L["%s (%s)"]:format(entry.total .. (entry.bank == nil and "+" or ""), table.concat(parts, L[", "]))
 end
 
 -- Tooltip lines { {left, right} } for the item: one per visible character holding it (left: the short name on the
@@ -624,15 +624,15 @@ function Alts:HoldingsLines(itemID)
   for i = 1, shown do
     lines[#lines + 1] = { display_name(row.chars[i].charKey, ctx), holding_text(row.chars[i]) }
   end
-  if #row.chars > shown then lines[#lines + 1] = { "+" .. (#row.chars - shown) .. " more", "" } end
+  if #row.chars > shown then lines[#lines + 1] = { L["+%d more"]:format(#row.chars - shown), "" } end
   if row.warband and row.warband > 0 then
     local text = tostring(row.warband)
-    if row.warbandStale then text = text .. " (" .. format_age(row.warbandAgeSeconds) .. " old)" end
+    if row.warbandStale then text = L["%s (%s old)"]:format(text, format_age(row.warbandAgeSeconds)) end
     lines[#lines + 1] = { L["Warband bank"], text }
   end
   local total = tostring(row.total) .. (row.partial and "+" or "")
-  if row.warband == nil then total = total .. " (warband not scanned)" end
-  lines[#lines + 1] = { "Total", total }
+  if row.warband == nil then total = L["%s (warband not scanned)"]:format(total) end
+  lines[#lines + 1] = { L["Total"], total }
   return lines
 end
 

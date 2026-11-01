@@ -8,9 +8,6 @@ end
 -- them (Task 7 core/crafting/social, 8 orders, 9 customers/ledger, 10 characters, 11 planner). Each task removes
 -- its own files; Task 11 deletes this table and the allowlist entries it explains.
 local PENDING = {
-  -- Task 10: characters
-  ["Modules/Alts.lua"] = true, ["Modules/AltsCollector.lua"] = true, ["UI/AltsDashboard.lua"] = true,
-  ["UI/Tabs/Characters.lua"] = true, ["UI/Tabs/CharactersView.lua"] = true,
   -- Task 11: planner
   ["Modules/Planner.lua"] = true, ["UI/Tabs/Planner.lua"] = true, ["UI/Tabs/PlannerView.lua"] = true,
 }

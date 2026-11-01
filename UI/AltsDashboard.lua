@@ -57,7 +57,7 @@ end
 local function format_pair(pair, isTotal)
   local left, right = tostring(pair[1] or ""), tostring(pair[2] or "")
   if isTotal then
-    local text = "Total: " .. right
+    local text = L["Total: %s"]:format(right)
     return pair.tooltip and color(WARN, text) or text
   end
   if right == "" then return color(DIM, left) end

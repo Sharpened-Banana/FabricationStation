@@ -118,9 +118,9 @@ local function cooldown_text(cooldowns, now)
   local nextIn = soonest and V.FormatDuration(soonest - now) or nil
   local state
   if ready == n then
-    state = "ready"
+    state = L["ready"]
   elseif ready > 0 then
-    state = ready .. " ready"
+    state = L["%d ready"]:format(ready)
   elseif nextIn then
     state = nextIn
   else
@@ -151,7 +151,7 @@ function V.Row(altRow, now)
     profs = {},
   }
   if finite(altRow.olderProfessions) and altRow.olderProfessions > 0 then
-    row.older = "Older expansions: " .. whole(altRow.olderProfessions)
+    row.older = L["Older expansions: %s"]:format(whole(altRow.olderProfessions))
   end
   local urgentWithin = cap_warn_seconds()
   for _, p in ipairs(type(altRow.professions) == "table" and altRow.professions or {}) do
@@ -160,7 +160,7 @@ function V.Row(altRow, now)
     local cds, cdsNext = cooldown_text(p.cooldowns, now)
     row.profs[#row.profs + 1] = {
       skillLineID = p.skillLineID,
-      label = p.name or ("Skill " .. tostring(p.skillLineID)),
+      label = p.name or L["Skill %s"]:format(tostring(p.skillLineID)),
       skill = skill_text(p),
       conc = conc_text(c),
       concUrgent = finite(toFull) and toFull <= urgentWithin,
@@ -195,45 +195,50 @@ local function recipe_name(recipeID)
     local ok, name = pcall(api, recipeID)
     if ok and type(name) == "string" and name ~= "" then return name end
   end
-  return "Recipe " .. tostring(recipeID)
+  return L["Recipe %s"]:format(tostring(recipeID))
 end
 
 local function spec_detail(s, who, now)
   if type(s) ~= "table" then
-    return "  Spec: no data (open this profession's specializations on " .. who .. ")"
+    return L["  Spec: no data (open this profession's specializations on %s)"]:format(who)
   end
-  local spent = (finite(s.spent) and finite(s.max)) and (whole(s.spent) .. "/" .. whole(s.max) .. " spent") or "? spent"
-  local currency = type(s.currencyName) == "string" and s.currencyName ~= "" and s.currencyName or "points"
-  local unspent = (finite(s.unspent) and whole(s.unspent) or "?") .. " unspent " .. currency
-  local age = finite(s.time) and ("data " .. ns.UI.FormatAge(now - s.time) .. " old") or L["data age unknown"]
-  return "  Spec: " .. spent .. DOT .. unspent .. DOT .. age
+  local spent = (finite(s.spent) and finite(s.max)) and L["%s/%s spent"]:format(whole(s.spent), whole(s.max))
+    or L["? spent"]
+  local currency = type(s.currencyName) == "string" and s.currencyName ~= "" and s.currencyName or L["points"]
+  local unspent = L["%s unspent %s"]:format(finite(s.unspent) and whole(s.unspent) or "?", currency)
+  local age = finite(s.time) and L["data %s old"]:format(ns.UI.FormatAge(now - s.time)) or L["data age unknown"]
+  return L["  Spec: %s"]:format(spent .. DOT .. unspent .. DOT .. age)
 end
 
 local function conc_detail(c)
-  if type(c) ~= "table" or not finite(c.now) or not finite(c.max) then return "  Concentration: unknown" end
+  if type(c) ~= "table" or not finite(c.now) or not finite(c.max) then return L["  Concentration: unknown"] end
   local value = whole(c.now) .. "/" .. whole(c.max)
-  if c.secondsToFull == 0 then return "  Concentration: " .. value .. DOT .. "Full" end
-  if c.rateUnknown then return "  Concentration: " .. value .. DOT .. "fill time unknown (no regeneration data)" end
-  if finite(c.secondsToFull) then
-    return "  Concentration: " .. value .. DOT .. "full at " .. clock(c.fullAt) .. " (in "
-      .. V.FormatDuration(c.secondsToFull) .. ")"
+  local when
+  if c.secondsToFull == 0 then
+    when = L["Full"]
+  elseif c.rateUnknown then
+    when = L["fill time unknown (no regeneration data)"]
+  elseif finite(c.secondsToFull) then
+    when = L["full at %s (in %s)"]:format(clock(c.fullAt), V.FormatDuration(c.secondsToFull))
+  else
+    when = L["not full within 14 days"]
   end
-  return "  Concentration: " .. value .. DOT .. "not full within 14 days"
+  return L["  Concentration: %s"]:format(value .. DOT .. when)
 end
 
 local function cooldown_detail(cd, now)
   local state
   if (finite(cd.readyAt) and cd.readyAt <= now) or (finite(cd.charges) and cd.charges > 0) then
-    state = "ready"
+    state = L["ready"]
   elseif finite(cd.readyAt) then
-    state = "ready in " .. V.FormatDuration(cd.readyAt - now) .. " (" .. clock(cd.readyAt) .. ")"
+    state = L["ready in %s (%s)"]:format(V.FormatDuration(cd.readyAt - now), clock(cd.readyAt))
   else
     state = L["ready time unknown"]
   end
   if finite(cd.charges) and finite(cd.maxCharges) and cd.maxCharges > 1 then
-    state = state .. DOT .. "charges " .. whole(cd.charges) .. "/" .. whole(cd.maxCharges)
+    state = state .. DOT .. L["charges %s/%s"]:format(whole(cd.charges), whole(cd.maxCharges))
   end
-  return "  Cooldown: " .. recipe_name(cd.recipeID) .. DOT .. state
+  return L["  Cooldown: %s"]:format(recipe_name(cd.recipeID) .. DOT .. state)
 end
 
 -- AltRow (Alts:GetAltRow), now -> the detail lines: per listed profession a gold "<name> <skill>" title, then its
@@ -248,18 +253,18 @@ function V.DetailLines(altRow, now)
   local lines = {}
   local professions = type(altRow.professions) == "table" and altRow.professions or {}
   for _, p in ipairs(professions) do
-    lines[#lines + 1] = color(GOLD, (p.name or ("Skill " .. tostring(p.skillLineID))) .. " " .. skill_text(p))
+    lines[#lines + 1] = color(GOLD, (p.name or L["Skill %s"]:format(tostring(p.skillLineID))) .. " " .. skill_text(p))
     lines[#lines + 1] = spec_detail(p.spec, who, now)
-    lines[#lines + 1] = "  Knowledge: " .. V.KnowledgeBreakdown(p.knowledge)
+    lines[#lines + 1] = L["  Knowledge: %s"]:format(V.KnowledgeBreakdown(p.knowledge))
     lines[#lines + 1] = conc_detail(p.concentration)
     local cooldowns = type(p.cooldowns) == "table" and p.cooldowns or {}
     for _, cd in ipairs(cooldowns) do
       if type(cd) == "table" then lines[#lines + 1] = cooldown_detail(cd, now) end
     end
-    if #cooldowns == 0 then lines[#lines + 1] = "  Cooldowns: none" end
+    if #cooldowns == 0 then lines[#lines + 1] = L["  Cooldowns: none"] end
   end
   if finite(altRow.olderProfessions) and altRow.olderProfessions > 0 then
-    lines[#lines + 1] = "Older expansions: " .. whole(altRow.olderProfessions) .. " (not shown in the grid)"
+    lines[#lines + 1] = L["Older expansions: %s (not shown in the grid)"]:format(whole(altRow.olderProfessions))
   end
   if #professions == 0 then lines[#lines + 1] = V.EMPTY_TEXT end
   return lines
@@ -283,7 +288,7 @@ for slot = 1, 2 do
     { key = "cds", label = L["Cooldowns"], width = 80, tooltip = L["Cooldowns · ready or time until the next"] },
   }) do
     V.COLUMNS[#V.COLUMNS + 1] = { key = col.key .. slot, label = col.label, width = col.width, right = col.right,
-      badge = col.badge, tooltip = col.tooltip and ("Profession " .. slot .. ": " .. col.tooltip) or nil }
+      badge = col.badge, tooltip = col.tooltip and L["Profession %d: %s"]:format(slot, col.tooltip) or nil }
   end
 end
 V.COLUMNS[#V.COLUMNS + 1] = { key = "gold", label = L["Gold"], width = 100, right = true }
@@ -318,7 +323,7 @@ local function name_text(row)
   local c = colors and row.class and colors[row.class]
   if type(c) == "table" and type(c.colorStr) == "string" then text = "|c" .. c.colorStr .. text .. "|r" end
   if row.isCurrent then text = BULLET .. text end
-  if row.hidden then text = text .. color(DIM, " (hidden)") end
+  if row.hidden then text = text .. color(DIM, L[" (hidden)"]) end
   return text
 end
 
@@ -356,22 +361,26 @@ function V.TooltipLines(row, note)
   if note == nil then note = V.CurrentDataNote() end
   local lines = { tostring(row.charKey or row.name) }
   if row.hidden then lines[#lines + 1] = L["Hidden (shown because \"Show hidden\" is ticked)"] end
-  lines[#lines + 1] = "Gold: " .. row.gold
+  lines[#lines + 1] = L["Gold: %s"]:format(row.gold)
   if row.isCurrent then
     lines[#lines + 1] = L["Last seen: online"]
   elseif row.neverSeen then
     lines[#lines + 1] = L["Last seen: never (stale)"]
   else
-    lines[#lines + 1] = "Last seen: " .. row.age .. " ago" .. (row.staleAge and " (stale)" or "")
+    lines[#lines + 1] = (row.staleAge and L["Last seen: %s ago (stale)"] or L["Last seen: %s ago"]):format(row.age)
   end
   for _, p in ipairs(row.profs) do
     lines[#lines + 1] = p.label .. " " .. p.skill
-    lines[#lines + 1] = "  Concentration: " .. p.conc
-    lines[#lines + 1] = "  Knowledge left this week: " .. p.kp .. (note and (DOT .. note) or "")
-    lines[#lines + 1] = "  Spec: " .. p.spec
-    lines[#lines + 1] = "  Moxie: " .. p.moxie
-    local nextIn = p.cdsNext and p.cds:sub(-#p.cdsNext) ~= p.cdsNext and (", next in " .. p.cdsNext) or ""
-    lines[#lines + 1] = "  Cooldowns: " .. p.cds .. nextIn
+    lines[#lines + 1] = L["  Concentration: %s"]:format(p.conc)
+    local kpLine = L["  Knowledge left this week: %s"]:format(p.kp)
+    lines[#lines + 1] = note and (kpLine .. DOT .. note) or kpLine
+    lines[#lines + 1] = L["  Spec: %s"]:format(p.spec)
+    lines[#lines + 1] = L["  Moxie: %s"]:format(p.moxie)
+    if p.cdsNext and p.cds:sub(-#p.cdsNext) ~= p.cdsNext then
+      lines[#lines + 1] = L["  Cooldowns: %s, next in %s"]:format(p.cds, p.cdsNext)
+    else
+      lines[#lines + 1] = L["  Cooldowns: %s"]:format(p.cds)
+    end
   end
   if row.empty then lines[#lines + 1] = row.empty end
   if row.older then lines[#lines + 1] = row.older end
@@ -389,7 +398,7 @@ end
 -- another build) never mark knowledge data as old.
 function V.DataBuildNote(knowledgeBuild, clientBuild)
   if not finite(knowledgeBuild) or not finite(clientBuild) or knowledgeBuild == clientBuild then return nil end
-  return "data build " .. whole(knowledgeBuild) .. " (outdated)"
+  return L["data build %s (outdated)"]:format(whole(knowledgeBuild))
 end
 
 -- DataBuildNote for this session: the Knowledge table's build and the game build (Core's FS:GameDataStatus), or nil.
@@ -405,9 +414,9 @@ V.MARKER_LABEL = L["Old data"]
 function V.DataMarker(knowledgeBuild, clientBuild)
   if not V.DataBuildNote(knowledgeBuild, clientBuild) then return nil end
   return { label = V.MARKER_LABEL, tooltip = {
-    "Game data build " .. whole(knowledgeBuild) .. " is outdated",
-    "Knowledge sources and counts come from game build " .. whole(knowledgeBuild) .. "; this is game build "
-      .. whole(clientBuild) .. ", so they may be wrong.",
+    L["Game data build %s is outdated"]:format(whole(knowledgeBuild)),
+    L["Knowledge sources and counts come from game build %s; this is game build %s, so they may be wrong."]
+      :format(whole(knowledgeBuild), whole(clientBuild)),
   } }
 end
 
@@ -441,21 +450,23 @@ function V.Header(rows, note)
   if goldKnown > 0 and goldUnknown > 0 then goldText, goldFull = goldText .. "+", goldFull .. "+" end
   local kpText = "?"
   if kpKnown then kpText = whole(kp) .. (kpPartial and "+?" or "") end
-  local base = "Characters: " .. #rows .. DOT .. "Gold: " .. goldText .. DOT .. "Knowledge left: " .. kpText .. " KP"
+  local base = table.concat({ L["Characters: %d"]:format(#rows), L["Gold: %s"]:format(goldText),
+    L["Knowledge left: %s KP"]:format(kpText) }, DOT)
   local text = note and (base .. DOT .. note) or base
   local tooltip = {
-    "Characters: " .. #rows,
-    "Gold: " .. goldFull .. " (all characters shown)",
-    "Knowledge left this week: " .. kpText .. " KP (professions with knowledge data)",
+    L["Characters: %d"]:format(#rows),
+    L["Gold: %s (all characters shown)"]:format(goldFull),
+    L["Knowledge left this week: %s KP (professions with knowledge data)"]:format(kpText),
   }
   if goldUnknown > 0 then
-    tooltip[#tooltip + 1] = goldUnknown .. (goldUnknown == 1 and " character's" or " characters'") .. " gold is unknown"
+    tooltip[#tooltip + 1] = (goldUnknown == 1 and L["%d character's gold is unknown"] or L["%d characters' gold is unknown"])
+      :format(goldUnknown)
   end
   if kpPartial then
     tooltip[#tooltip + 1] = L["?: some professions have no knowledge data, or no quest data from this week yet"]
   end
   if note then
-    tooltip[#tooltip + 1] = "Knowledge " .. note .. ": the game has changed since, so counts may be wrong"
+    tooltip[#tooltip + 1] = L["Knowledge %s: the game has changed since, so counts may be wrong"]:format(note)
   end
   return { text = text, base = base, note = note or nil, tooltip = tooltip }
 end

@@ -40,9 +40,6 @@ Modules/Social/GuildOptions.lua:build failed
 # one; the area task that turns each sentence into one format string (Tasks 7-11) deletes its entries here, and
 # stale_allowlist fails while an entry matches nothing. What the checkers skip on purpose is explained above
 # NON_DISPLAY_LINE in tools/check_locale.lua.
-UI/Tabs/Characters.lua: (hidden characters are not searched)
-UI/Tabs/Characters.lua: (this session only: the saved data is from a newer version)
-UI/Tabs/Characters.lua: (tick Show hidden to see it again)
 UI/Tabs/PlannerView.lua:this character
 UI/Tabs/PlannerView.lua:This character
 
@@ -50,6 +47,3 @@ UI/Tabs/PlannerView.lua:This character
 Modules/Planner.lua:unknown
 UI/OrdersPanel.lua:none
 UI/ProfessionPanel.lua:estimate
-
-# Short suffixes appended to an already built cell text (colour code around a leading space).
-UI/Tabs/CharactersView.lua: (hidden)

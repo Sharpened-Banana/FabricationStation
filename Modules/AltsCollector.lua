@@ -121,7 +121,7 @@ function Alts:GetSpecSnapshot(charKey, skillLineID)
       local ranks = perkRanks[pathID] or {}
       table.sort(ranks)
       paths[pathID] = {
-        name = names[pathID] or ("Path " .. tostring(pathID)),
+        name = names[pathID] or L["Path %s"]:format(tostring(pathID)),
         rank = raw > 0 and raw - 1 or 0,
         maxRank = rawMax > 0 and rawMax - 1 or 0,
         available = path.state ~= locked,
@@ -348,7 +348,7 @@ function Alts:DebugKnowledge()
       for _, questID in ipairs(type(source.quests) == "table" and source.quests or {}) do
         parts[#parts + 1] = tostring(questID) .. "=" .. (isDone and tostring(isDone(questID) and true or false) or "?")
       end
-      print(("FabricationStation: %s %s"):format(tostring(source.id), table.concat(parts, " ")))
+      print(("FabricationStation: %s %s"):format(tostring(source.id), table.concat(parts, " ")))   -- locale: joined (debug dump of quest ids)
       shown = shown + 1
     end
   end

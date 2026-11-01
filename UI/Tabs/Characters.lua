@@ -153,15 +153,15 @@ function Tab.ResultRow(r, me)
     if e.stale then
       parts[#parts + 1] = e.dataAgeSeconds and L["%s old"]:format(ns.UI.FormatAge(e.dataAgeSeconds)) or L["age unknown"]
     end
-    tooltip[#tooltip + 1] = short_name(e.charKey, me) .. ": " .. count_text(e) .. " (" .. table.concat(parts, ", ") .. ")"
+    tooltip[#tooltip + 1] = L["%s: %s (%s)"]:format(short_name(e.charKey, me), count_text(e), ns.UI.JoinList(parts))
   end
-  tooltip[#tooltip + 1] = "Warband bank: " .. warbandTip
-  tooltip[#tooltip + 1] = "Total: " .. total
+  tooltip[#tooltip + 1] = L["Warband bank: %s"]:format(warbandTip)
+  tooltip[#tooltip + 1] = L["Total: %s"]:format(total)
   return {
     key = r.itemID,
     cells = {
       item = (icon and ("|T" .. tostring(icon) .. ":" .. ICON_SIZE .. ":" .. ICON_SIZE .. "|t ") or "") .. name,
-      total = total, chars = table.concat(list, ", "), warband = warband,
+      total = total, chars = ns.UI.JoinList(list), warband = warband,
     },
     badges = { chars = #chars > RESULT_CHARS and ("+" .. (#chars - RESULT_CHARS)) or "" },
     tooltip = tooltip,
@@ -175,19 +175,20 @@ function Tab.SearchStatus(query, rows, hiddenShown)
   local DOT = ns.UI.ViewUtil.DOT
   local n = #rows
   if n > 0 then
-    local text = "Search: " .. n .. (n == 1 and " item" or " items")
-    if hiddenShown then text = text .. DOT .. "visible characters only (hidden ones are not searched)" end
+    local text = (n == 1 and L["Search: %d item"] or L["Search: %d items"]):format(n)
+    if hiddenShown then text = text .. DOT .. L["visible characters only (hidden ones are not searched)"] end
     for _, r in ipairs(rows) do
-      if r.partial then return text .. DOT .. "+: a bank or the warband bank was never scanned", nil end
+      if r.partial then return text .. DOT .. L["+: a bank or the warband bank was never scanned"], nil end
     end
     return text, nil
   end
   if not query:match("^%d+$") and #query < 3 then
     return L["Search: too short"], L["Type at least 3 letters of a reagent name, or an item ID"]
   end
-  return L["Search: no items"],
-    (L['No reagent named "%s" on your visible characters or in the warband bank']):format((query:gsub("|", "||")))
-      .. (hiddenShown and " (hidden characters are not searched)" or "")
+  local shown = (query:gsub("|", "||"))
+  return L["Search: no items"], (hiddenShown
+    and L['No reagent named "%s" on your visible characters or in the warband bank (hidden characters are not searched)']
+    or L['No reagent named "%s" on your visible characters or in the warband bank']):format(shown)
 end
 
 ---------------------------------------------------------------------------
@@ -220,10 +221,10 @@ local function set_hidden(charKey, hide)
   if not A or type(charKey) ~= "string" then return end
   A:SetHidden(charKey, hide)
   if hide then
-    notice = "Hidden: " .. charKey .. (ns.FS.dbIsNewer and " (this session only: the saved data is from a newer version)"
-      or " (tick Show hidden to see it again)")
+    notice = (ns.FS.dbIsNewer and L["Hidden: %s (this session only: the saved data is from a newer version)"]
+      or L["Hidden: %s (tick Show hidden to see it again)"]):format(charKey)
   else
-    notice = "Shown: " .. charKey
+    notice = L["Shown: %s"]:format(charKey)
   end
   refresh()
 end
@@ -412,13 +413,13 @@ function refresh()
     notice = nil
     view.grid.frame:Hide(); view.results.frame:Hide()
     view.header:SetText(L["Characters"])
-    view.headerTooltip = { "Characters", V().OFF_TEXT }
+    view.headerTooltip = { L["Characters"], V().OFF_TEXT }
     set_marker(nil)
     view.status:SetText("")
     view.statusText = ""
     view.showHiddenLabel:SetText(L["Show hidden"])
     view.hiddenCount = nil
-    show_empty(V().OFF_TEXT .. ": turn it on in Settings > Modules to see your characters")
+    show_empty(L["%s: turn it on in Settings > Modules to see your characters"]:format(V().OFF_TEXT))
     apply_layout()
     return
   end
@@ -524,7 +525,7 @@ local function build_bar(container, created)
   created.showHiddenHit = hover_area(bar, label, function()
     local n = view and view.hiddenCount
     return {
-      n and ("Show hidden (" .. n .. ")") or L["Show hidden"],
+      n and L["Show hidden (%d)"]:format(n) or L["Show hidden"],
       L["Lists the characters you hid with \"Hide character\" (in a row's detail), marked \"(hidden)\"."],
       L["The reagent search, the Planner, the holdings tooltip lines and the knowledge widget always leave them out."],
     }

@@ -36,6 +36,111 @@ describe("a non-identity ns.L", function()
     assert.is_false(V.Row(A:GetAltRow("Bren-Silvermoon", NOW), NOW).neverSeen)
     assert.is_false(V.Row(A:GetAltRow("Aria-Silvermoon", NOW), NOW).neverSeen)
   end)
+
+  -- Task 10: the Characters row tooltip and detail lines are whole keys, so a translated ns.L reaches every sentence.
+  -- The title, the profession titles ("Herbalism 50/100") and the unit values are data, not sentences.
+  local function is_title(row, line)
+    if line == tostring(row.charKey or row.name) then return true end
+    for _, p in ipairs(row.profs) do if line == p.label .. " " .. p.skill then return true end end
+    return false
+  end
+
+  it("translates every sentence of the row tooltip (a stale character)", function()
+    local row = V.Row(A:GetAltRow("Bren-Silvermoon", NOW), NOW)
+    local lines = V.TooltipLines(row)
+    for i, line in ipairs(lines) do
+      if not is_title(row, line) then assert.equal("T:", plain(line):sub(1, 2), i .. ": " .. plain(line)) end
+    end
+    assert.equal("T:Last seen: 10d ago (stale)", lines[3])
+    assert.equal("T:  Knowledge left this week: 3", lines[6])
+    assert.equal("T:  Concentration: 1000/1000 \194\183 T:Full", lines[5])
+  end)
+
+  it("translates every sentence of the current character's tooltip", function()
+    local row = V.Row(A:GetAltRow("Aria-Silvermoon", NOW), NOW)
+    local lines = V.TooltipLines(row)
+    for i, line in ipairs(lines) do
+      if not is_title(row, line) then assert.equal("T:", plain(line):sub(1, 2), i .. ": " .. plain(line)) end
+    end
+    assert.equal("T:Older expansions: 1", row.older)
+  end)
+
+  it("adds the outdated-data note to the knowledge line and explains it", function()
+    local row = V.Row(A:GetAltRow("Aria-Silvermoon", NOW), NOW)
+    local note = V.DataBuildNote(70000, 70575)
+    assert.equal("T:data build 70000 (outdated)", note)
+    local lines = V.TooltipLines(row, note)
+    assert.equal("T:  Knowledge left this week: 2 \194\183 T:data build 70000 (outdated)", lines[6])
+    local marker = V.DataMarker(70000, 70575)
+    assert.equal("T:Game data build 70000 is outdated", marker.tooltip[1])
+    assert.equal("T:Knowledge sources and counts come from game build 70000; this is game build 70575, so they may be wrong.",
+      marker.tooltip[2])
+    local header = V.Header({ A:GetAltRow("Aria-Silvermoon", NOW) }, note)
+    assert.equal("T:Knowledge T:data build 70000 (outdated): the game has changed since, so counts may be wrong",
+      header.tooltip[#header.tooltip])
+  end)
+
+  it("translates the header text and its tooltip, with and without unknown gold", function()
+    local rows = { A:GetAltRow("Aria-Silvermoon", NOW), A:GetAltRow("Bren-Silvermoon", NOW) }
+    local header = V.Header(rows, nil)
+    assert.equal(1, header.text:find("T:Characters: 2 \194\183 T:Gold: ", 1, true))
+    assert.truthy(header.text:find("\194\183 T:Knowledge left: ", 1, true))
+    assert.truthy(header.text:find(" KP", 1, true))
+    for i, line in ipairs(header.tooltip) do assert.equal("T:", line:sub(1, 2), i .. ": " .. line) end
+    rows[2].gold = nil
+    local unknown = V.Header(rows, nil)
+    assert.equal("T:1 character's gold is unknown", unknown.tooltip[4])
+    rows[1].gold = nil
+    assert.equal("T:2 characters' gold is unknown", V.Header(rows, nil).tooltip[4])
+  end)
+
+  it("translates the detail lines under an opened row", function()
+    for _, name in ipairs({ "Aria-Silvermoon", "Bren-Silvermoon" }) do
+      local altRow = A:GetAltRow(name, NOW)
+      local lines = V.DetailLines(altRow, NOW)
+      for i, line in ipairs(lines) do
+        if i > 1 then assert.equal("T:", plain(line):sub(1, 2), name .. " " .. i .. ": " .. plain(line)) end
+      end
+    end
+    local lines = V.DetailLines(A:GetAltRow("Aria-Silvermoon", NOW), NOW)
+    assert.truthy(lines[2]:find("T:  Spec: T:17/63 spent \194\183 T:4 unspent Blacksmithing Knowledge \194\183 T:data ", 1, true))
+    assert.truthy(lines[4]:find("\194\183 T:full at ", 1, true))
+    assert.truthy(lines[5]:find("T:  Cooldown: T:Recipe 1001 \194\183 T:ready in 2h 0m (", 1, true))
+    assert.equal("T:Older expansions: 1 (not shown in the grid)", lines[6])
+    assert.equal("T:  Spec: no data (open this profession's specializations on Bren)",
+      V.DetailLines(A:GetAltRow("Bren-Silvermoon", NOW), NOW)[2])
+  end)
+
+  it("translates the unknown and next-cooldown variants", function()
+    local row = { charKey = "X-Y", name = "X", gold = "1g", age = "1d", profs = { { label = "P", skill = "1/2",
+      conc = "5/10", kp = "1", spec = "?", moxie = "1", cds = "2 \194\183 T:ready", cdsNext = "1h" } } }
+    local lines = V.TooltipLines(row, nil)
+    assert.equal("T:  Cooldowns: 2 \194\183 T:ready, next in 1h", lines[#lines - 1])
+    row.profs[1].cds = "2 \194\183 1h"
+    lines = V.TooltipLines(row, nil)
+    assert.equal("T:  Cooldowns: 2 \194\183 1h", lines[#lines - 1])
+    local detail = V.DetailLines({ name = "X", professions = { { name = "P", skill = 1, maxSkill = 2, spec = {},
+      concentration = { now = 1, max = 2, rateUnknown = true }, cooldowns = {
+        { recipeID = 8, readyAt = NOW - 1 }, { recipeID = 9, readyAt = NOW - 1, charges = 1, maxCharges = 2 },
+        { recipeID = 7 } } } } }, NOW)
+    assert.equal("T:  Spec: T:? spent \194\183 T:? unspent T:points \194\183 T:data age unknown", detail[2])
+    assert.equal("T:  Concentration: 1/2 \194\183 T:fill time unknown (no regeneration data)", detail[4])
+    assert.equal("T:  Cooldown: T:Recipe 8 \194\183 T:ready", detail[5])
+    assert.equal("T:  Cooldown: T:Recipe 9 \194\183 T:ready \194\183 T:charges 1/2", detail[6])
+    assert.equal("T:  Cooldown: T:Recipe 7 \194\183 T:ready time unknown", detail[7])
+    assert.equal("T:  Concentration: unknown", V.DetailLines({ professions = { { name = "P" } } }, NOW)[4])
+  end)
+
+  it("translates the cooldown cell, the hidden mark and the slot tooltips", function()
+    local row = V.Row(A:GetAltRow("Aria-Silvermoon", NOW), NOW)
+    row.hidden = true
+    assert.truthy(plain(V.CellTexts(row, { hidden = {} }).name):find("T: (hidden)", 1, true))
+    assert.equal("1 \194\183 2h 0m", row.profs[1].cds)   -- a duration, not a sentence
+    local cooldowns = { { readyAt = NOW - 5 }, { readyAt = NOW + 3600 }, { readyAt = NOW - 1 } }
+    assert.equal("3 \194\183 T:2 ready", ns.UI.CharactersView.Row({ professions = { { skillLineID = 1, cooldowns = cooldowns } } },
+      NOW).profs[1].cds)
+    assert.equal("T:Skill 7 ", V.Row({ professions = { { skillLineID = 7 } } }, NOW).profs[1].label .. " ")
+  end)
 end)
 
 describe("a non-identity ns.L (data compared, not display text)", function()
@@ -415,5 +520,119 @@ describe("a non-identity ns.L (ledger sentences)", function()
     reg.ledger.build(container)
     reg.ledger.refresh(container)
     assert.equal("T:1 entries, newest <1m ago", plain(ns.FS:GetModule("LedgerTab"):GetView().header:GetText()))
+  end)
+end)
+
+-- Task 10: the Characters tab, the holdings tooltip lines and the knowledge widget.
+describe("a non-identity ns.L (characters sentences)", function()
+  local TAB_FILES = { "Modules/Alts.lua", "Modules/AltsCollector.lua", "UI/Widgets/ExpandGrid.lua", "UI/Tabs/ViewUtil.lua",
+    "UI/Tabs/CharactersView.lua", "UI/Tabs/PlannerView.lua", "Modules/Planner.lua", "Modules/PlannerSpec.lua",
+    "UI/OrdersPanel.lua", "UI/Tabs/Characters.lua", "UI/AltsDashboard.lua" }
+  local tooltip = { lines = {} }
+  local ns, env, W, A, Tab
+
+  -- Edit boxes, check buttons and buttons that keep their text and checked state (the shared stubs make them no-ops).
+  local function stateful_frames()
+    local real = _G.CreateFrame
+    _G.CreateFrame = function(frameType, name, parent, template)
+      local f = real(frameType, name, parent, template)
+      if frameType == "EditBox" or frameType == "CheckButton" or frameType == "Button" then
+        local text, checked = "", false
+        function f:SetText(t) text = t end
+        function f:GetText() return text end
+        function f:SetChecked(v) checked = v and true or false end
+        function f:GetChecked() return checked end
+        if template == "SearchBoxTemplate" then f.Instructions = f:CreateFontString() end
+      end
+      return f
+    end
+  end
+
+  before_each(function()
+    tooltip.lines = {}
+    ns, env, W = phase3_env({ files = TAB_FILES, wow = {
+      GameTooltip = {
+        SetOwner = function() tooltip.lines = {} end,
+        SetText = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+        AddLine = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+        Show = function() end, Hide = function() end,
+      },
+      C_Item = { GetItemCount = function() return nil end,
+        GetItemNameByID = function(id) return id == 2001 and "Bismuth Ore" or nil end },
+    } })
+    stateful_frames()
+    A = ns.FS:GetModule("Alts")
+    Tab = ns.UI.CharactersTab
+    W.advance(1)
+    setmetatable(ns.L, { __index = function(_, key) return "T:" .. key end })
+  end)
+
+  it("translates the holdings tooltip lines, warband age and totals included", function()
+    local lines = A:HoldingsLines(2001)
+    assert.equal("T:15 (T:bags 5T:, T:bank 10)", lines[1][2])
+    assert.equal("T:3 (T:reagent bank 3T:, T:10d old)", lines[2][2])
+    assert.equal("T:Warband bank", lines[3][1])
+    assert.equal("T:Total", lines[4][1])
+    A:Settings().tooltipMaxChars = 1
+    assert.equal("T:+1 more", A:HoldingsLines(2001)[2][1])
+  end)
+
+  it("translates the warband bank age and the unscanned warband bank in the holdings", function()
+    ns.FS.db.global.warband.time = NOW - 10 * 86400
+    local lines = A:HoldingsLines(2001)
+    assert.equal("T:7 (10d old)", lines[3][2])
+    ns.FS.db.global.warband = nil
+    lines = A:HoldingsLines(2001)
+    assert.equal("T:18+ (warband not scanned)", lines[#lines][2])
+  end)
+
+  it("translates the reagent search status and its empty text", function()
+    assert.equal("T:Search: 1 item", (Tab.SearchStatus("ore", { {} }, false)))
+    assert.equal("T:Search: 2 items", (Tab.SearchStatus("ore", { {}, {} }, false)))
+    assert.equal("T:Search: 1 item \194\183 T:visible characters only (hidden ones are not searched)",
+      (Tab.SearchStatus("ore", { {} }, true)))
+    assert.equal("T:Search: 1 item \194\183 T:+: a bank or the warband bank was never scanned",
+      (Tab.SearchStatus("ore", { { partial = true } }, false)))
+    local _, empty = Tab.SearchStatus("zzz", {}, false)
+    assert.equal("T:No reagent named \"zzz\" on your visible characters or in the warband bank", empty)
+    local _, hidden = Tab.SearchStatus("zzz", {}, true)
+    assert.equal("T:No reagent named \"zzz\" on your visible characters or in the warband bank "
+      .. "(hidden characters are not searched)", hidden)
+  end)
+
+  it("translates a search result row's tooltip", function()
+    local rows = A:FindItems("bismuth")
+    assert.is_true(#rows > 0)
+    local row = Tab.ResultRow(rows[1], "Aria-Silvermoon")
+    assert.equal("Bismuth Ore", row.tooltip[1])
+    for i = 2, #row.tooltip do assert.equal("T:", row.tooltip[i]:sub(1, 2), i .. ": " .. row.tooltip[i]) end
+    assert.equal("T:Aria: 15 (T:bags 5T:, T:bank 10)", row.tooltip[2])
+    assert.equal("T:Warband bank: 7", row.tooltip[#row.tooltip - 1])
+    assert.equal("T:Total: 25", row.tooltip[#row.tooltip])
+  end)
+
+  it("translates the hide and show notices of the status line", function()
+    local container = CreateFrame("Frame")
+    container:SetSize(716, 500)
+    local reg = env.registered.tabs
+    ns.FS:GetModule("MainWindow").RefreshTab = function(_, id) reg[id].refresh(container) end
+    reg.characters.build(container)
+    reg.characters.refresh(container)
+    local v = ns.FS:GetModule("CharactersTab"):GetView()
+    local row
+    for i = 1, v.grid.shownRows do
+      if v.grid.rowPool[i].data.key == "Bren-Silvermoon" then row = v.grid.rowPool[i] end
+    end
+    row:GetScript("OnClick")(row)
+    local hide = v.grid.detailPool[1].hideButton
+    hide:GetScript("OnClick")(hide)
+    assert.equal("T:Hidden: Bren-Silvermoon (tick Show hidden to see it again)", plain(v.status:GetText()))
+    assert.equal("T:Show hidden (1)", v.showHiddenLabel:GetText())
+  end)
+
+  it("translates the knowledge widget's total line", function()
+    local checklist = ns.FS:GetModule("Planner"):GetKnowledgeChecklist(NOW)
+    local model = ns.UI.AltsDashboard.KnowledgeModel(checklist, "ok", 6)
+    assert.truthy(plain(model.lines[1]):find("T:Total: ", 1, true))
   end)
 end)
