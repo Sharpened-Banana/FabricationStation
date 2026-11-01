@@ -1,7 +1,7 @@
 local _, ns = ...
 local L = ns.L
 
--- Ledger tab: a row of section buttons (Tab.SECTIONS: Profit, Auctions; the choice is kept for the session only,
+-- Ledger tab: a row of section buttons (Tab.SECTIONS: Profit, Auctions, Crafts; the choice is kept for the session only,
 -- default Profit) above one scrolling page. Profit is what the player earned crafting (Ledger module), in four parts:
 --   * Weekly profit for the last WEEKS reset weeks plus their total (Ledger:Weekly): week, income, cost, profit and a
 --     note "partial: <n> with missing or partial cost" when some of the week's sales or commissions had no known (or
@@ -18,6 +18,11 @@ local L = ns.L
 -- item, after the AH cut) and Listed now ("?" while no listing was read), best sellers first. Sales come from the
 -- Ledger's sold mail, so with the Ledger off Sold and Rate are "?" and the row tooltip says why. Cancelled, Expired and
 -- Posted are hidden first when narrow. A status line says when the sale log is off (what was recorded still shows).
+-- Crafts (phase 7) is the craft log over the last WEEKS weeks (CraftLog:Summary), one row per recipe, most crafted first:
+-- Crafts, Quality ("2 of 3 as predicted": the crafts whose quality matched FabricationStation's prediction, of those
+-- where both are known), Multicraft (the extra items seen next to the expected ones), Resourcefulness (crafts that
+-- returned reagents) and Concentration (spent next to predicted). A number the game did not report is "?", never 0, and
+-- the row tooltip says how many crafts it leaves out. Concentration and Resourcefulness are hidden first when narrow.
 -- The page is one pooled virtual list in a plain scroll frame, as in the Orders and Queue tabs; each list item is a
 -- heading, a column header, a data row, a note or a spacer, and a pooled row keeps one set of cells per section.
 --
@@ -47,6 +52,7 @@ ns.UI.LedgerTab = Tab
 local TAB_ID, SOURCE, REFRESH_SOURCE = "ledger", "Tab:ledger", "LedgerTab"
 local REFRESH_KEY, REFRESH_DELAY = "ledgerTab.refresh", 0.5
 local WEEKS = 8
+local WEEK_SECONDS = 7 * 86400
 local ROW_HEIGHT, BAR_HEIGHT = 18, 22
 local PAD, GAP = 6, 4
 local MIN_FLEX = 120
@@ -56,10 +62,11 @@ local SCROLL_STEP = ROW_HEIGHT * 3
 local DIM, WARN, GOOD, BAD = "|cff9d9d9d", "|cffffd100", "|cff40ff40", "|cffff4040"
 local WHITE, GREY, GOLD = { 1, 1, 1 }, { 0.62, 0.62, 0.62 }, { 1, 0.82, 0 }
 
--- The page buttons above the list. Task 10 appends "crafts".
+-- The page buttons above the list.
 Tab.SECTIONS = {
   { id = "profit", label = L["Profit"] },
   { id = "auctions", label = L["Auctions"] },
+  { id = "crafts", label = L["Crafts"] },
 }
 local DEFAULT_SECTION = "profit"
 local SECTION_BAR_HEIGHT, SECTION_BUTTON_WIDTH, SECTION_BUTTON_HEIGHT = 24, 90, 20
@@ -73,6 +80,8 @@ local OFF_DETAIL = L["Turn the Ledger on again in /fs settings > Modules."]
 local PARTIAL_DETAIL = L["Their cost is not subtracted, so the real profit may be lower than shown."]
 local SALELOG_OFF_NOTICE = L["Sale log off: nothing new is recorded"]
 local SALELOG_OFF_DETAIL = L["Turn the Sale log on again in /fs settings > Modules."]
+local CRAFTLOG_OFF_NOTICE = L["Craft log off: nothing new is recorded"]
+local CRAFTLOG_OFF_DETAIL = L["Turn the Craft log on again in /fs settings > Modules."]
 
 local TYPE_LABELS = { craft = L["craft"], sale = L["sale"], commission = L["commission"] }
 local TYPE_NAMES = { craft = L["Craft (cost record)"], sale = L["Auction sale"], commission = L["Order commission"] }
@@ -136,6 +145,18 @@ SECTIONS.auction = {
     { key = "listed", label = L["Listed"], width = 44, right = true },
   },
   hide = { "cancelled", "expired", "posted" },
+}
+-- Crafts: at 516 px the fixed columns leave 28 px for Recipe, so Concentration goes first (144 px), Resourcefulness next.
+SECTIONS.craft = {
+  columns = {
+    { key = "recipe", label = L["Recipe"], flex = true },
+    { key = "crafts", label = L["Crafts"], width = 40, right = true },
+    { key = "quality", label = L["Quality"], width = 112 },
+    { key = "multicraft", label = L["Multicraft"], width = 104 },
+    { key = "resourcefulness", label = L["Resourcefulness"], width = 88 },
+    { key = "concentration", label = L["Concentration"], width = 112 },
+  },
+  hide = { "concentration", "resourcefulness" },
 }
 for _, def in pairs(SECTIONS) do
   def.widths, def.hideable, def.used = {}, {}, 2 * PAD + (#def.columns - 1) * GAP
@@ -474,6 +495,40 @@ function Tab.AuctionDisplayRows(rows, windowDays)
   return items
 end
 
+-- CraftLog:Summary's { [recipeID] = RecipeCraftStats } -> one row per recipe: { recipeID, name, <the stats> } (copies),
+-- most crafts first, then by name (case-insensitive), then recipeID. `names` = { [recipeID] = name } for the recipes it
+-- knows; the others use the cached schematic's name, else "Recipe <id>". Unknown stats stay nil.
+function Tab.CraftRows(summary, names)
+  local rows = {}
+  names = type(names) == "table" and names or {}
+  for recipeID, s in pairs(type(summary) == "table" and summary or {}) do
+    if type(s) == "table" then
+      local row = { recipeID = recipeID, name = names[recipeID] or recipe_name(recipeID) }
+      for k, v in pairs(s) do row[k] = v end
+      rows[#rows + 1] = row
+    end
+  end
+  table.sort(rows, function(a, b)
+    local ca, cb = count(a.crafts), count(b.crafts)
+    if ca ~= cb then return ca > cb end
+    local na, nb = tostring(a.name):lower(), tostring(b.name):lower()
+    if na ~= nb then return na < nb end
+    return id_less(a.recipeID, b.recipeID)
+  end)
+  return rows
+end
+
+-- The Crafts page as list items: the column header, a row per recipe, a spacer and the footer note. Empty without rows.
+function Tab.CraftDisplayRows(rows)
+  local items = {}
+  if type(rows) ~= "table" or #rows == 0 then return items end
+  items[1] = { kind = "header", section = "craft" }
+  for _, data in ipairs(rows) do items[#items + 1] = { kind = "row", section = "craft", data = data } end
+  items[#items + 1] = { kind = "spacer" }
+  items[#items + 1] = { kind = "note", text = (L["Your crafts over the last %d weeks, next to the predictions."]):format(WEEKS) }
+  return items
+end
+
 -- The item's icon as texture markup ("" when the client has none cached), then its name.
 local function icon_markup(itemID)
   local api = type(C_Item) == "table" and C_Item.GetItemIconByID
@@ -483,9 +538,40 @@ local function icon_markup(itemID)
   return ""
 end
 
+local function rounded(v)
+  return string.format("%d", math.floor(v + 0.5))
+end
+
+local function procs_text(n)
+  return (n == 1 and L["%d proc"] or L["%d procs"]):format(n)
+end
+
+-- The Multicraft cell: the extras seen next to the expected ones; "?" for a part nobody reported, and a trailing "?"
+-- when some of the crafts did not report theirs.
+local function multicraft_text(data)
+  local expected = is_money(data.expectedExtra) and string.format("%.1f", data.expectedExtra) or "?"
+  if not is_money(data.actualExtra) then return (L["? (expected +%s)"]):format(expected) end
+  local text = (L["+%d (expected +%s)"]):format(math.floor(data.actualExtra + 0.5), expected)
+  if count(data.multicraftReported) < count(data.crafts) then text = text .. " " .. color(DIM, "?") end
+  return text
+end
+
 -- The display text of one data row's cells, by column key.
 function Tab.CellTexts(section, data)
   data = type(data) == "table" and data or {}
+  if section == "craft" then
+    local known = count(data.qualityKnown) > 0
+    return {
+      recipe = tostring(data.name or recipe_name(data.recipeID)),
+      crafts = tostring(count(data.crafts)),
+      quality = known and (L["%d of %d as predicted"]):format(count(data.asPredicted), data.qualityKnown) or color(DIM, "?"),
+      multicraft = multicraft_text(data),
+      resourcefulness = procs_text(count(data.resourcefulnessProcs)),
+      concentration = (is_money(data.concentrationSpent) and is_money(data.concentrationPredicted))
+        and (L["%s of %s predicted"]):format(rounded(data.concentrationSpent), rounded(data.concentrationPredicted))
+        or color(DIM, EM_DASH),
+    }
+  end
   if section == "auction" then
     local function known(v) return v ~= nil and tostring(v) or color(DIM, "?") end
     return {
@@ -646,6 +732,30 @@ function Tab.TooltipLines(item)
     lines[5] = line((L["From %d of your commissions (recrafts not counted)"]):format(count(data.n)), GREY)
   elseif item.section == "entry" then
     entry_lines(lines, data)
+  elseif item.section == "craft" then
+    lines[1] = line(tostring(data.name or recipe_name(data.recipeID)))
+    lines[2] = line((L["Crafts: %d"]):format(count(data.crafts)), GREY)
+    if count(data.qualityKnown) > 0 then
+      lines[#lines + 1] = line((L["Quality: %d of %d as predicted, %d above, %d below"]):format(count(data.asPredicted),
+        data.qualityKnown, count(data.above), count(data.below)))
+    else
+      lines[#lines + 1] = line(L["Quality: no craft has both a prediction and a result yet"], GREY)
+    end
+    lines[#lines + 1] = line((L["The game's own prediction matched the result in %d"]):format(count(data.gameAgreed)), GREY)
+    lines[#lines + 1] = line((L["Multicraft: %s extra items seen, %s expected"]):format(
+      is_money(data.actualExtra) and tostring(data.actualExtra) or "?",
+      is_money(data.expectedExtra) and string.format("%.1f", data.expectedExtra) or "?"))
+    if count(data.multicraftReported) < count(data.crafts) then
+      lines[#lines + 1] = line((L["Multicraft reported for %d of %d crafts"]):format(count(data.multicraftReported),
+        count(data.crafts)), GOLD)
+    end
+    lines[#lines + 1] = line((L["Resourcefulness: %s"]):format(procs_text(count(data.resourcefulnessProcs))))
+    if is_money(data.concentrationSpent) and is_money(data.concentrationPredicted) then
+      lines[#lines + 1] = line((L["Concentration: %s spent, %s predicted"]):format(rounded(data.concentrationSpent),
+        rounded(data.concentrationPredicted)))
+    else
+      lines[#lines + 1] = line(L["Concentration: no data yet"], GREY)
+    end
   elseif item.section == "auction" then
     lines[1] = line(tostring(data.name))
     lines[2] = line((L["Posted %d, expired %d, cancelled %d"]):format(count(data.posted), count(data.expired),
@@ -935,6 +1045,13 @@ local function status_text(ledger)
     end
     return "", OFF_DETAIL
   end
+  if current == "crafts" then
+    local craftLog = module("CraftLog")
+    if craftLog and craftLog.IsEnabled and not craftLog:IsEnabled() then
+      return color(WARN, CRAFTLOG_OFF_NOTICE), CRAFTLOG_OFF_DETAIL
+    end
+    return "", OFF_DETAIL
+  end
   if ledger and ledger.IsEnabled and not ledger:IsEnabled() then return color(WARN, OFF_NOTICE), OFF_DETAIL end
   return "", OFF_DETAIL
 end
@@ -957,6 +1074,21 @@ local function auctions_page(now)
     L["No auctions recorded yet. Posts, cancels and expiries are recorded as you use the auction house and open your mailbox."]
 end
 
+-- The Crafts page: the craft log of the last WEEKS weeks as rows, the header line and the text for an empty page.
+local function crafts_page(now)
+  local craftLog = module("CraftLog")
+  if not craftLog or not craftLog.Summary then
+    return {}, L["No crafts yet"], L["The craft log is not available."]
+  end
+  local rows = Tab.CraftRows(craftLog:Summary({ since = now - WEEKS * WEEK_SECONDS }))
+  local total = 0
+  for _, row in ipairs(rows) do total = total + count(row.crafts) end
+  local header = total == 0 and L["No crafts yet"]
+    or (total == 1 and (L["%d craft"]):format(1) or (L["%d crafts"]):format(total))
+  return Tab.CraftDisplayRows(rows), header,
+    L["No crafts logged yet. Each craft you make is logged with the result it gave, next to the prediction."]
+end
+
 local function refresh()
   if not view then return end
   local now = ns.FS:Now()
@@ -968,6 +1100,9 @@ local function refresh()
   if current == "auctions" then
     view.model = nil
     view.items, headerText, emptyMessage = auctions_page(now)
+  elseif current == "crafts" then
+    view.model = nil
+    view.items, headerText, emptyMessage = crafts_page(now)
   else
     local model = Tab.Model(ledger, now)
     view.model = model
@@ -1133,6 +1268,8 @@ function LedgerTab:OnEnable()
   self:RegisterMessage(ns.Msg.LEDGER_CHANGED, ns.FS:Wrap(REFRESH_SOURCE, schedule_refresh))
   -- The Auctions page: posts, cancels, expiries and listings (a sale arrives as a Ledger change).
   self:RegisterMessage(ns.Msg.SALELOG_CHANGED, ns.FS:Wrap(REFRESH_SOURCE, schedule_refresh))
+  -- The Crafts page: a craft was logged or got a Multicraft extra.
+  self:RegisterMessage(ns.Msg.CRAFTLOG_CHANGED, ns.FS:Wrap(REFRESH_SOURCE, schedule_refresh))
   self:RegisterEvent("GET_ITEM_INFO_RECEIVED", ns.FS:Wrap(REFRESH_SOURCE, on_item_info))
 end
 

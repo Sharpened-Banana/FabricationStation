@@ -12,6 +12,7 @@ local _, ns = ...
 --                multicraft? (extra items: the game's number, else the extras seen; nil = unknown),
 --                resourcesReturned = { [itemID] = qty }, concentrationSpent?, ingenuityRefund?, ingenuityProc? },
 --     fixture = { reagents, calib, build } | nil }
+-- CraftLog:Summary(filter) totals the entries per recipe for the Ledger's Crafts page.
 --
 -- It only watches. A post-hook on C_TradeSkillUI.CraftRecipe (Blizzard's own button and Queue:CraftNext alike; this
 -- file never calls it, tests/queue/craft_spec.lua allows exactly that hook line) remembers the pending craft with
@@ -296,6 +297,67 @@ function CraftLog:GetEntries(filter)
       and (filter.charKey == nil or e.charKey == filter.charKey)
       and (filter.recipeID == nil or e.recipeID == filter.recipeID) then
       out[#out + 1] = e
+    end
+  end
+  return out
+end
+
+-- RecipeCraftStats per recipe over GetEntries(filter): { [recipeID] = { crafts, qualityKnown, asPredicted, above,
+-- below, gameAgreed, expectedExtra|nil, actualExtra|nil, multicraftReported, multicraftProcs, resourcefulnessProcs,
+-- concentrationSpent|nil, concentrationPredicted|nil } }. A part an entry does not have is unknown and left out of
+-- that sum, never counted as 0:
+--   * qualityKnown: entries with both actual.quality and predicted.quality, split into asPredicted / above / below;
+--     gameAgreed: entries whose game.quality and actual.quality are both known and equal;
+--   * expectedExtra = sum of (predicted.yield - (actual.baseQuantity or predicted.yield)) over the entries with a
+--     predicted yield; actualExtra = sum of actual.multicraft over the entries that have one. Each is nil when no
+--     entry has the number (P7-16: the payload's multicraft may be absent); multicraftReported counts the entries
+--     that have one, so a page can say when the sum leaves crafts out;
+--   * multicraftProcs: entries with extras (actual.multicraft > 0); resourcefulnessProcs: entries that returned reagents;
+--   * the concentration sums count only entries with both predicted.concentrationCost and actual.concentrationSpent,
+--     and are nil when there are none.
+function CraftLog:Summary(filter)
+  local out = {}
+  for _, e in ipairs(self:GetEntries(filter)) do
+    if is_finite(e.recipeID) then
+      local s = out[e.recipeID]
+      if not s then
+        s = { crafts = 0, qualityKnown = 0, asPredicted = 0, above = 0, below = 0, gameAgreed = 0,
+          multicraftReported = 0, multicraftProcs = 0, resourcefulnessProcs = 0 }
+        out[e.recipeID] = s
+      end
+      local predicted = type(e.predicted) == "table" and e.predicted or {}
+      local game = type(e.game) == "table" and e.game or {}
+      local actual = type(e.actual) == "table" and e.actual or {}
+      s.crafts = s.crafts + 1
+
+      local actualQuality, predictedQuality = number_or_nil(actual.quality), number_or_nil(predicted.quality)
+      if actualQuality and predictedQuality then
+        s.qualityKnown = s.qualityKnown + 1
+        if actualQuality == predictedQuality then s.asPredicted = s.asPredicted + 1
+        elseif actualQuality > predictedQuality then s.above = s.above + 1
+        else s.below = s.below + 1 end
+      end
+      if actualQuality and number_or_nil(game.quality) == actualQuality then s.gameAgreed = s.gameAgreed + 1 end
+
+      local yield = number_or_nil(predicted.yield)
+      if yield then s.expectedExtra = (s.expectedExtra or 0) + (yield - (number_or_nil(actual.baseQuantity) or yield)) end
+      local multicraft = number_or_nil(actual.multicraft)
+      if multicraft then
+        s.actualExtra = (s.actualExtra or 0) + multicraft
+        s.multicraftReported = s.multicraftReported + 1
+        if multicraft > 0 then s.multicraftProcs = s.multicraftProcs + 1 end
+      end
+      if type(actual.resourcesReturned) == "table" then
+        for _, qty in pairs(actual.resourcesReturned) do
+          if type(qty) == "number" and qty > 0 then s.resourcefulnessProcs = s.resourcefulnessProcs + 1; break end
+        end
+      end
+
+      local spent, cost = number_or_nil(actual.concentrationSpent), number_or_nil(predicted.concentrationCost)
+      if spent and cost then
+        s.concentrationSpent = (s.concentrationSpent or 0) + spent
+        s.concentrationPredicted = (s.concentrationPredicted or 0) + cost
+      end
     end
   end
   return out

@@ -1239,6 +1239,19 @@ FabricationStation's panel last showed): the entry's `recipeID` is the recipe ac
 "Create All" of 3 or more, stop it after the first cast (move), and recraft an item of that recipe within a minute:
 no new entry (the Ledger shows no new craft either).
 
+P7-18. **Golden fixtures from crafts.** Craft 8 recipes (the phase 1b Task 9 list: rank 1, rank 2, just under and
+over a threshold, a difficulty optional, a skill finishing reagent, an ingenuity effect, a 5-quality recipe), `/reload`,
+then
+`lua tools/export_math_fixtures.lua "<WoW>/_retail_/WTF/Account/<ACCOUNT>/SavedVariables/FabricationStation.lua"`
+and `busted tests/math/golden_spec.lua`. Expected: at least 8 fixtures (`exported N fixtures (...)`; the line also counts
+captures without a calibration and crafts without a cached schematic that were left out), and the golden spec green.
+Report every failing assertion: each failure names the fixture and lists every field that differs ("quality: the game
+says 3, the maths say 2"). Phase 1b Task 9 Step 5 says which constant each field pins. A craft fixture also asserts
+that the game's prediction (`game.quality`) equals the quality the craft made (`actual.quality`): a mismatch there is
+reported, never loosened. The Ledger tab's Crafts page (the Crafts button above the list) shows the same crafts per
+recipe: "Quality: 3 of 4 as predicted", "Multicraft: +2 (expected +1.4)" (a "?" when the game left a number out, never 0),
+Resourcefulness procs and Concentration spent against predicted. Check it against what you made.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

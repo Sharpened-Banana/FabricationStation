@@ -736,9 +736,9 @@ describe("Ledger tab Auctions section", function()
   end)
 
   it("names the sections, Profit first", function()
-    assert.same({ { "profit", "Profit" }, { "auctions", "Auctions" } },
-      { { T.SECTIONS[1].id, T.SECTIONS[1].label }, { T.SECTIONS[2].id, T.SECTIONS[2].label } })
-    assert.equal(2, #T.SECTIONS)
+    local names = {}
+    for i, section in ipairs(T.SECTIONS) do names[i] = { section.id, section.label } end
+    assert.same({ { "profit", "Profit" }, { "auctions", "Auctions" }, { "crafts", "Crafts" } }, names)
   end)
 
   it("switches between Profit and Auctions", function()
@@ -911,5 +911,247 @@ describe("Ledger tab Auctions section", function()
     ns.FS:GetModule("SaleLog"):SendMessage(ns.Msg.SALELOG_CHANGED)
     W.advance(1)
     assert.same({ "ledger" }, before)
+  end)
+end)
+
+describe("Ledger tab Crafts section", function()
+  local ns, W, T, reg, container, tooltip
+  local ME = "Me-Silvermoon"
+  local NAMES = { [9001] = "Potion", [9002] = "Elixir", [9003] = "Flask" }
+  local DAY = 86400
+
+  local function open(width)
+    container = CreateFrame("Frame")
+    container:SetSize(width or 740, 500)
+    reg.ledger.build(container)
+    reg.ledger.refresh(container)
+    return ns.FS:GetModule("LedgerTab"):GetView()
+  end
+  local function show(v, id) v.sections[id]:GetScript("OnClick")(v.sections[id]) end
+  local function craft_rows(v)
+    local out = {}
+    for _, item in ipairs(v.items) do if item.kind == "row" and item.section == "craft" then out[#out + 1] = item end end
+    return out
+  end
+  local function row_of(v, recipeID)
+    for i = 1, v.shown do
+      local row = v.pool[i]
+      if row.item and row.item.kind == "row" and row.item.section == "craft" and row.item.data.recipeID == recipeID then
+        return row
+      end
+    end
+  end
+  local function cells(v, recipeID)
+    local out = {}
+    for key, cell in pairs(row_of(v, recipeID).groups.craft.cells) do out[key] = plain(cell:GetText()) end
+    return out
+  end
+  local nextID = 0
+  local function craft(recipeID, t)
+    nextID = nextID + 1
+    local e = { id = nextID, time = W.now, charKey = ME, recipeID = recipeID, applyConcentration = false,
+      actual = { resourcesReturned = {} } }
+    for k, v in pairs(t or {}) do e[k] = v end
+    return e
+  end
+  local function seed(entries)
+    ns.FS.db.global.craftLog = { nextID = #entries + 1, entries = entries }
+  end
+  -- Potion: 3 crafts (2 as predicted, 1 above), Multicraft +2 of +1.0 expected, 1 Resourcefulness proc, concentration
+  -- 70 of 80. Elixir: 1 craft with nothing known beyond the recipe. Flask: 2 crafts.
+  local function seed_crafts()
+    seed({
+      craft(9001, { predicted = { quality = 1, yield = 1.4, concentrationCost = 40 },
+        actual = { quality = 1, baseQuantity = 1, multicraft = 1, resourcesReturned = { [100] = 1 }, concentrationSpent = 40 } }),
+      craft(9001, { predicted = { quality = 1, yield = 1.2, concentrationCost = 40 },
+        actual = { quality = 2, baseQuantity = 1, multicraft = 0, resourcesReturned = {}, concentrationSpent = 30 } }),
+      craft(9001, { predicted = { quality = 2, yield = 1.4 },
+        actual = { quality = 2, baseQuantity = 1, multicraft = 1, resourcesReturned = {} } }),
+      craft(9002, { actual = { resourcesReturned = {} } }),
+      craft(9003, { predicted = { quality = 3, yield = 1 }, actual = { quality = 3, resourcesReturned = {} } }),
+      craft(9003, { predicted = { quality = 3, yield = 1 }, actual = { quality = 2, resourcesReturned = {} } }),
+    })
+  end
+
+  before_each(function()
+    reg, container, nextID = {}, nil, 0
+    tooltip = { lines = {} }
+    ns, W = P2.boot({
+      C_DateAndTime = { GetSecondsUntilWeeklyReset = function() return 100 end },
+      GameTooltip = {
+        SetOwner = function() tooltip.lines = {} end,
+        SetText = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+        AddLine = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+        Show = function() tooltip.shown = true end,
+        Hide = function() tooltip.shown = false end,
+      },
+    })
+    local real = _G.CreateFrame
+    _G.CreateFrame = function(frameType, name, parent, template)
+      local f = real(frameType, name, parent, template)
+      if frameType == "Button" then
+        local text, locked = "", false
+        function f:SetText(t) text = t end
+        function f:GetText() return text end
+        function f:LockHighlight() locked = true end
+        function f:UnlockHighlight() locked = false end
+        function f:IsHighlightLocked() return locked end
+      end
+      return f
+    end
+    P2.fake_module(ns, "MainWindow", { RegisterTab = function(_, id, def) reg[id] = def; return true end,
+      RefreshTab = function(_, id) if id == "ledger" and container then reg[id].refresh(container) end end })
+    P2.fake_module(ns, "Dashboard", { RegisterWidget = function() return true end })
+    P2.fake_module(ns, "Scanner", { GetSchematic = function(_, id) return NAMES[id] and { name = NAMES[id] } or nil end })
+    local files = {}
+    for i, f in ipairs(FILES) do files[i] = f end
+    files[#files + 1] = "Modules/CraftLog.lua"
+    P2.load(ns, files)
+    T = ns.UI.LedgerTab
+  end)
+
+  it("lists each recipe's results in the Crafts section", function()
+    seed_crafts()
+    local v = open()
+    show(v, "crafts")
+    assert.equal("crafts", T.GetSection())
+    assert.is_true(v.sections.crafts:IsHighlightLocked()); assert.is_false(v.sections.profit:IsHighlightLocked())
+    local rows = craft_rows(v)
+    assert.same({ 9001, 9003, 9002 }, { rows[1].data.recipeID, rows[2].data.recipeID, rows[3].data.recipeID })
+    local potion = cells(v, 9001)
+    assert.same({ "Potion", "3", "2 of 3 as predicted", "+2 (expected +1.0)", "1 proc", "70 of 80 predicted" },
+      { potion.recipe, potion.crafts, potion.quality, potion.multicraft, potion.resourcefulness, potion.concentration })
+    local flask = cells(v, 9003)
+    assert.same({ "Flask", "2", "1 of 2 as predicted", "0 procs", "\226\128\148" },
+      { flask.recipe, flask.crafts, flask.quality, flask.resourcefulness, flask.concentration })
+  end)
+
+  it("shows ? for what the game did not report, never 0", function()
+    seed_crafts()
+    local v = open()
+    show(v, "crafts")
+    local elixir = cells(v, 9002)      -- no prediction, no actual numbers
+    assert.same({ "1", "?", "? (expected +?)" }, { elixir.crafts, elixir.quality, elixir.multicraft })
+    -- Two of Potion's three crafts reported their extras; a third that did not leaves a ? beside the sum.
+    local entries = ns.FS.db.global.craftLog.entries
+    entries[2].actual.multicraft = nil
+    reg.ledger.refresh(container)
+    local potion = cells(v, 9001)
+    assert.equal("+2 (expected +1.0) ?", potion.multicraft)
+    local row = row_of(v, 9001)
+    row:GetScript("OnEnter")(row)
+    assert.is_truthy(table.concat(tooltip.lines, "\n"):find("Multicraft reported for 2 of 3 crafts", 1, true))
+  end)
+
+  it("sorts by crafts, then name, then recipe id", function()
+    local rows = T.CraftRows({
+      [10] = { crafts = 2 }, [11] = { crafts = 5 }, [12] = { crafts = 2 }, [13] = { crafts = 2 },
+    }, { [10] = "banana", [11] = "Zed", [12] = "Apple", [13] = "banana" })
+    local ids = {}
+    for i, row in ipairs(rows) do ids[i] = row.recipeID end
+    assert.same({ 11, 12, 10, 13 }, ids)
+    assert.equal("Zed", rows[1].name)
+    -- Without a name the cached schematic's, else "Recipe <id>".
+    assert.same({ "Potion", "Recipe 5" }, { T.CraftRows({ [9001] = { crafts = 1 } })[1].name,
+      T.CraftRows({ [5] = { crafts = 1 } })[1].name })
+  end)
+
+  it("keeps the flexible column at 120 px or more at 516 px and hides Concentration, then Resourcefulness", function()
+    local layout = T.Layout("craft", 516)
+    assert.is_true(layout.flex >= 120, tostring(layout.flex))
+    assert.same({ concentration = true }, layout.hidden)
+    assert.same({ concentration = true }, T.Layout("craft", 495).hidden)
+    assert.same({ concentration = true, resourcefulness = true }, T.Layout("craft", 480).hidden)
+    assert.same({ concentration = true, resourcefulness = true }, T.Layout("craft", 400).hidden)
+    assert.same({}, T.Layout("craft", 740).hidden)
+    assert.same({}, T.Layout("craft", nil).hidden)
+    seed_crafts()
+    local v = open(516)
+    show(v, "crafts")
+    local g = row_of(v, 9001).groups.craft
+    assert.is_false(g.cells.concentration:IsShown()); assert.is_true(g.cells.resourcefulness:IsShown())
+    -- The hidden column's numbers are still in the row tooltip.
+    local row = row_of(v, 9001)
+    row:GetScript("OnEnter")(row)
+    assert.is_truthy(table.concat(tooltip.lines, "\n"):find("70 spent, 80 predicted", 1, true))
+  end)
+
+  it("ends with the footer naming the weeks", function()
+    seed_crafts()
+    local v = open()
+    show(v, "crafts")
+    local last = v.items[#v.items]
+    assert.same({ "note", "Your crafts over the last 8 weeks, next to the predictions." }, { last.kind, last.text })
+    assert.equal("6 crafts", v.header:GetText())
+  end)
+
+  it("counts only the last 8 weeks", function()
+    seed({ craft(9001, { time = W.now - 8 * 7 * DAY - 10 }), craft(9001, { time = W.now - 8 * 7 * DAY }),
+      craft(9002, { time = W.now - 100 }) })
+    local v = open()
+    show(v, "crafts")
+    -- The cut-off is inclusive: the craft exactly 8 weeks old counts, the one 10 s older does not.
+    local rows = craft_rows(v)
+    assert.same({ { 9002, 1 }, { 9001, 1 } }, { { rows[1].data.recipeID, rows[1].data.crafts },
+      { rows[2].data.recipeID, rows[2].data.crafts } })
+    assert.equal(2, #rows)
+    assert.equal("2 crafts", v.header:GetText())
+  end)
+
+  it("says there is nothing yet", function()
+    local v = open()
+    show(v, "crafts")
+    assert.is_true(v.empty:IsShown())
+    assert.is_truthy(v.empty:GetText():find("No crafts logged yet", 1, true))
+    assert.equal("No crafts yet", v.header:GetText())
+    seed_crafts()
+    reg.ledger.refresh(container)
+    assert.is_false(v.empty:IsShown())
+  end)
+
+  it("says the craft log is off, and still shows what was recorded", function()
+    seed_crafts()
+    local v = open()
+    show(v, "crafts")
+    assert.equal("", v.status:GetText())
+    ns.FS:SetModuleEnabled("CraftLog", false)
+    reg.ledger.refresh(container)
+    assert.equal("Craft log off: nothing new is recorded", plain(v.status:GetText()))
+    assert.equal(3, #craft_rows(v))
+    v.statusArea:GetScript("OnEnter")(v.statusArea)
+    assert.same({ v.status:GetText(), "Turn the Craft log on again in /fs settings > Modules." }, tooltip.lines)
+    show(v, "profit")
+    assert.is_nil(plain(v.status:GetText()):find("Craft log", 1, true))
+  end)
+
+  it("does not save the chosen page", function()
+    seed_crafts()
+    local v = open()
+    show(v, "crafts")
+    assert.is_nil(ns.FS.db.global.settings.ledger and ns.FS.db.global.settings.ledger.section)
+  end)
+
+  it("shows the page and writes nothing while the saved data is from a newer version", function()
+    seed_crafts()
+    ns.FS.dbIsNewer = true
+    local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+    local v = open()
+    show(v, "crafts")
+    assert.equal(3, #craft_rows(v))
+    assert.equal("Read-only", plain(v.status:GetText()):sub(1, 9))
+    row_of(v, 9001):GetScript("OnEnter")(row_of(v, 9001))
+    assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+    ns.FS.dbIsNewer = nil
+  end)
+
+  it("refreshes when a craft is logged", function()
+    seed_crafts()
+    local v = open()
+    show(v, "crafts")
+    local refreshed = {}
+    ns.FS:GetModule("MainWindow").RefreshTab = function(_, id) if id == "ledger" then refreshed[#refreshed + 1] = id end end
+    ns.FS:GetModule("CraftLog"):SendMessage(ns.Msg.CRAFTLOG_CHANGED)
+    W.advance(1)
+    assert.same({ "ledger" }, refreshed)
   end)
 end)

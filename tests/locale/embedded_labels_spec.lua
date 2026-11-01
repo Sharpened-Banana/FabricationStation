@@ -23,6 +23,7 @@ local PAIRS = {
   { "%s: turn it on in Settings > Modules to see the plan", "Modules" },
   { "Turn the Ledger on again in /fs settings > Modules.", "Modules" },
   { "Turn the Sale log on again in /fs settings > Modules.", "Modules" },
+  { "Turn the Craft log on again in /fs settings > Modules.", "Modules" },
   { "FabricationStation: %s stopped after an error and was turned off. Turn it back on in /fs settings > Modules > "
     .. "Stopped modules; the error is in Diagnostics.", "Modules" },
   { "FabricationStation: %s stopped after an error and was turned off. Turn it back on in /fs settings > Modules > "

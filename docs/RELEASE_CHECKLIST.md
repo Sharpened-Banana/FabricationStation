@@ -70,6 +70,20 @@ test -f "$P/FabricationStation.toc" && test -f "$P/LICENSE" && test -f "$P/THIRD
 - [ ] `Libs/` is git-ignored, so a local `bash tools/fetch-libs.sh` is for playing and testing only; it never reaches
   the package.
 
+## Patch day
+
+When the game patches (a new build or Interface number), before the next release:
+
+- [ ] Bump `## Interface` (see Per release) and rebuild GameData for the new build (`tools/gamedata/README.md`).
+- [ ] Run `luacheck .`, `busted` and `lua tools/check_locale.lua`.
+- [ ] Capture fixtures: in game, craft the recipes of the phase 1b Task 9 list (or `/fs capture` them), then `/reload`.
+- [ ] Export them: `lua tools/export_math_fixtures.lua "<WoW>/_retail_/WTF/Account/<ACCOUNT>/SavedVariables/FabricationStation.lua"`.
+  An existing fixture with different content stops the export; ids restart when SavedVariables are wiped, so check
+  the name before `--force`.
+- [ ] Run `busted tests/math/golden_spec.lua`. Every failing fixture lists the fields that differ; a change in the
+  game's maths shows here before it shows in a player's numbers.
+- [ ] Look at Settings > Diagnostics for new math mismatches.
+
 ## In-game smoke tests
 
 Install the packaged folder (or a symlink to the repo after `bash tools/fetch-libs.sh`) into
