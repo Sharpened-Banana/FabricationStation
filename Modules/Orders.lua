@@ -426,6 +426,11 @@ end
 --   commission = tip - consortium cut; net = commission + priced rewards - reagent cost (flags.unpricedReward: some
 --   reward has no value, so net is a lower bound); score = net - expected concentration x the profession's best
 --   gold per concentration, when concentration is needed to reach minQuality (an unreachable target is not charged).
+--   Route to minQuality (Task 10b): when the plain plan reaches it (perhaps by buying better reagents), the
+--   concentration plan for that quality is taken instead when reagentCost + charge is strictly lower; a tie or an
+--   unknown rate or cost keeps the plain plan. The concentration route not taken is concentrationAlternative =
+--   { cost = points, charge = copper|nil, reagentCost = copper|nil } (recorded when the rate is unknown or both
+--   costs are known), else nil.
 --   costPerReward[kind] (kind "knowledge" | "moxie", only for rewards with units) = what the order costs per unit:
 --   0 when commission - reagent cost - concentration charge covers it, nil when that is unknown. Above
 --   settings.rewardCostLimits[kind] it raises the "rewardTooCostly" risk.
@@ -451,12 +456,45 @@ function Orders:ScoreInput(input, ctx)
     return target ~= nil and ((result.flags or {}).unreachableTarget == true or (result.expectedQuality or 0) < target)
   end
 
+  -- The rate is asked at most once per order, and only when a concentration route to the target is costed.
+  local rateAsked, rateValue
+  local function rate()
+    if not rateAsked then rateAsked, rateValue = true, gpc_for(ctx, input.recipeID) end
+    return rateValue
+  end
+  -- What spending result.expectedConcentrationCost (else concentrationCost) is worth; nil while the rate is unknown.
+  local function charge_of(result)
+    local gpc = rate()
+    if gpc == nil then return nil end
+    return math.floor(number_or(result.expectedConcentrationCost, number_or(result.concentrationCost, 0)) * gpc)
+  end
+
   local recraft = input.isRecraft == true
-  local r, usedConc
+  local r, usedConc, alternative
   if not recraft then
     r, usedConc = evaluate(nil), false
     if r and short_of_target(r) then
       r, usedConc = evaluate(true) or r, true
+    elseif r and target ~= nil then
+      -- The plain plan reaches the target (maybe with better reagents than the cheapest): cost the concentration
+      -- route to that same target too and take it when strictly cheaper (reagents + expected concentration x rate).
+      -- A tie, an unknown rate or an unknown cost keeps the plain route; the concentration route not taken is kept as
+      -- concentrationAlternative (when the rate is unknown, or both costs are known) for the row to show.
+      local c = evaluate(true)
+      local cflags = c and type(c.flags) == "table" and c.flags or {}
+      local concentrates = c ~= nil and c.concentrated == true and c.expectedQuality == target
+        and cflags.unreachableTarget ~= true and type(c.concentrationCost) == "number" and c.concentrationCost > 0
+      if concentrates then
+        local concCharge = charge_of(c)
+        local plainCost, concReagents = r.reagentCost, c.reagentCost
+        local comparable = concCharge ~= nil and type(plainCost) == "number" and type(concReagents) == "number"
+        if comparable and concReagents + concCharge < plainCost then
+          r, usedConc = c, true
+        elseif comparable or concCharge == nil then
+          alternative = { cost = c.concentrationCost, charge = concCharge,
+            reagentCost = type(concReagents) == "number" and concReagents or nil }
+        end
+      end
     end
   end
   usedConc = usedConc == true
@@ -469,15 +507,12 @@ function Orders:ScoreInput(input, ctx)
   local net = (commission ~= nil and type(reagentCost) == "number") and commission + rewardsValue - reagentCost or nil
   local noPrice = not recraft and (r == nil or paid_reagent_unpriced(r, provided))
   local unknownRecipe = not recraft and (r == nil or rflags.unknownRecipe == true)
-  -- Concentration is charged only when it is spent to reach a reachable target; its rate is asked only then.
+  -- Concentration is charged only when it is spent to reach a reachable target; its rate is asked only then (or for
+  -- the route comparison above).
   local charge, unknownConcValue = 0, false
   if usedConc and not unreachable then
-    local rate = gpc_for(ctx, input.recipeID)
-    if rate == nil then
-      charge, unknownConcValue = nil, true
-    else
-      charge = math.floor(number_or(r.expectedConcentrationCost, concCost) * rate)
-    end
+    charge = charge_of(r)
+    unknownConcValue = charge == nil
   end
   local scorable = net ~= nil and charge ~= nil and not (noPrice or unknownRecipe or recraft)
   local score = scorable and net - charge or nil
@@ -540,6 +575,7 @@ function Orders:ScoreInput(input, ctx)
     usedConcentration = usedConc,
     concentrationCost = concCost,
     concentrationCharge = charge,
+    concentrationAlternative = alternative,
     costPerReward = costPerReward,
     net = net,
     goldPerConcentration = (concCost > 0 and net ~= nil) and math.floor(net / concCost) or nil,

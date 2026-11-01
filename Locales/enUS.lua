@@ -359,6 +359,8 @@ L["Module OrderViewWarning: a line above the order details when the customer is 
 L["Module OrdersSidePanel: risk filters, claims remaining, the best claimable order and its button."] = true
 L["Multicraft"] = true
 L["Needs %d concentration to reach the minimum quality"] = true   -- order row concentration cell tooltip
+L["Buying better reagents is cheaper than %s concentration (%s vs %s)"] = true   -- points, plain route cost, concentration route cost
+L["Could use %s concentration instead of better reagents (value of concentration unknown)"] = true
 L["New personal crafting order"] = true
 L["New personal crafting order: %s"] = true
 L["New personal orders: %s"] = true

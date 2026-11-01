@@ -561,6 +561,69 @@ describe("OrdersPanel on the crafting orders page", function()
       end)
     end)
 
+    -- Task 10b: the real Orders scoring picks the cheaper route to the minimum quality; the cell shows the chosen
+    -- concentration as before, or the concentration route not taken in grey.
+    describe("route to the minimum quality", function()
+      local GREY_ = { 0.62, 0.62, 0.62 }
+      local function route_order(concReagents, rate)
+        local R = ns.FS:GetModule("Recipes")
+        R.Evaluate = function(_, _, _, o)
+          if o.useConcentration then
+            return { expectedQuality = 3, concentrated = true, reagentCost = concReagents, concentrationCost = 50,
+              expectedConcentrationCost = 50, flags = {} }
+          end
+          return { expectedQuality = 3, reagentCost = 200000, flags = {} }
+        end
+        R.GetRanked = function() return rate and { { goldPerConcentration = rate, flags = {} } } or {} end
+        local raw = P2.raw_order({ orderID = 10, minQuality = 3 })
+        local row = row_for(raw, geometry(w_short()))
+        show_board({ raw })
+        return rows():GetCells(row), O:GetView(10)
+      end
+      local function lines(c)
+        c.conc:GetScript("OnEnter")(c.conc)
+        local out = tooltip.lines
+        c.conc:GetScript("OnLeave")(c.conc)
+        return out
+      end
+      it("shows the chosen concentration in white, and the score apart from the profit", function()
+        boot()
+        local c, view = route_order(100000, 1000)
+        assert.is_true(view.usedConcentration)
+        assert.same({ "50", WHITE_, true }, conc_state(c)); assert.equal("amount", c.concCell.mode)
+        assert.same({ "+35g", "+30g", true, "all" }, score_state(c))
+        assert.same({ "Needs 50 concentration to reach the minimum quality", "You have 500",
+          "Worth " .. ns.UI.FormatMoney(50000) .. " at your best gold per concentration" }, lines(c))
+      end)
+      it("shows the concentration not taken in grey, with the comparison, and blanks the equal score", function()
+        boot()
+        local c, view = route_order(160000, 1000)
+        assert.is_false(view.usedConcentration)
+        assert.same({ "50", GREY_, true }, conc_state(c))
+        assert.same({ "alternative", 50 }, { c.concCell.mode, c.concCell.amount })
+        assert.same({ "+25g", "", true, "all" }, score_state(c))
+        assert.same({ "Buying better reagents is cheaper than 50 concentration ("
+          .. ns.UI.FormatMoney(200000) .. " vs " .. ns.UI.FormatMoney(210000) .. ")" }, lines(c))
+        assert.is_nil(ns.UI.OrdersPanel.QueueEntry(view).useConcentration)   -- the queue crafts the plain route
+      end)
+      it("says the concentration value is unknown while the rate is", function()
+        boot()
+        local c, view = route_order(100000, nil)
+        assert.is_false(view.usedConcentration); assert.is_false(view.flags.unknownConcentrationValue)
+        assert.same({ "50", GREY_, true }, conc_state(c))
+        assert.same({ "+25g", "", true, "all" }, score_state(c))
+        assert.same({ "Could use 50 concentration instead of better reagents (value of concentration unknown)" }, lines(c))
+      end)
+      it("keeps the cell empty without an alternative, and never shows one over a chosen route", function()
+        assert.same({}, ns.UI.OrdersPanel.ConcentrationCell({ usedConcentration = false }, 10))
+        assert.same({}, ns.UI.OrdersPanel.ConcentrationCell({ usedConcentration = false,
+          concentrationAlternative = { cost = 0 } }, 10))
+        local cell = ns.UI.OrdersPanel.ConcentrationCell({ usedConcentration = true, concentrationCost = 70,
+          concentrationAlternative = { cost = 50, charge = 1 } }, 100)
+        assert.same({ "amount", 70 }, { cell.mode, cell.amount })
+      end)
+    end)
+
     describe("in the strip", function()
       local function LY() return ns.UI.OrdersPanel.LAYOUT end
       it("stays with the core when the profit cell gives way, and goes with the whole strip", function()

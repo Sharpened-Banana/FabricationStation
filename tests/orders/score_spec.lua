@@ -85,7 +85,9 @@ describe("Orders scoring", function()
       return o.useConcentration and ev.conc or ev.plain
     end
     O:ScoreInput(input({provided={[300]=2}}), ctx())
-    assert.same({ {4444, "Me-Silvermoon", {targetQuality=2, providedReagents={[300]=2}}} }, calls)
+    -- The plain plan reaches the target: the concentration route to it is asked for too, to compare (Task 10b).
+    assert.same({ {4444, "Me-Silvermoon", {targetQuality=2, providedReagents={[300]=2}}},
+      {4444, "Me-Silvermoon", {targetQuality=2, providedReagents={[300]=2}, useConcentration=true}} }, calls)
     calls = {}
     O:ScoreInput(input({minQuality=1}), ctx())
     assert.same({ {4444, "Me-Silvermoon", {providedReagents={}}} }, calls)   -- quality 1 needs no target
@@ -294,6 +296,100 @@ describe("Orders scoring", function()
     local c = ctx({bestGPC=P2.NIL, bestGPCFor=function() asked = asked + 1 return 1000 end})
     O:ScoreInput(input(), c); assert.equal(0, asked)
     assert.equal(200000, O:ScoreInput(input({minQuality=4}), c).score); assert.equal(1, asked)
+  end)
+
+  -- Task 10b: with a target the plain plan reaches, the concentration route to that target is costed too (its
+  -- reagents + expected concentration x the rate) and taken when strictly cheaper.
+  describe("route to the minimum quality", function()
+    before_each(function()
+      ev.plain = {expectedQuality=3, reagentCost=200000, concentrationCost=0, flags={}}
+      ev.conc = {expectedQuality=3, concentrated=true, reagentCost=100000, concentrationCost=50,
+        expectedConcentrationCost=50, flags={}}
+    end)
+    local function roomy(o) return P2.merge(ctx({concentrationFor=function() return 100 end}), o or {}) end
+
+    it("takes concentration when it is cheaper than buying better reagents", function()
+      local v = O:ScoreInput(input({minQuality=3}), roomy())
+      assert.is_true(v.usedConcentration); assert.equal(ev.conc, v.result)
+      assert.equal(50, v.concentrationCost); assert.equal(50000, v.concentrationCharge)
+      assert.equal(350000, v.net); assert.equal(300000, v.score)   -- 450000 - 100000, then - 50 x 1000
+      assert.equal(7000, v.goldPerConcentration); assert.same({}, v.risks)
+      assert.is_nil(v.concentrationAlternative); assert.is_false(v.flags.unknownConcentrationValue)
+    end)
+    it("charges the expected (after Ingenuity) concentration in the comparison", function()
+      ev.conc.reagentCost, ev.conc.expectedConcentrationCost = 160000, 30   -- 160000 + 30000 < 200000
+      local v = O:ScoreInput(input({minQuality=3}), roomy())
+      assert.is_true(v.usedConcentration); assert.equal(30000, v.concentrationCharge); assert.equal(260000, v.score)
+    end)
+    it("keeps the plain route when it is cheaper, and records the concentration alternative", function()
+      ev.conc.reagentCost = 160000   -- 160000 + 50000 > 200000
+      local v = O:ScoreInput(input({minQuality=3}), roomy())
+      assert.is_false(v.usedConcentration); assert.equal(ev.plain, v.result)
+      assert.equal(0, v.concentrationCost); assert.equal(0, v.concentrationCharge)
+      assert.equal(250000, v.net); assert.equal(250000, v.score); assert.is_nil(v.goldPerConcentration)
+      assert.same({cost=50, charge=50000, reagentCost=160000}, v.concentrationAlternative)
+    end)
+    it("keeps the plain route on a tie", function()
+      ev.conc.reagentCost = 150000   -- 150000 + 50000 = 200000
+      local v = O:ScoreInput(input({minQuality=3}), roomy())
+      assert.is_false(v.usedConcentration); assert.equal(250000, v.score)
+      assert.same({cost=50, charge=50000, reagentCost=150000}, v.concentrationAlternative)
+    end)
+    it("keeps the plain route while the rate is unknown, and still records the alternative", function()
+      local v = O:ScoreInput(input({minQuality=3}), roomy({bestGPC=P2.NIL}))
+      assert.is_false(v.usedConcentration); assert.equal(250000, v.score); assert.equal(0, v.concentrationCharge)
+      assert.same({cost=50, reagentCost=100000}, v.concentrationAlternative)
+      assert.is_false(v.flags.unknownConcentrationValue); assert.same({}, v.risks)
+    end)
+    it("asks for the rate once", function()
+      local asked = 0
+      local c = roomy({bestGPC=P2.NIL, bestGPCFor=function() asked = asked + 1 return 1000 end})
+      assert.equal(300000, O:ScoreInput(input({minQuality=3}), c).score); assert.equal(1, asked)
+    end)
+    it("applies noConcentration when the cheaper concentration route needs more than you have", function()
+      local v = O:ScoreInput(input({minQuality=3}), ctx({concentrationFor=function() return 40 end}))
+      assert.is_true(v.usedConcentration); assert.same({"noConcentration"}, v.risks)
+      assert.equal(300000, v.score)
+    end)
+    it("charges the chosen route in the cost per reward", function()
+      O:Settings().rewardCostLimits.knowledge = 100000
+      local i = input({orderType="npc", customer=P2.NIL, tipAmount=0, consortiumCut=0, minQuality=3,
+        rewards={ {currencyID=3151, count=1} }})
+      local v = O:ScoreInput(i, roomy())
+      assert.is_true(v.usedConcentration); assert.equal(150000, v.costPerReward.knowledge)   -- 100000 + 50000
+      assert.same({"rewardTooCostly"}, v.risks)
+      ev.conc.reagentCost = 160000
+      local p = O:ScoreInput(i, roomy())
+      assert.is_false(p.usedConcentration); assert.equal(200000, p.costPerReward.knowledge)
+    end)
+    it("has no alternative when the concentration answer is not a concentration plan for the target", function()
+      ev.conc.concentrated = false   -- Recipes found nothing to concentrate to the target: its plain plan
+      local v = O:ScoreInput(input({minQuality=3}), roomy())
+      assert.is_false(v.usedConcentration); assert.is_nil(v.concentrationAlternative)
+      ev.conc.concentrated, ev.conc.expectedQuality = true, 4   -- lands above the target: not a route to it
+      assert.is_nil(O:ScoreInput(input({minQuality=3}), roomy()).concentrationAlternative)
+      ev.conc.expectedQuality, ev.conc.flags = 3, {unreachableTarget=true}
+      assert.is_nil(O:ScoreInput(input({minQuality=3}), roomy()).concentrationAlternative)
+    end)
+    it("records no alternative when a known rate meets an unknown reagent cost", function()
+      ev.conc.reagentCost = nil
+      local v = O:ScoreInput(input({minQuality=3}), roomy())
+      assert.is_false(v.usedConcentration); assert.is_nil(v.concentrationAlternative); assert.equal(250000, v.score)
+      ev.conc.reagentCost, ev.plain.reagentCost = 100000, nil   -- unknown plain cost: not compared, plain kept
+      local p = O:ScoreInput(input({minQuality=3}), roomy())
+      assert.is_false(p.usedConcentration); assert.is_nil(p.concentrationAlternative); assert.is_nil(p.net)
+    end)
+    it("is unchanged when only concentration reaches the target", function()
+      ev.plain.expectedQuality = 2
+      local v = O:ScoreInput(input({minQuality=3}), roomy())
+      assert.is_true(v.usedConcentration); assert.equal(300000, v.score); assert.is_nil(v.concentrationAlternative)
+      local u = O:ScoreInput(input({minQuality=3}), roomy({bestGPC=P2.NIL}))
+      assert.is_true(u.usedConcentration); assert.is_true(u.flags.unknownConcentrationValue); assert.is_nil(u.score)
+    end)
+    it("has no alternative without a target", function()
+      local v = O:ScoreInput(input({minQuality=1}), roomy())
+      assert.is_false(v.usedConcentration); assert.is_nil(v.concentrationAlternative)
+    end)
   end)
 
   it("does not score a recraft as a fresh craft", function()

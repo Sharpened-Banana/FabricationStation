@@ -480,9 +480,21 @@ local set_result
 -- minimum quality cannot be reached even with concentration: the risk unreachableQuality; a red cross), or nil (no
 -- concentration is used: an empty cell). The amount is what Orders charges: view.concentrationCost, set only when
 -- view.usedConcentration; charge = what it is worth in copper (nil while the rate is unknown).
+-- [Task 10b] When the order is crafted without concentration but Orders recorded the concentration route it did not
+-- take (view.concentrationAlternative), mode "alternative" (muted): amount = its points, charge and reagentCost =
+-- that route's, plainCost = the reagent cost of the route taken (view.result.reagentCost); unknown ones are nil.
 function M.ConcentrationCell(view, available)
-  if type(view) ~= "table" or view.usedConcentration ~= true then return {} end
+  if type(view) ~= "table" then return {} end
   local have = type(available) == "number" and available == available and available or nil
+  if view.usedConcentration ~= true then
+    local alt = view.concentrationAlternative
+    if type(alt) ~= "table" or type(alt.cost) ~= "number" or alt.cost <= 0 then return {} end
+    local result = type(view.result) == "table" and view.result or {}
+    return { mode = "alternative", amount = alt.cost, available = have,
+      charge = is_money(alt.charge) and alt.charge or nil,
+      reagentCost = is_money(alt.reagentCost) and alt.reagentCost or nil,
+      plainCost = is_money(result.reagentCost) and result.reagentCost or nil }
+  end
   local unreachable, noConcentration = false, false
   for _, risk in ipairs(type(view.risks) == "table" and view.risks or {}) do
     if risk == "unreachableQuality" then unreachable = true end
@@ -835,6 +847,17 @@ local function conc_tooltip(c)
   local cell, lines = c.concCell or {}, {}
   if cell.mode == "unreachable" then
     lines[1] = { text = L["The minimum quality cannot be reached, even with concentration"], color = TEXT_COLORS.red }
+  elseif cell.mode == "alternative" then
+    -- The concentration route Orders did not take: why (cheaper reagents, compared in copper), or that it could not
+    -- be compared because the value of concentration is unknown.
+    local amount = tostring(cell.amount)
+    if cell.charge and cell.reagentCost and cell.plainCost then
+      lines[1] = { text = L["Buying better reagents is cheaper than %s concentration (%s vs %s)"]:format(amount,
+        ns.UI.FormatMoney(cell.plainCost), ns.UI.FormatMoney(cell.reagentCost + cell.charge)), color = TEXT_COLORS.grey }
+    elseif cell.charge == nil then
+      lines[1] = { text = L["Could use %s concentration instead of better reagents (value of concentration unknown)"]:format(amount),
+        color = TEXT_COLORS.grey }
+    end
   elseif cell.mode then
     lines[1] = { text = L["Needs %d concentration to reach the minimum quality"]:format(cell.amount), color = TEXT_COLORS.white }
     if cell.available then
@@ -1395,7 +1418,9 @@ local function show_row(row, elementData)
     color_text(c.concText, TEXT_COLORS.red)
   elseif c.concCell.mode then
     c.concText:SetText(tostring(c.concCell.amount))
-    color_text(c.concText, c.concCell.mode == "short" and TEXT_COLORS.red or TEXT_COLORS.white)
+    local mode = c.concCell.mode
+    color_text(c.concText, mode == "short" and TEXT_COLORS.red or mode == "alternative" and TEXT_COLORS.grey
+      or TEXT_COLORS.white)
   else
     c.concText:SetText("")
   end

@@ -191,6 +191,8 @@ local function result(ctx, chosen, concPlan, plainBest, perQuality, missingPrice
     requiredCost = chosen.requiredCost,
     expectedSale = chosen.expectedSale,
     profit = chosen.profit,
+    -- true when the chosen plan itself spends concentration (the concentration fields may describe another plan).
+    concentrated = chosen.concentrated == true,
     concentrationCost = concentrationCost,
     expectedConcentrationCost = expectedConcentrationCost,
     goldPerConcentration = goldPerConcentration,

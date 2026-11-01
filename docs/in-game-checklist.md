@@ -1253,6 +1253,17 @@ reported, never loosened. The Ledger tab's Crafts page (the Crafts button above 
 recipe: "Quality: 3 of 4 as predicted", "Multicraft: +2 (expected +1.4)" (a "?" when the game left a number out, never 0),
 Resourcefulness procs and Concentration spent against predicted. Check it against what you made.
 
+P7-18b. **Cheaper route to an order's minimum quality.** On the Orders page's Patron tab, find orders with a minimum
+quality (the gold pip) that the game says need concentration (the user's: Flask of the Shattered Sun, Potion of
+Devoured Dreams, Composite Flora). Hover each row's concentration cell, then its net and score. Expected: each shows
+either the concentration it will spend (white, or red when you have too little; the score is then below the net) or,
+when buying better reagents is cheaper, the concentration in grey with the tooltip "Buying better reagents is cheaper
+than N concentration (A vs B)" (A = the reagents bought, B = the cheaper reagents + the concentration's worth; the
+score cell is blank because it equals the net). Before your best gold per concentration is known the grey cell says
+"Could use N concentration instead of better reagents (value of concentration unknown)". Add a grey-cell order to the
+Queue: it crafts without concentration. Compare A with the reagent prices in Auctionator: A should be the higher-quality
+reagents' cost.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

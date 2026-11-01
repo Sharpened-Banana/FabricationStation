@@ -82,6 +82,14 @@ describe("Math.Profit", function()
     local r1 = P.EvaluateCraft(scenario({ targetQuality = 1, useConcentration = true }))  -- nothing concentrates to 1
     assert.equals(1, r1.expectedQuality); assert.equals(71895, r1.profit); assert.is_nil(r1.flags.unreachableTarget)
   end)
+  it("says whether the chosen plan spends concentration", function()
+    assert.is_false(P.EvaluateCraft(scenario()).concentrated)                              -- plain best
+    assert.is_true(P.EvaluateCraft(scenario({ targetQuality = 2, useConcentration = true })).concentrated)
+    assert.is_false(P.EvaluateCraft(scenario({ targetQuality = 1, useConcentration = true })).concentrated)  -- plain fallback
+    assert.is_false(P.EvaluateCraft(scenario({ targetQuality = 2 })).concentrated)
+    assert.is_true(P.EvaluateAllocation(scenario({ useConcentration = true }), ALL_LOW).concentrated)
+    assert.is_false(P.EvaluateAllocation(scenario({ useConcentration = true }), ALL_TOP).concentrated)   -- already top
+  end)
   it("a slot with no priced option gives no profit and flags noPrice", function()
     local r = P.EvaluateCraft(scenario({ slots = { slot(1,10,48,{100,300}), slot(2,5,32,{200,300}), slot(3,2,0,{false}) } }))
     assert.is_nil(r.profit); assert.is_nil(r.reagentCost); assert.is_nil(r.requiredCost)
