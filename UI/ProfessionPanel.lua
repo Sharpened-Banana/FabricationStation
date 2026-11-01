@@ -629,7 +629,7 @@ local function render()
     local row, data = view.qualityRows[i], model.perQualityRows[i]
     row.data = data
     if data then
-      row.label:SetText("Q" .. data.quality)
+      row.label:SetText(L["Q%d"]:format(math.floor(data.quality)))
       row.cost:SetText(data.costText)
       set_tone(row.cost, data.costTone)
       row.profit:SetText(data.profitText)

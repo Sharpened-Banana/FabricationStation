@@ -1121,6 +1121,19 @@ P6-5. **Order rows after the polish.** On the crafting-orders board:
   optimiser picks (Midnight reagents have two ranks). Note whether the Reagents column still asks you for that
   reagent; if it does, report it (the need is matched by exact item ID).
 
+P6-6. **English text unchanged after the phase 6 locale polish.** In game (enUS), look at:
+- every duration and age: Characters, Queue, Dashboard, Planner and the main window header;
+- the Orders tab Type column and a customer's order history;
+- the Ledger Type column, including a recraft;
+- a customer with linked alts ("Name-Realm (+2)") and a custom tag chip ("tag x");
+- the Recipes tab quality and flags, and the Queue tab quality ("Q2");
+- the Characters tab spec points ("12/40 (+3)");
+- Settings > Prices manual prices ("Item — 12g");
+- `/fs help`.
+
+Expected: every text reads exactly as before. There are no doubled or missing spaces, no stray brackets, and no `%s`
+or `%d` shows.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

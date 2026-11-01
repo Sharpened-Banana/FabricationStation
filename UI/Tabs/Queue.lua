@@ -144,7 +144,7 @@ function Tab.CellTexts(row)
   end
   return {
     name = name, character = short_name(row.charKey), quantity = tostring(row.quantity),
-    quality = row.targetQuality ~= nil and ("Q" .. row.targetQuality) or "--", concentration = row.concentration,
+    quality = row.targetQuality ~= nil and L["Q%d"]:format(math.floor(row.targetQuality)) or "--", concentration = row.concentration,
     cost = cost,
   }
 end

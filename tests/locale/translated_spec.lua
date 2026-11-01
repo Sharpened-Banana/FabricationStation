@@ -1175,3 +1175,186 @@ describe("a non-identity ns.L (units, plurals and labels)", function()
     end)
   end)
 end)
+
+-- Task 7: every area has a case under a translated ns.L (the first line only, after colour codes are removed).
+describe("a non-identity ns.L (the areas without one)", function()
+  local function translate(ns) setmetatable(ns.L, { __index = function(_, key) return "T:" .. key end }) end
+
+  describe("Core", function()
+    it("starts the game data status with the translated sentence", function()
+      local W = install_wow_stubs()
+      local ns = load_addon({}, "Core/DB.lua"); W.boot()
+      translate(ns)
+      assert.equal("T:GameData", ns.FS:GameDataStatusText():sub(1, #"T:GameData"))
+    end)
+
+    it("starts the stopped-module chat line with the translated addon name sentence", function()
+      local W = install_wow_stubs()
+      local ns = load_addon({}, "Core/DB.lua")
+      ns.FS:NewModule("Boom", "AceEvent-3.0"); W.boot()
+      translate(ns)
+      ns.FS:SafeCall("Boom", function() error("x") end)
+      assert.equal("T:FabricationStation: ", plain(W.printed[1]):sub(1, #"T:FabricationStation: "))
+    end)
+  end)
+
+  describe("SelfCheck", function()
+    it("starts the panel's check line with the translated sentence", function()
+      local ns, _, world = make_world({ last = "Modules/SelfCheck.lua", calibrate = { ["Main-Realm"] = { 9001 } } })
+      translate(ns)
+      local lines = {}
+      local panel = ns.FS:NewModule("ProfessionPanel", "AceEvent-3.0")
+      function panel:SetCheckLine(text, tone) lines[#lines + 1] = { text, tone } end
+      panel:Enable()
+      -- The first mismatch fixture of tests/recipes/selfcheck_spec.lua: the game's quality and threshold differ.
+      world.live[9001] = function() return { baseSkill = 480, bonusSkill = 20, baseDifficulty = 700, bonusDifficulty = 0,
+        craftingQuality = 2, lowerSkillThreshold = 700, upperSkillTreshold = 700, concentrationCost = 0,
+        craftingDataID = 2588, bonusStats = {} } end
+      world.openProfession(2906); world.liveReagents({})
+      assert.equal(2, #ns.FS:GetModule("SelfCheck"):Run(9001))
+      assert.equal(1, #lines)
+      assert.equal("T:Math check: ", plain(lines[1][1]):sub(1, #"T:Math check: "))
+      assert.equal("warn", lines[1][2])
+    end)
+  end)
+
+  describe("GuildOptions", function()
+    it("starts the /fs guild status line with the translated sentence", function()
+      local ns, W, p4 = boot_phase4({ "Modules/Social/Util.lua", "Modules/Social/Gate.lua", "Modules/Social/Codec.lua",
+        "Modules/Social/Protocol.lua", "Modules/Social/ProfileStore.lua", "Modules/Social/Comm.lua",
+        "Modules/Social/ItemIndex.lua", "Modules/Social/RecipeIndex.lua", "Modules/Social/Guild.lua",
+        "Modules/Social/GuildNative.lua", "Modules/Social/GuildDirectory.lua", "Modules/Social/GuildOptions.lua" })
+      p4.fake_module(ns, "Scanner", { GetCharacters = function() return {} end })
+      p4.guild.key = { "G", "Realm" }
+      W.fire("PLAYER_ENTERING_WORLD", true, false)
+      translate(ns)
+      ns.FS:HandleSlash("guild")
+      -- The chat prefix is the addon's name and stays as it is; the sentence after it is the key.
+      assert.equal("FabricationStation: T:guild ", plain(W.printed[1]):sub(1, #"FabricationStation: T:guild "))
+    end)
+  end)
+
+  describe("ChatToast", function()
+    it("starts the whisper text with the translated template", function()
+      local ns = boot_phase4({ "Modules/Social/Util.lua", "Modules/Social/Gate.lua", "Modules/Social/ChatMatcher.lua",
+        "Modules/Social/ChatScan.lua", "UI/Util.lua", "UI/ChatToast.lua" })
+      translate(ns)
+      local match = { sender = "Buyer-Realm", kind = "trade", text = "LF crafter", lineID = 1,
+        recipes = { { recipeID = 100, itemID = 212345, name = "Everforged Gloves" } } }
+      local text = ns.UI.ChatToast:WhisperText(match)
+      assert.equal("T:Hi! I can craft ", text:sub(1, #"T:Hi! I can craft "))
+      assert.truthy(text:find("Everforged Gloves", 1, true))
+    end)
+  end)
+
+  describe("ProfessionPanel", function()
+    it("starts the quality and concentration lines with the translated sentence", function()
+      local ns = make_world({ last = "UI/ProfessionPanel.lua" })
+      translate(ns)
+      -- The result of tests/ui/profession_panel_spec.lua, without a live prediction.
+      local result = { expectedQuality = 2, perQuality = { [1] = { reagentCost = 3000, profit = 71895 },
+        [2] = { reagentCost = 4800, profit = 120010 } }, reagentCost = 4800, expectedSale = 124450,
+        multicraftValue = 29450, resourcefulnessValue = 360, ingenuityValue = 31.4, concentrationCost = 314,
+        goldPerConcentration = 6, profit = 120010, priceAgeDays = 1, flags = {} }
+      local model = ns.UI.ProfessionPanel.BuildModel(result, nil)
+      assert.equal("T:", plain(model.qualityText):sub(1, 2), model.qualityText)
+      assert.equal("T:", plain(model.concentrationText):sub(1, 2), model.concentrationText)
+    end)
+  end)
+
+  describe("Dashboard", function()
+    it("starts the queue widget with the formatted translated count line", function()
+      local ns, _, world = make_world({ last = "UI/Tabs/Dashboard.lua" })
+      translate(ns)
+      local D = ns.FS:GetModule("Dashboard")
+      world.fakeEvaluate(9001, { allocation = { { slotIndex = 1, itemID = 1001, quantity = 2 } }, reagentCost = 900,
+        expectedYield = 1, profit = 5000, flags = {} })
+      local Q = ns.FS:GetModule("Queue")
+      Q:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm" })
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Alt-Realm" })
+      D:BuildAll(CreateFrame("Frame")); D:RefreshAll()
+      local frame = D:GetBuiltFrames().queueSummary
+      assert.equal("T:2 entries, 4 crafts", plain(frame.lines[1]:GetText()))
+    end)
+  end)
+
+  describe("Recipes", function()
+    it("starts the status after queueing a row with the translated sentence", function()
+      local ns = make_world({ last = "UI/Tabs/Recipes.lua" })
+      translate(ns)
+      local Recipes = ns.FS:GetModule("Recipes")
+      Recipes.GetRanked = function()
+        return { { recipeID = 9001, charKey = "Alt-Realm", expectedQuality = 2, profit = 5, flags = {} } }
+      end
+      Recipes.IsScanning = function() return false end
+      ns.FS:GetModule("MainWindow"):Show("recipes")
+      local view = ns.FS:GetModule("RecipesTab"):GetView()
+      local button = view.pool[1].cells[9]
+      button:GetScript("OnClick")(button)
+      assert.equal(1, #ns.FS:GetModule("Queue"):GetEntries())
+      assert.equal("T:Queued ", plain(view.status:GetText()):sub(1, #"T:Queued "))
+    end)
+  end)
+
+  -- The quality tier marker is one key everywhere; "Q" .. n joins are gone.
+  describe("the Q%d tier marker", function()
+    it("is read through the key in the Queue tab quality cell", function()
+      local ns = make_world({ last = "UI/Tabs/Queue.lua" })
+      translate(ns)
+      local T = ns.UI.QueueTab
+      local row = T.BuildRows({ { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B", targetQuality = 2 } }, {}, {}, {}, 0)[1]
+      assert.equal("T:Q%d", ns.L["Q%d"])
+      assert.equal("T:Q2", plain(T.CellTexts(row).quality))
+      row.targetQuality = nil
+      assert.equal("--", T.CellTexts(row).quality)
+    end)
+
+    it("is read through the key in the Profession panel's quality rows", function()
+      local ns, W, world = make_world({ last = "UI/ProfessionPanel.lua" })
+      local form = fake_professions_frame()
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      translate(ns)
+      world.fakeEvaluate(9001, { expectedQuality = 2, flags = {}, perQuality = {
+        [1] = { reagentCost = 3000, profit = 1, allocation = { { slotIndex = 1, itemID = 1001, quantity = 10 } } },
+        [2] = { reagentCost = 4800, profit = 2, allocation = { { slotIndex = 1, itemID = 1002, quantity = 10 } } } } })
+      form.selectRecipe({ recipeID = 9001 })
+      local view = ns.FS:GetModule("ProfessionPanel"):GetView()
+      assert.equal("T:Q1", plain(view.qualityRows[1].label:GetText()))
+      assert.equal("T:Q2", plain(view.qualityRows[2].label:GetText()))
+    end)
+  end)
+
+  describe("the context comments", function()
+    -- The ambiguous keys: a translator cannot tell from the English alone what each one stands for.
+    local CONTEXT = {
+      ["Q%d"] = "-- quality tier marker, e.g. Q3",
+      ["ready"] = "-- Characters tab: a cooldown or weekly knowledge that can be done now",
+      ["points"] = "-- Characters tab: the fallback name of a profession's knowledge currency",
+      ["Order: %s"] = "-- customer history tooltip: the order type (Public, Guild, Personal, NPC)",
+      ["Total: %s"] = "-- holdings total: alts dashboard widget, Characters tab reagent tooltip",
+      ["Skill %s"] = "-- stands in for a profession name the client has not given yet (%s = skill line ID)",
+      ["none"] = "-- no value: concentration cost in the profession panel, the best score in the orders widget",
+      ["%s (%s)"] = "-- a value and its qualifiers in brackets: holdings total (where), craft cost (character, notes), "
+        .. "recipe (character), profit (partial)",
+      ["%s - last scan %s ago"] = "-- setup guide scan list: character name, then how long ago",
+    }
+
+    it("comments every ambiguous key", function()
+      local f = assert(io.open("Locales/enUS.lua", "r"))
+      local lines = {}
+      for line in f:lines() do lines[#lines + 1] = line end
+      f:close()
+      for key, comment in pairs(CONTEXT) do
+        local head = 'L["' .. key .. '"] = true'
+        local found
+        for _, line in ipairs(lines) do
+          if line:sub(1, #head) == head then found = line; break end
+        end
+        assert.truthy(found, key)
+        local tail = found:sub(#head + 1)
+        assert.equal(comment, tail:match("%-%-.*$"), key)
+        assert.truthy(tail:match("^%s+%-%-"), key)   -- a trailing comment, on the key's own line
+      end
+    end)
+  end)
+end)
