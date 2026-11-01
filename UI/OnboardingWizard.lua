@@ -241,6 +241,9 @@ local function layout_step(c)
       region:ClearAllPoints()
       region:SetPoint("TOPLEFT", c.frame, "TOPLEFT", x, -y)
       if kind == "wrap" then
+        -- Height 0 first (auto height): a font string with a height set measures only what fits in it, so a box keeps
+        -- its old, smaller height in the measure otherwise.
+        region:SetHeight(0)
         height = math.max(item.min or 0, math.ceil(measured_height(region)))
         region:SetHeight(height)
       elseif kind == "check" then

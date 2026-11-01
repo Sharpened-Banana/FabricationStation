@@ -18,10 +18,19 @@ end
 
 -- Text measuring of the fake client: CHAR_W per character and LINE_H per line, on the text without colour codes.
 -- measureNothing = true makes every font string measure 0, as a client may for a font string on a hidden frame.
+-- As in the client, a font string with a height set (not 0) shows and measures only what fits in that height:
+-- full_height() is what its whole text needs.
 local CHAR_W, LINE_H = 6, 14
 local measureNothing = false
 local function plain(text)
   return (tostring(text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+local function full_height(fs)
+  local chars = #plain(fs:GetText())
+  local lines = 1
+  if fs:GetWordWrap() then lines = math.max(1, math.ceil(chars * CHAR_W / (fs:GetWidth() or 1))) end
+  if fs:GetMaxLines() > 0 then lines = math.min(lines, fs:GetMaxLines()) end
+  return LINE_H * lines
 end
 
 -- The shared frame fake keeps no text, check state or enabled state for buttons, and no measurements; the wizard's
@@ -45,11 +54,9 @@ local function patch_frames()
       function fs:GetFontObject() return fontObject end
       function fs:GetStringHeight()
         if measureNothing then return 0 end
-        local chars = #plain(self:GetText())
-        local lines = 1
-        if self:GetWordWrap() then lines = math.max(1, math.ceil(chars * CHAR_W / (self:GetWidth() or 1))) end
-        if self:GetMaxLines() > 0 then lines = math.min(lines, self:GetMaxLines()) end
-        return LINE_H * lines
+        local full = full_height(self)
+        if type(height) == "number" and height > 0 then return math.min(full, height) end   -- cut at its set height
+        return full
       end
       return fs
     end
@@ -869,7 +876,7 @@ describe("OnboardingWizard", function()
           local r = item.region
           if r:IsShown() then
             local height = height_of(item)
-            if item.kind == "wrap" then assert.is_true(r:GetHeight() >= r:GetStringHeight(), step.id) end
+            if item.kind == "wrap" then assert.is_true(r:GetHeight() >= full_height(r), step.id) end
             if item.kind == "line" then assert.is_true(r:GetStringWidth() <= r:GetWidth(), step.id) end
             if item.kind == "button" then assert.is_true(r:GetTextWidth() + 16 <= (r:GetSize()), step.id) end
             if item.kind == "check" then assert.is_true(r.text:GetStringWidth() <= r.text:GetWidth(), step.id) end
