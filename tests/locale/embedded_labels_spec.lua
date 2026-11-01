@@ -55,7 +55,69 @@ local PAIRS = {
   { 'An order with less time left than this is flagged "Expiring soon".', "Expiring soon" },
   { 'An order with no materials provided is flagged "No mats, low tip" when its commission (the tip after the cut) is '
     .. "less than the reagent cost plus this much.", "No mats, low tip" },
+  -- Fix round 1 (controller ruling): a key that names a button, a settings path or a tab quotes it too.
+  { "Watches public chat for people asking for something one of your characters can craft and shows a small toast. "
+    .. "Nothing is ever sent for you: the toast's Whisper button only opens the chat box. Turn the whole feature off "
+    .. "under Modules.", "Whisper" },
+  { "Watches public chat for people asking for something one of your characters can craft and shows a small toast. "
+    .. "Nothing is ever sent for you: the toast's Whisper button only opens the chat box. Turn the whole feature off "
+    .. "under Modules.", "Modules" },
+  { "Apply fills the reagent slots in Blizzard's crafting window", "Apply" },
+  { "Apply is off in Settings", "Apply" },
+  { "Apply is off in Settings", "Settings" },
+  { "Auctionator returned an error; see the error log in Settings", "Settings" },
+  { "Enable in Settings " .. ARROW .. " Crafting", "Settings" },
+  { "Enable in Settings " .. ARROW .. " Crafting", "Crafting" },
+  { "Lets the Guild tab ask the game which guildmates know a recipe. This finds guildmates without this addon, but "
+    .. "cannot show their quality.", "Guild" },
+  { "The queue is empty. Queue crafts from the Recipes tab, or set a restock target below.", "Recipes" },
+  { "Hidden: %s is hidden on the Characters tab", "Characters" },
+  { "Click to open the Planner", "Planner" },
+  { "Skip or the close button ends this guide; /fs setup opens it again. If the window is hidden any other way, it "
+    .. "comes back at your next login.", "Skip" },
+  { "open the settings tab", "Settings" },   -- the label in lower case, as the slash help writes it
+  { "Addon: the guildmate's own data. Guild query: the game's guild recipe list, which has no quality.", "Addon" },
+  { "Addon: the guildmate's own data. Guild query: the game's guild recipe list, which has no quality.",
+    "Guild query" },
+  { "Source: Guild query, the game's guild recipe list (no quality)", "Guild query" },
+  { "Source: Addon, the guildmate's own FabricationStation data", "Addon" },
+  { "See which guildmates can craft what. Sharing is set on the Guild and chat step.", "Guild and chat" },
 }
+
+-- Keys that contain a known label as a whole word without quoting it. Each is the label's own text with something added,
+-- or the same word in another sense. A key that really names the label belongs in PAIRS, not here.
+local EXEMPT = {
+  { "the label with a suffix or prefix: another label, or part of the same control's text", {
+    "Show hidden (%d)", "Whisper text", "Apply failed", "Expiring soon (minutes)", "Crafting-orders window",
+    "Crafting %s\226\128\166", "Crafting order #%s", "Crafting\226\128\166" } },
+  { "Guild as the feature or the order type, and sentences about it, not the tab or a button", {
+    "Guild answered: %d can craft this", "Guild answered: nobody knows this recipe", "Guild sync",
+    "Guild sync is turned off", "Guild sync is turned off: turn it on in Settings > Modules", "Guild: %s", "Guild crafter directory",
+    "Guild sharing is off because the Guild feature is turned off on the previous step.",
+    "Guild sharing lets guildmates who run FabricationStation see which recipes your characters can craft. Only recipes, "
+      .. "skill levels and expected quality are shared, never gold, items or prices." } },
+  { "a module's off text, or the word in its ordinary sense", {
+    "Planner is turned off", "Recipes is turned off", "Recipes and expected quality", "Recipes only",
+    "Recipes compared for spec advice", "Characters that have no profession of the current expansion are never shared.",
+    "Characters listed in a tooltip", "Characters: %d",
+    "The reagent search, the Planner, the holdings tooltip lines and the knowledge widget always leave them out." } },
+}
+
+local function is_exempt(exempt, key)
+  return exempt[key] ~= nil
+end
+
+-- Whole word or phrase: the characters on either side are not letters, digits or an underscore.
+local function has_label(key, label)
+  local from = 1
+  while true do
+    local a, b = key:find(label, from, true)
+    if not a then return false end
+    local before, after = key:sub(a - 1, a - 1), key:sub(b + 1, b + 1)
+    if not before:match("[%w_]") and not after:match("[%w_]") then return true end
+    from = a + 1
+  end
+end
 
 local function read_lines(path)
   local lines = {}
@@ -87,7 +149,7 @@ describe("labels quoted inside other keys", function()
     for _, p in ipairs(PAIRS) do
       assert.is_true(keys[p[1]] ~= nil, p[1])
       assert.is_true(trimmed[p[2]] ~= nil, "label is not a key: " .. p[2])
-      assert.truthy(p[1]:find(p[2], 1, true), p[1])
+      assert.truthy(p[1]:lower():find(p[2]:lower(), 1, true), p[1])
     end
   end)
 
@@ -107,5 +169,46 @@ describe("labels quoted inside other keys", function()
       for _ in line:gmatch('quotes the label "') do found = found + 1 end
     end
     assert.equal(expected, found)
+  end)
+  it("has no key that names a known label without quoting it", function()
+    local labels, byKey, exempt = {}, {}, {}
+    for _, p in ipairs(PAIRS) do
+      labels[p[2]] = true
+      byKey[p[1]] = byKey[p[1]] or {}
+      byKey[p[1]][#byKey[p[1]] + 1] = p[2]
+    end
+    for _, group in ipairs(EXEMPT) do
+      for _, key in ipairs(group[2]) do exempt[key] = true end
+    end
+    local missed = {}
+    for key in pairs(keys) do
+      local trimmedKey = trim(key)
+      if not labels[trimmedKey] and not is_exempt(exempt, key) then   -- a label's own key is not a quote
+        for label in pairs(labels) do
+          if has_label(key, label) then
+            local covered = false
+            for _, quoted in ipairs(byKey[key] or {}) do
+              if quoted == label or quoted:find(label, 1, true) then covered = true end
+            end
+            if not covered then missed[#missed + 1] = key .. "  <- " .. label end
+          end
+        end
+      end
+    end
+    table.sort(missed)
+    assert.same({}, missed)
+  end)
+
+  it("lists only exemptions that still name a label", function()
+    local labels = {}
+    for _, p in ipairs(PAIRS) do labels[p[2]] = true end
+    for _, group in ipairs(EXEMPT) do
+      for _, key in ipairs(group[2]) do
+        assert.is_true(keys[key] ~= nil, "no such key: " .. key)
+        local hit = false
+        for label in pairs(labels) do if has_label(key, label) then hit = true end end
+        assert.is_true(hit, "names no label: " .. key)
+      end
+    end
   end)
 end)

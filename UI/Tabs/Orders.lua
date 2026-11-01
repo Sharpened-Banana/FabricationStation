@@ -238,7 +238,7 @@ end
 -- Ledger:Benchmark's result for quality (nil: all qualities) -> "Your tips (Q3): median <m> (p25 <a>, p75 <b>,
 -- n=<n>)", or "Your tips (all qualities): no history yet".
 function Tab.BenchmarkText(benchmark, quality)
-  local scope = quality ~= nil and ("Q" .. tostring(quality)) or L["all qualities"]
+  local scope = quality ~= nil and L["Q%d"]:format(math.floor(quality)) or L["all qualities"]
   local b = benchmark
   if not (type(b) == "table" and is_money(b.median) and is_money(b.p25) and is_money(b.p75)) then
     return (L["Your tips (%s): no history yet"]):format(scope)

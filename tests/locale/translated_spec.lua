@@ -308,6 +308,13 @@ describe("a non-identity ns.L (orders sentences)", function()
     assert.equal("T:Orders seen T:<1m ago", Tab.Model(snap, filters, 1000).header)
   end)
 
+  it("reads the tip benchmark's quality scope through the Q%d key", function()
+    local Tab = ns.UI.OrdersTab
+    assert.equal("T:Your tips (T:Q3): no history yet", Tab.BenchmarkText(nil, 3))
+    assert.equal("T:Your tips (T:Q3): no history yet", Tab.BenchmarkText(nil, 3.0))
+    assert.equal("T:Your tips (T:all qualities): no history yet", Tab.BenchmarkText(nil, nil))
+  end)
+
   it("translates the recraft note of a row", function()
     local notes = ns.UI.OrdersPanel.Notes({ flags = { recraft = true } })
     assert.equal("T:Recraft \226\128\148 judge manually", notes[1])
