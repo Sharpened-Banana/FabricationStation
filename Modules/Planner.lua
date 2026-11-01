@@ -204,7 +204,7 @@ function Planner:GetMissingRecipes(charKey, skillLineID)
       if source.kind == "item" and is_finite(gen.itemID) then source.itemID = gen.itemID end
       if type(entry.sourceText) == "string" and entry.sourceText ~= "" then source.text = entry.sourceText end
       local name = type(entry.name) == "string" and entry.name ~= "" and entry.name or spell_name(id)
-      out[#out + 1] = { recipeID = id, name = name or ("Recipe " .. id), source = source }
+      out[#out + 1] = { recipeID = id, name = name or L["Recipe %s"]:format(tostring(id)), source = source }
     end
   end
   local lower = {}
@@ -272,9 +272,9 @@ local function duration_text(seconds)
 end
 
 local function warning_text(A, w, now)
-  local head = w.charKey .. " " .. A:ProfessionName(w.skillLineID) .. ": concentration "
-  if w.status == "capped" then return head .. "is full" end
-  return head .. "full in " .. duration_text(w.fullAt - now)
+  local profession = A:ProfessionName(w.skillLineID)
+  if w.status == "capped" then return L["%s %s: concentration is full"]:format(w.charKey, profession) end
+  return L["%s %s: concentration full in %s"]:format(w.charKey, profession, duration_text(w.fullAt - now))
 end
 
 local announced = false   -- per session (a /reload starts a new one)

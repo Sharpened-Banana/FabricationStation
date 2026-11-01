@@ -972,6 +972,11 @@ overlaps a button, the window keeps its usual height in English, and the two but
 under a small heading ("What to share" / "Which characters to share"). If any text box is too short or the window is
 taller than before, the client measured 0 for a hidden font string: note which step.
 
+P5-7. **English text unchanged after the localization rewrite (Tasks 7-11).** In game (enUS), look at the Queue, Orders,
+Customers, Ledger, Characters and Planner tabs (all four Planner sections, the section's pickers and a click on a
+schedule row's Queue button), a recipe tooltip, the profession panel and `/fs guild`. Expected: every text reads exactly
+as before (no doubled spaces, no missing colon or bracket, no `%s` or `%d` shown).
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

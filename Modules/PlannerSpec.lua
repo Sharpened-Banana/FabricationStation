@@ -225,6 +225,7 @@ local function memo_key(R, charKey, snapshot, top, n)
   table.sort(ids, function(a, b) return tostring(a) < tostring(b) end)
   for _, id in ipairs(ids) do
     local path = snapshot.paths[id]
+    -- The memo key is a cache signature of the spec data; none of it is shown.
     parts[#parts + 1] = table.concat({ tostring(id), tostring(path.rank), tostring(path.maxRank),
       tostring(path.available), table.concat(path.perkRanks or {}, ",") }, ":")
   end

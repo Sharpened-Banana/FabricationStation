@@ -4,17 +4,6 @@ local function tmp_file(content)
   return path
 end
 
--- Files that still join display sentences with `..`, table.concat or plural logic, by the area task that converts
--- them (Task 7 core/crafting/social, 8 orders, 9 customers/ledger, 10 characters, 11 planner). Each task removes
--- its own files; Task 11 deletes this table and the allowlist entries it explains.
-local PENDING = {
-  -- Task 11: planner
-  ["Modules/Planner.lua"] = true, ["UI/Tabs/Planner.lua"] = true, ["UI/Tabs/PlannerView.lua"] = true,
-}
-
--- Allowlist entries that no longer match anything and have not been removed yet (none while the area tasks run).
-local STALE_PENDING = {}
-
 local function lines_of(src)
   local C = dofile("tools/check_locale.lua")
   local path = tmp_file(src)
@@ -89,16 +78,14 @@ describe("concatenated display sentences", function()
     os.remove(path); os.remove(allow)
   end)
 
-  it("has no concatenated display sentence outside the areas still pending", function()
+  it("has no concatenated display sentence in Core, Modules or UI", function()
     local C = dofile("tools/check_locale.lua")
-    for _, hit in ipairs(C.find_concatenations({ "Core", "Modules", "UI" }, "tools/locale_allowlist.txt")) do
-      assert.is_true(PENDING[hit.file] == true, hit.file .. ":" .. hit.line .. ": " .. hit.text)
-    end
+    assert.are.same({}, C.find_concatenations({ "Core", "Modules", "UI" }, "tools/locale_allowlist.txt"))
   end)
 
   it("keeps every allowlist entry in use", function()
     local C = dofile("tools/check_locale.lua")
-    assert.are.same(STALE_PENDING, C.stale_allowlist({ "Core", "Modules", "UI" }, "tools/locale_allowlist.txt"))
+    assert.are.same({}, C.stale_allowlist({ "Core", "Modules", "UI" }, "tools/locale_allowlist.txt"))
   end)
 
   it("has no unused enUS key", function()

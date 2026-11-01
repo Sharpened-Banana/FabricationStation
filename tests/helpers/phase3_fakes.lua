@@ -246,6 +246,7 @@ function P3.phase3_env(opts)
   end
   local files = { "Modules/PlanCalc.lua" }
   for _, f in ipairs(opts.files or {}) do files[#files + 1] = f end
+  if opts.before_load then opts.before_load(ns) end   -- e.g. a translating ns.L, so load-time constants translate too
   P2.load(ns, files)   -- loads, then boots (InitDB, every module's OnInitialize/OnEnable)
   local g = ns.FS.db.global
   g.characters = P3.characters()

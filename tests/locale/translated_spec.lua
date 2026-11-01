@@ -636,3 +636,365 @@ describe("a non-identity ns.L (characters sentences)", function()
     assert.truthy(plain(model.lines[1]):find("T:Total: ", 1, true))
   end)
 end)
+
+-- Task 11: the planner's tab, view and chat sentences are whole keys, so a translated ns.L reaches every sentence.
+-- The ns.L metatable is set BEFORE the files load (before_load), so load-time constants (category labels, state words)
+-- are translated too. Character keys, recipe and item names, durations and numbers are data, not sentences.
+describe("a non-identity ns.L (planner sentences)", function()
+  local P2 = require("tests.helpers.phase2")
+  local PLANNER_FILES = { "Modules/Alts.lua", "Modules/AltsCollector.lua", "Modules/CraftingData.lua",
+    "Modules/Planner.lua", "Modules/PlannerSpec.lua", "UI/Widgets/ExpandGrid.lua", "UI/Tabs/ViewUtil.lua",
+    "UI/Tabs/CharactersView.lua", "UI/Tabs/PlannerView.lua", "UI/OrdersPanel.lua", "UI/Tabs/Planner.lua" }
+  local OLD_BUILD = { GetBuildInfo = function() return "12.2.0", "70700", "Nov 1 2026", 120200 end }
+  local ns, env, W, PL, Tab, PV, reg, container
+  local tooltip = { lines = {} }
+  local added, queueAnswer
+
+  -- Buttons that keep their text and highlight lock (the shared stubs make them no-ops).
+  local function stateful_buttons()
+    local real = _G.CreateFrame
+    _G.CreateFrame = function(frameType, name, parent, template)
+      local f = real(frameType, name, parent, template)
+      if frameType == "Button" then
+        local text = ""
+        function f:SetText(t) text = t end
+        function f:GetText() return text end
+      end
+      return f
+    end
+  end
+
+  local function boot(wow)
+    tooltip.lines, added, queueAnswer, container = {}, {}, 7, nil
+    ns, env, W = phase3_env({
+      files = PLANNER_FILES, recipeLines = { [1001] = 2907, [1002] = 2907 },
+      ranked = { { recipeID = 1001, charKey = "Aria-Silvermoon", concentrationCost = 200, goldPerConcentration = 80,
+        profit = 5000, flags = {} }, { recipeID = 1002, charKey = "Aria-Silvermoon", profit = 1000, flags = {} } },
+      before_load = function(n) setmetatable(n.L, { __index = function(_, key) return "T:" .. key end }) end,
+      queue = { Add = function(_, entry) added[#added + 1] = entry; return queueAnswer end },
+      wow = P2.merge({ GameTooltip = {
+        SetOwner = function() tooltip.lines = {} end,
+        SetText = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+        AddLine = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+        Show = function() end, Hide = function() end },
+        C_Spell = { GetSpellName = function(id) return id == 1001 and "Truesilver Transmute" or nil end },
+        C_Item = { GetItemCount = function() return nil end,
+          GetItemNameByID = function(id) return id == 263455 and "Smith's Notes" or nil end } }, wow or {}),
+    })
+    stateful_buttons()
+    PL, Tab, PV = ns.FS:GetModule("Planner"), ns.UI.PlannerTab, ns.UI.PlannerView
+    reg = env.registered.tabs
+    W.advance(1)
+  end
+
+  local function open()
+    container = CreateFrame("Frame")
+    container:SetSize(716, 500)
+    reg.planner.build(container)
+    reg.planner.refresh(container)
+    return ns.FS:GetModule("PlannerTab"):GetView()
+  end
+  local function click(button) button:GetScript("OnClick")(button) end
+  local function hover(frame) frame:GetScript("OnEnter")(frame) end
+  local function select(v, id) click(v.sections[id]) end
+  local function row_frame(grid, key)
+    for i = 1, grid.shownRows do
+      if grid.rowPool[i].data.key == key then return grid.rowPool[i] end
+    end
+  end
+
+  before_each(function() boot() end)
+
+  local function all_translated(lines, from)
+    for i = from or 1, #lines do assert.equal("T:", plain(lines[i]):sub(1, 2), i .. ": " .. plain(lines[i])) end
+  end
+
+  it("really translates (guards the other tests)", function()
+    assert.equal("T:Full", ns.L["Full"])
+  end)
+
+  describe("the cap warning row", function()
+    local pool = { status = "capped", charKey = "Aria-Silvermoon", skillLineID = 2907, value = 1000, max = 1000,
+      fullAt = NOW }
+
+    it("translates the cells and every tooltip sentence of a full pool", function()
+      local row = Tab.WarningRow(pool, NOW)
+      assert.equal("T:Capped: concentration is full", plain(row.cells.recipe))
+      assert.equal("T:Full", plain(row.cells.caps))
+      assert.equal("T:Capped: concentration is full", row.tooltip[1])
+      assert.equal("Aria-Silvermoon Blacksmithing", row.tooltip[2])   -- character and profession: data
+      assert.equal("T:Concentration: 1000/1000", row.tooltip[3])
+      assert.equal("T:Spend it before more is wasted", row.tooltip[4])
+      all_translated(row.tooltip, 3)
+    end)
+
+    it("translates the soon row, with an unknown value as ?", function()
+      local row = Tab.WarningRow({ status = "soon", charKey = "Aria-Silvermoon", skillLineID = 2907,
+        fullAt = NOW + 7200 }, NOW)
+      assert.equal("T:Soon: full in 2h 0m", plain(row.cells.recipe))
+      assert.equal("T:Concentration: ?/?", row.tooltip[3])
+      assert.equal("T:Spend some before it is full", row.tooltip[4])
+    end)
+
+    it("translates the chat line of a warning, with the time to full nested", function()
+      PL:Settings().capWarnHours = 72
+      PL:AnnounceCapWarnings(NOW)
+      assert.same({ "T:FabricationStation: T:Bren-Silvermoon Herbalism: concentration is full",
+        "T:FabricationStation: T:Aria-Silvermoon Blacksmithing: concentration full in 2d 12h" }, W.printed)
+    end)
+  end)
+
+  describe("the schedule row", function()
+    local function schedule(extra)
+      local r = { charKey = "Aria-Silvermoon", skillLineID = 2907, recipeID = 1001, crafts = 2, concentrationUsed = 400,
+        expectedGain = 12345, goldPerConcentration = 678, fullAt = NOW + 3 * 3600 }
+      for k, v in pairs(extra or {}) do r[k] = v end
+      return r
+    end
+
+    it("translates every tooltip sentence after the names", function()
+      local row = Tab.ScheduleRow(schedule(), NOW)
+      assert.equal("Truesilver Transmute", row.tooltip[1])
+      assert.equal("Aria-Silvermoon Blacksmithing", row.tooltip[2])
+      assert.equal("T:Crafts: 2 (400 concentration)", row.tooltip[3])
+      assert.truthy(row.tooltip[4]:find("^T:Expected gain: "))
+      assert.truthy(row.tooltip[5]:find("^T:Gold per concentration: "))
+      assert.equal("T:Full in: 3h 0m", row.tooltip[6])
+      assert.equal("T:Queue adds the crafts with concentration", row.tooltip[7])
+      all_translated(row.tooltip, 3)
+    end)
+
+    it("translates the full, unknown and slow variants of the time to full", function()
+      local full = Tab.ScheduleRow(schedule({ fullAt = NOW }), NOW)
+      assert.equal("T:Full", full.cells.caps)
+      assert.equal("T:Full in: now (full)", full.tooltip[6])
+      assert.equal("T:Full in: unknown",
+        Tab.ScheduleRow(schedule({ fullAt = false, rateUnknown = true }), NOW).tooltip[6])
+      assert.equal("T:Full in: more than 14 days", Tab.ScheduleRow(schedule({ fullAt = false }), NOW).tooltip[6])
+    end)
+
+    it("falls back to translated names for a recipe and a profession the client does not know", function()
+      local row = Tab.ScheduleRow(schedule({ recipeID = 777, skillLineID = 999 }), NOW)
+      assert.equal("T:Recipe 777", row.cells.recipe)
+      assert.equal("T:Skill 999", row.cells.profession)
+    end)
+  end)
+
+  describe("the concentration lines", function()
+    it("translates the full marker, the fallback profession name and the overflow line", function()
+      local pools = {
+        { charKey = "Aria-Silvermoon", skillLineID = 2907, value = 1000, max = 1000, fullAt = NOW, secondsToFull = 0 },
+        { charKey = "Bren-Silvermoon", skillLineID = 4242, value = 100, max = 1000, fullAt = NOW + 7200 },
+        { charKey = "Cato-Silvermoon", skillLineID = 2907, value = 50, max = 1000, fullAt = NOW + 9000 },
+        { charKey = "Dora-Silvermoon", skillLineID = 2907, value = 40, max = 1000, fullAt = NOW + 9500 },
+      }
+      local lines = PV.ConcentrationLines(pools, NOW, 3)
+      assert.equal("Aria-Silvermoon Blacksmithing", lines[1][1])
+      assert.equal("T:Full", lines[1][2])
+      assert.equal("Bren-Silvermoon T:Skill 4242", lines[2][1])   -- the character is data, the fallback name is text
+      assert.equal("2h 0m", lines[2][2])
+      assert.equal("T:+2 more", lines[3][1])
+      assert.equal("", lines[3][2])
+    end)
+  end)
+
+  describe("the knowledge texts", function()
+    local function aria() return PL:GetKnowledgeChecklist()[2] end
+
+    it("translates every detail line after the title", function()
+      local lines = Tab.KnowledgeDetailLines(aria(), { [263455] = "Smith's Notes" })
+      assert.same({ "|cffffd100Aria-Silvermoon Blacksmithing|r",
+        "T:  T:Darkmoon Faire: 0/3 KP \194\183 T:closed (not the faire week)",
+        "T:  T:Treasure: 0/2 KP \194\183 T:open",
+        "T:  T:One-time: 0/3 KP \194\183 T:open",
+        "T:  T:Weekly quest: Smith's Notes \194\183 2/2 KP \194\183 T:done",
+        "T:  First crafts: 2 pending" }, lines)
+      assert.equal("T:  T:Weekly quest: item:263455 \194\183 2/2 KP \194\183 T:done",
+        Tab.KnowledgeDetailLines(aria(), {})[5])
+      assert.equal("T:  No knowledge data for this profession in this GameData build",
+        Tab.KnowledgeDetailLines({ charKey = "A-B", name = "Alchemy", summary = { status = "noData" }, states = {} })[2])
+    end)
+
+    it("translates the grid cell text and the tooltip lines", function()
+      local cells = PV.KnowledgeCells(aria()).cells
+      assert.equal("T:closed", cells.darkmoon)
+      assert.equal("\226\128\148", cells.treatise)
+      local lines = PV.KnowledgeTooltipLines(aria())
+      assert.equal("T:T:Weekly quest: 2/2 (done)", lines[2])
+      assert.equal("T:T:Treasures: 0/2", lines[4])
+      assert.equal("T:T:Darkmoon Faire: T:closed", lines[6])
+      assert.equal("T:First crafts: 2", lines[8])
+      assert.equal("T:Left this week: 2", lines[9])
+      all_translated(lines, 2)
+      -- A profession without data adds its sentence.
+      local noData = PV.KnowledgeTooltipLines({ charKey = "A-B", name = "Alchemy", summary = { status = "noData" },
+        states = {} })
+      assert.equal("T:No knowledge data for this profession in this GameData build", noData[#noData])
+    end)
+
+    it("translates the knowledge lines, their overflow and the weekly total", function()
+      local rows = PL:GetKnowledgeChecklist()
+      local lines = PV.KnowledgeLines(rows)
+      assert.same({ "T:Total", "T:5 KP" }, { lines[1][1], lines[1][2] })
+      assert.equal("T:3 KP", lines[2][2])
+      assert.equal("T:+2 more", PV.KnowledgeLines(rows, 2)[2][1])
+      assert.equal("T:? KP", PV.KnowledgeLines({ { charKey = "A-B", name = "Alchemy", summary = { status = "noData" } } })[2][2])
+    end)
+
+    it("translates the outdated marker on the total and the note nested in its sentences", function()
+      boot({ GetBuildInfo = OLD_BUILD.GetBuildInfo })
+      local lines = PV.KnowledgeLines(PL:GetKnowledgeChecklist())
+      assert.equal("T:T:5 KP (outdated)", lines[1][2])
+      assert.equal("T:Knowledge T:data build 70575 (outdated): the game has changed since, so counts may be wrong",
+        lines[1].tooltip)
+      local tip = PV.KnowledgeTooltipLines(PL:GetKnowledgeChecklist()[2])
+      assert.equal("T:Knowledge T:data build 70575 (outdated)", tip[#tip])
+    end)
+
+    it("translates both footers and their tooltips", function()
+      local text, tip = Tab.KnowledgeFooter()
+      assert.equal("T:Knowledge data: build 70575 \194\183 T:Weekly reset in 4d 3h", text)
+      assert.equal("T:Knowledge sources come from GameData build 70575", tip[2])
+      text, tip = Tab.MissingFooter()
+      assert.equal("T:Recipe sources: not generated \194\183 T:Recipe lists fill in when you open the profession on any character",
+        text)
+      all_translated(tip)
+    end)
+  end)
+
+  describe("the status and empty texts", function()
+    it("translates every status of a named character", function()
+      local function status(code) return PV.StatusText(code, { char = "Bren" }) end
+      assert.equal("T:Hidden: Bren is hidden on the Characters tab", status("hidden"))
+      assert.equal("T:Bren does not have this profession", status("noProfession"))
+      assert.equal("T:Open this profession on Bren", status("notScanned"))
+      assert.equal("T:Open this profession's specializations on Bren to load spec data", status("noSpec"))
+      assert.equal("T:No profitable recipes for Bren in this profession yet: check prices or open the profession",
+        status("noRecipes"))
+      assert.equal("T:No data (weird)", status("weird"))
+      assert.equal("T:Bren knows every listed recipe of this profession", PV.EmptyText("missing", { char = "Bren" }))
+    end)
+
+    it("translates the stand-in for a character that has no name yet, nested in its sentence", function()
+      assert.equal("T:Open this profession on T:this character", PV.StatusText("notScanned"))
+      assert.equal("T:T:This character knows every listed recipe of this profession", PV.EmptyText("missing"))
+    end)
+  end)
+
+  describe("the spec advice and missing recipe texts", function()
+    it("translates the estimate note, the path fallback and the source sentences", function()
+      local model = PV.SpecAdvice({ { pathID = 9, rank = 1, maxRank = 3, gain = 100, points = 2, affordable = true } },
+        "ok", { topRecipes = 7 })
+      assert.equal("T:Estimate from your top 7 profitable recipes", model.note)
+      assert.equal("T:Path 9", model.rows[1].path)
+      assert.equal("T:Affordable", model.rows[1].affordable)
+      assert.equal("T:Recipe item: Plans: Axe", PV.SourceText({ kind = "item", itemID = 1 }, "Plans: Axe"))
+      assert.equal("T:Recipe item: item:5", PV.SourceText({ kind = "item", itemID = 5 }))
+      assert.equal("T:Learned automatically", PV.SourceText({ kind = "auto" }))
+      assert.equal("T:Unknown \226\128\148 open the profession on any character to load sources", PV.SourceText({}))
+    end)
+  end)
+
+  describe("the tab frame", function()
+    local function stub_spec()
+      PL._nodeBonus = function(_, _, _, pathID)
+        return pathID == 1 and { skill = 5, recipes = { [1001] = true } } or { multicraft = 10 }
+      end
+      PL._evaluateWithBonus = function(_, recipeID, charKey, bonus)
+        local base = ({ [1001] = 5000, [1002] = 1000 })[recipeID]
+        return { recipeID = recipeID, charKey = charKey, profit = base + (bonus.skill and 2500 or 500), flags = {} }
+      end
+    end
+
+    it("translates the Knowledge status and its tooltip", function()
+      local v = open()
+      assert.equal("T:Knowledge left: T:5 KP", plain(v.status:GetText()))
+    end)
+
+    it("translates the Concentration status and the schedule row's hover", function()
+      PL:Settings().capWarnHours = 72
+      local v = open()
+      select(v, "concentration")
+      assert.equal("T:Plan: 2 crafts \194\183 T:Capped: 1 \194\183 T:Soon: 1", plain(v.status:GetText()))
+      hover(row_frame(v.grids.concentration, "plan:Aria-Silvermoon:2907:1001"))
+      assert.equal("Truesilver Transmute", tooltip.lines[1])
+      all_translated(tooltip.lines, 3)
+    end)
+
+    it("translates the one-craft plan and the feedback of a Queue click", function()
+      local v = open()
+      select(v, "concentration")
+      click(row_frame(v.grids.concentration, "plan:Aria-Silvermoon:2907:1001").queueButton)
+      assert.equal("T:Queued: 2 \195\151 Truesilver Transmute for Aria-Silvermoon (with concentration)",
+        plain(v.status:GetText()))
+      queueAnswer = nil
+      click(row_frame(v.grids.concentration, "plan:Aria-Silvermoon:2907:1001").queueButton)
+      assert.equal("T:Not queued: the Queue did not accept 2 \195\151 Truesilver Transmute", plain(v.status:GetText()))
+    end)
+
+    it("translates the Spec advice status, row tooltip and pickers", function()
+      stub_spec()
+      local v = open()
+      select(v, "spec")
+      assert.equal("T:Spec advice: 2 paths", plain(v.status:GetText()))
+      assert.equal("T:Estimate from your top 20 profitable recipes", v.footer:GetText())
+      hover(row_frame(v.grids.spec, 1))
+      assert.same({ "Path 1", "T:Rank: 10/30", "T:Points to the next step: 5", "T:Gain: 25s 0c",
+        "T:Per point: 5s 0c", "T:Needs more points than you have unspent" }, { tooltip.lines[1], tooltip.lines[2],
+        tooltip.lines[3], tooltip.lines[4], tooltip.lines[5], tooltip.lines[6] })
+      hover(v.charButton)
+      assert.same({ "T:Character: Aria-Silvermoon", "T:Click for the next character (2 with a Midnight profession)" },
+        tooltip.lines)
+      hover(v.profButton)
+      assert.same({ "T:Profession: Blacksmithing", "T:Click for the next profession of Aria (1)" }, tooltip.lines)
+      click(v.charButton)
+      assert.equal("T:Open this profession's specializations on Bren to load spec data", plain(v.empty:GetText()))
+    end)
+
+    it("translates the Missing recipes status, row tooltip and footer", function()
+      ns.FS.db.global.recipeCatalog[2907] = {
+        [1001] = { name = "Truesilver Transmute", sourceText = "", time = NOW },
+        [1003] = { name = "Bismuth Bar", sourceText = "Trainer: Smith Bob", time = NOW },
+        [1005] = { name = "Axe", sourceText = "", time = NOW },
+      }
+      ns.GameData.Define("RecipeSources", nil, { bySkillLine = { [2907] = { [1005] = { kind = "item", itemID = 3001 },
+        [1007] = { kind = "auto" } } } })
+      local v = open()
+      select(v, "missing")
+      assert.equal("T:Missing: 3 recipes", plain(v.status:GetText()))
+      assert.equal("T:Recipe 1007", row_frame(v.grids.missing, 1007).cells.recipe:GetText())
+      assert.equal("T:Learned automatically", row_frame(v.grids.missing, 1007).cells.source:GetText())
+      hover(row_frame(v.grids.missing, 1005))
+      assert.same({ "Axe", "T:Source: T:Recipe item: item:3001", "T:Recipe ID 1005" }, tooltip.lines)
+      assert.equal("T:Recipe sources: not generated \194\183 T:Recipe lists fill in when you open the profession on any character",
+        v.footer:GetText())
+      hover(v.footerHit)
+      assert.equal("T:Recipe sources: not generated \194\183 T:Recipe lists fill in when you open the profession on any character",
+        tooltip.lines[1])
+      all_translated(tooltip.lines, 2)
+      ns.FS.db.global.characters["Aria-Silvermoon"].professions[2907].recipes = { [1001] = true, [1003] = true,
+        [1005] = true }
+      reg.planner.refresh(container)
+      assert.equal("T:Missing: 1 recipe", plain(v.status:GetText()))
+    end)
+
+    it("translates the empty text of a fully known profession and the turned-off message", function()
+      ns.FS.db.global.recipeCatalog[2907] = { [1001] = { name = "Truesilver Transmute", sourceText = "", time = NOW } }
+      ns.FS.db.global.characters["Aria-Silvermoon"].professions[2907].recipes = { [1001] = true }
+      local v = open()
+      select(v, "missing")
+      assert.equal("T:Aria knows every listed recipe of this profession", plain(v.empty:GetText()))
+      ns.FS:GetModule("Planner"):Disable()
+      reg.planner.refresh(container)
+      assert.equal("T:T:Planner is turned off: turn it on in Settings > Modules to see the plan",
+        plain(v.empty:GetText()))
+    end)
+
+    it("translates the one-craft plan", function()
+      PL:Settings().maxCraftsPerRecipe = 1
+      local v = open()
+      select(v, "concentration")
+      assert.equal("T:Plan: 1 craft \194\183 T:Capped: 1 \194\183 T:Soon: 0", plain(v.status:GetText()))
+    end)
+  end)
+end)

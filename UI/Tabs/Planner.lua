@@ -149,7 +149,7 @@ local function recipe_name(recipeID)
     local ok, name = pcall(api, recipeID)
     if ok and type(name) == "string" and name ~= "" and readable(name) then return name end
   end
-  return "Recipe " .. tostring(recipeID)
+  return L["Recipe %s"]:format(tostring(recipeID))
 end
 
 -- The cached item name, or nil. An uncached name is requested from the client once per session
@@ -171,14 +171,12 @@ end
 local function profession_name(skillLineID)
   local A = module("Alts")
   local name = A and A.ProfessionName and A:ProfessionName(skillLineID)
-  return type(name) == "string" and name or ("Skill " .. tostring(skillLineID))
+  return type(name) == "string" and name or L["Skill %s"]:format(tostring(skillLineID))
 end
 
 local function money(copper)
   return finite(copper) and U.compactMoney(copper) or "?"
 end
-
-local function plural(n, one, many) return whole(n) .. " " .. (n == 1 and one or many) end
 
 ---------------------------------------------------------------------------
 -- Models (pure)
@@ -205,13 +203,14 @@ function Tab.KnowledgeDetailLines(row, names)
   else
     for _, st in ipairs(states) do
       local source = type(st.source) == "table" and st.source or {}
-      local label = source.reset == "once" and "One-time" or CATEGORY_LABELS[source.category]
+      local label = source.reset == "once" and L["One-time"] or CATEGORY_LABELS[source.category]
         or tostring(source.category or L["Source"])
       local name = finite(source.itemID) and (names[source.itemID] or ("item:" .. whole(source.itemID))) or nil
       local earned = (st.status ~= "unknown" and finite(st.earned)) and whole(st.earned) or "?"
       local total = finite(st.total) and whole(st.total) or "?"
       local parts = {
-        "  " .. label .. ": " .. (name and (name .. DOT) or "") .. earned .. "/" .. total .. " KP",
+        name and L["  %s: %s · %s/%s KP"]:format(label, name, earned, total)
+          or L["  %s: %s/%s KP"]:format(label, earned, total),
         STATE_WORDS[st.status] or tostring(st.status),
       }
       if type(source.hint) == "string" and source.hint ~= "" then parts[#parts + 1] = source.hint end
@@ -219,7 +218,7 @@ function Tab.KnowledgeDetailLines(row, names)
     end
   end
   if finite(summary.firstCraftsPending) then
-    lines[#lines + 1] = "  First crafts: " .. whole(summary.firstCraftsPending) .. " pending"
+    lines[#lines + 1] = L["  First crafts: %s pending"]:format(whole(summary.firstCraftsPending))
   end
   return lines
 end
@@ -258,7 +257,7 @@ function Tab.MissingFooter()
   local base = L["Recipe lists fill in when you open the profession on any character"]
   local build = ns.GameData.Get("RecipeSources") ~= nil and ns.GameData.TableBuild("RecipeSources") or nil
   if not finite(build) then
-    local text = "Recipe sources: not generated" .. DOT .. base
+    local text = L["Recipe sources: not generated"] .. DOT .. base
     return text, { text, L["Without generated recipe sources, only recipes a character has seen in the profession window are listed, and a source the game did not describe shows as Unknown"] }
   end
   return base, { base, L["Recipe sources come from GameData build %s; the game's own source text wins once a character has seen the recipe"]:format(whole(build)) }
@@ -277,7 +276,7 @@ function Tab.WarningRow(w, now)
     key = "warn:" .. tostring(w.charKey) .. ":" .. tostring(w.skillLineID),
     cells = { character = tostring(w.charKey), profession = prof, recipe = color(code, text), caps = color(code, caps) },
     tooltip = { text, tostring(w.charKey) .. " " .. prof,
-      "Concentration: " .. (finite(w.value) and whole(w.value) or "?") .. "/" .. (finite(w.max) and whole(w.max) or "?"),
+      L["Concentration: %s/%s"]:format(finite(w.value) and whole(w.value) or "?", finite(w.max) and whole(w.max) or "?"),
       capped and L["Spend it before more is wasted"] or L["Spend some before it is full"] },
   }
 end
@@ -294,10 +293,10 @@ function Tab.ScheduleRow(r, now)
   elseif toFull == nil then
     caps, capsLine = ">14d", L["Full in: more than 14 days"]
   elseif toFull == 0 then
-    caps, capsLine = "Full", L["Full in: now (full)"]
+    caps, capsLine = L["Full"], L["Full in: now (full)"]
   else
     caps = CV().FormatDuration(toFull)
-    capsLine = "Full in: " .. caps
+    capsLine = L["Full in: %s"]:format(caps)
   end
   local crafts = finite(r.crafts) and whole(r.crafts) or "?"
   local used = finite(r.concentrationUsed) and whole(r.concentrationUsed) or "?"
@@ -306,9 +305,9 @@ function Tab.ScheduleRow(r, now)
     schedule = r, recipeName = name,
     cells = { character = tostring(r.charKey), profession = prof, recipe = name, crafts = crafts, conc = used,
       gain = money(r.expectedGain), gpc = money(r.goldPerConcentration), caps = caps, queue = "" },
-    tooltip = { name, tostring(r.charKey) .. " " .. prof, "Crafts: " .. crafts .. " (" .. used .. " concentration)",
-      "Expected gain: " .. ns.UI.FormatMoney(r.expectedGain),
-      "Gold per concentration: " .. ns.UI.FormatMoney(r.goldPerConcentration), capsLine,
+    tooltip = { name, tostring(r.charKey) .. " " .. prof, L["Crafts: %s (%s concentration)"]:format(crafts, used),
+      L["Expected gain: %s"]:format(ns.UI.FormatMoney(r.expectedGain)),
+      L["Gold per concentration: %s"]:format(ns.UI.FormatMoney(r.goldPerConcentration)), capsLine,
       L["Queue adds the crafts with concentration"] },
   }
 end
@@ -374,11 +373,11 @@ local function queue_row(grow)
   else
     local id = Q:Add({ recipeID = r.recipeID, quantity = r.crafts, charKey = r.charKey, useConcentration = true })
     if id ~= nil then
-      notice = "Queued: " .. what .. " for " .. tostring(r.charKey) .. " (with concentration)"
+      notice = L["Queued: %s for %s (with concentration)"]:format(what, tostring(r.charKey))
     elseif ns.FS.dbIsNewer then
       notice = L["Not queued: the saved data is from a newer version (read-only)"]
     else
-      notice = "Not queued: the Queue did not accept " .. what
+      notice = L["Not queued: the Queue did not accept %s"]:format(what)
     end
   end
   refresh()
@@ -474,7 +473,7 @@ local function knowledge_section(P)
   if #out.rows == 0 then out.empty = PV().EmptyText("knowledge") end
   local total = PV().KnowledgeLines(checklist)[1]
   if total then
-    out.status = "Knowledge left: " .. total[2]
+    out.status = L["Knowledge left: %s"]:format(total[2])
     out.statusTooltip = { out.status, total.tooltip }
   end
   return out
@@ -501,8 +500,13 @@ local function concentration_section(P)
     out.empty = PV().EmptyText("schedule")
   end
   if warnStatus == "ok" then
-    out.status = (status == "ok" and ("Plan: " .. plural(crafts, "craft", "crafts") .. DOT) or "")
-      .. "Capped: " .. capped .. DOT .. "Soon: " .. soon
+    local parts = {}
+    if status == "ok" then
+      parts[#parts + 1] = (crafts == 1 and L["Plan: %s craft"] or L["Plan: %s crafts"]):format(whole(crafts))
+    end
+    parts[#parts + 1] = L["Capped: %d"]:format(capped)
+    parts[#parts + 1] = L["Soon: %d"]:format(soon)
+    out.status = table.concat(parts, DOT)
   end
   return out
 end
@@ -546,11 +550,13 @@ local function spec_section(P)
       key = m.pathID,
       cells = { path = m.path, rank = m.rank, points = m.points, gain = money(r.gain), perPoint = money(r.gainPerPoint),
         affordable = m.affordable },
-      tooltip = { m.path, "Rank: " .. m.rank, "Points to the next step: " .. m.points, "Gain: " .. m.gain,
-        "Per point: " .. m.perPoint, afford },
+      tooltip = { m.path, L["Rank: %s"]:format(m.rank), L["Points to the next step: %s"]:format(m.points),
+        L["Gain: %s"]:format(m.gain), L["Per point: %s"]:format(m.perPoint), afford },
     }
   end
-  if #out.rows > 0 then out.status = "Spec advice: " .. plural(#out.rows, "path", "paths") end
+  if #out.rows > 0 then
+    out.status = (#out.rows == 1 and L["Spec advice: %s path"] or L["Spec advice: %s paths"]):format(whole(#out.rows))
+  end
   return out
 end
 
@@ -569,11 +575,11 @@ local function missing_section(P)
     local text = PV().SourceText(source, source and source.kind == "item" and item_name(source.itemID) or nil)
     out.rows[#out.rows + 1] = {
       key = r.recipeID, cells = { recipe = r.name, source = text },
-      tooltip = { r.name, "Source: " .. text, "Recipe ID " .. tostring(r.recipeID) },
+      tooltip = { r.name, L["Source: %s"]:format(text), L["Recipe ID %s"]:format(tostring(r.recipeID)) },
     }
   end
   if #out.rows == 0 then out.empty = PV().EmptyText("missing", { char = alt.name }) end
-  out.status = "Missing: " .. plural(#out.rows, "recipe", "recipes")
+  out.status = (#out.rows == 1 and L["Missing: %s recipe"] or L["Missing: %s recipes"]):format(whole(#out.rows))
   return out
 end
 
@@ -739,7 +745,8 @@ function refresh()
     view.status:SetText(""); view.statusTooltip = nil
     view.footer:SetText(""); view.footerTooltip = nil
     ns.FS:CancelDebounce(TICK_KEY)
-    show_empty(view.grids[section], PV().StatusText("plannerOff") .. ": turn it on in Settings > Modules to see the plan")
+    show_empty(view.grids[section],
+      L["%s: turn it on in Settings > Modules to see the plan"]:format(PV().StatusText("plannerOff")))
     apply_layout()
     return
   end
@@ -804,14 +811,14 @@ local function build_bar(container, created)
   created.charButton = picker_button(bar, 0, next_character, function()
     local p = view and view.pickers
     if not p then return nil end
-    return { "Character: " .. tostring(p.alt.charKey),
-      "Click for the next character (" .. p.count .. " with a Midnight profession)" }
+    return { L["Character: %s"]:format(tostring(p.alt.charKey)),
+      L["Click for the next character (%d with a Midnight profession)"]:format(p.count) }
   end)
   created.profButton = picker_button(bar, PICKER_WIDTH + PICKER_GAP, next_profession, function()
     local p = view and view.pickers
     if not p then return nil end
-    return { "Profession: " .. tostring(p.prof.name),
-      "Click for the next profession of " .. tostring(p.alt.name) .. " (" .. #p.alt.professions .. ")" }
+    return { L["Profession: %s"]:format(tostring(p.prof.name)),
+      L["Click for the next profession of %s (%d)"]:format(tostring(p.alt.name), #p.alt.professions) }
   end)
 
   local status = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")

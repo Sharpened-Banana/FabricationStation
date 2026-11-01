@@ -37,7 +37,7 @@ local function view() return ns.UI.CharactersView end
 local function profession_name(skillLineID)
   local A = module("Alts")
   local name = A and A.ProfessionName and A:ProfessionName(skillLineID)
-  return type(name) == "string" and name or ("Skill " .. tostring(skillLineID))
+  return type(name) == "string" and name or L["Skill %s"]:format(tostring(skillLineID))
 end
 
 local function planner_setting(key, default)
@@ -62,7 +62,7 @@ local function capped(fixed, items, max, extra)
   local keepItems = math.max(0, limit - 1 - keepFixed)
   for i = 1, keepFixed do out[#out + 1] = fixed[i] end
   for i = 1, keepItems do out[#out + 1] = items[i] end
-  local more = { "+" .. (#items - keepItems) .. " more", "" }
+  local more = { L["+%d more"]:format(#items - keepItems), "" }
   for k, v in pairs(extra or {}) do more[k] = v end
   out[#out + 1] = more
   return out
@@ -133,7 +133,7 @@ function PV.KnowledgeLines(rows, max)
     local left = tostring(row.charKey) .. " " .. tostring(row.name or profession_name(row.skillLineID))
     if s.status == "ok" and finite(s.weeklyLeft) then
       total, known = total + s.weeklyLeft, true
-      if s.weeklyLeft > 0 then items[#items + 1] = { left, whole(s.weeklyLeft) .. " KP" } end
+      if s.weeklyLeft > 0 then items[#items + 1] = { left, L["%s KP"]:format(whole(s.weeklyLeft)) } end
     else
       unknown = true
       local pair = { left, L["? KP"] }
@@ -141,11 +141,11 @@ function PV.KnowledgeLines(rows, max)
       items[#items + 1] = pair
     end
   end
-  local totalLine = { "Total", (known and (whole(total) .. (unknown and "+?" or "")) or "?") .. " KP" }
+  local totalLine = { L["Total"], L["%s KP"]:format(known and (whole(total) .. (unknown and "+?" or "")) or "?") }
   local note = view().CurrentDataNote()
   if note then
-    totalLine[2] = totalLine[2] .. " (outdated)"
-    totalLine.tooltip = "Knowledge " .. note .. ": the game has changed since, so counts may be wrong"
+    totalLine[2] = L["%s (outdated)"]:format(totalLine[2])
+    totalLine.tooltip = L["Knowledge %s: the game has changed since, so counts may be wrong"]:format(note)
   end
   return capped({ totalLine }, items, max)
 end
@@ -166,26 +166,26 @@ end
 -- the view shows instead of rows; nil for "ok".
 function PV.StatusText(status, ctx)
   ctx = type(ctx) == "table" and ctx or {}
-  local char = ctx.char ~= nil and tostring(ctx.char) or "this character"
+  local char = ctx.char ~= nil and tostring(ctx.char) or L["this character"]
   if status == "ok" then return nil end
   if status == "off" then return off_text(ctx) end
   if status == "plannerOff" then return L["Planner is turned off"] end
-  if status == "hidden" then return "Hidden: " .. char .. " is hidden on the Characters tab" end
-  if status == "noProfession" then return char .. " does not have this profession" end
+  if status == "hidden" then return L["Hidden: %s is hidden on the Characters tab"]:format(char) end
+  if status == "noProfession" then return L["%s does not have this profession"]:format(char) end
   if status == "noData" then return L["No recipe list yet: open this profession on any character"] end
-  if status == "notScanned" then return "Open this profession on " .. char end
-  if status == "noSpec" then return "Open this profession's specializations on " .. char .. " to load spec data" end
+  if status == "notScanned" then return L["Open this profession on %s"]:format(char) end
+  if status == "noSpec" then return L["Open this profession's specializations on %s to load spec data"]:format(char) end
   if status == "noRecipes" then
-    return "No profitable recipes for " .. char .. " in this profession yet: check prices or open the profession"
+    return L["No profitable recipes for %s in this profession yet: check prices or open the profession"]:format(char)
   end
-  return "No data (" .. tostring(status) .. ")"
+  return L["No data (%s)"]:format(tostring(status))
 end
 
 -- section ("missing", "spec", "knowledge", "schedule"), ctx = { char } -> the line for an "ok" status without rows.
 function PV.EmptyText(section, ctx)
   ctx = type(ctx) == "table" and ctx or {}
-  local char = ctx.char ~= nil and tostring(ctx.char) or "This character"
-  if section == "missing" then return char .. " knows every listed recipe of this profession" end
+  local char = ctx.char ~= nil and tostring(ctx.char) or L["This character"]
+  if section == "missing" then return L["%s knows every listed recipe of this profession"]:format(char) end
   if section == "spec" then return L["No spec step left that would earn more"] end
   if section == "knowledge" then return L["No characters with a Midnight profession yet"] end
   if section == "schedule" then return L["Nothing to schedule: no concentration pool has a priced recipe"] end
@@ -208,7 +208,7 @@ end
 function PV.SpecAdvice(rows, status, ctx)
   ctx = type(ctx) == "table" and ctx or {}
   local top = finite(ctx.topRecipes) and ctx.topRecipes or planner_setting("specTopRecipes", DEFAULT_TOP_RECIPES)
-  local model = { rows = {}, note = "Estimate from your top " .. whole(top) .. " profitable recipes" }
+  local model = { rows = {}, note = L["Estimate from your top %s profitable recipes"]:format(whole(top)) }
   if status ~= "ok" then
     model.message = PV.StatusText(status, { char = ctx.char, recipes = true })
     return model
@@ -236,7 +236,7 @@ function PV.SpecAdvice(rows, status, ctx)
   for _, r in ipairs(rows) do
     model.rows[#model.rows + 1] = {
       pathID = r.pathID,
-      path = r.name ~= nil and tostring(r.name) or ("Path " .. tostring(r.pathID)),
+      path = r.name ~= nil and tostring(r.name) or L["Path %s"]:format(tostring(r.pathID)),
       rank = (finite(r.rank) and whole(r.rank) or "?") .. "/" .. (finite(r.maxRank) and whole(r.maxRank) or "?"),
       points = finite(r.points) and whole(r.points) or "?",
       gain = finite(r.gain) and ns.UI.FormatMoney(r.gain) or "?",
@@ -255,9 +255,9 @@ function PV.SourceText(source, itemName)
   if source.kind == "auto" then return L["Learned automatically"] end
   if source.kind == "item" then
     local name = type(itemName) == "string" and itemName ~= "" and itemName or ("item:" .. tostring(source.itemID))
-    return "Recipe item: " .. name
+    return L["Recipe item: %s"]:format(name)
   end
-  return "Unknown " .. EM_DASH .. " open the profession on any character to load sources"
+  return L["Unknown — open the profession on any character to load sources"]
 end
 
 ---------------------------------------------------------------------------
@@ -321,7 +321,7 @@ local function category_cell(states)
     earned, total = earned + (finite(st.earned) and st.earned or 0), total + (finite(st.total) and st.total or 0)
     if not st.done then done = false end
   end
-  if closed then return "closed", false end
+  if closed then return L["closed"], false end
   return whole(earned) .. "/" .. whole(total), done
 end
 
@@ -363,10 +363,10 @@ function PV.KnowledgeTooltipLines(row)
   local c = model.cells
   local lines = { c.character .. " " .. c.profession }
   for _, col in ipairs(CATEGORY_COLUMNS) do
-    lines[#lines + 1] = col.long .. ": " .. c[col.key] .. (model.done[col.key] and " (done)" or "")
+    lines[#lines + 1] = (model.done[col.key] and L["%s: %s (done)"] or L["%s: %s"]):format(col.long, c[col.key])
   end
-  lines[#lines + 1] = "First crafts: " .. c.firstCrafts
-  lines[#lines + 1] = "Left this week: " .. c.left
+  lines[#lines + 1] = L["First crafts: %s"]:format(c.firstCrafts)
+  lines[#lines + 1] = L["Left this week: %s"]:format(c.left)
   local status = type(row) == "table" and type(row.summary) == "table" and row.summary.status or nil
   if status == "unknown" then
     lines[#lines + 1] = L["Unknown: no quest data from this week yet (log in on this character)"]
@@ -374,6 +374,6 @@ function PV.KnowledgeTooltipLines(row)
     lines[#lines + 1] = L["No knowledge data for this profession in this GameData build"]
   end
   local note = view().CurrentDataNote()
-  if note then lines[#lines + 1] = "Knowledge " .. note end
+  if note then lines[#lines + 1] = L["Knowledge %s"]:format(note) end
   return lines
 end
