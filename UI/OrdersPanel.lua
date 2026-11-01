@@ -150,6 +150,10 @@ local CLAIM_REFUSED = {
   none = L["No order meets your claim rules"],
   stale = L["That order is gone; the list was refreshed"],
 }
+local REFRESH_REFUSED = {
+  noProfession = CLAIM_REFUSED.noProfession,
+  busy = L["Still waiting for the order list"],
+}
 
 ---------------------------------------------------------------------------
 -- Pure helpers
@@ -1774,6 +1778,16 @@ function refresh_side()
   end
   side.claimEnabled = view ~= nil
   side.claim:SetEnabled(side.claimEnabled)
+
+  -- Refresh: shown while Orders can ask the server at all, disabled while an answer is awaited; the line under it
+  -- counts the new matching orders the last Refresh found (cleared by the next board show).
+  local state = O and O.GetRequestState and O:GetRequestState() or "unavailable"
+  set_shown(side.refresh, state ~= "unavailable")
+  side.refreshEnabled = state ~= "busy"
+  side.refresh:SetEnabled(side.refreshEnabled)
+  local fresh = O and O.GetRefreshFresh and O:GetRefreshFresh() or nil
+  side.fresh:SetText(fresh and L["%d new matching orders: press Search on the board to see them"]:format(fresh) or "")
+  set_shown(side.fresh, fresh ~= nil)
 end
 
 local function on_claim_clicked(view, reason)
@@ -1783,6 +1797,11 @@ local function on_claim_clicked(view, reason)
   else
     set_result(CLAIM_REFUSED[reason] or L["Nothing claimed (%s)"]:format(tostring(reason)), "warn")
   end
+  refresh_side()
+end
+
+local function on_refresh_clicked(ok, reason)
+  if not ok then set_result(REFRESH_REFUSED[reason] or L["Nothing refreshed (%s)"]:format(tostring(reason)), "warn") end
   refresh_side()
 end
 
@@ -1860,8 +1879,28 @@ local function build_side()
     on_claim_clicked(view, reason)
   end))
 
+  v.refresh = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  v.refresh:SetSize(SIDE_WIDTH - 2 * SIDE_PAD, 22)
+  v.refresh:SetPoint("TOPLEFT", v.claim, "BOTTOMLEFT", 0, -4)
+  v.refresh:SetText(L["Refresh"])
+  -- The only caller of Orders:RequestBoard, directly in this click handler (design rule 3;
+  -- tests/orders/refresh_click_only_spec.lua enforces it). Nothing refreshes by itself.
+  v.refresh:SetScript("OnClick", ns.FS:Wrap(SIDE, function()
+    if not SidePanel:IsEnabled() then return end
+    local O2 = orders()
+    if not O2 then return end
+    local ok, reason = O2:RequestBoard()
+    on_refresh_clicked(ok, reason)
+  end))
+
+  v.fresh = text(frame)
+  v.fresh:SetPoint("TOPLEFT", v.refresh, "BOTTOMLEFT", 0, -4)
+  v.fresh:SetPoint("RIGHT", frame, "RIGHT", -SIDE_PAD, 0)
+  v.fresh:SetJustifyH("LEFT")
+  v.fresh:SetWordWrap(true)
+
   v.best = text(frame)
-  v.best:SetPoint("TOPLEFT", v.claim, "BOTTOMLEFT", 0, -6)
+  v.best:SetPoint("TOPLEFT", v.fresh, "BOTTOMLEFT", 0, -6)
   v.best:SetPoint("RIGHT", frame, "RIGHT", -SIDE_PAD, 0)
   v.best:SetJustifyH("LEFT")
   v.best:SetWordWrap(true)

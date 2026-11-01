@@ -118,6 +118,8 @@ local function install(overrides)
     now = 1700000000,
     messages = {},
     printed = {},
+    flashes = 0,          -- FlashClientIcon calls
+    orderRequests = {},   -- C_CraftingOrders.RequestCrafterOrders requests
     slash = {},
     config = { registered = {}, notified = 0, opened = {}, blizOptions = {} },
     ldb = { objects = {} },
@@ -830,7 +832,11 @@ local function install(overrides)
     C_CraftingOrders = {
       ClaimOrder = retNil, FulfillOrder = retNil, GetClaimedOrder = retNil, GetCrafterOrders = emptyList,
       GetCraftingOrderTime = retZero, GetPersonalOrdersInfo = emptyList, GetOrderClaimInfo = retNil,
+      -- records the request in W.orderRequests and answers nothing (a spec runs request.callback itself)
+      RequestCrafterOrders = function(request) W.orderRequests[#W.orderRequests + 1] = request end,
     },
+    -- the callback container is the function itself, so a spec can call request.callback(...) directly
+    C_FunctionContainers = { CreateCallback = function(fn) return fn end },
     C_DateAndTime = { GetSecondsUntilWeeklyReset = retZero, GetCurrentCalendarTime = retNil },
     -- phase 3 (preflight row 14): safe defaults so full loads boot Alts/Planner without errors.
     C_QuestLog = { IsQuestFlaggedCompleted = retFalse },
@@ -896,6 +902,7 @@ local function install(overrides)
     hooksecurefunc = hooksecurefunc,
     GetInboxInvoiceInfo = retNil, GetInboxHeaderInfo = retNil, TakeInboxMoney = noop, AutoLootMailItem = noop,
     PlaySound = noop,
+    FlashClientIcon = function() W.flashes = W.flashes + 1 end,
     SOUNDKIT = { RAID_WARNING = 8959, TELL_MESSAGE = 3081 },
     ScrollUtil = ScrollUtil,
     LibStub = LibStub,

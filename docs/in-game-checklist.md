@@ -1162,6 +1162,27 @@ Expected: Auctionator has a list "FabricationStation Orders" with each missing r
 "FabricationStation" list is unchanged. A ticked recraft order is counted on the status line ("1 order skipped"), and at
 the 516 px window width the tick boxes stay while Character, Customer and Type are hidden.
 
+P7-6. **Taskbar flash.** In Settings > Alerts turn on "Flash the taskbar on new orders", alt-tab out with the crafting
+order board open on the public tab, and have a new public order appear (press Refresh or Search). Expected: the WoW
+icon flashes. `/run print(type(FlashClientIcon))` prints `function`.
+
+P7-7. **Board Refresh.** Open the public tab of the crafting order board, press Search once (so there is a first
+board), then press Refresh in the side panel. Expected: no error; when there are new orders the side panel says "N
+new matching orders: press Search on the board to see them"; Blizzard's list still works (Search, scrolling, Start)
+and shows them after Search. Also try Refresh on the guild and personal tabs. If nothing ever changes on the public
+tab, run `/dump C_CraftingOrders.GetCrafterOrders()` after a Refresh: the server may answer the public tab with
+buckets (the request is not a flat search), which FabricationStation leaves alone. Report any field Blizzard's
+`ProfessionsCraftingOrderPageMixin:RequestOrders` / `SendOrderRequest` sends that the plan lacked. (Compared on the
+`live` branch at implementation time: the same fields, plus `selectedSkillLineAbility`, which is nil for a request
+that is not a flat search, and the sorts, which Blizzard takes from the page's own sort state while the plan sends
+`sortType = 0` for both.)
+
+P7-8. **Ready alerts.** In Settings > Alerts turn on concentration, Moxie (threshold just above your amount) and
+cooldown alerts. Expected: one chat line (and a toast with OrderAlert on) when concentration fills during play, when
+Moxie reaches the threshold, and when a cooldown comes off; none repeat until the state resets. At login, 12 s after
+the loading screen, the concentration and Moxie states already true are announced once (concentration only when the
+Planner's own chat warning is off).
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

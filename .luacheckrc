@@ -15,7 +15,8 @@ stds.wow = {
     "ScrollUtil", "PlaySound", "SOUNDKIT", "C_QuestLog", "C_Spell", "GetCurrentRegion", "canaccessvalue",
     "RAID_CLASS_COLORS", "C_ChatInfo", "C_RestrictedActions", "C_EncodingUtil", "C_GuildInfo", "GetGuildInfo",
     "IsInGuild", "GetGuildRecipeInfoPostQuery", "GetGuildRecipeMember", "GetNumGuildMembers", "Ambiguate",
-    "issecretvalue", "ChatFrameUtil", "ChatEdit_InsertLink", "C_FriendList", "IsInInstance", "InCombatLockdown", "GetTime", "GetItemIcon" },
+    "issecretvalue", "ChatFrameUtil", "ChatEdit_InsertLink", "C_FriendList", "IsInInstance", "InCombatLockdown", "GetTime", "GetItemIcon",
+    "FlashClientIcon", "C_FunctionContainers" },
 }
 files["Math/"] = { std = "lua51" }
 files["Data/"] = { std = "lua51" }

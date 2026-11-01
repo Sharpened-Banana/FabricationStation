@@ -84,7 +84,9 @@ describe("FabricationStation.toc", function()
     assert.is_true(at["Modules/Onboarding.lua"] < at["UI/Util.lua"])
     assert.is_true(at["UI/AltsDashboard.lua"] < at["UI/ChatToast.lua"])
     assert.is_true(at["UI/ChatToast.lua"] < at["UI/OnboardingWizard.lua"])
-    assert.equal(#toc.files, at["UI/OnboardingWizard.lua"])
+    -- phase 7: the wizard is no longer last; the phase-7 UI modules (ReadyAlerts, ...) follow it at the end
+    assert.is_truthy(at["UI/ReadyAlerts.lua"])
+    assert.is_true(at["UI/OnboardingWizard.lua"] < at["UI/ReadyAlerts.lua"])
   end)
   -- Phase 3 (Task 16, preflight row 3): the phase-3 data files after Data/OrderRewards.lua and before Math, the
   -- phase-3 modules after Modules/Ledger.lua in dependency order, all before the UI.

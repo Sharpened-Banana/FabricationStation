@@ -19,4 +19,6 @@ ns.Msg = {
   GUILD_CHANGED = "FS_GUILD_CHANGED",
   CHATSCAN_MATCH = "FS_CHATSCAN_MATCH",
   ONBOARDING_DONE = "FS_ONBOARDING_DONE",   -- the setup guide no longer holds guild sync (finished, skipped or off)
+  -- Phase 7
+  ORDERS_NEW = "FS_ORDERS_NEW",   -- (sent by Orders) charKey, count, orderTypeName: new matching orders on a scope seen before
 }

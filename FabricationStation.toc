@@ -89,3 +89,4 @@ UI\AltsTooltips.lua
 UI\AltsDashboard.lua
 UI\ChatToast.lua
 UI\OnboardingWizard.lua
+UI\ReadyAlerts.lua
