@@ -60,8 +60,9 @@ describe("Orders scoring", function()
   -- Additions beyond the brief's tests (carries and edge cases).
 
   it("exposes the risk ids and labels in order", function()
-    assert.same({"noMatsLowTip","unreachableQuality","noConcentration","expiringSoon","blockedCustomer","rewardTooCostly"}, O.RISKS)
+    assert.same({"noMatsLowTip","unreachableQuality","noConcentration","expiringSoon","blockedCustomer","rewardTooCostly","notLearned"}, O.RISKS)
     assert.equal("Can't reach min quality", O.RISK_LABELS.unreachableQuality)
+    assert.equal("Recipe not learned", O.RISK_LABELS.notLearned)
     assert.equal("Reward costs too much", O.RISK_LABELS.rewardTooCostly)
     for _, id in ipairs(O.RISKS) do assert.is_string(O.RISK_LABELS[id]) end
   end)
@@ -149,6 +150,35 @@ describe("Orders scoring", function()
     ev.plain.flags = {unknownRecipe=true}
     local v = O:ScoreInput(input(), ctx())
     assert.is_nil(v.score); assert.equal(250000, v.net); assert.is_true(v.flags.unknownRecipe)
+  end)
+
+  describe("notLearned (Task 10c)", function()
+    it("is raised for a recipe whose schematic is cached and the character lacks", function()
+      ev.plain.flags = {unknownRecipe=true}
+      local v = O:ScoreInput(input(), ctx())
+      assert.same({"notLearned"}, v.risks); assert.is_nil(v.score)
+    end)
+    it("is not raised when the schematic is not cached (Recipes has no result)", function()
+      ns.FS:GetModule("Recipes").Evaluate = function() return nil end
+      local v = O:ScoreInput(input(), ctx())
+      assert.is_true(v.flags.unknownRecipe); assert.same({}, v.risks)
+    end)
+    it("is not raised for a recraft", function()
+      ev.plain.flags = {unknownRecipe=true}
+      local v = O:ScoreInput(input({isRecraft=true}), ctx())
+      assert.is_true(v.flags.recraft); assert.same({}, v.risks)
+    end)
+    it("is not raised for a learned recipe, and comes after the other risks", function()
+      assert.same({}, O:ScoreInput(input(), ctx()).risks)
+      ev.plain.flags = {unknownRecipe=true}
+      local v = O:ScoreInput(input({expiresAt=1001800, customer="Bad-Silvermoon"}), ctx())
+      assert.same({"expiringSoon","blockedCustomer","notLearned"}, v.risks)
+    end)
+    it("keeps a too-low skill as the unreachableQuality risk, not notLearned", function()
+      ev.plain = {expectedQuality=1, reagentCost=200000, flags={unreachableTarget=true}}
+      ev.conc = {expectedQuality=1, reagentCost=200000, concentrationCost=50, flags={unreachableTarget=true}}
+      assert.same({"unreachableQuality"}, O:ScoreInput(input({minQuality=4}), ctx()).risks)
+    end)
   end)
 
   it("adds reward values, flags unpriced rewards and passes the orderID", function()

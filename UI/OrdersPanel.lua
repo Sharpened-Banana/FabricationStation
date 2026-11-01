@@ -289,7 +289,20 @@ function M.Notes(view)
   end
   if flags.unknownConcentrationValue then notes[#notes + 1] = L["Concentration value unknown"] end
   if flags.noPrice then notes[#notes + 1] = is_money(view.net) and L["Some prices missing"] or L["No price"] end
-  if flags.unknownRecipe then notes[#notes + 1] = L["Recipe not learned"] end
+  if flags.unknownRecipe then
+    -- With the notLearned risk the red label already says it; the grey line gives where to get the recipe (if known).
+    local learnedRisk = false
+    for _, risk in ipairs(type(view.risks) == "table" and view.risks or {}) do
+      if risk == "notLearned" then learnedRisk = true end
+    end
+    local O = orders()
+    local source = learnedRisk and O and O.RecipeSource and O.RecipeSource(view.recipeID) or nil
+    if source then
+      notes[#notes + 1] = source
+    elseif not learnedRisk then
+      notes[#notes + 1] = L["Recipe not learned"]
+    end
+  end
   if flags.estimated then notes[#notes + 1] = L["Estimate (no calibration)"] end
   if flags.unpricedReward then notes[#notes + 1] = L["Some rewards have no price"] end
   if flags.stalePrice then notes[#notes + 1] = L["Prices are old"] end

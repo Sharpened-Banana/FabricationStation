@@ -26,7 +26,7 @@ Orders.SETTINGS_DEFAULTS = {
   showRowIcons = true,   -- reward and reagent icons on the order rows (UI/OrdersPanel.lua)
   claimBlockingRisks = {
     noMatsLowTip = true, unreachableQuality = true, noConcentration = true, expiringSoon = true, blockedCustomer = true,
-    rewardTooCostly = true,
+    rewardTooCostly = true, notLearned = true,
   },
   filters = {
     hideRisks = {},
@@ -314,7 +314,7 @@ end
 ---------------------------------------------------------------------------
 
 Orders.RISKS = { "noMatsLowTip", "unreachableQuality", "noConcentration", "expiringSoon", "blockedCustomer",
-  "rewardTooCostly" }
+  "rewardTooCostly", "notLearned" }
 Orders.RISK_LABELS = {
   noMatsLowTip = L["No mats, low tip"],
   unreachableQuality = L["Can't reach min quality"],
@@ -322,7 +322,31 @@ Orders.RISK_LABELS = {
   expiringSoon = L["Expiring soon"],
   blockedCustomer = L["Blocked customer"],
   rewardTooCostly = L["Reward costs too much"],
+  notLearned = L["Recipe not learned"],
 }
+
+-- Where the client says a recipe comes from ("Vendor: Naynar Zone: Harandar"), for the tooltip of an order for a recipe
+-- the character has not learned: the recipe catalog the Recipes scan keeps (global.recipeCatalog[skillLineID][recipeID]
+-- .sourceText), else C_TradeSkillUI.GetRecipeSourceText (read-only, pcall). Colour codes are stripped and line breaks
+-- become spaces. nil when no source is known (never ""). Wrapped in a function so the value is read at call time.
+function Orders.RecipeSource(recipeID)
+  if type(recipeID) ~= "number" then return nil end
+  local text
+  local scanner = ns.FS:GetModule("Scanner", true)
+  local okS, schematic = pcall(function() return scanner and scanner.GetSchematic and scanner:GetSchematic(recipeID) end)
+  local catalog = global() and global().recipeCatalog
+  local line = okS and type(schematic) == "table" and type(catalog) == "table" and catalog[schematic.skillLineID] or nil
+  local entry = type(line) == "table" and line[recipeID] or nil
+  if type(entry) == "table" and type(entry.sourceText) == "string" then text = entry.sourceText end
+  if (text == nil or text == "") and C_TradeSkillUI and type(C_TradeSkillUI.GetRecipeSourceText) == "function" then
+    local ok, value = pcall(C_TradeSkillUI.GetRecipeSourceText, recipeID)
+    if ok and type(value) == "string" then text = value end
+  end
+  if type(text) ~= "string" then return nil end
+  text = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("[\r\n]+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+  if text == "" then return nil end
+  return text
+end
 
 local function skill_line_of(recipeID)
   local scanner = ns.FS:GetModule("Scanner", true)
@@ -434,6 +458,8 @@ end
 --   costPerReward[kind] (kind "knowledge" | "moxie", only for rewards with units) = what the order costs per unit:
 --   0 when commission - reagent cost - concentration charge covers it, nil when that is unknown. Above
 --   settings.rewardCostLimits[kind] it raises the "rewardTooCostly" risk.
+--   "notLearned" (last risk): Recipes evaluated the recipe (its schematic is cached) and flagged it unknownRecipe, i.e.
+--   the character has not learned it. A recipe without a result (schematic not cached) and a recraft raise nothing.
 --   A recraft (input.isRecraft) is not a fresh craft, so Recipes is not asked: flags.recraft and flags.estimated,
 --   result/net/score nil, and no quality or concentration risk.
 function Orders:ScoreInput(input, ctx)
@@ -557,6 +583,9 @@ function Orders:ScoreInput(input, ctx)
     if cost ~= nil and type(limit) == "number" and limit >= 0 and cost > limit then tooCostly = true end
   end
   if tooCostly then risks[#risks + 1] = "rewardTooCostly" end
+  -- A recipe whose schematic is cached (Recipes had a result) that the character's own learned recipes lack. No result
+  -- at all (schematic not cached yet) is unknown, not "not learned": it keeps flags.unknownRecipe and no risk.
+  if not recraft and r ~= nil and rflags.unknownRecipe == true then risks[#risks + 1] = "notLearned" end
 
   return {
     orderID = input.orderID,

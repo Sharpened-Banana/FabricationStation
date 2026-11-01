@@ -97,6 +97,34 @@ describe("OrdersPanel", function()
         P.Notes({ net = 5, flags = { noPrice = true, estimated = true, unpricedReward = true, stalePrice = true } }))
       assert.same({}, P.Notes({ net = 5 }))
     end)
+    describe("a recipe the character has not learned (notLearned)", function()
+      local view = { orderID = 5, recipeID = 4444, risks = { "notLearned" }, flags = { unknownRecipe = true, noPrice = true } }
+      before_each(function()
+        P2.fake_module(ns, "Scanner", { GetSchematic = function() return { skillLineID = 2900 } end })
+        ns.FS.db.global.recipeCatalog = nil
+        _G.C_TradeSkillUI = _G.C_TradeSkillUI or {}
+        _G.C_TradeSkillUI.GetRecipeSourceText = nil
+      end)
+      it("shows the recipe's source from the catalog instead of repeating the label", function()
+        ns.FS.db.global.recipeCatalog = { [2900] = { [4444] = { name = "Vat", sourceText = "Vendor: Naynar\nZone: Harandar", time = 1 } } }
+        assert.same({ "No price", "Vendor: Naynar Zone: Harandar" }, P.Notes(view))
+      end)
+      it("falls back to the client's source text, read-only, and strips colour codes", function()
+        _G.C_TradeSkillUI.GetRecipeSourceText = function(id)
+          assert.equal(4444, id); return "|cffffd200Vendor:|r Naynar"
+        end
+        assert.same({ "No price", "Vendor: Naynar" }, P.Notes(view))
+      end)
+      it("survives a failing client call and adds no line when no source is known (the label is already shown)", function()
+        _G.C_TradeSkillUI.GetRecipeSourceText = function() error("boom") end
+        assert.same({ "No price" }, P.Notes(view))
+        _G.C_TradeSkillUI.GetRecipeSourceText = function() return "" end
+        assert.same({ "No price" }, P.Notes(view))
+      end)
+      it("keeps the plain note for an unknown recipe without the risk (schematic not cached)", function()
+        assert.same({ "No price", "Recipe not learned" }, P.Notes({ flags = { noPrice = true, unknownRecipe = true } }))
+      end)
+    end)
     it("notes what a patron order pays per knowledge point and per Moxie", function()
       local money = ns.UI.FormatMoney
       assert.same({ "Pays " .. money(300000) .. " per knowledge point", "Pays " .. money(5000) .. " per Moxie" },
@@ -787,7 +815,7 @@ describe("OrdersPanel on the crafting orders page", function()
       local labels = {}
       for _, cb in ipairs(v.checks) do labels[#labels + 1] = cb.label:GetText() end
       assert.same({ "No mats, low tip", "Can't reach min quality", "Not enough concentration", "Expiring soon",
-        "Blocked customer", "Reward costs too much", "Hide unscored" }, labels)
+        "Blocked customer", "Reward costs too much", "Recipe not learned", "Hide unscored" }, labels)
       assert.same({}, form.assignedFields)
     end)
     it("binds the checkboxes to the filters and refreshes the rows", function()
@@ -801,7 +829,7 @@ describe("OrdersPanel on the crafting orders page", function()
       rawset(cb.button, "GetChecked", function() return false end)
       cb.button:GetScript("OnClick")(cb.button)
       assert.is_nil(O:Settings().filters.hideRisks.expiringSoon)
-      local unscored = v.checks[7]
+      local unscored = v.checks[8]
       rawset(unscored.button, "GetChecked", function() return true end)
       unscored.button:GetScript("OnClick")(unscored.button)
       assert.is_true(O:Settings().filters.hideUnscored)

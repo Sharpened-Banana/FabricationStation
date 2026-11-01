@@ -453,7 +453,7 @@ describe("Orders options", function()
       -- The row-icons toggle (panel.rowIcons) is the one editable option outside those groups. The group's other
       -- options are module toggles, which turn modules on and off, so only this one is called.
       g.args.panel.args.rowIcons.set(nil, not g.args.panel.args.rowIcons.get()); set = set + 1
-      assert.equal(20, set)   -- scoring: 3 gold + minutes + claim score + 6 risk toggles; alerts: 2 toggles, sound,
+      assert.equal(21, set)   -- scoring: 3 gold + minutes + claim score + 7 risk toggles; alerts: 2 toggles, sound,
                               -- toast seconds; ledger: 2 ranges, the sale window and tooltip toggle; panel: the
                               -- row-icons toggle
       local settings = ns.FS.db.global.settings

@@ -456,6 +456,21 @@ describe("Orders board", function()
       O:Settings().claimBlockingRisks.rewardTooCostly = false
       assert.equal(20, O:ClaimBest().orderID)   -- the setting is read when claiming
     end)
+    it("never claims an order for a recipe the character has not learned, and the filter hides it", function()
+      ns.FS:GetModule("Recipes").Evaluate = function() return {expectedQuality=3, reagentCost=200000, flags={unknownRecipe=true}} end
+      O:OnBoardShown(2, { P2.raw_order({ orderID = 21, tipAmount = 900000 }) })
+      assert.same({ "notLearned" }, O:GetView(21).risks)
+      assert.is_true(O:Settings().claimBlockingRisks.notLearned)
+      assert.same({ nil, "none" }, { O:ClaimBest() }); assert.same({}, claimCalls)
+      O:Settings().claimBlockingRisks.notLearned = false
+      assert.same({ nil, "none" }, { O:ClaimBest() })   -- still unscored: never the best claimable
+      assert.is_true(O:IsHidden(O:GetView(21), { hideRisks = { notLearned = true } }))
+      assert.is_false(O:IsHidden(O:GetView(21), { hideRisks = {} }))
+    end)
+    it("adds the notLearned default to settings saved before it existed", function()
+      ns.FS.db.global.settings.orders = { claimBlockingRisks = { expiringSoon = false } }
+      assert.is_true(O:Settings().claimBlockingRisks.notLearned)
+    end)
     it("adds the rewardTooCostly default to settings saved before it existed", function()
       ns.FS.db.global.settings.orders = { claimBlockingRisks = { expiringSoon = false } }
       local s = O:Settings()

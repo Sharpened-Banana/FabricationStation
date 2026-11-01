@@ -1264,6 +1264,15 @@ score cell is blank because it equals the net). Before your best gold per concen
 Queue: it crafts without concentration. Compare A with the reagent prices in Auctionator: A should be the higher-quality
 reagents' cost.
 
+P7-18c. **Orders for recipes you have not learned.** On the Orders page, find an order (a patron order is easiest) for a
+recipe your character has not learned, whose recipe the game has shown you before (open that profession's recipe list
+once so its details are cached). Expected: its row's risk count is red and the risk tooltip lists a red "Recipe not
+learned" line followed by a grey source line as the game words it (e.g. "Vendor: Naynar Zone: Harandar"); the score
+stays "?", there is no "+" queue button; the side panel and the Orders tab have a "Recipe not learned" checkbox that
+dims or hides such orders; Claim Best Order never picks one (Orders options > claim-blocking risks has the toggle). An
+order for a recipe the game has not told the addon about yet shows no red flag. If the source line is missing for a
+recipe you know the game gives a source for, report the recipe name.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

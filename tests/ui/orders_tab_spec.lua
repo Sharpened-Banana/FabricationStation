@@ -150,6 +150,19 @@ describe("Orders tab models", function()
     assert.equal("Net: " .. EM_DASH, texts(T.TooltipLines(recraft, nil))[4])
   end)
 
+  it("tooltips an unlearned recipe with the red risk label and its source line", function()
+    P2.fake_module(ns, "Scanner", { GetSchematic = function() return { skillLineID = 2900 } end })
+    ns.FS.db.global.recipeCatalog = { [2900] = { [4444] = { name = "Vat", sourceText = "Vendor: Naynar Zone: Harandar", time = 1 } } }
+    local r = row({ orderID = 1, orderType = "public", itemID = 5, recipeID = 4444, risks = { "notLearned" },
+      flags = { unknownRecipe = true } })
+    local lines = T.TooltipLines(r, nil)
+    local out, colors = {}, {}
+    for i, line in ipairs(lines) do out[i], colors[i] = line.text, line.color end
+    assert.same({ "item:5", "Type: Public", "Tip: --", "Net: no price", "Recipe not learned", "Vendor: Naynar Zone: Harandar",
+      T.BenchmarkText(nil, nil) }, out)
+    assert.are_not.same(colors[6], colors[5])   -- the label is the red line, the source the grey note
+  end)
+
   it("names the order type in the tooltip, since a narrow window hides the Type column", function()
     local function texts(r)
       local out = {}
