@@ -91,3 +91,4 @@ UI\AltsDashboard.lua
 UI\ChatToast.lua
 UI\OnboardingWizard.lua
 UI\ReadyAlerts.lua
+UI\FeatureLines.lua

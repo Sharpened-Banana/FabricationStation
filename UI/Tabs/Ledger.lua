@@ -1,7 +1,8 @@
 local _, ns = ...
 local L = ns.L
 
--- Ledger tab: what the player earned crafting (Ledger module), in one scrolling page of four sections:
+-- Ledger tab: a row of section buttons (Tab.SECTIONS: Profit, Auctions; the choice is kept for the session only,
+-- default Profit) above one scrolling page. Profit is what the player earned crafting (Ledger module), in four parts:
 --   * Weekly profit for the last WEEKS reset weeks plus their total (Ledger:Weekly): week, income, cost, profit and a
 --     note "partial: <n> with missing or partial cost" when some of the week's sales or commissions had no known (or
 --     a partial) cost.
@@ -12,6 +13,11 @@ local L = ns.L
 --   * The player's own tips by recipe and quality (Ledger:Benchmark for every recipe and quality of a commission; a
 --     recipe whose commissions carry no quality gets one all-qualities row).
 --   * Every entry, newest first (Ledger:Query): date, type, item, amount, customer (or AH buyer).
+-- Auctions (phase 7) is the player's own auction history over the sale log's window (SaleLog:GetAllStats): one row per
+-- item with Posted, Sold, Expired, Cancelled, Rate (sold of everything that ended, "?" while unknown), Last sale (per
+-- item, after the AH cut) and Listed now ("?" while no listing was read), best sellers first. Sales come from the
+-- Ledger's sold mail, so with the Ledger off Sold and Rate are "?" and the row tooltip says why. Cancelled, Expired and
+-- Posted are hidden first when narrow. A status line says when the sale log is off (what was recorded still shows).
 -- The page is one pooled virtual list in a plain scroll frame, as in the Orders and Queue tabs; each list item is a
 -- heading, a column header, a data row, a note or a spacer, and a pooled row keeps one set of cells per section.
 --
@@ -50,11 +56,23 @@ local SCROLL_STEP = ROW_HEIGHT * 3
 local DIM, WARN, GOOD, BAD = "|cff9d9d9d", "|cffffd100", "|cff40ff40", "|cffff4040"
 local WHITE, GREY, GOLD = { 1, 1, 1 }, { 0.62, 0.62, 0.62 }, { 1, 0.82, 0 }
 
+-- The page buttons above the list. Task 10 appends "crafts".
+Tab.SECTIONS = {
+  { id = "profit", label = L["Profit"] },
+  { id = "auctions", label = L["Auctions"] },
+}
+local DEFAULT_SECTION = "profit"
+local SECTION_BAR_HEIGHT, SECTION_BUTTON_WIDTH, SECTION_BUTTON_HEIGHT = 24, 90, 20
+local current = DEFAULT_SECTION   -- the page shown; session only (nothing is saved)
+local EM_DASH = "\226\128\148"   -- UTF-8 for the dash that stands for "no sale yet"
+
 local READ_ONLY_NOTICE = L["Read-only: saved data is from a newer addon version"]
 local READ_ONLY_DETAIL = L["Nothing new is recorded until the addon is updated."]
 local OFF_NOTICE = L["Ledger off: nothing new is recorded"]
 local OFF_DETAIL = L["Turn the Ledger on again in /fs settings > Modules."]
 local PARTIAL_DETAIL = L["Their cost is not subtracted, so the real profit may be lower than shown."]
+local SALELOG_OFF_NOTICE = L["Sale log off: nothing new is recorded"]
+local SALELOG_OFF_DETAIL = L["Turn the Sale log on again in /fs settings > Modules."]
 
 local TYPE_LABELS = { craft = L["craft"], sale = L["sale"], commission = L["commission"] }
 local TYPE_NAMES = { craft = L["Craft (cost record)"], sale = L["Auction sale"], commission = L["Order commission"] }
@@ -62,7 +80,7 @@ local TYPE_NAMES = { craft = L["Craft (cost record)"], sale = L["Auction sale"],
 -- Per section, left to right. The flexible column takes the width the fixed ones leave; the columns before it are
 -- laid out from the left edge, the ones after it from the right edge. `hide` lists the columns dropped, in order,
 -- when the flexible column would get under MIN_FLEX px.
-local SECTIONS = {
+local SECTIONS = {   -- column definitions per list section (not the Profit / Auctions page buttons: Tab.SECTIONS)
   weekly = {
     columns = {
       { key = "week", label = L["Week"], width = 64 },
@@ -105,6 +123,19 @@ local SECTIONS = {
     },
     hide = { "customer", "type" },
   },
+}
+SECTIONS.auction = {
+  columns = {
+    { key = "item", label = L["Item"], flex = true },
+    { key = "posted", label = L["Posted"], width = 44, right = true },
+    { key = "sold", label = L["Sold"], width = 40, right = true },
+    { key = "expired", label = L["Expired"], width = 48, right = true },
+    { key = "cancelled", label = L["Cancelled"], width = 56, right = true },
+    { key = "rate", label = L["Rate"], width = 40, right = true },
+    { key = "last", label = L["Last sale"], width = 72, right = true },
+    { key = "listed", label = L["Listed"], width = 44, right = true },
+  },
+  hide = { "cancelled", "expired", "posted" },
 }
 for _, def in pairs(SECTIONS) do
   def.widths, def.hideable, def.used = {}, {}, 2 * PAD + (#def.columns - 1) * GAP
@@ -398,9 +429,74 @@ local function partial_note(incomplete)
   return (L["partial: %d with missing or partial cost"]):format(incomplete)
 end
 
+-- SaleLog:GetAllStats' { [itemID] = ItemSaleStats } -> one row per item: { itemID, name, posted, sold|nil, expired,
+-- cancelled, rate|nil (whole percent, floored), lastSale = { time, unitPrice }|nil, lastAge|nil (seconds before
+-- `now`), listed|nil }. Best sellers first: `sold` descending (unknown last), then the item's name, then itemID.
+-- Unknown is nil, never 0: sold and rate are nil while the Ledger is off (rate also with nothing ended), listed while
+-- no listing was read.
+function Tab.AuctionRows(stats, now)
+  local rows = {}
+  for itemID, s in pairs(type(stats) == "table" and stats or {}) do
+    if type(s) == "table" then
+      local row = { itemID = itemID, name = item_name({ itemID = itemID }), posted = count(s.posted),
+        sold = is_money(s.sold) and s.sold or nil, expired = count(s.expired), cancelled = count(s.cancelled),
+        listed = is_money(s.listed) and s.listed or nil }
+      if is_money(s.saleRate) then
+        -- The epsilon keeps 29 / 100 (28.999999999999996 after the multiplication) at 29.
+        row.rate = math.max(0, math.min(100, math.floor(s.saleRate * 100 + 1e-9)))
+      end
+      if type(s.lastSale) == "table" and is_money(s.lastSale.unitPrice) then
+        row.lastSale = { time = s.lastSale.time, unitPrice = s.lastSale.unitPrice }
+        if is_money(s.lastSale.time) and is_money(now) then row.lastAge = math.max(0, now - s.lastSale.time) end
+      end
+      rows[#rows + 1] = row
+    end
+  end
+  table.sort(rows, function(a, b)
+    if (a.sold ~= nil) ~= (b.sold ~= nil) then return a.sold ~= nil end
+    if a.sold ~= b.sold then return a.sold > b.sold end
+    local na, nb = tostring(a.name):lower(), tostring(b.name):lower()
+    if na ~= nb then return na < nb end
+    return id_less(a.itemID, b.itemID)
+  end)
+  return rows
+end
+
+-- The Auctions page as list items: the column header, a row per item, a spacer and the footer note. Empty without rows.
+function Tab.AuctionDisplayRows(rows, windowDays)
+  local items = {}
+  if type(rows) ~= "table" or #rows == 0 then return items end
+  items[1] = { kind = "header", section = "auction" }
+  for _, data in ipairs(rows) do items[#items + 1] = { kind = "row", section = "auction", data = data } end
+  items[#items + 1] = { kind = "spacer" }
+  items[#items + 1] = { kind = "note", text = (L["Your own auctions over the last %d days. Sales come from the Ledger's sold mail; prices are after the AH cut."])
+    :format(windowDays) }
+  return items
+end
+
+-- The item's icon as texture markup ("" when the client has none cached), then its name.
+local function icon_markup(itemID)
+  local api = type(C_Item) == "table" and C_Item.GetItemIconByID
+  if type(api) ~= "function" then return "" end
+  local ok, icon = pcall(api, itemID)
+  if ok and icon ~= nil and icon ~= "" then return ("|T%s:14|t "):format(tostring(icon)) end
+  return ""
+end
+
 -- The display text of one data row's cells, by column key.
 function Tab.CellTexts(section, data)
   data = type(data) == "table" and data or {}
+  if section == "auction" then
+    local function known(v) return v ~= nil and tostring(v) or color(DIM, "?") end
+    return {
+      item = icon_markup(data.itemID) .. tostring(data.name),
+      posted = tostring(count(data.posted)), sold = known(data.sold),
+      expired = tostring(count(data.expired)), cancelled = tostring(count(data.cancelled)),
+      rate = data.rate ~= nil and (L["%d%%"]):format(data.rate) or color(DIM, "?"),
+      last = data.lastSale and money_cell(data.lastSale.unitPrice, false, false) or color(DIM, EM_DASH),
+      listed = known(data.listed),
+    }
+  end
   if section == "weekly" or section == "recipe" then
     local est = count(data.estimated) > 0
     local cells = {
@@ -550,6 +646,23 @@ function Tab.TooltipLines(item)
     lines[5] = line((L["From %d of your commissions (recrafts not counted)"]):format(count(data.n)), GREY)
   elseif item.section == "entry" then
     entry_lines(lines, data)
+  elseif item.section == "auction" then
+    lines[1] = line(tostring(data.name))
+    lines[2] = line((L["Posted %d, expired %d, cancelled %d"]):format(count(data.posted), count(data.expired),
+      count(data.cancelled)), GREY)
+    if data.sold == nil then
+      lines[#lines + 1] = line(L["Sales unknown: the Ledger is off"], GOLD)
+    elseif data.rate == nil then
+      lines[#lines + 1] = line(L["No auction has ended yet in this period"], GREY)
+    else
+      lines[#lines + 1] = line((L["%d of %d sold (%d%%)"]):format(data.sold,
+        data.sold + count(data.expired) + count(data.cancelled), data.rate))
+    end
+    if data.lastSale then
+      lines[#lines + 1] = line((L["Last sale: %s each, %s ago"]):format(full_money(data.lastSale.unitPrice),
+        ns.UI.FormatAge(data.lastAge)))
+    end
+    lines[#lines + 1] = line((L["Listed now: %s"]):format(data.listed ~= nil and tostring(data.listed) or "?"))
   end
   return lines
 end
@@ -736,7 +849,7 @@ local function bind_row(row, item, index)
   if item.kind == "note" then row.note:Show() else row.note:Hide() end
 
   if item.kind == "row" then
-    if item.section == "entry" then request_item(item.data.itemID) end
+    if item.section == "entry" or item.section == "auction" then request_item(item.data.itemID) end
     local texts = Tab.CellTexts(item.section, item.data)
     for key, cell in pairs(active.cells) do cell:SetText(texts[key] or "") end
     local total = item.data.total or item.data.unattributed
@@ -812,10 +925,18 @@ local function apply_layout()
   update_rows()
 end
 
+-- The status line and its tooltip's second line, for the page shown.
 local function status_text(ledger)
-  if ns.FS.dbIsNewer then return color(BAD, READ_ONLY_NOTICE) end
-  if ledger and ledger.IsEnabled and not ledger:IsEnabled() then return color(WARN, OFF_NOTICE) end
-  return ""
+  if ns.FS.dbIsNewer then return color(BAD, READ_ONLY_NOTICE), READ_ONLY_DETAIL end
+  if current == "auctions" then
+    local saleLog = module("SaleLog")
+    if saleLog and saleLog.IsEnabled and not saleLog:IsEnabled() then
+      return color(WARN, SALELOG_OFF_NOTICE), SALELOG_OFF_DETAIL
+    end
+    return "", OFF_DETAIL
+  end
+  if ledger and ledger.IsEnabled and not ledger:IsEnabled() then return color(WARN, OFF_NOTICE), OFF_DETAIL end
+  return "", OFF_DETAIL
 end
 
 local function empty_text(ledger)
@@ -823,24 +944,49 @@ local function empty_text(ledger)
   return L["No sales recorded yet. Commissions from the crafting orders you fulfil and the auction sales you collect from the mailbox show here; crafts are kept as their cost."]
 end
 
+-- The Auctions page: the sale log's stats as rows, the header line and the text for an empty page.
+local function auctions_page(now)
+  local saleLog = module("SaleLog")
+  if not saleLog or not saleLog.GetAllStats then
+    return {}, L["No auctions yet"], L["The sale log is not available."]
+  end
+  local rows = Tab.AuctionRows(saleLog:GetAllStats(now), now)
+  local header = #rows == 0 and L["No auctions yet"]
+    or (#rows == 1 and (L["%d item"]):format(1) or (L["%d items"]):format(#rows))
+  return Tab.AuctionDisplayRows(rows, saleLog:Settings().windowDays), header,
+    L["No auctions recorded yet. Posts, cancels and expiries are recorded as you use the auction house and open your mailbox."]
+end
+
 local function refresh()
   if not view then return end
   local now = ns.FS:Now()
   local ledger = module("Ledger")
-  local model = Tab.Model(ledger, now)
-  view.model = model
-  view.items = Tab.DisplayRows(model)
-
-  if model.count == 0 then
-    view.header:SetText(L["No entries yet"])
-  else
-    view.header:SetText(model.newest
-      and (L["%d entries, newest %s ago"]):format(model.count, ns.UI.FormatAge(now - model.newest))
-      or (L["%d entries"]):format(model.count))
+  for id, button in pairs(view.sections) do
+    if id == current then button:LockHighlight() else button:UnlockHighlight() end
   end
-  view.status:SetText(status_text(ledger))
+  local headerText, emptyMessage
+  if current == "auctions" then
+    view.model = nil
+    view.items, headerText, emptyMessage = auctions_page(now)
+  else
+    local model = Tab.Model(ledger, now)
+    view.model = model
+    view.items = Tab.DisplayRows(model)
+    if model.count == 0 then
+      headerText = L["No entries yet"]
+    else
+      headerText = model.newest
+        and (L["%d entries, newest %s ago"]):format(model.count, ns.UI.FormatAge(now - model.newest))
+        or (L["%d entries"]):format(model.count)
+    end
+    emptyMessage = empty_text(ledger)
+  end
+  view.header:SetText(headerText)
+  local status, detail = status_text(ledger)
+  view.status:SetText(status)
+  view.statusDetail = detail
   if #view.items == 0 then
-    view.empty:SetText(color(DIM, empty_text(ledger)))
+    view.empty:SetText(color(DIM, emptyMessage))
     view.empty:Show()
   else
     view.empty:SetText("")
@@ -859,15 +1005,57 @@ local function refresh()
 end
 
 ---------------------------------------------------------------------------
+-- Pages
+---------------------------------------------------------------------------
+
+local PAGE_IDS = {}
+for _, s in ipairs(Tab.SECTIONS) do PAGE_IDS[s.id] = true end
+
+function Tab.GetSection()
+  return current
+end
+
+-- Shows the page `id` (one of Tab.SECTIONS); an unknown id or the page already shown changes nothing. The choice is
+-- session only. The list starts at the top again.
+function Tab.SetSection(id)
+  if not PAGE_IDS[id] or id == current then return false end
+  current = id
+  if view then
+    view.scroll:SetVerticalScroll(0)
+    refresh()
+  end
+  return true
+end
+
+---------------------------------------------------------------------------
 -- Build
 ---------------------------------------------------------------------------
 
-local function build(container)
-  local created = { container = container, items = {}, pool = {}, shown = 0, layouts = {}, layoutKeys = {} }
-
+local function build_section_buttons(container, created)
   local bar = CreateFrame("Frame", nil, container)
   bar:SetPoint("TOPLEFT", container, "TOPLEFT", PAD, 0)
   bar:SetPoint("TOPRIGHT", container, "TOPRIGHT", -PAD, 0)
+  bar:SetHeight(SECTION_BAR_HEIGHT)
+  created.sectionBar, created.sections = bar, {}
+  local x = 0
+  for _, s in ipairs(Tab.SECTIONS) do
+    local button = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
+    button:SetSize(SECTION_BUTTON_WIDTH, SECTION_BUTTON_HEIGHT)
+    button:SetPoint("TOPLEFT", bar, "TOPLEFT", x, -2)
+    button:SetText(s.label)
+    button:SetScript("OnClick", ns.FS:Wrap(SOURCE, function() Tab.SetSection(s.id) end))
+    created.sections[s.id] = button
+    x = x + SECTION_BUTTON_WIDTH + GAP
+  end
+end
+
+local function build(container)
+  local created = { container = container, items = {}, pool = {}, shown = 0, layouts = {}, layoutKeys = {} }
+  build_section_buttons(container, created)
+
+  local bar = CreateFrame("Frame", nil, container)
+  bar:SetPoint("TOPLEFT", container, "TOPLEFT", PAD, -SECTION_BAR_HEIGHT)
+  bar:SetPoint("TOPRIGHT", container, "TOPRIGHT", -PAD, -SECTION_BAR_HEIGHT)
   bar:SetHeight(BAR_HEIGHT)
   created.header = bar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   created.header:SetPoint("LEFT", bar, "LEFT", 0, 0)
@@ -885,12 +1073,11 @@ local function build(container)
   created.statusArea:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
     local text = created.status:GetText()
     if type(text) ~= "string" or text == "" then return end
-    local detail = ns.FS.dbIsNewer and READ_ONLY_DETAIL or OFF_DETAIL
-    show_lines(self, { line(text), line(detail, GREY) })
+    show_lines(self, { line(text), line(created.statusDetail or OFF_DETAIL, GREY) })
   end))
   created.statusArea:SetScript("OnLeave", hide_tooltip)
 
-  local scrollTop = BAR_HEIGHT + 2
+  local scrollTop = SECTION_BAR_HEIGHT + BAR_HEIGHT + 2
   local scroll = CreateFrame("ScrollFrame", nil, container)
   scroll:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -scrollTop)
   scroll:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
@@ -944,6 +1131,8 @@ function LedgerTab:OnEnable()
   -- One refresh follows REFRESH_DELAY after the last change of a burst; MainWindow only refreshes a selected,
   -- visible tab.
   self:RegisterMessage(ns.Msg.LEDGER_CHANGED, ns.FS:Wrap(REFRESH_SOURCE, schedule_refresh))
+  -- The Auctions page: posts, cancels, expiries and listings (a sale arrives as a Ledger change).
+  self:RegisterMessage(ns.Msg.SALELOG_CHANGED, ns.FS:Wrap(REFRESH_SOURCE, schedule_refresh))
   self:RegisterEvent("GET_ITEM_INFO_RECEIVED", ns.FS:Wrap(REFRESH_SOURCE, on_item_info))
 end
 

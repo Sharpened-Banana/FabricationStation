@@ -654,3 +654,238 @@ describe("Orders dashboard widgets", function()
     assert.same({}, refreshed)
   end)
 end)
+
+-- Phase 7 Task 8: the Auctions section (SaleLog stats), beside the unchanged Profit page.
+describe("Ledger tab Auctions section", function()
+  local ns, W, T, L, reg, container, tooltip
+  local ME = "Me-Silvermoon"
+  local NAMES = { [5] = "Potion", [6] = "Elixir", [7] = "Flask", [8] = "Bandage" }
+
+  local function open(width)
+    container = CreateFrame("Frame")
+    container:SetSize(width or 740, 500)
+    reg.ledger.build(container)
+    reg.ledger.refresh(container)
+    return ns.FS:GetModule("LedgerTab"):GetView()
+  end
+  local function show(v, id)
+    v.sections[id]:GetScript("OnClick")(v.sections[id])
+  end
+  local function auction_rows(v)
+    local out = {}
+    for _, item in ipairs(v.items) do if item.kind == "row" and item.section == "auction" then out[#out + 1] = item end end
+    return out
+  end
+  local function row_of(v, itemID)
+    for i = 1, v.shown do
+      local row = v.pool[i]
+      if row.item and row.item.kind == "row" and row.item.section == "auction" and row.item.data.itemID == itemID then return row end
+    end
+  end
+  local function cells(v, itemID)
+    local out = {}
+    for key, cell in pairs(row_of(v, itemID).groups.auction.cells) do out[key] = plain(cell:GetText()) end
+    return out
+  end
+  local function event(kind, itemID, quantity)
+    return { time = 900, kind = kind, itemID = itemID, quantity = quantity, charKey = ME }
+  end
+  -- Potion: 3 posted, 2 sold (19000 for both), 1 expired. Elixir: 2 posted, both expired. Flask: 1 posted.
+  local function seed_auctions(listed)
+    ns.FS.db.global.auctionLog = { seenMail = {}, listings = listed and { [ME] = { time = 950, items = listed } } or {},
+      events = { event("post", 5, 3), event("expire", 5, 1), event("post", 6, 2), event("expire", 6, 2),
+        event("post", 7, 1) } }
+    L:Add({ type = "sale", itemID = 5, quantity = 2, amount = 19000 })
+  end
+
+  before_each(function()
+    reg, container = {}, nil
+    tooltip = { lines = {} }
+    ns, W = P2.boot({
+      C_DateAndTime = { GetSecondsUntilWeeklyReset = function() return 100 end },
+      C_Item = { GetItemNameByID = function(id) return NAMES[id] end },
+      GameTooltip = {
+        SetOwner = function() tooltip.lines = {} end,
+        SetText = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+        AddLine = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+        Show = function() tooltip.shown = true end,
+        Hide = function() tooltip.shown = false end,
+      },
+    })
+    local real = _G.CreateFrame
+    _G.CreateFrame = function(frameType, name, parent, template)
+      local f = real(frameType, name, parent, template)
+      if frameType == "Button" then
+        local text, locked = "", false
+        function f:SetText(t) text = t end
+        function f:GetText() return text end
+        function f:LockHighlight() locked = true end
+        function f:UnlockHighlight() locked = false end
+        function f:IsHighlightLocked() return locked end
+      end
+      return f
+    end
+    P2.fake_module(ns, "MainWindow", { RegisterTab = function(_, id, def) reg[id] = def; return true end,
+      RefreshTab = function(_, id) if id == "ledger" and container then reg[id].refresh(container) end end })
+    P2.fake_module(ns, "Dashboard", { RegisterWidget = function() return true end })
+    local files = {}
+    for i, f in ipairs(FILES) do files[i] = f end
+    files[#files + 1] = "Modules/SaleLog.lua"
+    P2.load(ns, files)
+    T, L = ns.UI.LedgerTab, ns.FS:GetModule("Ledger")
+  end)
+
+  it("names the sections, Profit first", function()
+    assert.same({ { "profit", "Profit" }, { "auctions", "Auctions" } },
+      { { T.SECTIONS[1].id, T.SECTIONS[1].label }, { T.SECTIONS[2].id, T.SECTIONS[2].label } })
+    assert.equal(2, #T.SECTIONS)
+  end)
+
+  it("switches between Profit and Auctions", function()
+    L:Add({ type = "sale", amount = 5000, itemName = "Ore", buyer = "Ann" })
+    seed_auctions()
+    local v = open()
+    assert.is_true(v.sections.profit:IsHighlightLocked())
+    assert.is_false(v.sections.auctions:IsHighlightLocked())
+    assert.equal("Profit", v.sections.profit:GetText()); assert.equal("Auctions", v.sections.auctions:GetText())
+    assert.equal("Weekly profit (last 8 reset weeks)", v.items[1].text)   -- today's page
+    local profitItems = #v.items
+    assert.equal(0, #auction_rows(v))
+    show(v, "auctions")
+    assert.equal("auctions", T.GetSection())
+    assert.is_true(v.sections.auctions:IsHighlightLocked()); assert.is_false(v.sections.profit:IsHighlightLocked())
+    assert.equal(3, #auction_rows(v))
+    show(v, "profit")
+    assert.equal("profit", T.GetSection())
+    assert.equal(profitItems, #v.items)
+    assert.equal(0, #auction_rows(v))
+    assert.is_truthy(v.header:GetText():find("entries", 1, true))
+  end)
+
+  it("does not save the chosen page", function()
+    seed_auctions()
+    local v = open()
+    show(v, "auctions")
+    assert.equal("auctions", T.GetSection())
+    assert.is_nil(ns.FS.db.global.settings.ledger and ns.FS.db.global.settings.ledger.section)
+  end)
+
+  it("lists each item's posts, sales, expiries, cancels and rate", function()
+    seed_auctions({ [5] = 2 })
+    table.insert(ns.FS.db.global.auctionLog.events, event("cancel", 5, 1))
+    local v = open()
+    show(v, "auctions")
+    local rows = auction_rows(v)
+    assert.same({ 5, 6, 7 }, { rows[1].data.itemID, rows[2].data.itemID, rows[3].data.itemID })   -- sold desc, then name
+    local potion = cells(v, 5)
+    assert.is_truthy(potion.item:find("Potion", 1, true))
+    assert.same({ "3", "2", "1", "1", "50%" }, { potion.posted, potion.sold, potion.expired, potion.cancelled, potion.rate })
+    assert.equal(plain(ns.UI.OrdersPanel.CompactMoney(9500)), potion.last)
+    assert.equal("2", potion.listed)
+    local elixir = cells(v, 6)
+    assert.same({ "2", "0", "2", "0", "0%", "\226\128\148", "0" },
+      { elixir.posted, elixir.sold, elixir.expired, elixir.cancelled, elixir.rate, elixir.last, elixir.listed })
+  end)
+
+  it("sorts by sold, unknown last, then name, then item id", function()
+    NAMES[6], NAMES[7], NAMES[8] = "Elixir", "Elixir", "Bandage"
+    local rows = T.AuctionRows({
+      [10] = { posted = 1, sold = 4, expired = 0, cancelled = 0 },
+      [11] = { posted = 1, sold = nil, expired = 0, cancelled = 0 },
+      [8] = { posted = 1, sold = 0, expired = 0, cancelled = 0 },
+      [7] = { posted = 1, sold = 0, expired = 0, cancelled = 0 },
+      [6] = { posted = 1, sold = 0, expired = 0, cancelled = 0 },
+      [12] = { posted = 1, sold = 9, expired = 0, cancelled = 0 },
+    }, 1000)
+    local ids = {}
+    for i, row in ipairs(rows) do ids[i] = row.itemID end
+    assert.same({ 12, 10, 8, 6, 7, 11 }, ids)
+  end)
+
+  it("shows ? for an unknown rate and names why", function()
+    seed_auctions()
+    local v = open()
+    show(v, "auctions")
+    -- Flask was only posted: nothing has ended, so there is no rate yet.
+    assert.equal("?", cells(v, 7).rate)
+    local flask = row_of(v, 7)
+    flask:GetScript("OnEnter")(flask)
+    assert.is_truthy(table.concat(tooltip.lines, "\n"):find("No auction has ended yet", 1, true))
+    -- The Ledger off: sold and every rate are unknown, and the row tooltip says so.
+    ns.FS:SetModuleEnabled("Ledger", false)
+    reg.ledger.refresh(container)
+    local potion = cells(v, 5)
+    assert.same({ "?", "?" }, { potion.rate, potion.sold })
+    assert.equal("3", potion.posted)
+    local row = row_of(v, 5)
+    row:GetScript("OnEnter")(row)
+    assert.is_truthy(table.concat(tooltip.lines, "\n"):find("Sales unknown: the Ledger is off", 1, true))
+  end)
+
+  it("shows ? for a listing nobody has read", function()
+    seed_auctions()
+    local v = open()
+    show(v, "auctions")
+    assert.equal("?", cells(v, 5).listed)
+  end)
+
+  it("says the sale log is off", function()
+    seed_auctions()
+    local v = open()
+    show(v, "auctions")
+    assert.equal("", v.status:GetText())
+    ns.FS:SetModuleEnabled("SaleLog", false)
+    reg.ledger.refresh(container)
+    assert.equal("Sale log off: nothing new is recorded", plain(v.status:GetText()))
+    assert.equal(3, #auction_rows(v))   -- what was recorded still shows
+    v.statusArea:GetScript("OnEnter")(v.statusArea)
+    assert.same({ v.status:GetText(), "Turn the Sale log on again in /fs settings > Modules." }, tooltip.lines)
+    show(v, "profit")
+    assert.is_nil(plain(v.status:GetText()):find("Sale log", 1, true))
+  end)
+
+  it("says there is nothing yet, and ends with the footer naming the window", function()
+    local v = open()
+    show(v, "auctions")
+    assert.is_true(v.empty:IsShown())
+    assert.is_truthy(v.empty:GetText():find("No auctions recorded yet", 1, true))
+    seed_auctions()
+    reg.ledger.refresh(container)
+    assert.is_false(v.empty:IsShown())
+    local last = v.items[#v.items]
+    assert.same({ "note", "Your own auctions over the last 30 days. Sales come from the Ledger's sold mail; prices are after the AH cut." },
+      { last.kind, last.text })
+    ns.FS:GetModule("SaleLog"):Settings().windowDays = 90
+    reg.ledger.refresh(container)
+    assert.is_truthy(v.items[#v.items].text:find("last 90 days", 1, true))
+  end)
+
+  it("hides Cancelled, then Expired, then Posted when narrow", function()
+    assert.same({}, T.Layout("auction", 516).hidden)
+    assert.is_true(T.Layout("auction", 516).flex >= 120)
+    assert.same({ cancelled = true }, T.Layout("auction", 500).hidden)
+    assert.same({ cancelled = true, expired = true }, T.Layout("auction", 430).hidden)
+    assert.same({ cancelled = true, expired = true, posted = true }, T.Layout("auction", 380).hidden)
+    seed_auctions()
+    local v = open(516)
+    show(v, "auctions")
+    local row = row_of(v, 5)
+    local g = row.groups.auction
+    assert.is_true(g.cells.cancelled:IsShown())
+    container:SetSize(430, 500)
+    container:GetScript("OnSizeChanged")(container, 430, 500)
+    assert.is_false(g.cells.cancelled:IsShown()); assert.is_false(g.cells.expired:IsShown())
+    assert.is_true(g.cells.posted:IsShown())
+  end)
+
+  it("refreshes when the sale log changes", function()
+    seed_auctions()
+    local v = open()
+    show(v, "auctions")
+    local before = {}
+    ns.FS:GetModule("MainWindow").RefreshTab = function(_, id) if id == "ledger" then before[#before + 1] = id end end
+    ns.FS:GetModule("SaleLog"):SendMessage(ns.Msg.SALELOG_CHANGED)
+    W.advance(1)
+    assert.same({ "ledger" }, before)
+  end)
+end)

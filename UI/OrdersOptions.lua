@@ -11,7 +11,9 @@ local L = ns.L
 --                          OrderViewWarning (ns.FS:SetModuleEnabled; the same switches Settings > Modules shows), and
 --                          the Orders:Settings() toggle for the reward and reagent icons on the order rows.
 --   Alerts                 OrderAlert:Settings(): sound and toast on a personal order, which sound, toast seconds.
---   Ledger                 Ledger:Settings(): benchmark sample minimum and how many days of entries to keep.
+--   Ledger                 Ledger:Settings(): benchmark sample minimum and how many days of entries to keep; under a
+--                          "Sale log" header SaleLog:Settings(): the history window (7..365 days, for the Ledger's
+--                          Auctions page and the item tooltip) and whether item tooltips show your sales.
 --
 -- Every setter writes through the owning module's Settings() table, never into db.global directly: while the saved
 -- data is from a newer version (ns.FS.dbIsNewer) Settings() is a session-only copy, so nothing is saved, and the
@@ -72,6 +74,12 @@ end
 local function ledger_changed()
   local ledger = module_of("Ledger")
   if ledger and ledger.SendMessage then ledger:SendMessage(ns.Msg.LEDGER_CHANGED) end
+end
+
+-- A shorter or longer sale history window changes the Auctions page: ask its views to redraw.
+local function salelog_changed()
+  local saleLog = module_of("SaleLog")
+  if saleLog and saleLog.SendMessage then saleLog:SendMessage(ns.Msg.SALELOG_CHANGED) end
 end
 
 -- A range option over settings_of(moduleName)[key]. scale converts stored -> shown (shown = stored / scale);
@@ -430,6 +438,14 @@ local function ledger_group()
       keepDays = range({ module = "Ledger", key = "keepDays", order = 2, name = L["Keep ledger entries for (days)"],
         desc = L["Older entries are removed when the Ledger starts."],
         min = 30, max = 1095, step = 1, bigStep = 30, after = ledger_changed }),
+      saleLogHeader = { type = "header", order = 10, name = L["Sale log"] },
+      saleLogWindow = range({ module = "SaleLog", key = "windowDays", order = 11,
+        name = L["Sale history window (days)"],
+        desc = L["How far back the Auctions page and the item tooltip count your posts, sales, expiries and cancels."],
+        min = 7, max = 365, step = 1, bigStep = 7, after = salelog_changed }),
+      saleLogTooltip = toggle({ module = "SaleLog", key = "tooltip", order = 12,
+        name = L["Show your sales in item tooltips"],
+        desc = L["Adds how many of an item you sold, its last sale price and how many you have listed now."] }),
     },
   }
 end

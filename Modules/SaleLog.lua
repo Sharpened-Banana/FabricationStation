@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- SaleLog: the player's own auction-house history, kept in db.global.auctionLog (created on first write):
 --   listings = { [charKey] = { time, items = { [itemID] = quantity } } }   what each character has up now
@@ -364,6 +365,28 @@ end
 -- { [itemID] = ItemSaleStats } for every item with an event or a sale in the window.
 function SaleLog:GetAllStats(now)
   return collect(self, is_finite(now) and now or ns.FS:Now())
+end
+
+-- Item tooltip lines { { left, right } } for itemID (the FeatureLines "saleLog" provider shows them): "Your sales"
+-- "<sold> of <ended> sold (<rate>%)" when the Ledger knows the sold count and something ended in the window; "Last
+-- sale" "<price> each, <age> ago"; "Listed now" "<n>" when more than 0 are up. Nothing for an item without history, and
+-- {} while this module is off or the `tooltip` setting is false. `now` defaults to the current time. Unknown counts
+-- add no line (never a 0).
+function SaleLog:TooltipLines(itemID, now)
+  if not self:IsEnabled() or self:Settings().tooltip ~= true or not positive(itemID) then return {} end
+  now = is_finite(now) and now or ns.FS:Now()
+  local stats, lines = self:GetItemStats(itemID, now), {}
+  local ended = (stats.sold or 0) + stats.expired + stats.cancelled
+  if stats.sold ~= nil and ended > 0 then
+    lines[#lines + 1] = { L["Your sales"],
+      (L["%d of %d sold (%d%%)"]):format(stats.sold, ended, math.floor(stats.sold * 100 / ended)) }
+  end
+  if stats.lastSale then
+    lines[#lines + 1] = { L["Last sale"], (L["%s each, %s ago"]):format(ns.UI.FormatMoney(stats.lastSale.unitPrice),
+      ns.UI.FormatAge(math.max(0, now - stats.lastSale.time))) }
+  end
+  if positive(stats.listed) then lines[#lines + 1] = { L["Listed now"], tostring(stats.listed) } end
+  return lines
 end
 
 ---------------------------------------------------------------------------

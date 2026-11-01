@@ -6,7 +6,7 @@ describe("Orders options", function()
   local function boot(stubs)
     ns, W = P2.boot(stubs)
     P2.load(ns, { "Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua", "Modules/Ledger.lua",
-      "UI/OrdersPanel.lua", "UI/OrderAlert.lua", "UI/OrdersOptions.lua" })
+      "Modules/SaleLog.lua", "UI/OrdersPanel.lua", "UI/OrderAlert.lua", "UI/OrdersOptions.lua" })
     g = ns.UI.OrdersOptions.Build()
   end
 
@@ -202,6 +202,41 @@ describe("Orders options", function()
     assert.equal(401, ledger:Settings().keepDays)
   end)
 
+  it("clamps the window to 7..365 days", function()
+    local l = g.args.ledger.args
+    local saleLog = ns.FS:GetModule("SaleLog")
+    assert.same({ "header", "Sale log" }, { l.saleLogHeader.type, l.saleLogHeader.name })
+    assert.equal("Sale history window (days)", l.saleLogWindow.name)
+    assert.same({ 7, 365, 30 }, { l.saleLogWindow.min, l.saleLogWindow.max, l.saleLogWindow.get() })
+    l.saleLogWindow.set(nil, 3)
+    assert.equal(7, saleLog:Settings().windowDays)
+    l.saleLogWindow.set(nil, 1000)
+    assert.equal(365, saleLog:Settings().windowDays)
+    l.saleLogWindow.set(nil, 45.4)
+    assert.equal(45, saleLog:Settings().windowDays)
+    assert.equal(45, l.saleLogWindow.get())
+    l.saleLogWindow.set(nil, 0 / 0)
+    l.saleLogWindow.set(nil, "x")
+    assert.equal(45, saleLog:Settings().windowDays)
+  end)
+
+  it("toggles the sale lines in item tooltips", function()
+    local opt = g.args.ledger.args.saleLogTooltip
+    assert.equal("Show your sales in item tooltips", opt.name)
+    assert.is_true(opt.get())
+    opt.set(nil, false)
+    assert.is_false(ns.FS:GetModule("SaleLog"):Settings().tooltip)
+    assert.is_false(opt.get())
+  end)
+
+  it("tells the Sale log views to refresh after a window change", function()
+    local saleLog = ns.FS:GetModule("SaleLog")
+    local sent = {}
+    saleLog.SendMessage = function(_, msg) sent[#sent + 1] = msg end
+    g.args.ledger.args.saleLogWindow.set(nil, 60)
+    assert.same({ "FS_SALELOG_CHANGED" }, sent)
+  end)
+
   it("tells the Ledger views to refresh after a ledger change, and never prunes", function()
     local ledger = ns.FS:GetModule("Ledger")
     local sent = {}
@@ -381,6 +416,7 @@ describe("Orders options", function()
       ns.FS.db.global.settings.orders = nil
       ns.FS.db.global.settings.ledger = nil
       ns.FS.db.global.settings.alerts = nil
+      ns.FS.db.global.settings.saleLog = nil
       ns.FS.dbIsNewer = true
     end)
     after_each(function() ns.FS.dbIsNewer = nil end)
@@ -417,10 +453,12 @@ describe("Orders options", function()
       -- The row-icons toggle (panel.rowIcons) is the one editable option outside those groups. The group's other
       -- options are module toggles, which turn modules on and off, so only this one is called.
       g.args.panel.args.rowIcons.set(nil, not g.args.panel.args.rowIcons.get()); set = set + 1
-      assert.equal(18, set)   -- scoring: 3 gold + minutes + claim score + 6 risk toggles; alerts: 2 toggles, sound,
-                              -- toast seconds; ledger: 2 ranges; panel: the row-icons toggle
+      assert.equal(20, set)   -- scoring: 3 gold + minutes + claim score + 6 risk toggles; alerts: 2 toggles, sound,
+                              -- toast seconds; ledger: 2 ranges, the sale window and tooltip toggle; panel: the
+                              -- row-icons toggle
       local settings = ns.FS.db.global.settings
       assert.is_nil(settings.orders); assert.is_nil(settings.ledger); assert.is_nil(settings.alerts)
+      assert.is_nil(settings.saleLog)
     end)
 
     it("setting a value leaves db.global untouched", function()
