@@ -334,7 +334,16 @@ describe("OrdersPanel on the crafting orders page", function()
       assert.equal("Could not add to the queue (saved data is read-only)", side():GetView().result:GetText())
     end)
     -- Row geometry: the strip's right edge is 760 - (860 - 400) - 6 = 294 from the row's left; the name ends at
-    -- 22 + textWidth. [score][risk][+] need 86, the profit cell 46 more, the warning icon 16 more; 4 px gap.
+    -- 22 + textWidth and keeps a 4 px gap. The strip needs the core ([conc] [score] [risk] [+]), the warning icon and
+    -- the profit cell, all from the module's LAYOUT: name widths that leave room for each tier derive from it.
+    local function room_for(extra)
+      local LY = ns.UI.OrdersPanel.LAYOUT
+      return 294 - LY.GAP - 22 - (LY.CORE_WIDTH + extra)
+    end
+    local function w_short() return room_for(ns.UI.OrdersPanel.LAYOUT.PROFIT_SLOT) - 20 end   -- everything fits
+    local function w_mid() return room_for(ns.UI.OrdersPanel.LAYOUT.PROFIT_SLOT) - ns.UI.OrdersPanel.LAYOUT.WARN_SLOT + 4 end
+    local function w_medium() return room_for(ns.UI.OrdersPanel.LAYOUT.PROFIT_SLOT) + 10 end   -- no room for the profit cell
+    local function w_long() return room_for(0) + 10 end                                         -- no room for the strip
     local function geometry(textWidth)
       return { left = 100, width = 760, itemRight = 400, textLeft = 122, textWidth = textWidth }
     end
@@ -344,7 +353,7 @@ describe("OrdersPanel on the crafting orders page", function()
     it("places the cells at the right of the item-name column", function()
       boot()
       local raw = P2.raw_order({ orderID = 10 })
-      local measured = row_for(raw, geometry(80))
+      local measured = row_for(raw, geometry(w_short()))
       show_board({ raw })
       assert.same({ "RIGHT", measured, "RIGHT", -(460 + 6), 0 }, { rows():GetCells(measured).strip:GetPoint(1) })
       local plain = row_for(raw)   -- not laid out: Blizzard's fixed columns after the item name, everything shown
@@ -354,7 +363,7 @@ describe("OrdersPanel on the crafting orders page", function()
     it("gives way to Blizzard's item name: profit first, then the whole strip", function()
       boot()
       local raw = P2.raw_order({ orderID = 10 })
-      local short, medium, long = row_for(raw, geometry(80)), row_for(raw, geometry(150)), row_for(raw, geometry(200))
+      local short, medium, long = row_for(raw, geometry(w_short())), row_for(raw, geometry(w_medium())), row_for(raw, geometry(w_long()))
       show_board({ raw })
       assert.same({ "all", true, true, true, false }, state(rows():GetCells(short)))
       assert.same({ "noProfit", true, false, true, false }, state(rows():GetCells(medium)))
@@ -366,8 +375,8 @@ describe("OrdersPanel on the crafting orders page", function()
       boot()
       C:SetTag("Bob-Silvermoon", "blocked", true)
       local raw = P2.raw_order({ orderID = 10 })
-      local short, mid, medium, long = row_for(raw, geometry(80)), row_for(raw, geometry(130)),
-        row_for(raw, geometry(150)), row_for(raw, geometry(200))
+      local short, mid, medium, long = row_for(raw, geometry(w_short())), row_for(raw, geometry(w_mid())),
+        row_for(raw, geometry(w_medium())), row_for(raw, geometry(w_long()))
       show_board({ raw })
       assert.same({ "all", true, true, true, true }, state(rows():GetCells(short)))
       assert.same({ "noProfit", true, false, true, true }, state(rows():GetCells(mid)))   -- the icon costs the profit cell
@@ -381,7 +390,7 @@ describe("OrdersPanel on the crafting orders page", function()
     it("leaves the score cell blank when it would repeat the profit shown beside it", function()
       boot()
       local raw = P2.raw_order({ orderID = 10 })
-      local row = row_for(raw, geometry(80))
+      local row = row_for(raw, geometry(w_short()))
       show_board({ raw })
       local c = rows():GetCells(row)
       assert.same({ "+25g", "", true, "all" }, score_state(c))
@@ -391,7 +400,7 @@ describe("OrdersPanel on the crafting orders page", function()
     it("shows both numbers when the score differs from the profit", function()
       boot()
       local raw = P2.raw_order({ orderID = 10 })
-      local row = row_for(raw, geometry(80))
+      local row = row_for(raw, geometry(w_short()))
       show_board({ raw })
       O:GetView(10).score = 130000
       ns.FS:SendMessage("FS_ORDERS_CHANGED")
@@ -400,14 +409,14 @@ describe("OrdersPanel on the crafting orders page", function()
     it("still shows the score when the profit cell has no room, even if the numbers are equal", function()
       boot()
       local raw = P2.raw_order({ orderID = 10 })
-      local row = row_for(raw, geometry(150))
+      local row = row_for(raw, geometry(w_medium()))
       show_board({ raw })
       assert.same({ "+25g", "+25g", false, "noProfit" }, score_state(rows():GetCells(row)))
     end)
     it("keeps conc? and recraft, which are not the profit's text", function()
       boot()
       local conc, recraft = P2.raw_order({ orderID = 10 }), P2.raw_order({ orderID = 11, isRecraft = true })
-      local a, b = row_for(conc, geometry(80)), row_for(recraft, geometry(80))
+      local a, b = row_for(conc, geometry(w_short())), row_for(recraft, geometry(w_short()))
       show_board({ conc, recraft })
       O:GetView(10).flags.unknownConcentrationValue = true
       ns.FS:SendMessage("FS_ORDERS_CHANGED")
@@ -419,15 +428,15 @@ describe("OrdersPanel on the crafting orders page", function()
       boot()
       local raw = P2.raw_order({ orderID = 10 })
       show_board({ raw })
-      local g = geometry(80)
+      local g = geometry(w_short())
       local row = form.newOrderRow(g)
       form.acquireOrderRow(row, form.orderElement(raw), true)
       local c = rows():GetCells(row)
       assert.same({ "all", "" }, { c.fit, c.score:GetText() })
-      g.textWidth = 150   -- a longer name: no room for the profit cell
+      g.textWidth = w_medium()   -- a longer name: no room for the profit cell
       W.advance(0)
       assert.same({ "noProfit", "+25g" }, { c.fit, c.score:GetText() })
-      g.textWidth = 80
+      g.textWidth = w_short()
       W.fire("GET_ITEM_INFO_RECEIVED", 211111, true)   -- item data arrives: a re-fit pass
       W.advance(0)
       assert.same({ "all", "" }, { c.fit, c.score:GetText() })
@@ -437,11 +446,160 @@ describe("OrdersPanel on the crafting orders page", function()
       assert.same({ "none", "+25g" }, { c.fit, c.score:GetText() })
       assert.same({}, form.assignedFields)
     end)
+    -- The concentration cell: [profit] [conc] [warning] [score] [risk] [+]. It holds a small icon and the amount the
+    -- order needs (Orders' concentrationCost, set when usedConcentration); the live view is edited here to say so.
+    local function conc_order(fields, geometry_width)
+      local raw = P2.raw_order({ orderID = 10 })
+      local row = row_for(raw, geometry(geometry_width or w_short()))
+      show_board({ raw })
+      local view = O:GetView(10)
+      for k, v in pairs(fields) do view[k] = v end
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      return rows():GetCells(row), row, view
+    end
+    local function conc_state(c) return { c.concText:GetText(), { c.concText:GetTextColor() }, c.concIcon:IsShown() } end
+    local WHITE_, RED_ = { 1, 1, 1 }, { 1, 0.25, 0.25 }
+
+    it("shows the concentration an order needs, in white when you have enough", function()
+      boot()
+      local c = conc_order({ usedConcentration = true, concentrationCost = 120, concentrationCharge = 50000 })
+      assert.same({ "120", WHITE_, true }, conc_state(c))
+      assert.same({ "amount", 120, 500 }, { c.concCell.mode, c.concCell.amount, c.concCell.available })   -- 500: Scanner's
+      assert.is_truthy(c.concIcon:GetTexture())
+      assert.equal(c.strip, c.conc:GetParent())
+    end)
+    it("shows the amount in red when it is more than you have", function()
+      boot()
+      local c = conc_order({ usedConcentration = true, concentrationCost = 600, risks = { "noConcentration" } })
+      assert.same({ "600", RED_, true }, conc_state(c))
+      assert.equal("short", c.concCell.mode)
+      local d = conc_order({ usedConcentration = true, concentrationCost = 501 })   -- no risk yet: the figure decides
+      assert.equal("short", d.concCell.mode)
+    end)
+    it("shows a red cross when the minimum quality cannot be reached", function()
+      boot()
+      local c = conc_order({ usedConcentration = true, concentrationCost = 90, risks = { "unreachableQuality" } })
+      assert.same({ "\195\151", RED_, true }, conc_state(c))
+      assert.equal("unreachable", c.concCell.mode)
+    end)
+    it("is empty, keeping its slot, when the order needs no concentration", function()
+      boot()
+      local c = conc_order({ usedConcentration = false, concentrationCost = 0 })
+      assert.same({ "", false }, { c.concText:GetText(), c.concIcon:IsShown() })
+      assert.is_nil(c.concCell.mode)
+      assert.is_true(c.conc:IsShown()); assert.is_true(c.strip:IsShown())
+      assert.same({ "RIGHT", c.strip, "RIGHT", -(ns.UI.OrdersPanel.LAYOUT.SCORE_CORE + ns.UI.OrdersPanel.LAYOUT.CELL_GAP), 0 },
+        { c.conc:GetPoint(1) })
+    end)
+    it("keeps conc? in the score cell and still shows the amount when it is known", function()
+      boot()
+      local c, _, view = conc_order({ usedConcentration = true, concentrationCost = 80, score = nil })
+      view.flags.unknownConcentrationValue = true
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.same({ "conc?", "80" }, { c.score:GetText(), c.concText:GetText() })
+    end)
+    it("uses the profession's concentration currency icon when the game names it, else a fixed one", function()
+      boot()
+      local fixed = conc_order({ usedConcentration = true, concentrationCost = 10 }).concIcon:GetTexture()
+      assert.is_truthy(fixed)
+      boot()
+      C_TradeSkillUI.GetConcentrationCurrencyID = function(line) return line == 2900 and 3333 or 0 end
+      _G.C_CurrencyInfo = { GetCurrencyInfo = function(id) if id == 3333 then return { iconFileID = 654321 } end end }
+      local c = conc_order({ usedConcentration = true, concentrationCost = 10 })
+      assert.equal(654321, c.concIcon:GetTexture())
+    end)
+
+    describe("tooltip", function()
+      local function lines(c)
+        c.conc:GetScript("OnEnter")(c.conc)
+        local out = tooltip.lines
+        c.conc:GetScript("OnLeave")(c.conc)
+        return out
+      end
+      it("says what it needs, what you have and what it is worth", function()
+        boot()
+        local c = conc_order({ usedConcentration = true, concentrationCost = 120, concentrationCharge = 50000 })
+        assert.same({ "Needs 120 concentration to reach the minimum quality", "You have 500",
+          "Worth " .. ns.UI.FormatMoney(50000) .. " at your best gold per concentration" }, lines(c))
+        assert.is_false(tooltip.shown)
+      end)
+      it("leaves out what you have while it is unknown, and the worth while the rate is unknown", function()
+        boot()
+        ns.FS:GetModule("Scanner").ProjectConcentration = function() return nil end
+        local c = conc_order({ usedConcentration = true, concentrationCost = 120, concentrationCharge = false })
+        assert.same({ "Needs 120 concentration to reach the minimum quality" }, lines(c))
+      end)
+      it("adds Not enough concentration when it is red", function()
+        boot()
+        local c = conc_order({ usedConcentration = true, concentrationCost = 600, concentrationCharge = false,
+          risks = { "noConcentration" } })
+        assert.same({ "Needs 600 concentration to reach the minimum quality", "You have 500", "Not enough concentration" },
+          lines(c))
+      end)
+      it("says the minimum quality cannot be reached over the cross", function()
+        boot()
+        local c = conc_order({ usedConcentration = true, concentrationCost = 90, risks = { "unreachableQuality" } })
+        assert.same({ "The minimum quality cannot be reached, even with concentration" }, lines(c))
+      end)
+      it("shows nothing for an empty cell, and a failing tooltip turns off only OrdersRowAddons", function()
+        boot()
+        local c = conc_order({ usedConcentration = false })
+        assert.same({}, lines(c))
+        _G.GameTooltip = { SetOwner = function() error("boom") end, Hide = function() end }
+        local d = conc_order({ usedConcentration = true, concentrationCost = 5 })
+        d.conc:GetScript("OnEnter")(d.conc)
+        assert.is_false(rows():IsEnabled()); assert.is_true(side():IsEnabled())
+      end)
+    end)
+
+    describe("in the strip", function()
+      local function LY() return ns.UI.OrdersPanel.LAYOUT end
+      it("stays with the core when the profit cell gives way, and goes with the whole strip", function()
+        boot()
+        local raw = P2.raw_order({ orderID = 10 })
+        local a, b, d = row_for(raw, geometry(w_short())), row_for(raw, geometry(w_medium())), row_for(raw, geometry(w_long()))
+        show_board({ raw })
+        assert.same({ "all", true, true, true }, { rows():GetCells(a).fit, rows():GetCells(a).strip:IsShown(),
+          rows():GetCells(a).profit:IsShown(), rows():GetCells(a).conc:IsShown() })
+        assert.same({ "noProfit", true, false, true }, { rows():GetCells(b).fit, rows():GetCells(b).strip:IsShown(),
+          rows():GetCells(b).profit:IsShown(), rows():GetCells(b).conc:IsShown() })
+        assert.same({ "none", false }, { rows():GetCells(d).fit, rows():GetCells(d).strip:IsShown() })   -- conc is a child of the strip
+      end)
+      it("sits between the profit and the warning icon, and moves left of the warning icon when that shows", function()
+        boot()
+        C:SetTag("Bob-Silvermoon", "blocked", true)
+        local raw = P2.raw_order({ orderID = 10 })
+        local row = row_for(raw, geometry(w_short()))
+        show_board({ raw })
+        local c = rows():GetCells(row)
+        assert.is_true(c.warnShown)
+        local function x(region) local _, _, _, px = region:GetPoint(1); return px end
+        assert.same({ -(LY().SCORE_CORE + LY().CELL_GAP), -(LY().SCORE_CORE + LY().CELL_GAP + LY().WARN_SLOT),
+          -(LY().CORE_WIDTH + LY().CELL_GAP + LY().WARN_SLOT) }, { x(c.warn), x(c.conc), x(c.profit) })
+      end)
+      it("takes the strip's alpha on a dimmed row and shows no leftover on a recycled one", function()
+        boot()
+        local a, b = P2.raw_order({ orderID = 10, expirationTime = 5100 }), P2.raw_order({ orderID = 11 })
+        show_board({ a, b })
+        local g = geometry(w_short())
+        local row = form.newOrderRow(g)
+        form.acquireOrderRow(row, form.orderElement(a), true)
+        local c = rows():GetCells(row)
+        O:GetView(10).usedConcentration, O:GetView(10).concentrationCost = true, 70
+        ns.FS:GetModule("Orders"):Settings().filters.hideRisks.expiringSoon = true
+        ns.FS:SendMessage("FS_ORDERS_CHANGED")
+        assert.same({ "70", true, 0.6 }, { c.concText:GetText(), c.dimmed, c.strip:GetAlpha() })
+        form.releaseOrderRow(row)
+        form.acquireOrderRow(row, form.orderElement(b), false)   -- order 11 needs none
+        assert.same({ "", false, nil }, { c.concText:GetText(), c.concIcon:IsShown(), c.concCell.mode })
+      end)
+    end)
+
     it("measures a recycled row after Blizzard has written its new item name", function()
       boot()
       local short, long = P2.raw_order({ orderID = 10 }), P2.raw_order({ orderID = 11 })
       show_board({ short, long })
-      local g = geometry(80)
+      local g = geometry(w_short())
       local row = form.newOrderRow(g)
       form.acquireOrderRow(row, form.orderElement(short), true)
       assert.same({ "all", true }, { rows():GetCells(row).fit, rows():GetCells(row).strip:IsShown() })
@@ -451,7 +609,7 @@ describe("OrdersPanel on the crafting orders page", function()
       assert.same({ "none", false }, { rows():GetCells(row).fit, rows():GetCells(row).strip:IsShown() })
       assert.equal(11, rows():GetCells(row).orderID)
       form.releaseOrderRow(row)
-      form.acquireOrderRow(row, form.orderElement(short), false, function() g.textWidth = 80 end)
+      form.acquireOrderRow(row, form.orderElement(short), false, function() g.textWidth = w_short() end)
       assert.same({ "all", true }, { rows():GetCells(row).fit, rows():GetCells(row).strip:IsShown() })
       assert.same({}, form.assignedFields)
     end)
@@ -459,7 +617,7 @@ describe("OrdersPanel on the crafting orders page", function()
       boot()
       local raw = P2.raw_order({ orderID = 10 })
       show_board({ raw })
-      local g = geometry(80)
+      local g = geometry(w_short())
       local row = form.newOrderRow(g)
       form.acquireOrderRow(row, form.orderElement(raw), true)
       g.textWidth = 200   -- the table builder's own OnInitializedFrame callback ran after ours
@@ -474,7 +632,7 @@ describe("OrdersPanel on the crafting orders page", function()
       boot()
       local raw = P2.raw_order({ orderID = 10 })
       show_board({ raw })
-      local g = geometry(80)
+      local g = geometry(w_short())
       local row = form.newOrderRow(g)
       form.acquireOrderRow(row, form.orderElement(raw), true)
       W.advance(0)
@@ -483,12 +641,12 @@ describe("OrdersPanel on the crafting orders page", function()
         return { mod:IsEventRegistered("ITEM_DATA_LOAD_RESULT"), mod:IsEventRegistered("GET_ITEM_INFO_RECEIVED") }
       end
       assert.same({ true, true }, listening())
-      g.textWidth = 150   -- an uncached item name arrives
+      g.textWidth = w_medium()   -- an uncached item name arrives
       W.fire("ITEM_DATA_LOAD_RESULT", 211111, true)
       assert.equal("all", c.fit)   -- coalesced into the next frame
       W.advance(0)
       assert.equal("noProfit", c.fit)
-      g.textWidth = 80
+      g.textWidth = w_short()
       W.fire("GET_ITEM_INFO_RECEIVED", 211111, true); W.fire("GET_ITEM_INFO_RECEIVED", 211112, true)
       W.advance(0)
       assert.equal("all", c.fit)

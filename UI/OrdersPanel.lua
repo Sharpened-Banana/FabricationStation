@@ -4,8 +4,10 @@ local L = ns.L
 -- OrdersPanel: our additions to Blizzard's crafting-orders list (ProfessionsFrame.OrdersPage), as three modules that
 -- are each switched on and off by 1a's module toggles (Settings > Modules) and fail on their own:
 --   OrdersRowAddons   per order row: a tint for VIP / repeat / blocked customers, a dark overlay on rows the filters
---                     hide, a strip of cells (net profit, score, risk count with a tooltip, Add to Queue; the score cell
---                     is blank while it would only repeat the profit shown beside it), left of it a
+--                     hide, a strip of cells (net profit, concentration, score, risk count with a tooltip, Add to Queue;
+--                     the concentration cell is a small icon and the concentration the order needs to reach its minimum
+--                     quality, red when you have less, a red cross when it cannot be reached, empty when none is
+--                     needed; the score cell is blank while it would only repeat the profit shown beside it), left of it a
 --                     strip of 20 px icons for the rewards of a patron order, and a cover over Blizzard's Reagents
 --                     cell that replaces its "Some" / "None" / "All" with the reagents the crafter must supply (the
 --                     allocation minus what the customer provides) that the character is short of: 20 px icons with
@@ -70,12 +72,21 @@ local COPPER_PER_SILVER, COPPER_PER_GOLD = 100, 10000
 -- the row cannot be measured yet.
 local FIXED_COLUMNS = 470
 local STRIP_HEIGHT, CELL_WIDTH, RISK_WIDTH, ADD_SIZE, WARN_SIZE, CELL_GAP = 16, 44, 22, 16, 14, 2
-local CORE_WIDTH = ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP + CELL_WIDTH   -- [score] [risk] [+]: always together
+local CONC_WIDTH, CONC_ICON_SIZE = 34, 12   -- the concentration cell: a small icon and the amount
+local SCORE_CORE = ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP + CELL_WIDTH   -- [score] [risk] [+]
+local CONC_SLOT = CONC_WIDTH + CELL_GAP
+-- The strip, left to right: [profit] [conc] [warning] [score] [risk] [+]. [conc] [score] [risk] [+] are the core and
+-- always stay together (the concentration an order needs matters more than a profit that repeats the score); the
+-- warning icon and then the profit cell give way first.
+local CORE_WIDTH = SCORE_CORE + CONC_SLOT
 local WARN_SLOT, PROFIT_SLOT = WARN_SIZE + CELL_GAP, CELL_WIDTH + CELL_GAP
 local STRIP_WIDTH = CORE_WIDTH + WARN_SLOT + PROFIT_SLOT
 local PAD, GAP = 6, 4
 local ICON_SIZE, ICON_GAP, MORE_WIDTH = 20, 2, 24   -- row icons: 20 px, 2 px apart; the "+N" slot has a width of its own
 M.ICON_SIZE, M.ICON_GAP, M.MORE_WIDTH = ICON_SIZE, ICON_GAP, MORE_WIDTH   -- read-only (the specs derive their geometry)
+-- The strip's measures, read-only (the specs derive their geometry from them).
+M.LAYOUT = { CORE_WIDTH = CORE_WIDTH, SCORE_CORE = SCORE_CORE, CONC_SLOT = CONC_SLOT, WARN_SLOT = WARN_SLOT,
+  PROFIT_SLOT = PROFIT_SLOT, STRIP_WIDTH = STRIP_WIDTH, PAD = PAD, GAP = GAP, CELL_GAP = CELL_GAP, FIXED_COLUMNS = FIXED_COLUMNS }
 local TOOLTIP_ICON = 14                               -- the inline icon in a tooltip line (keeps the line height)
 local UNKNOWN_ICON = 134400                           -- the question mark, for an icon the client cannot give
 -- The Reagents cover's padding inside Blizzard's cell.
@@ -436,6 +447,62 @@ local set_result
 -- Reward and reagent icons (pure helpers)
 ---------------------------------------------------------------------------
 
+-- The concentration cell of a row: { mode, amount, available, charge } from the view and the points the character has
+-- now (nil: unknown). mode: "amount" (the concentration the order needs to reach its minimum quality, in white),
+-- "short" (more than is available: Orders' noConcentration risk, or amount > available; red), "unreachable" (the
+-- minimum quality cannot be reached even with concentration: the risk unreachableQuality; a red cross), or nil (no
+-- concentration is used: an empty cell). The amount is what Orders charges: view.concentrationCost, set only when
+-- view.usedConcentration; charge = what it is worth in copper (nil while the rate is unknown).
+function M.ConcentrationCell(view, available)
+  if type(view) ~= "table" or view.usedConcentration ~= true then return {} end
+  local have = type(available) == "number" and available == available and available or nil
+  local unreachable, noConcentration = false, false
+  for _, risk in ipairs(type(view.risks) == "table" and view.risks or {}) do
+    if risk == "unreachableQuality" then unreachable = true end
+    if risk == "noConcentration" then noConcentration = true end
+  end
+  if unreachable then return { mode = "unreachable", available = have } end
+  local amount = view.concentrationCost
+  if type(amount) ~= "number" or amount <= 0 then return {} end
+  local charge = is_money(view.concentrationCharge) and view.concentrationCharge or nil
+  local short = noConcentration or (have ~= nil and amount > have)
+  return { mode = short and "short" or "amount", amount = amount, available = have, charge = charge }
+end
+
+-- The concentration the character has now for the recipe's profession (Orders' own figure: the context's
+-- concentrationFor, which projects the snapshot to now), or nil when unknown or unreadable.
+local function available_concentration(view)
+  local O = orders()
+  if not (O and O.BuildContext and type(view) == "table" and view.charKey ~= nil and view.recipeID ~= nil) then return nil end
+  local ok, value = pcall(function() return O:BuildContext(view.charKey).concentrationFor(view.recipeID) end)
+  if ok and type(value) == "number" and value == value then return value end
+  return nil
+end
+
+-- A fixed stand-in for the concentration icon, used while the profession's concentration currency cannot be asked.
+local CONCENTRATION_ICON = "Interface\\Icons\\Spell_Holy_PowerInfusion"
+local concentrationIcons = {}   -- [recipeID] = texture, per session
+
+-- The icon of the recipe's profession's concentration currency (C_TradeSkillUI.GetConcentrationCurrencyID(skillLine)
+-- then C_CurrencyInfo.GetCurrencyInfo(id).iconFileID), else the fixed one. Never raises.
+local function concentration_icon(recipeID)
+  if concentrationIcons[recipeID] then return concentrationIcons[recipeID] end
+  local icon
+  local scanner = ns.FS:GetModule("Scanner", true)
+  local ok, schematic = pcall(function() return scanner and scanner:GetSchematic(recipeID) end)
+  local line = ok and type(schematic) == "table" and schematic.skillLineID or nil
+  local trade, currencies = C_TradeSkillUI, C_CurrencyInfo
+  if line and type(trade) == "table" and type(trade.GetConcentrationCurrencyID) == "function"
+    and type(currencies) == "table" and type(currencies.GetCurrencyInfo) == "function" then
+    local okID, id = pcall(trade.GetConcentrationCurrencyID, line)
+    local okInfo, info = false, nil
+    if okID and type(id) == "number" and id ~= 0 then okInfo, info = pcall(currencies.GetCurrencyInfo, id) end
+    if okInfo and type(info) == "table" and type(info.iconFileID) == "number" then icon = info.iconFileID end
+  end
+  if icon then concentrationIcons[recipeID] = icon end   -- only the currency's own answer is kept
+  return icon or CONCENTRATION_ICON
+end
+
 -- How many of itemID the logged-in character owns (bags, bank, reagent bank and the warband bank: the game's own
 -- count through Scanner), or nil when the game cannot tell (unknown is nil, never 0, so no snapshot stands in).
 local function owned_count(itemID)
@@ -730,6 +797,27 @@ local function pass_through(frame)
   end
 end
 
+-- The concentration cell's tooltip: what the order needs, what you have, what it is worth, and why it is red.
+local function conc_tooltip(c)
+  local cell, lines = c.concCell or {}, {}
+  if cell.mode == "unreachable" then
+    lines[1] = { text = L["The minimum quality cannot be reached, even with concentration"], color = TEXT_COLORS.red }
+  elseif cell.mode then
+    lines[1] = { text = L["Needs %d concentration to reach the minimum quality"]:format(cell.amount), color = TEXT_COLORS.white }
+    if cell.available then
+      lines[#lines + 1] = { text = L["You have %d"]:format(cell.available), color = TEXT_COLORS.white }
+    end
+    if cell.charge then
+      lines[#lines + 1] = { text = L["Worth %s at your best gold per concentration"]:format(ns.UI.FormatMoney(cell.charge)),
+        color = TEXT_COLORS.white }
+    end
+    if cell.mode == "short" then
+      lines[#lines + 1] = { text = L["Not enough concentration"], color = TEXT_COLORS.red }
+    end
+  end
+  show_tooltip(c.conc, lines)
+end
+
 local function add_to_queue(c)
   local O = orders()
   local view = O and c.orderID ~= nil and O:GetView(c.orderID) or nil
@@ -835,10 +923,24 @@ local function new_cells(row)
   c.score:SetJustifyH("RIGHT")
   c.score:SetPoint("RIGHT", strip, "RIGHT", -(ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP), 0)
 
+  -- The concentration cell: a small icon and the amount (a red cross when the minimum quality cannot be reached),
+  -- empty when the order needs none. Its right edge is set in apply_fit (it moves with the warning icon).
+  c.conc = CreateFrame("Frame", nil, strip)
+  c.conc:SetSize(CONC_WIDTH, STRIP_HEIGHT)
+  c.conc:EnableMouse(true)
+  c.concIcon = c.conc:CreateTexture(nil, "ARTWORK")
+  c.concIcon:SetSize(CONC_ICON_SIZE, CONC_ICON_SIZE)
+  c.concIcon:SetPoint("LEFT", c.conc, "LEFT", 0, 0)
+  c.concText = text(c.conc)
+  c.concText:SetPoint("RIGHT", c.conc, "RIGHT", 0, 0)
+  c.concText:SetJustifyH("RIGHT")
+  c.conc:SetScript("OnEnter", function() M.Guard(ROWS, conc_tooltip, c) end)
+  c.conc:SetScript("OnLeave", function() M.Guard(ROWS, hide_tooltip) end)
+
   c.warn = strip:CreateTexture(nil, "OVERLAY")
   c.warn:SetTexture(WARNING_ICON)
   c.warn:SetSize(WARN_SIZE, WARN_SIZE)
-  c.warn:SetPoint("RIGHT", strip, "RIGHT", -CORE_WIDTH - CELL_GAP, 0)
+  c.warn:SetPoint("RIGHT", strip, "RIGHT", -SCORE_CORE - CELL_GAP, 0)
 
   c.profit = text(strip)
   c.profit:SetSize(CELL_WIDTH, STRIP_HEIGHT)
@@ -1102,6 +1204,8 @@ function apply_fit(c, row)
   c.fit, reserve, room = fit(c, row, c.blocked)
   c.warnShown = c.blocked == true and c.fit ~= "none"
   set_shown(c.warn, c.warnShown)
+  c.conc:ClearAllPoints()
+  c.conc:SetPoint("RIGHT", c.strip, "RIGHT", -(SCORE_CORE + CELL_GAP + (c.warnShown and WARN_SLOT or 0)), 0)
   c.profit:ClearAllPoints()
   c.profit:SetPoint("RIGHT", c.strip, "RIGHT", -(CORE_WIDTH + CELL_GAP + (c.warnShown and WARN_SLOT or 0)), 0)
   set_shown(c.profit, c.fit == "all")
@@ -1205,6 +1309,20 @@ local function show_row(row, elementData)
   c.reagentEntries = on and reagents or {}
   c.shortEntries = M.ShortEntries(c.reagentEntries)
   c.coverMode = on and reagent_state(reagents) or nil
+
+  -- The concentration cell keeps its slot; it is empty when the order needs none.
+  c.concCell = M.ConcentrationCell(view, available_concentration(view))
+  if c.concCell.mode == "unreachable" then
+    c.concText:SetText("\195\151")   -- a multiplication sign
+    color_text(c.concText, TEXT_COLORS.red)
+  elseif c.concCell.mode then
+    c.concText:SetText(tostring(c.concCell.amount))
+    color_text(c.concText, c.concCell.mode == "short" and TEXT_COLORS.red or TEXT_COLORS.white)
+  else
+    c.concText:SetText("")
+  end
+  if c.concCell.mode then c.concIcon:SetTexture(concentration_icon(view.recipeID)) end
+  set_shown(c.concIcon, c.concCell.mode ~= nil)
 
   c.profitText, c.scoreText = M.ProfitText(view), M.ScoreText(view)
   c.profit:SetText(c.profitText)

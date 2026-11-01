@@ -32,10 +32,19 @@ describe("OrdersPanel row icons", function()
     while with_more(n + 1) <= room do n = n + 1 end
     return n
   end
-  -- Name widths that leave a given room for the reward icons: with the whole strip (132 px of cells) room = 132 - w;
-  -- without the profit cell (86 px) room = 178 - w, and only for w above 136 (below that the profit cell fits).
-  local function width_for_room(room) return 132 - room end
-  local function width_for_room_without_profit(room) return 178 - room end
+  -- The strip's measures come from the module (LAYOUT, read at boot). The reward icons end GAP px left of the visible
+  -- cells and start GAP px right of the name, which ends at 22 + w; the strip's right edge is 294 from the row's left:
+  -- room = 294 - 2 * GAP - 22 - visible - w. Name widths that leave a given room for the icons:
+  local LY
+  local function visible_cells(withProfit, withWarn)
+    return LY.CORE_WIDTH + (withProfit and LY.PROFIT_SLOT or 0) + (withWarn and LY.WARN_SLOT or 0)
+  end
+  local function width_for_room(room, withWarn) return 294 - 2 * LY.GAP - 22 - visible_cells(true, withWarn) - room end
+  local function width_for_room_without_profit(room) return 294 - 2 * LY.GAP - 22 - visible_cells(false) - room end
+  -- Where the icon strip's right edge sits: reserve (460 or 470) + PAD + the visible cells + GAP from the row's right.
+  local function icons_offset(reserve, withProfit, withWarn)
+    return -(reserve + LY.PAD + visible_cells(withProfit, withWarn) + LY.GAP)
+  end
 
   -- The list's column headers (read-only for the addon): the name column and `columns`, handed out in a scrambled
   -- creation order. texts[i] = the text of the i-th column (nil: the header has no text).
@@ -108,6 +117,7 @@ describe("OrdersPanel row icons", function()
     form = fake_professions_frame()
     P2.load(ns, FILES)
     S, G, MW = ns.UI.OrdersPanel.ICON_SIZE, ns.UI.OrdersPanel.ICON_GAP, ns.UI.OrdersPanel.MORE_WIDTH
+    LY = ns.UI.OrdersPanel.LAYOUT
     W.fire("ADDON_LOADED", "Blizzard_Professions")
     headers = nil
     set_headers(COLUMNS, nil)
@@ -125,9 +135,9 @@ describe("OrdersPanel row icons", function()
     return { left = 100, width = 760, itemRight = 400, textLeft = 122, textWidth = textWidth,
       columns = copy_columns(COLUMNS) }
   end
-  -- A row laid out like the list (geometry(50) unless given); `false`: a row that was not laid out at all.
+  -- A row laid out like the list (a short name unless given); `false`: a row that was not laid out at all.
   local function row_for(option, g)
-    if g == nil then g = geometry(50) end
+    if g == nil then g = geometry(10) end
     local row = form.newOrderRow(g or nil)
     form.acquireOrderRow(row, form.orderElement(option), true)
     return row
@@ -200,11 +210,11 @@ describe("OrdersPanel row icons", function()
   end)
 
   describe("fitting the reward icons beside the item name", function()
-    -- Five rewards.
-    local function five(textWidth)
+    -- Five rewards (a name width and, optionally, another number of them).
+    local function five(textWidth, n)
       boot()
       local rewards = {}
-      for i = 1, 5 do rewards[i] = item_reward(2000 + i, 1) end
+      for i = 1, n or 5 do rewards[i] = item_reward(2000 + i, 1) end
       local raw = order({ orderType = 3, npcOrderRewards = rewards })
       show_board({ raw })
       local row = row_for(raw, geometry(textWidth))
@@ -215,9 +225,9 @@ describe("OrdersPanel row icons", function()
     end
 
     it("shows every icon when they all fit", function()
-      local c = five(width_for_room(strip_width(5) + 8))
-      assert.same({ "all", true, 5, nil }, state(c))
-      assert.equal(strip_width(5), c.icons:GetWidth())
+      local c = five(width_for_room(strip_width(4) + 4), 4)
+      assert.same({ "all", true, 4, nil }, state(c))
+      assert.equal(strip_width(4), c.icons:GetWidth())
     end)
     it("shows as many as fit and turns the last slot into +N", function()
       local c = five(width_for_room(with_more(2) + 2))   -- 2 icons and a "+3"
@@ -244,20 +254,20 @@ describe("OrdersPanel row icons", function()
       assert.is_true(c.frame:IsShown())   -- the row tint and dimming stay
     end)
     it("sits left of the visible cells and moves with the profit cell", function()
-      local c, row = five(50)
-      assert.same({ "RIGHT", row, "RIGHT", -(460 + 6 + 132 + 4), 0 }, { c.icons:GetPoint(1) })
-      local c2, row2 = five(140)   -- without the profit cell
-      assert.same({ "RIGHT", row2, "RIGHT", -(460 + 6 + 86 + 4), 0 }, { c2.icons:GetPoint(1) })
+      local c, row = five(width_for_room(60))
+      assert.same({ "RIGHT", row, "RIGHT", icons_offset(460, true), 0 }, { c.icons:GetPoint(1) })
+      local c2, row2 = five(width_for_room_without_profit(MW + 4))   -- without the profit cell
+      assert.same({ "RIGHT", row2, "RIGHT", icons_offset(460, false), 0 }, { c2.icons:GetPoint(1) })
     end)
     it("leaves room for the blocked warning icon too", function()
       boot()
       ns.FS:GetModule("Customers"):SetTag("Bob-Silvermoon", "blocked", true)
       local raw = order({ orderType = 2, npcOrderRewards = { item_reward(2001, 1) } })
       show_board({ raw })
-      local row = row_for(raw, geometry(50))
+      local row = row_for(raw, geometry(10))
       local c = cells_of(row)
       assert.is_true(c.warnShown)
-      assert.same({ "RIGHT", row, "RIGHT", -(460 + 6 + 132 + 16 + 4), 0 }, { c.icons:GetPoint(1) })
+      assert.same({ "RIGHT", row, "RIGHT", icons_offset(460, true, true), 0 }, { c.icons:GetPoint(1) })
     end)
     it("shows everything on a row that cannot be measured", function()
       boot()
@@ -268,13 +278,13 @@ describe("OrdersPanel row icons", function()
       local row = row_for(raw, false)
       local c = cells_of(row)
       assert.same({ "all", true, 7, nil }, state(c))
-      assert.same({ "RIGHT", row, "RIGHT", -(470 + 6 + 132 + 4), 0 }, { c.icons:GetPoint(1) })
+      assert.same({ "RIGHT", row, "RIGHT", icons_offset(470, true), 0 }, { c.icons:GetPoint(1) })
     end)
     it("re-fits the icons with the strip when Blizzard writes the name after our callback", function()
       boot()
       local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 1), item_reward(2002, 1), item_reward(2003, 1) } })
       show_board({ raw })
-      local g = geometry(50)
+      local g = geometry(10)
       local row = form.newOrderRow(g)
       form.acquireOrderRow(row, form.orderElement(raw), true)
       local c = cells_of(row)
@@ -282,7 +292,7 @@ describe("OrdersPanel row icons", function()
       g.textWidth = width_for_room(MW + 4)   -- room for the "+N" slot alone: only "+3"
       W.advance(0)
       assert.same({ 0, true, "+3" }, { #shown(c.slots), c.more:IsShown(), c.more:GetText() })
-      g.textWidth = 50
+      g.textWidth = 10
       W.fire("GET_ITEM_INFO_RECEIVED", 1001, true)
       W.advance(0)
       assert.same({ 3, false }, { #shown(c.slots), c.more:IsShown() })
@@ -367,7 +377,7 @@ describe("OrdersPanel row icons", function()
       evalResult = slots_needed(7)
       local raw = order()
       show_board({ raw })
-      local c = cells_of(row_for(raw, geometry(50)))
+      local c = cells_of(row_for(raw, geometry(10)))
       local n = fit_count(90 - 2 * 4)   -- the 90 px column less its padding
       assert.is_true(n > 0 and n < 6)
       assert.equal(n, #shown(c.coverSlots))
@@ -609,7 +619,7 @@ describe("OrdersPanel row icons", function()
     it("covers nothing on a three-column layout", function()
       local raw = one_order()
       form.raw(form.orderList).HeaderContainer.GetChildren = function() return end   -- no headers to read
-      local g = geometry(50)
+      local g = geometry(10)
       g.columns = { { 400, 640 }, { 640, 860 } }
       local c = cells_of(row_for(raw, g))
       assert.is_false(c.cover:IsShown())
@@ -630,7 +640,7 @@ describe("OrdersPanel row icons", function()
     it("measures the row's own cells when the list has no header to read", function()
       local raw = one_order()
       form.raw(form.orderList).HeaderContainer.GetChildren = function() return end
-      local g = geometry(50)
+      local g = geometry(10)
       g.columns = { { 400, 550 }, { 550, 700 }, { 700, 790 }, { 790, 860 } }
       local row = row_for(raw, g)
       assert.same(expect(row, 70, 90), points(cells_of(row)))
@@ -638,7 +648,7 @@ describe("OrdersPanel row icons", function()
     it("covers nothing on a row whose cells are not the known layout either", function()
       local raw = one_order()
       form.raw(form.orderList).HeaderContainer.GetChildren = function() return end
-      local g = geometry(50)
+      local g = geometry(10)
       g.columns = { { 400, 560 }, { 560, 720 }, { 720, 860 } }
       assert.is_false(cells_of(row_for(raw, g)).cover:IsShown())
       assert.is_false(cells_of(row_for(raw, false)).cover:IsShown())   -- not laid out, nothing to read
@@ -745,7 +755,7 @@ describe("OrdersPanel row icons", function()
       evalResult = slots_needed(7)
       local raw = order()
       show_board({ raw })
-      local c = cells_of(row_for(raw, geometry(50)))
+      local c = cells_of(row_for(raw, geometry(10)))
       c.cover:GetScript("OnEnter")(c.cover)
       assert.equal(8, #tooltip.lines)   -- the header and 7 reagents
     end)
@@ -786,7 +796,7 @@ describe("OrdersPanel row icons", function()
       evalResult = allocation({ itemID = 1001, quantity = 3 })
       local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 1) } })
       show_board({ raw })
-      local g = geometry(50)
+      local g = geometry(10)
       local c = cells_of(row_for(raw, g))
       c.icons:GetScript("OnEnter")(c.icons)
       assert.truthy(c.tipping)
@@ -967,7 +977,7 @@ describe("OrdersPanel row icons", function()
       local second = order({ orderID = 11, orderType = 3, npcOrderRewards = { { currencyType = 3001, count = 4 } } })
       evalResult = allocation({ itemID = 1001, quantity = 3 })
       show_board({ first, second })
-      local row = form.newOrderRow(geometry(50))
+      local row = form.newOrderRow(geometry(10))
       form.acquireOrderRow(row, form.orderElement(first), true)
       local c = cells_of(row)
       assert.same({ 2, 1 }, { #shown(c.slots), #shown(c.coverSlots) })
@@ -1054,7 +1064,7 @@ describe("OrdersPanel row icons", function()
       boot()
       local raw = order()
       show_board({ raw })
-      local row = form.newOrderRow(geometry(50))
+      local row = form.newOrderRow(geometry(10))
       form.acquireOrderRow(row, form.orderElement(raw), true)
       form.releaseOrderRow(row)
       form.acquireOrderRow(row, form.orderElement(raw), false)

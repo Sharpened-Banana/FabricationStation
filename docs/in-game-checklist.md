@@ -1050,6 +1050,17 @@ rows" is on by default. Turn it off: the reward icons and the Reagents panel dis
 (the cells stay, and Blizzard's "Some" / "None" / "All" shows again) and stay off after `/reload`; turn it on again and
 they return.
 
+P5-14. **The concentration cell on the order rows.** In the strip of cells on each order row there is now a small icon
+and a number between the profit and the score: the concentration the order needs to reach its minimum quality. White when
+you have enough, red when you have less (hover it: "Needs N concentration to reach the minimum quality", "You have M",
+"Worth <money> at your best gold per concentration", then "Not enough concentration" in red), a red cross when the minimum
+quality cannot be reached even with concentration, and an empty cell (the columns stay aligned) when the order needs
+none. Expected: the icon is the profession's concentration icon (the addon asks `C_TradeSkillUI.GetConcentrationCurrencyID`
+for the recipe's skill line, then `C_CurrencyInfo.GetCurrencyInfo(id).iconFileID`; if it shows a generic spell icon
+instead, one of those is missing: `/dump C_TradeSkillUI.GetConcentrationCurrencyID(<skillLineID>)` and note the answer).
+"You have M" matches the profession's concentration shown in the crafting window. With a long item name the profit cell
+goes first; the concentration cell stays with the score, risk and + cells. Dimmed rows show it faded like the cells.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in
