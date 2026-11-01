@@ -338,7 +338,7 @@ end
 local function recipe_name(recipeID)
   local scanner = module("Scanner")
   local schematic = scanner and scanner:GetSchematic(recipeID)
-  return schematic and schematic.name or ("Recipe " .. tostring(recipeID))
+  return schematic and schematic.name or L["Recipe %s"]:format(tostring(recipeID))
 end
 
 local function top_craft_line(row)
@@ -348,12 +348,13 @@ local function top_craft_line(row)
   else
     parts[1] = color(row.profit > 0 and GOOD or BAD, ns.UI.FormatMoney(row.profit))
   end
-  parts[#parts + 1] = recipe_name(row.recipeID) .. " (" .. short_name(row.charKey) .. ")"
+  parts[#parts + 1] = L["%s (%s)"]:format(recipe_name(row.recipeID), short_name(row.charKey))
   if row.missingPrices then parts[#parts + 1] = color(WARN, L["some prices missing"]) end
   if row.estimated then parts[#parts + 1] = color(WARN, L["estimate"]) end
   if row.ageDays ~= nil then
-    local age = "price " .. ns.UI.FormatAge(row.ageDays * SECONDS_PER_DAY) .. " old"
-    parts[#parts + 1] = row.stale and color(BAD, age .. ", stale") or color(DIM, age)
+    local age = ns.UI.FormatAge(row.ageDays * SECONDS_PER_DAY)
+    parts[#parts + 1] = row.stale and color(BAD, L["price %s old, stale"]:format(age))
+      or color(DIM, L["price %s old"]:format(age))
   end
   return table.concat(parts, "  ")
 end
@@ -378,7 +379,7 @@ local function prices_age_text()
   local prices = module("Prices")
   local last = prices and prices:HasSource() and prices:GetLastUpdate()
   if not last then return nil end
-  return "prices " .. ns.UI.FormatAge(ns.FS:Now() - last) .. " old"
+  return L["prices %s old"]:format(ns.UI.FormatAge(ns.FS:Now() - last))
 end
 
 local function refresh_queue_summary(frame)
@@ -453,7 +454,7 @@ local function concentration_line(row, now)
   if row.full then
     status = color(GOOD, L["full"])
   elseif row.fullAt then
-    status = "full in " .. duration_text(row.fullAt - now)
+    status = L["full in %s"]:format(duration_text(row.fullAt - now))
   else
     status = color(DIM, L["full in ?"])
   end

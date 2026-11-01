@@ -44,7 +44,7 @@ local PROVIDER_RIGHT_WIDTH = 120   -- the right-hand column of a provider line; 
 local ACTION_BUTTON_WIDTH = 90     -- an action's button; its status line takes the rest of the row
 local MAX_QUALITY_ROWS = 5
 local SECONDS_PER_DAY = 86400
-local EM_DASH, TIMES, RSAQUO = "\226\128\148", "\195\151", "\226\128\186"
+local EM_DASH, TIMES = "\226\128\148", "\195\151"
 local READ_ONLY = L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
 local TONES = { good = { 0.25, 1, 0.25 }, bad = { 1, 0.25, 0.25 }, warn = { 1, 0.82, 0 }, plain = { 1, 1, 1 },
   dim = { 0.62, 0.62, 0.62 } }
@@ -53,14 +53,14 @@ local BACKDROP = {
   tile = true, tileSize = 16, edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 },
 }
 
-M.APPLY_DISABLED_TOOLTIP = "Enable in Settings " .. RSAQUO .. " Crafting"
-M.APPLY_OFF_NOTE = "Apply is off " .. EM_DASH .. " turn it on in Settings > Crafting after the in-game check."
+M.APPLY_DISABLED_TOOLTIP = L["Enable in Settings \226\128\186 Crafting"]
+M.APPLY_OFF_NOTE = L["Apply is off \226\128\148 turn it on in Settings > Crafting after the in-game check."]
 -- Status texts for an Apply that wrote nothing, by ApplyAllocation's reason.
 M.APPLY_REFUSED = {
   off = L["Apply is off in Settings"],
   empty = L["Nothing to apply for this quality"],
   noTransaction = L["Open the recipe in the crafting window first"],
-  recipe = "Recipe changed " .. EM_DASH .. " reselect it",
+  recipe = L["Recipe changed \226\128\148 reselect it"],
   fit = L["Reagents don't fit this recipe"],
 }
 
@@ -218,7 +218,7 @@ local function flags_text(r)
   if flags.estimated then parts[#parts + 1] = L["estimate"] end
   if flags.unreachableTarget then parts[#parts + 1] = L["quality unreachable"] end
   if flags.unknownRecipe then parts[#parts + 1] = L["unknown recipe"] end
-  return table.concat(parts, ", ")
+  return ns.UI.JoinList(parts)
 end
 
 -- Colour of a profit: nil (no price) and losses red, gains green, exactly zero neutral.

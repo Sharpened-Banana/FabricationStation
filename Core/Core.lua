@@ -134,7 +134,7 @@ local function print_help(self)
   table.sort(names)
   for _, name in ipairs(names) do
     local cmd = self.slashCommands[name]
-    local label = name == "" and "/fs" or ("/fs " .. name)
+    local label = name == "" and "/fs" or ("/fs " .. name)  -- locale: joined (slash command, typed as written)
     print(label .. " - " .. (cmd.help or ""))
   end
 end
@@ -252,7 +252,7 @@ function FS:BuildModuleToggles()
   for i, name in ipairs(names) do
     args[name] = {
       type = "toggle", order = i,
-      name = self.failedModules[name] and (name .. " (stopped after an error)") or name,
+      name = self.failedModules[name] and L["%s (stopped after an error)"]:format(name) or name,
       get = function() return self:GetModule(name):IsEnabled() end,
       set = function(_, value) self:SetModuleEnabled(name, value) end,
     }
@@ -286,7 +286,7 @@ function FS:GameDataStatusText()
     return (L["GameData is outdated: data build %s, game build %s"]):format(tostring(status.build), tostring(clientBuild))
   end
   if #status.mismatched > 0 then
-    return "GameData tables are from different builds: " .. table.concat(status.mismatched, ", ")
+    return L["GameData tables are from different builds: %s"]:format(table.concat(status.mismatched, L[", "]))
   end
   return (L["GameData: build %s, up to date"]):format(tostring(status.build))
 end

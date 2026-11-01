@@ -84,7 +84,7 @@ local function check(profile, info)
     result.err = "mismatch"
   else
     local valid, why = Protocol.Validate(back)
-    if valid then result.ok = true else result.err = "invalid (" .. tostring(why) .. ")" end
+    if valid then result.ok = true else result.err = "invalid (" .. tostring(why) .. ")" end  -- locale: joined (error code)
   end
   return result
 end
@@ -163,14 +163,16 @@ local function print_selftest_result(r)
     text = L["guild selftest ok: %s, %d bytes on the wire, %d chunks"]:format(Util.EscapePipes(r.charKey or ""),
       r.wireBytes, r.chunks)
   else
-    text = L["guild selftest FAILED: %s"]:format(tostring(r.err))
-    if r.wireBytes > 0 then text = text .. L[" (%d bytes)"]:format(r.wireBytes) end
+    text = r.wireBytes > 0 and L["guild selftest FAILED: %s (%d bytes)"]:format(tostring(r.err), r.wireBytes)
+      or L["guild selftest FAILED: %s"]:format(tostring(r.err))
   end
-  if r.trimmed then text = text .. " " .. L["(trimmed to fit: a profile is at the size limit)"] end
+  -- Independent sentences on one chat line, separated by a space.
+  local sentences = { text }
+  if r.trimmed then sentences[#sentences + 1] = L["(trimmed to fit: a profile is at the size limit)"] end
   if r.wireBytes > WIRE_CHECK_BYTES then
-    text = text .. " " .. L["above the %d byte check, please report this"]:format(WIRE_CHECK_BYTES)
+    sentences[#sentences + 1] = L["above the %d byte check, please report this"]:format(WIRE_CHECK_BYTES)
   end
-  say(text)
+  say(table.concat(sentences, " "))
 end
 
 local function print_selftest()

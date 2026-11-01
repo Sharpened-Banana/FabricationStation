@@ -43,7 +43,6 @@ local TRANSACTION_UPDATED = "Professions.TransactionUpdated"
 local RUN_KEY, RUN_DELAY = "selfCheck.run", 0.2
 local SKILL_TOLERANCE = 0.5   -- points; the game rounds its skill display
 local EXACT = 1e-6            -- float noise only
-local RSAQUO = "\226\128\186"
 local MAX_PER_FIELD = 3
 
 local attached = false     -- the callbacks are registered
@@ -169,8 +168,9 @@ local function show_status(count)
   elseif count == 0 then
     panel:SetCheckLine(L["Math check: OK"], "good")
   else
-    local noun = count == 1 and "mismatch" or "mismatches"
-    panel:SetCheckLine((L["Math check: %d %s (see Settings %s Diagnostics)"]):format(count, noun, RSAQUO), "warn")
+    local text = count == 1 and L["Math check: %d mismatch (see Settings \226\128\186 Diagnostics)"]
+      or L["Math check: %d mismatches (see Settings \226\128\186 Diagnostics)"]
+    panel:SetCheckLine(text:format(count), "warn")
   end
 end
 

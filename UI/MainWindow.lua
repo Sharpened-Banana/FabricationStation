@@ -160,7 +160,7 @@ function MainWindow:GetHeaderText()
   else
     local lastUpdate = prices:GetLastUpdate()
     if lastUpdate then
-      priceText = "Prices: " .. ns.UI.FormatAge(ns.FS:Now() - lastUpdate) .. " ago"
+      priceText = L["Prices: %s ago"]:format(ns.UI.FormatAge(ns.FS:Now() - lastUpdate))
     else
       priceText = L["Prices: not scanned yet"]
     end

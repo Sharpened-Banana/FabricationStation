@@ -95,9 +95,9 @@ function Wizard.ScanRows(status)
   local formatAge = ns.UI and ns.UI.FormatAge
   for _, entry in ipairs(type(status) == "table" and status or {}) do
     local header = entry.charKey
-    if entry.isCurrent then header = header .. " (" .. L["this character"] .. ")" end
+    if entry.isCurrent then header = L["%s (this character)"]:format(header) end
     if entry.time and formatAge then
-      header = header .. " - " .. L["last scan %s ago"]:format(formatAge(math.max(0, ns.FS:Now() - entry.time)))
+      header = L["%s - last scan %s ago"]:format(header, formatAge(math.max(0, ns.FS:Now() - entry.time)))
     end
     rows[#rows + 1] = { text = header, kind = "header" }
     for _, p in ipairs(entry.professions) do

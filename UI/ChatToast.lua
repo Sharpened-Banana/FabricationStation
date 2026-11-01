@@ -235,7 +235,7 @@ function Toast:Show(match)
   local first = match.recipes[1]
   view.title:SetText(TITLE_COLOR .. escape(match.sender) .. "|r" .. DOT .. kind_label(match.kind))
   local recipeLine = escape(recipe_text(first))
-  if #match.recipes > 1 then recipeLine = recipeLine .. " " .. L["+%d more"]:format(#match.recipes - 1) end
+  if #match.recipes > 1 then recipeLine = L["%s +%d more"]:format(recipeLine, #match.recipes - 1) end
   view.recipe:SetText(recipeLine)
   view.you:SetText(you_text(first.best))
   active[#active + 1] = view

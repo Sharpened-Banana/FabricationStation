@@ -26,7 +26,6 @@ local DEFAULT_VIEW_HEIGHT = 400   -- before the scroll frame has a size
 local SCROLL_STEP = ROW_HEIGHT * 3
 local MAX_QUALITY = 5
 local SECONDS_PER_DAY = 86400
-local ELLIPSIS = "\226\128\166"
 local DIM, WARN, GOOD, BAD = "|cff9d9d9d", "|cffffd100", "|cff40ff40", "|cffff4040"
 
 -- Left to right. The flexible recipe column takes the width the fixed ones leave over. `sort` names the
@@ -85,10 +84,10 @@ local function flags_text(result)
   end
   if flags.stalePrice then parts[#parts + 1] = L["stale price"] end
   if flags.staleData then parts[#parts + 1] = L["stale data"] end
-  if flags.estimated then parts[#parts + 1] = "estimate" end
+  if flags.estimated then parts[#parts + 1] = L["estimate"] end
   if flags.unreachableTarget then parts[#parts + 1] = L["quality unreachable"] end
   if flags.unknownRecipe then parts[#parts + 1] = L["unknown recipe"] end
-  return table.concat(parts, ", ")
+  return ns.UI.JoinList(parts)
 end
 
 -- results = Recipes:GetRanked output (kept in order). Each row copies the display values and carries the
@@ -244,7 +243,7 @@ local function queue_row(row)
   local queue = module("Queue")
   local id = row and queue and queue:Add(Tab.QueueEntry(row, state))
   if id then
-    status = color(GOOD, "Queued " .. row.name .. " (" .. short_name(row.charKey) .. ")")
+    status = color(GOOD, L["Queued %s (%s)"]:format(row.name, short_name(row.charKey)))
   else
     status = color(BAD, ns.FS.dbIsNewer
       and L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
@@ -360,9 +359,9 @@ local function refresh()
   local scanning = recipes and recipes:IsScanning() or false
   local results = recipes and recipes:GetRanked(Tab.FilterFromControls(state)) or {}
   view.rows = Tab.BuildRows(results)
-  view.scanning:SetText(scanning and color(WARN, "Scanning" .. ELLIPSIS) or "")
+  view.scanning:SetText(scanning and color(WARN, L["Scanning\226\128\166"]) or "")
   if #view.rows == 0 then
-    view.empty:SetText(color(DIM, scanning and ("Scanning recipes" .. ELLIPSIS) or
+    view.empty:SetText(color(DIM, scanning and L["Scanning recipes\226\128\166"] or
       L["No recipes match. Learn recipes, open each profession once, or loosen the filters."]))
     view.empty:Show()
   else

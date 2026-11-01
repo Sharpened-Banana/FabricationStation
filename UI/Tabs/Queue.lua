@@ -32,7 +32,7 @@ local RESTOCK_EDITOR_TOP = 22                                   -- below the pan
 local RESTOCK_LIST_TOP = RESTOCK_EDITOR_TOP + BAR_ROW
 local RESTOCK_HEIGHT = RESTOCK_LIST_TOP + RESTOCK_ROW * RESTOCK_VISIBLE + 6
 local DEFAULT_VIEW_HEIGHT = 400   -- before a scroll frame has a size
-local ELLIPSIS, TIMES = "\226\128\166", "\195\151"
+local TIMES = "\195\151"
 local DIM, WARN, BAD = "|cff9d9d9d", "|cffffd100", "|cffff4040"
 local TONES = { good = { 0.25, 1, 0.25 }, bad = { 1, 0.25, 0.25 }, warn = { 1, 0.82, 0 }, plain = { 1, 1, 1 } }
 local READ_ONLY = L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
@@ -103,7 +103,7 @@ local function missing_text(missing)
   table.sort(ids)
   local parts = {}
   for i, itemID in ipairs(ids) do parts[i] = missing[itemID] .. TIMES .. " " .. item_name(itemID) end
-  return table.concat(parts, ", ")
+  return ns.UI.JoinList(parts)
 end
 
 -- entries = Queue:GetEntries output (kept in order), costs = { [id] = copper|nil }, missing = { [id] =
@@ -120,7 +120,7 @@ function Tab.BuildRows(entries, costs, missing, readyAt, now, results)
       id = e.id, name = recipe_name(e.recipeID), charKey = e.charKey, quantity = e.quantity,
       targetQuality = e.targetQuality, concentration = e.useConcentration and "on" or "off",
       missingText = missing_text(missing[e.id]), cost = costs[e.id],
-      readyText = (type(ready) == "number" and ready > now) and ("ready in " .. Tab.FormatDuration(ready - now)) or "",
+      readyText = (type(ready) == "number" and ready > now) and L["ready in %s"]:format(Tab.FormatDuration(ready - now)) or "",
       isRestock = e.isRestock == true, orderID = e.orderID,
       estimated = flags.estimated == true, stale = flags.stalePrice == true, unreachable = flags.unreachableTarget == true,
       priceAge = type(r) == "table" and r.priceAgeDays or nil,
@@ -181,11 +181,10 @@ function Tab.RowTooltip(row)
   return { L["Crafting order #%s"]:format(tostring(row.orderID)) }
 end
 
+-- "1 item" / "3 items": two whole keys, chosen by the count.
 local function count_items(n)
-  return n .. (n == 1 and " item" or " items")
+  return (n == 1 and L["%d item"] or L["%d items"]):format(n)
 end
-
-local AH_HINT = " in Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear"
 
 -- One line for an ExportShoppingList result (ok, info). info.loading: names are still loading and the list will be
 -- made or updated by itself once they arrive; skipped without loading: names the client could not load.
@@ -194,16 +193,22 @@ function Tab.ShoppingText(ok, info)
     local t = type(info) == "table" and info or {}
     local added, skipped = t.added or 0, t.skipped or 0
     if skipped > 0 and t.loading then
-      if added == 0 then return "Loading item names" .. ELLIPSIS .. " the list will appear" .. AH_HINT end
-      return "Shopping list updated (" .. count_items(added) .. "); loading " .. skipped
-        .. (skipped == 1 and " item name" or " item names") .. ELLIPSIS .. " the list will update" .. AH_HINT
+      if added == 0 then
+        return L["Loading item names\226\128\166 the list will appear in Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear"]
+      end
+      return (skipped == 1
+        and L["Shopping list updated (%s); loading %d item name\226\128\166 the list will update in Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear"]
+        or L["Shopping list updated (%s); loading %d item names\226\128\166 the list will update in Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear"]
+      ):format(count_items(added), skipped)
     end
     if added == 0 and skipped > 0 then
-      return count_items(skipped) .. " skipped: " .. (skipped == 1 and "its name" or "their names") .. " could not be loaded"
+      return (skipped == 1 and L["%s skipped: its name could not be loaded"]
+        or L["%s skipped: their names could not be loaded"]):format(count_items(skipped))
     end
-    local text = "Shopping list updated (" .. count_items(added) .. ")"
-    if skipped > 0 then text = text .. ", " .. count_items(skipped) .. " skipped" end
-    return text
+    if skipped > 0 then
+      return L["Shopping list updated (%s), %s skipped"]:format(count_items(added), count_items(skipped))
+    end
+    return L["Shopping list updated (%s)"]:format(count_items(added))
   end
   if info == "noAuctionator" then return L["Auctionator not available"] end
   if info == "empty" then return L["Nothing to buy: no reagents are missing"] end
@@ -459,7 +464,7 @@ local function bind_queue_row(row, data, index)
   row.background:SetColorTexture(1, 1, 1, index % 2 == 0 and 0.04 or 0)
   local texts = Tab.CellTexts(data)
   for key, cell in pairs(row.cells) do cell:SetText(texts[key]) end
-  row.missing:SetText(data.missingText ~= "" and ("Missing: " .. data.missingText) or color(DIM, L["Reagents on hand"]))
+  row.missing:SetText(data.missingText ~= "" and L["Missing: %s"]:format(data.missingText) or color(DIM, L["Reagents on hand"]))
   row.ready:SetText(data.readyText ~= "" and color("|cffffd100", data.readyText) or "")
   local editable = not data.isRestock
   for _, control in ipairs({ row.minus, row.plus, row.remove }) do
@@ -489,7 +494,7 @@ local function create_restock_row(list)
 end
 
 local function bind_restock_row(row, data)
-  row.text:SetText(data.name .. "  " .. color(DIM, "(keep " .. data.target .. ")"))
+  row.text:SetText(data.name .. "  " .. color(DIM, L["(keep %s)"]:format(data.target)))
 end
 
 ---------------------------------------------------------------------------
@@ -569,7 +574,7 @@ local function set_restock()
   end
   edit_queue(function(queue)
     queue:SetRestock(itemID, target)
-    set_status("Restocking " .. item_name(itemID) .. " to " .. target, "good")
+    set_status(L["Restocking %s to %s"]:format(item_name(itemID), target), "good")
     view.itemEdit:SetText("")
     view.targetEdit:SetText("")
   end)

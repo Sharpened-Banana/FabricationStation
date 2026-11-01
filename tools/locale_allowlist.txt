@@ -40,11 +40,6 @@ Modules/Social/GuildOptions.lua:build failed
 # one; the area task that turns each sentence into one format string (Tasks 7-11) deletes its entries here, and
 # stale_allowlist fails while an entry matches nothing. What the checkers skip on purpose is explained above
 # NON_DISPLAY_LINE in tools/check_locale.lua.
-UI/Tabs/Queue.lua: in Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear
-UI/Tabs/Queue.lua: item name
-UI/Tabs/Queue.lua: item names
-UI/Tabs/Queue.lua:its name
-UI/Tabs/Queue.lua:their names
 UI/Tabs/Characters.lua: (hidden characters are not searched)
 UI/Tabs/Characters.lua: (this session only: the saved data is from a newer version)
 UI/Tabs/Characters.lua: (tick Show hidden to see it again)

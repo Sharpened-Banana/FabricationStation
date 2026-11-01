@@ -73,6 +73,12 @@ function UI.ParseItemID(text)
   return nil
 end
 
+-- A comma list of display words ("a, b, c"). The separator is a key, so a translation can use its own; the lookup
+-- happens at call time. Each part is already a whole phrase (or data such as a name).
+function UI.JoinList(parts)
+  return table.concat(parts, ns.L[", "])
+end
+
 -- A coarse age: "never" for nil, then "<1m", "Nm", "Nh", "Nd".
 function UI.FormatAge(seconds)
   if type(seconds) ~= "number" then return L["never"] end

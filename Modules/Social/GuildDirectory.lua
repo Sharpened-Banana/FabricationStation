@@ -704,7 +704,7 @@ local function tooltip_lines(self, itemID)
     parts[i] = text
   end
   if #rows > TOOLTIP_NAMES then parts[#parts + 1] = L("+%d more"):format(#rows - TOOLTIP_NAMES) end
-  return { { L("Guild crafters"), table.concat(parts, ", ") } }
+  return { { L("Guild crafters"), table.concat(parts, L(", ")) } }
 end
 
 -- At most one { "Guild crafters", "A (Q3), B, C, +2 more" } line for the item tooltip. Index lookups only; {} for an
@@ -733,7 +733,7 @@ local function panel_lines(self, recipeID)
       local parts = {}
       if row.expectedQuality then parts[#parts + 1] = L("Q%d"):format(row.expectedQuality) end
       parts[#parts + 1] = synced_text(row)
-      right = table.concat(parts, ", ")
+      right = table.concat(parts, L(", "))
     end
     lines[#lines + 1] = { display_name(row), right }
   end

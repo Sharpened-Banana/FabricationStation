@@ -163,7 +163,7 @@ local function craft_cost_lines(itemID)
     local notes = { short_name(c.charKey) }
     if c.estimated then notes[#notes + 1] = L["estimate"] end
     if type(c.priceAge) == "number" then notes[#notes + 1] = L["%s old"]:format(ns.UI.FormatAge(c.priceAge * SECONDS_PER_DAY)) end
-    return { { L["Craft cost"], ns.UI.FormatMoney(c.cost) .. " (" .. table.concat(notes, ", ") .. ")" } }
+    return { { L["Craft cost"], L["%s (%s)"]:format(ns.UI.FormatMoney(c.cost), ns.UI.JoinList(notes)) } }
   end
   if a.unreachable then return { { L["Craft cost"], L["quality not reachable"] } } end
   return { { L["Craft cost"], L["no price"] } }
@@ -175,7 +175,7 @@ local function crafters_lines(itemID)
   if not a then return {} end
   local names = {}
   for i, charKey in ipairs(a.crafters) do names[i] = short_name(charKey) end
-  return { { L["Crafters"], table.concat(names, ", ") } }
+  return { { L["Crafters"], ns.UI.JoinList(names) } }
 end
 
 local function clear_cache() analysisCache = {} end
