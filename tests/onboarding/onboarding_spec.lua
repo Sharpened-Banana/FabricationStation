@@ -284,6 +284,18 @@ describe("Onboarding", function()
       assert.is_nil(find(me.professions, "skillLineID", 164))
     end)
 
+    it("uses the client's parentProfessionID when the line's name does not contain the base's name", function()
+      orphan_line()
+      ns.FS.db.global.characters["Me-Realm"].professions[2907].name = "Midnight Forgework"   -- no "Blacksmithing" in it
+      _G.C_TradeSkillUI.GetProfessionInfoBySkillLineID = function(id)
+        return id == 2907 and { parentProfessionID = 164 } or nil
+      end
+      local me = find(Onboarding:ScanStatus(), "charKey", "Me-Realm")
+      assert.are.equal("Midnight Forgework", find(me.professions, "skillLineID", 2907).name)
+      assert.is_nil(find(me.professions, "skillLineID", 164))      -- covered by the API answer alone
+      assert.is_truthy(find(me.professions, "skillLineID", 171))   -- Alchemy has no line at all: still asked for
+    end)
+
     it("falls back to the profession name when the client does not know the parent", function()
       orphan_line()
       _G.C_TradeSkillUI.GetProfessionInfoBySkillLineID = function() return nil end

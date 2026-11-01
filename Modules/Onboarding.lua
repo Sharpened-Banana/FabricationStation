@@ -222,8 +222,9 @@ end
 --     needsOpen = it is the current character's and not scanned (only the current character can open a window).
 --   * For the current character a base profession it knows (GetProfessions) without any current-expansion line is
 --     listed as well (a line counts for its base by parentSkillLineID, Knowledge.variants, the client's
---     parentProfessionID, and last by the base's name being part of the line's name), as needsOpen: the Scanner creates a record only from an open profession window, so a profession
---     the character never opened has no record at all.
+--     parentProfessionID, and last by the base's name being part of the line's name), as needsOpen: the Scanner
+--     creates a record only from an open profession window, so a profession the character never opened has no
+--     record at all.
 --   * time = when the newest profession record of the character was scanned (nil when none was).
 function Onboarding:ScanStatus()
   local scanner = module("Scanner")
