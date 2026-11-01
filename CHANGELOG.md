@@ -51,7 +51,8 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
   - Guild sharing: guildmates running FabricationStation exchange what their characters can craft, with a Guild tab,
     guild crafters in item tooltips and in the profession window, and optional use of the game's own guild recipe
     list. Sharing covers only the current expansion's professions. It is on by default (recipes and expected quality
-    of your characters in that guild) and can be limited or turned off under Settings > Guild. Sync pauses where the game blocks addon chat, for example in instances.
+    of your characters in that guild) and can be limited or turned off under Settings > Guild.
+    Sync pauses where the game blocks addon chat, for example in instances.
   - Chat requests: Trade, Trade (Services) and guild chat (General is off by default) are scanned for people asking
     for something one of your characters can craft, and a small toast offers a Whisper button that only opens the
     chat box. The module is on by default. Nothing is sent for you.

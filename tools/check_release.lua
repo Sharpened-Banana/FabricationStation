@@ -6,7 +6,10 @@
 -- `version` is the tag without its leading "v" (the release workflow passes "${GITHUB_REF_NAME#v}"). It passes when
 --   * it is SemVer: X.Y.Z, X.Y.Z-alpha.N or X.Y.Z-beta.N (three anchored patterns, because Lua has no alternation),
 --   * `<root>/CHANGELOG.md` has a `## [<version>]` heading, and
---   * `<root>/FabricationStation.toc` still carries the `@project-version@` token the packager fills in.
+--   * `<root>/FabricationStation.toc` still carries the `@project-version@` token the packager fills in,
+--   * that TOC has an `## Interface:` line whose comma-separated values are each six digits and at least 120000
+--     (retail Midnight or later), and
+--   * `<root>/LICENSE` and `<root>/THIRD_PARTY_NOTICES.md` exist and are not empty.
 -- `root` defaults to the current directory.
 --
 -- As a script (`lua tools/check_release.lua <version>`) it prints the reason and exits 1 on failure, or prints the
@@ -26,6 +29,24 @@ local function read_file(path)
   local s = f:read("*a")
   f:close()
   return s
+end
+
+local MIN_INTERFACE = 120000
+
+-- True when the TOC has an `## Interface:` line and every comma-separated value is six digits >= MIN_INTERFACE.
+local function has_retail_interface(toc)
+  for line in (toc .. "\n"):gmatch("(.-)\r?\n") do
+    local list = line:match("^## Interface:%s*(.-)%s*$")
+    if list then
+      local count = 0
+      for value in (list .. ","):gmatch("%s*([^,]-)%s*,") do
+        if not value:find("^%d%d%d%d%d%d$") or tonumber(value) < MIN_INTERFACE then return false end
+        count = count + 1
+      end
+      return count > 0
+    end
+  end
+  return false
 end
 
 function M.is_valid_version(version)
@@ -53,6 +74,15 @@ function M.check(version, root)
   if not toc then return false, "cannot read FabricationStation.toc in " .. root end
   if not toc:find("@project-version@", 1, true) then
     return false, "FabricationStation.toc lacks the @project-version@ token the packager fills in"
+  end
+
+  if not has_retail_interface(toc) then
+    return false, "FabricationStation.toc has no valid ## Interface line"
+  end
+
+  for _, name in ipairs({ "LICENSE", "THIRD_PARTY_NOTICES.md" }) do
+    local content = read_file(root .. "/" .. name)
+    if not content or content == "" then return false, name .. " is missing or empty in " .. root end
   end
 
   return true

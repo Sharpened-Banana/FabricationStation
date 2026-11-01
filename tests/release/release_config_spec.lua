@@ -87,10 +87,11 @@ describe("release configuration", function()
 
   describe("tools/check_release.lua", function()
     local R = dofile("tools/check_release.lua")
-    local TOC = "## Version: @project-version@\n"
+    local TOC = "## Interface: 120105\n## Version: @project-version@\n"
 
     local function repo(changelog, toc)
-      return make_tmp_repo({ ["CHANGELOG.md"] = changelog, ["FabricationStation.toc"] = toc or TOC })
+      return make_tmp_repo({ ["CHANGELOG.md"] = changelog, ["FabricationStation.toc"] = toc or TOC,
+        ["LICENSE"] = "MIT", ["THIRD_PARTY_NOTICES.md"] = "notices" })
     end
 
     it("gates release on version format and changelog entry", function()
@@ -134,6 +135,27 @@ describe("release configuration", function()
       local ok, reason = R.check("1.0.0", repo("## [1.0.0]\n", "## Version: 1.0.0\n"))
       assert.is_false(ok)
       assert.truthy(reason:find("@project-version@", 1, true))
+    end)
+
+    it("needs a retail ## Interface line in the TOC", function()
+      for _, toc in ipairs({ "## Version: @project-version@\n", "## Interface: 110207\n## Version: @project-version@\n",
+        "## Interface: 12010\n## Version: @project-version@\n" }) do
+        local ok, reason = R.check("1.0.0", repo("## [1.0.0]\n", toc))
+        assert.is_false(ok); assert.truthy(reason:find("## Interface", 1, true))
+      end
+      assert.is_true((R.check("1.0.0",
+        repo("## [1.0.0]\n", "## Interface: 120105, 120100\n## Version: @project-version@\n"))))
+    end)
+
+    it("needs the licence and the third-party notices", function()
+      local root = make_tmp_repo({ ["CHANGELOG.md"] = "## [1.0.0]\n", ["FabricationStation.toc"] = TOC,
+        ["LICENSE"] = "MIT" })
+      local ok, reason = R.check("1.0.0", root)
+      assert.is_false(ok); assert.truthy(reason:find("THIRD_PARTY_NOTICES.md", 1, true))
+      root = make_tmp_repo({ ["CHANGELOG.md"] = "## [1.0.0]\n", ["FabricationStation.toc"] = TOC,
+        ["LICENSE"] = "", ["THIRD_PARTY_NOTICES.md"] = "notices" })
+      ok, reason = R.check("1.0.0", root)
+      assert.is_false(ok); assert.truthy(reason:find("LICENSE", 1, true))
     end)
 
     it("fails cleanly when a file is missing", function()

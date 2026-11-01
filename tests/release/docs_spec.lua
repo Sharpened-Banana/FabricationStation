@@ -37,6 +37,14 @@ describe("public docs and release metadata", function()
     end
   end)
 
+  it("keeps CHANGELOG lines within 120 columns", function()
+    local n = 0
+    for line in (read("CHANGELOG.md") .. "\n"):gmatch("(.-)\n") do
+      n = n + 1
+      assert.is_true(#line <= 120, ("CHANGELOG.md line %d is %d columns"):format(n, #line))
+    end
+  end)
+
   it("documents privacy, commands and versioning in README", function()
     local r = read("README.md")
     for _, s in ipairs({ "/fs setup", "/fs guild", "Recipes only", "pauses", "Versioning", "vMAJOR.MINOR.PATCH" }) do
