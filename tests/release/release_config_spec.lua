@@ -217,8 +217,8 @@ describe("release configuration", function()
     for _, k in ipairs({ "## Version: @project-version@", "## X-License: MIT", "## SavedVariables: FabricationStationDB" }) do
       assert.truthy(toc:find(k, 1, true), k)
     end
-    assert.truthy(toc:find("## OptionalDeps:[^\n]*Auctionator"))
-    assert.is_nil(toc:find("## Dependencies:[^\n]*Auctionator"))
+    assert.truthy(toc:find("## Dependencies:[^\n]*Auctionator"))
+    assert.is_nil(toc:find("## OptionalDeps:[^\n]*Auctionator"))
     assert.truthy(toc:find("Locales\\Locales.xml", 1, true) < toc:find("Core\\Util.lua", 1, true))
     assert.truthy(toc:find("UI\\Tabs\\Guild.lua", 1, true) < toc:find("UI\\Tabs\\Settings.lua", 1, true))
     for _, path in ipairs(read_toc("FabricationStation.toc").files) do assert.truthy(io.open(path), path) end

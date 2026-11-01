@@ -62,8 +62,8 @@ General, Prices, Modules and Diagnostics.
    top of the window) shows `Prices: <1m ago`, and
    `/dump LibStub("AceAddon-3.0"):GetAddon("FabricationStation"):GetModule("Prices"):Get(<itemID>)`
    for an item that was in the scan shows a table with `value` (copper), `source = "auction"` and `ageDays`.
-   Then disable Auctionator and `/reload`. Expected: the header shows `Prices: no Auctionator` and there are
-   no errors.
+   Then disable Auctionator in the AddOns list. Expected: FabricationStation is shown as needing Auctionator and
+   does not load (it is a required dependency); re-enable Auctionator and it loads again with no errors.
 
 ## D. Reference data (plan check 9)
 

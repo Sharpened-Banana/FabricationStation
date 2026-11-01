@@ -15,8 +15,8 @@ describe("public docs and release metadata", function()
   end)
 
   -- Preflight row 37: the user's decision overrides the plan's "The FabricationStation authors".
-  it("names lonezebra in the copyright line", function()
-    assert.truthy(read("LICENSE"):find("Copyright (c) 2026 lonezebra", 1, true))
+  it("names Sharpened Banana in the copyright line", function()
+    assert.truthy(read("LICENSE"):find("Copyright (c) 2026 Sharpened Banana", 1, true))
     assert.is_nil(read("LICENSE"):find("The FabricationStation authors", 1, true))
   end)
 

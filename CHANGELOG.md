@@ -25,8 +25,8 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
 - Phase 1, crafting:
   - A scanner that records every profession, recipe and reagent of each character, and the game's crafting data
     generated for client build 12.1.5.70688 (`tools/gamedata/README.md` explains regeneration).
-  - Prices from Auctionator (auction and vendor prices, with the age of the price) and manual price overrides. The
-    addon loads and works without Auctionator; costs and profits are then shown as unknown rather than as zero.
+  - Prices from Auctionator (auction and vendor prices, with the age of the price) and manual price overrides.
+    Auctionator is a required dependency. A price that is not known yet is shown as unknown rather than as zero.
   - Quality prediction, concentration cost and a reagent optimiser, with profit per recipe. The formulas follow
     CraftSim (MIT).
   - A panel beside Blizzard's profession window with live quality, the cheapest reagents per reachable quality and

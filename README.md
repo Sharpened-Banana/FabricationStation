@@ -47,12 +47,11 @@ come out at, how much concentration it takes, what it earns, and what your other
 ## Requirements
 
 - World of Warcraft retail, Midnight (client 12.1.5, Interface 120105). Classic is not supported.
-- [Auctionator](https://www.curseforge.com/wow/addons/auctionator) is optional. It is the source of item prices
-  (auction prices with their age, and vendor prices). The packaged addon lists it as a dependency on CurseForge, so a
-  CurseForge install brings it along. Without Auctionator the addon still loads and everything that does not need a
-  price keeps working: quality and concentration prediction, the reagent optimiser, recipes, characters, the planner,
-  guild sharing and the chat scanner. Anything that needs a price shows it as unknown instead of zero, unless you set
-  a manual price under Settings > Prices. The queue's shopping list export needs Auctionator.
+- [Auctionator](https://www.curseforge.com/wow/addons/auctionator) is required. It is the source of item prices
+  (auction prices with their age, and vendor prices) and of the queue's shopping list. The game does not load
+  FabricationStation unless Auctionator is installed and enabled; a CurseForge or Wago install brings it along. Until
+  you scan the auction house, anything that needs a price shows it as unknown instead of zero, unless you set a manual
+  price under Settings > Prices.
 
 ## Install
 
@@ -201,4 +200,4 @@ you instead of overwriting it.
 
 ## License
 
-[MIT](LICENSE), Copyright (c) 2026 lonezebra.
+[MIT](LICENSE), Copyright (c) 2026 Sharpened Banana.

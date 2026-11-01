@@ -19,8 +19,8 @@ Every `lua tools/...` command below needs Lua 5.1 or LuaJIT (the game's dialect)
 - [ ] Leave Settings > Actions > General > Workflow permissions at the read-only default: `release.yml` is read-only at
   the top level and grants `contents: write` to the release job only (it creates the GitHub release).
 - [ ] On CurseForge, enable localization and import the phrases from `Locales/enUS.lua`.
-- [ ] On CurseForge, set the relation to Auctionator as a **required dependency**. (The TOC lists it as optional; the
-  packager's `required-dependencies` entry in `.pkgmeta` sets the store relation.)
+- [ ] On CurseForge, set the relation to Auctionator as a **required dependency**. (The TOC lists it under
+  `## Dependencies`; the packager's `required-dependencies` entry in `.pkgmeta` sets the store relation.)
 - [ ] Confirm the licence setting on each site is MIT.
 
 ## Per release
