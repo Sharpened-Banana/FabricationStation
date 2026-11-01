@@ -143,3 +143,68 @@ describe("a non-identity ns.L (core, crafting and social sentences)", function()
     assert.equal("header", rows[1].kind)
   end)
 end)
+
+-- Task 8: the orders display text is whole keys under a translated ns.L.
+describe("a non-identity ns.L (orders sentences)", function()
+  local P2 = require("tests.helpers.phase2")
+  local ORDERS_FILES = { "Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua", "Modules/Ledger.lua",
+    "UI/OrdersPanel.lua", "UI/OrdersWidgets.lua", "UI/Tabs/Orders.lua" }
+  local ns
+
+  before_each(function()
+    ns = P2.boot({ C_DateAndTime = { GetSecondsUntilWeeklyReset = function() return 1 end } })
+    P2.fake_module(ns, "MainWindow", { RegisterTab = function() end })
+    P2.fake_module(ns, "Dashboard", { RegisterWidget = function() end })
+    P2.load(ns, ORDERS_FILES)
+    setmetatable(ns.L, { __index = function(_, key) return "T:" .. key end })
+  end)
+
+  local function every_line_translated(lines)
+    assert.is_true(#lines > 0)
+    for i, line in ipairs(lines) do assert.equal("T:", plain(line):sub(1, 2), i .. ": " .. plain(line)) end
+  end
+
+  it("translates every open-orders line, scored or not", function()
+    local W = ns.UI.OrdersWidgets
+    local scored = { time = 400, charKey = "Me-Silvermoon", orders = {
+      { orderID = 1, orderType = "personal", score = 50000, flags = { estimated = true } } } }
+    local lines = W.OpenOrdersLines(scored, 1000)
+    every_line_translated(lines)
+    assert.equal(3, #lines)
+    local mixed = { time = 400, charKey = "Me-Silvermoon", orders = {
+      { orderID = 1, orderType = "personal", score = 50000 },
+      { orderID = 2, orderType = "public", flags = { recraft = true } },
+      { orderID = 3, orderType = "public", flags = { unknownConcentrationValue = true } },
+      { orderID = 4, orderType = "npc", flags = { noPrice = true } } } }
+    lines = W.OpenOrdersLines(mixed, 1000)
+    every_line_translated(lines)
+    assert.equal(4, #lines)
+    assert.truthy(plain(lines[3]):find("T:Not scored: T:1 recraft", 1, true))
+    assert.truthy(plain(lines[3]):find("T:1 recraftT:, T:1 conc?T:, T:1 no price", 1, true))
+    local none = W.OpenOrdersLines({ time = 400, orders = { { orderID = 2, orderType = "public", flags = { recraft = true } } } }, 1000)
+    assert.equal("T:Best score: T:none", plain(none[2]))
+  end)
+
+  it("translates the gold-this-week lines, a partial profit included", function()
+    local ledger = { HasIncome = function() return true end, IsEnabled = function() return true end,
+      Weekly = function() return { { weekStart = 0, income = 9, cost = 2, profit = 7, incomplete = 1 } } end }
+    local lines = ns.UI.OrdersWidgets.GoldThisWeekLines(ledger, 1000)
+    assert.truthy(plain(lines[1]):find("T:Profit: ", 1, true))
+    assert.truthy(plain(lines[1]):find("T:partial", 1, true))
+    assert.truthy(plain(lines[2]):find("T:Income: ", 1, true))
+  end)
+
+  it("translates the Orders tab header", function()
+    local Tab = ns.UI.OrdersTab
+    local filters = { hideRisks = {}, orderTypes = {} }
+    local snap = { time = 970, charKey = "Me-Silvermoon", orders = {} }
+    assert.equal("T:Orders seen <1m ago on Me-Silvermoon", Tab.Model(snap, filters, 1000).header)
+    snap.charKey = nil
+    assert.equal("T:Orders seen <1m ago", Tab.Model(snap, filters, 1000).header)
+  end)
+
+  it("translates the recraft note of a row", function()
+    local notes = ns.UI.OrdersPanel.Notes({ flags = { recraft = true } })
+    assert.equal("T:Recraft \226\128\148 judge manually", notes[1])
+  end)
+end)

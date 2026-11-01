@@ -145,20 +145,23 @@ function M.OpenOrdersLines(snapshot, now)
     local orders = orders_of(snapshot)
     local best = M.BestOrder(filtered(orders))
     if best then
-      lines[#lines + 1] = "Best score: " .. signed(best.score, money(best.score, flags_of(best).estimated))
+      lines[#lines + 1] = L["Best score: %s"]:format(signed(best.score, money(best.score, flags_of(best).estimated)))
     else
-      lines[#lines + 1] = "Best score: " .. color(DIM, L["none"])
+      lines[#lines + 1] = L["Best score: %s"]:format(color(DIM, L["none"]))
     end
     local why = M.UnscoredReasons(orders)
     local parts = {}
-    if why.recraft > 0 then parts[#parts + 1] = why.recraft .. " recraft" end
-    if why.conc > 0 then parts[#parts + 1] = why.conc .. " conc?" end
-    if why.noPrice > 0 then parts[#parts + 1] = why.noPrice .. " no price" end
-    if why.other > 0 then parts[#parts + 1] = why.other .. " ?" end
-    if #parts > 0 then lines[#lines + 1] = color(DIM, "Not scored: " .. table.concat(parts, ", ")) end
+    if why.recraft > 0 then parts[#parts + 1] = L["%d recraft"]:format(why.recraft) end
+    if why.conc > 0 then parts[#parts + 1] = L["%d conc?"]:format(why.conc) end
+    if why.noPrice > 0 then parts[#parts + 1] = L["%d no price"]:format(why.noPrice) end
+    if why.other > 0 then parts[#parts + 1] = L["%d ?"]:format(why.other) end
+    if #parts > 0 then lines[#lines + 1] = color(DIM, L["Not scored: %s"]:format(ns.UI.JoinList(parts))) end
   end
-  local seen = "Seen " .. ns.UI.FormatAge(model.age) .. " ago"
-  if type(snapshot) == "table" and snapshot.charKey ~= nil then seen = seen .. " on " .. tostring(snapshot.charKey) end
+  local age = ns.UI.FormatAge(model.age)
+  local seen = L["Seen %s ago"]:format(age)
+  if type(snapshot) == "table" and snapshot.charKey ~= nil then
+    seen = L["Seen %s ago on %s"]:format(age, tostring(snapshot.charKey))
+  end
   lines[#lines + 1] = color(DIM, seen)
   return lines
 end
@@ -189,9 +192,10 @@ function M.GoldThisWeekLines(ledger, now)
     else
       local partial = model.incomplete > 0
       local estimated = type(model.estimated) == "number" and model.estimated > 0
-      lines[1] = "Profit: " .. signed(model.profit, money(model.profit, estimated))
-        .. (partial and color(WARN, " (partial)") or "")
-      lines[2] = "Income: " .. money(model.income)
+      local profit = signed(model.profit, money(model.profit, estimated))
+      if partial then profit = L["%s (%s)"]:format(profit, color(WARN, L["partial"])) end
+      lines[1] = L["Profit: %s"]:format(profit)
+      lines[2] = L["Income: %s"]:format(money(model.income))
       if partial then lines[3] = color(WARN, (L["Partial: %d with missing or partial cost"]):format(model.incomplete)) end
     end
   end

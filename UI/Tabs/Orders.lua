@@ -114,8 +114,9 @@ function Tab.Model(snapshot, filters, now)
   local seen = type(snapshot.time) == "number"
   local header = L["No orders seen yet"]
   if seen then
-    header = "Orders seen " .. ns.UI.FormatAge(now - snapshot.time) .. " ago"
-    if snapshot.charKey ~= nil then header = header .. " on " .. tostring(snapshot.charKey) end
+    local age = ns.UI.FormatAge(now - snapshot.time)
+    header = snapshot.charKey ~= nil and L["Orders seen %s ago on %s"]:format(age, tostring(snapshot.charKey))
+      or L["Orders seen %s ago"]:format(age)
   end
   local O = module("Orders")
   local rows = {}
@@ -262,9 +263,9 @@ function Tab.TooltipLines(row, benchmark, model)
   model = row_model(row, model)
   local lines = { { text = item_name(row), color = WHITE } }
   local customer = customer_text(row)
-  if customer then lines[#lines + 1] = { text = "Customer: " .. customer, color = WHITE } end
-  lines[#lines + 1] = { text = "Tip: " .. ns.UI.FormatMoney(row.tip), color = WHITE }
-  lines[#lines + 1] = { text = "Net: " .. net_text(v), color = WHITE }
+  if customer then lines[#lines + 1] = { text = L["Customer: %s"]:format(customer), color = WHITE } end
+  lines[#lines + 1] = { text = L["Tip: %s"]:format(ns.UI.FormatMoney(row.tip)), color = WHITE }
+  lines[#lines + 1] = { text = L["Net: %s"]:format(net_text(v)), color = WHITE }
   for label in (model.riskText or ""):gmatch("[^\n]+") do lines[#lines + 1] = { text = label, color = RED } end
   for _, note in ipairs(panel().Notes(v)) do lines[#lines + 1] = { text = note, color = GREY } end
   lines[#lines + 1] = { text = Tab.BenchmarkText(benchmark, benchmark_quality(v)), color = GOLD }

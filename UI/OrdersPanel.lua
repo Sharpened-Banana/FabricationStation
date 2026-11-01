@@ -45,7 +45,7 @@ local SidePanel = ns.FS:NewModule(SIDE, "AceEvent-3.0")
 local Warning = ns.FS:NewModule(WARN, "AceEvent-3.0")
 
 local PROFESSIONS_ADDON = "Blizzard_Professions"
-local DOT, EM_DASH, ELLIPSIS = "\194\183", "\226\128\148", "\226\128\166"
+local DOT, EM_DASH = "\194\183", "\226\128\148"
 local COPPER_PER_SILVER, COPPER_PER_GOLD = 100, 10000
 
 -- Row layout. Blizzard's flat order table (ProfessionsCraftingOrderPageMixin:SetupTable, 12.1.5) is the item-name
@@ -220,7 +220,7 @@ end
 function M.Notes(view)
   local flags, notes = flags_of(view), {}
   if flags.recraft then
-    notes[1] = "Recraft " .. EM_DASH .. " judge manually"
+    notes[1] = L["Recraft \226\128\148 judge manually"]
     return notes
   end
   if flags.unknownConcentrationValue then notes[#notes + 1] = L["Concentration value unknown"] end
@@ -833,9 +833,9 @@ end
 local function on_claim_clicked(view, reason)
   if view then
     pendingClaim = view.orderID
-    set_result("Claiming " .. item_text(view.itemID) .. ELLIPSIS, "plain")
+    set_result(L["Claiming %s\226\128\166"]:format(item_text(view.itemID)), "plain")
   else
-    set_result(CLAIM_REFUSED[reason] or ("Nothing claimed (" .. tostring(reason) .. ")"), "warn")
+    set_result(CLAIM_REFUSED[reason] or L["Nothing claimed (%s)"]:format(tostring(reason)), "warn")
   end
   refresh_side()
 end
@@ -846,7 +846,7 @@ local function on_claim_response(_, result, orderID)
   if pendingClaim == nil or (orderID ~= nil and orderID ~= pendingClaim) then return end
   pendingClaim = nil
   if result == ok_result() then
-    set_result("Claimed " .. EM_DASH .. " open it from the order list", "good")
+    set_result(L["Claimed \226\128\148 open it from the order list"], "good")
   else
     set_result((L["Claim failed (%s)"]):format(result_name(result)), "bad")
   end
@@ -1002,13 +1002,14 @@ local function refresh_warning()
   local name = type(order) == "table" and typeName ~= "npc" and cust and cust:NormalizeName(order.customerName) or nil
   local message, tone
   if name and cust:IsBlocked(name) then
-    message, tone = "Blocked customer: " .. name, "red"
+    message, tone = L["Blocked customer: %s"]:format(name), "red"
   elseif name then
     local record = cust:Get(name)
     local tags = type(record) == "table" and type(record.tags) == "table" and record.tags or {}
     if tags.VIP then
       local n = type(record.orders) == "table" and #record.orders or 0
-      message, tone = (L["VIP customer %s %d previous order%s"]):format(DOT, n, n == 1 and "" or "s"), "gold"
+      message, tone = (n == 1 and L["VIP customer \194\183 %d previous order"] or L["VIP customer \194\183 %d previous orders"])
+        :format(n), "gold"
     end
   end
   warn.tone = tone

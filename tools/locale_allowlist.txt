@@ -52,5 +52,4 @@ UI/OrdersPanel.lua:none
 UI/ProfessionPanel.lua:estimate
 
 # Short suffixes appended to an already built cell text (colour code around a leading space).
-UI/OrdersWidgets.lua: (partial)
 UI/Tabs/CharactersView.lua: (hidden)

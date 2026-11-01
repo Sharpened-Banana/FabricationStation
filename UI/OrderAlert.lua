@@ -79,7 +79,7 @@ end
 -- "New personal orders: Tailoring, Alchemy" for several professions at once.
 function OrderAlert.ToastTextMany(names)
   if #names == 0 then return OrderAlert.ToastText(nil, nil) end
-  return L["New personal orders: %s"]:format(table.concat(names, ", "))
+  return L["New personal orders: %s"]:format(ns.UI.JoinList(names))
 end
 
 -- The SOUNDKIT id for a settings name; the raid warning for an unknown or non-string name; nil without SOUNDKIT.
