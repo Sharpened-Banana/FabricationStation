@@ -214,11 +214,11 @@ L["Welcome"] = true
 L["Sharing several characters lets guildmates see that they belong to the same player."] = true
 L["The saved data is from a newer version of FabricationStation, so the choices you make in this guide will not be saved."] = true
 L["Skip or the close button ends this guide; /fs setup opens it again. If the window is hidden any other way, it comes back at your next login."] = true
-L["log in to this character and open it"] = true
 L["no profession found yet"] = true
-L["open this profession window now"] = true
+L["%s - scanned"] = true   -- setup guide scan list: profession name, then its scan state
+L["%s - open this profession window now"] = true   -- setup guide scan list: profession name, then its scan state
+L["%s - log in to this character and open it"] = true   -- setup guide scan list: profession name, then its scan state
 L["reopen the setup guide"] = true
-L["scanned"] = true
 
 -- Phases 1-3: Core and Modules (Task 13)
 L["%s stopped after an error: %s"] = true

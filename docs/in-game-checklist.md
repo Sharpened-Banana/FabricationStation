@@ -1104,6 +1104,14 @@ list give the full sentence. Search a recipe that only the game's guild list kno
 select its row. Expected: the Ask guild hint says "The profession of this recipe is not known yet". Join another
 guild, or leave and rejoin, with the same search text: the only result is selected again.
 
+P6-4. **Setup guide footer and scan list.** `/fs setup`. Expected:
+- "Step N of M" sits between Skip and Back on every step and never touches a button.
+- On "Guild and chat" with Guild turned off on the previous step, both small headings are grey.
+- On "Scan your professions", hovering a row that ends in "..." shows its full text, and the mouse wheel still scrolls
+  the list while the pointer is over a row.
+- `/run local b = CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate"); b:SetText("x"); print(type(b:GetFontString().GetUnboundedStringWidth))`
+  prints `function` (if not, the buttons use the older width call; note it).
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

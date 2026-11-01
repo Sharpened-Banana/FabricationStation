@@ -812,6 +812,149 @@ describe("OnboardingWizard", function()
     assert.are.equal("GameFontNormal", Wizard:GetControls().shareCheck.text:GetFontObject())
   end)
 
+  it("greys the social headings while the Guild feature is turned off", function()
+    Wizard:Open()
+    goto_step("modules")
+    click(Wizard:GetControls().moduleChecks.Guild)
+    goto_step("social")
+    local social = Wizard:GetControls().steps.social
+    assert.are.equal("GameFontDisableSmall", social.levelLabel:GetFontObject())
+    assert.are.equal("GameFontDisableSmall", social.altsLabel:GetFontObject())
+    goto_step("modules")
+    click(Wizard:GetControls().moduleChecks.Guild)
+    goto_step("social")
+    assert.are.equal("GameFontNormalSmall", social.levelLabel:GetFontObject())
+    assert.are.equal("GameFontNormalSmall", social.altsLabel:GetFontObject())
+  end)
+
+  describe("the scan list", function()
+    local tooltip
+    before_each(function()
+      tooltip = { shown = {}, hidden = 0 }
+      _G.GameTooltip = {
+        SetOwner = function(_, owner) tooltip.owner = owner end,
+        SetText = function(_, text) tooltip.shown[#tooltip.shown + 1] = text end,
+        AddLine = function(_, text) tooltip.shown[#tooltip.shown + 1] = text end,
+        Show = function() tooltip.visible = true end,
+        Hide = function() tooltip.hidden = tooltip.hidden + 1; tooltip.visible = false end,
+      }
+    end)
+    after_each(function() _G.GameTooltip = nil end)
+
+    local function scan_chars()
+      local chars = ns.FS.db.global.characters
+      chars["Me-Realm"] = { professions = { [2907] = { name = "Midnight Blacksmithing", parentSkillLineID = 164,
+        recipes = {} } } }
+      chars["Alt-Realm"] = { professions = { [2906] = { name = "Midnight Alchemy", parentSkillLineID = 171,
+        recipes = { [1] = true } } } }
+    end
+
+    it("shows a cut row's full text on hover and nothing for a row that fits", function()
+      local function long_locale(factor)
+        for key in pairs(ns.L) do rawset(ns.L, key, nil) end
+        setmetatable(ns.L, { __index = function(_, key) return key .. " " .. ("w"):rep(math.ceil(#key * factor / 2)) end })
+      end
+      long_locale(3)
+      scan_chars()
+      Wizard:Open(); goto_step("scan")
+      local scan = Wizard:GetControls().steps.scan
+      local rows = Wizard.ScanRows(Onboarding:ScanStatus())
+      assert.is_true(#rows >= 4)
+      local cut, short
+      for i, row in ipairs(rows) do
+        local hit = scan.rowHits[i]
+        assert.is_table(hit, "row " .. i)
+        assert.is_true(hit:IsShown())
+        local fs = scan.rows[i]
+        if fs:GetStringWidth() > fs:GetWidth() then
+          assert.are.equal(row.text, hit.text); cut = cut or i
+        else
+          assert.is_nil(hit.text); short = short or i
+        end
+      end
+      assert.is_truthy(cut); assert.is_truthy(short)
+      -- hover on the cut row: its whole line in the tooltip, hidden again on leave
+      local hit = scan.rowHits[cut]
+      hit:GetScript("OnEnter")(hit)
+      assert.is_true(tooltip.visible)
+      assert.are.equal(hit, tooltip.owner)
+      assert.are.equal(rows[cut].text, tooltip.shown[1])
+      hit:GetScript("OnLeave")(hit)
+      assert.is_false(tooltip.visible)
+      -- hover on a row that fits: nothing
+      tooltip.visible, tooltip.shown, tooltip.owner = false, {}, nil
+      local fitting = scan.rowHits[short]
+      fitting:GetScript("OnEnter")(fitting)
+      assert.is_false(tooltip.visible)
+      assert.are.same({}, tooltip.shown)
+    end)
+
+    it("hides a row's hover frame with the row and re-reads its text when the row is reused", function()
+      scan_chars()
+      Wizard:Open(); goto_step("scan")
+      local scan = Wizard:GetControls().steps.scan
+      local count = scan.rowCount
+      assert.is_true(count > 0)
+      assert.is_true(scan.rowHits[count]:IsShown())
+      ns.FS.db.global.characters["Alt-Realm"] = nil
+      ns.FS.db.global.characters["Me-Realm"] = nil
+      goto_step("scan")
+      local now = scan.rowCount
+      assert.is_true(now < count)
+      for i = now + 1, count do assert.is_false(scan.rowHits[i]:IsShown(), i) end
+    end)
+
+    it("words each profession row as one sentence", function()
+      scan_chars()
+      for key in pairs(ns.L) do rawset(ns.L, key, nil) end
+      setmetatable(ns.L, { __index = function(_, key) return "T:" .. key end })
+      local rows = Wizard.ScanRows(Onboarding:ScanStatus())
+      local professionRows = 0
+      for _, row in ipairs(rows) do
+        if row.indent and row.kind ~= "empty" then
+          professionRows = professionRows + 1
+          local ok = row.text:find("^T:Midnight Blacksmithing %- ") or row.text:find("^T:Midnight Alchemy %- ")
+          assert.is_truthy(ok, row.text)
+        end
+      end
+      assert.is_true(professionRows >= 2)
+    end)
+  end)
+
+  describe("button width", function()
+    local function fit_next(unbounded, textWidth)
+      Wizard:Open()
+      local c = Wizard:GetControls()
+      c.next.GetTextWidth = function() return textWidth end
+      c.next.GetFontString = function() return { GetUnboundedStringWidth = unbounded } end
+      Wizard:ShowStep(2)
+      return (c.next:GetSize())
+    end
+
+    it("sizes a button from the unbounded text width when the client has it", function()
+      assert.are.equal(94, fit_next(function() return 70 end, 85))       -- 70 + 24, not 85 + 24
+      assert.are.equal(110, fit_next(function() return 200 end, 50))     -- capped at the nav width
+    end)
+
+    it("uses the plain text width when the unbounded call raises or answers no number", function()
+      assert.are.equal(109, fit_next(function() error("boom") end, 85))
+      assert.are.equal(109, fit_next(function() return nil end, 85))
+      assert.are.equal(109, fit_next(function() return "70" end, 85))
+    end)
+
+    it("uses the plain text width when the button has no font string or the string lacks the call", function()
+      Wizard:Open()
+      local c = Wizard:GetControls()
+      c.next.GetTextWidth = function() return 85 end
+      c.next.GetFontString = function() return {} end
+      Wizard:ShowStep(2)
+      assert.are.equal(109, (c.next:GetSize()))
+      c.next.GetFontString = function() return nil end
+      Wizard:ShowStep(2)
+      assert.are.equal(109, (c.next:GetSize()))
+    end)
+  end)
+
   it("writes nothing while the saved data is from a newer version and says so on the last step", function()
     ns.FS.dbIsNewer = true
     Wizard:Open()
@@ -891,6 +1034,10 @@ describe("OnboardingWizard", function()
       long_locale()                                   -- before the frame is built
       Wizard:Open()
       local c = Wizard:GetControls()
+      -- the window's chrome is read from the content anchors, not assumed
+      local contentTop = -select(5, c.content:GetPoint(1))
+      local contentBottom = select(5, c.content:GetPoint(2))
+      local chrome = contentTop + contentBottom
       for i, step in ipairs(Onboarding:GetSteps()) do
         Wizard:ShowStep(i)
         local _, frameHeight = c.frame:GetSize()
@@ -903,10 +1050,36 @@ describe("OnboardingWizard", function()
             if item.kind == "line" then assert.is_true(r:GetStringWidth() <= r:GetWidth(), step.id) end
             if item.kind == "button" then assert.is_true(r:GetTextWidth() + 16 <= (r:GetSize()), step.id) end
             if item.kind == "check" then assert.is_true(r.text:GetStringWidth() <= r.text:GetWidth(), step.id) end
-            if item.kind ~= "scroll" then assert.is_true(top(r) + height <= frameHeight - 76, step.id) end
+            if item.kind ~= "scroll" then assert.is_true(top(r) + height <= frameHeight - chrome, step.id) end
           end
         end
       end
+    end)
+
+    it("keeps the step counter between Skip and Back", function()
+      long_locale()
+      Wizard:Open(); Wizard:ShowStep(3)
+      local c = Wizard:GetControls()
+      local p1, rel1, relP1, x1 = c.stepLabel:GetPoint(1)
+      local p2, rel2, relP2, x2 = c.stepLabel:GetPoint(2)
+      assert.are.same({ "LEFT", c.skip, "RIGHT", 8 }, { p1, rel1, relP1, x1 })
+      assert.are.same({ "RIGHT", c.back, "LEFT", -8 }, { p2, rel2, relP2, x2 })
+      assert.are.equal(2, c.stepLabel:GetNumPoints())
+      local room = 500 - 28 - c.skip:GetWidth() - c.back:GetWidth() - c.next:GetWidth() - 6 - 16
+      assert.is_true(c.stepLabel:GetStringWidth() <= room)
+    end)
+
+    it("leaves the step counter at least 120 px at the nav button caps", function()
+      long_locale(8); Wizard:Open()
+      local c = Wizard:GetControls()
+      local room = 500 - 28 - c.skip:GetWidth() - c.back:GetWidth() - c.next:GetWidth() - 6 - 16
+      assert.are.equal(120, room)
+    end)
+
+    it("caps every nav button at 110 px", function()
+      long_locale(8); Wizard:Open()
+      local c = Wizard:GetControls()
+      for _, b in ipairs({ c.skip, c.back, c.next }) do assert.are.equal(110, b:GetWidth()) end
     end)
 
     it("stacks the shown regions without overlap, in the builder's order", function()

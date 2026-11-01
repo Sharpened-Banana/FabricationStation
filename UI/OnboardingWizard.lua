@@ -24,10 +24,11 @@ local _, ns = ...
 -- builder lists its regions in order in c.layout = { { region, kind = "wrap"|"line"|"button"|"check"|"scroll", gap, x } }
 -- instead of fixed y offsets, and layout_step() (run by ShowStep after the refresher) stacks the shown ones from the
 -- top: a wrapped box is as tall as its measured text (never under its English height, which is also the fallback when
--- the client measures 0), a button is as wide as its text needs (never under its English width), and the window grows
+-- the client measures 0), a button is as wide as its text needs (never under its English width; Skip, Back and Next stop
+-- at NAV_MAX_WIDTH, and the step counter sits between Skip and Back), and the window grows
 -- (up to the screen) when the longest step needs it, so a longer translation does not clip. With the English text
--- every step keeps the usual 440 px. The scan list is a plain ScrollFrame of pooled one-line rows that takes the rest
--- of the content area.
+-- every step keeps the usual 440 px. The scan list is a plain ScrollFrame of pooled one-line rows (each with a hover
+-- frame, c.rowHits[i], that shows the whole line in a tooltip when it was cut) that takes the rest of the content area.
 local Wizard = {}
 ns.UI = ns.UI or {}
 ns.UI.OnboardingWizard = Wizard
@@ -46,7 +47,8 @@ local ROW_HEIGHT = 16
 local BUTTON_PAD = 24         -- a button's width is its text width plus this
 local SCROLL_MIN = 100        -- the least height the scan list needs; it takes whatever the window has beyond that
 local SCROLL_FOOT = 32        -- below the scan list: the "Check again" button
-local NAV_MAX_WIDTH = 120        -- Back, Next and Skip stay clear of the step counter between them
+local NAV_MAX_WIDTH = 110        -- the most Skip, Back and Next grow to; at the caps the step counter between them keeps
+                              -- 500 - 2*14 - 3*110 - 6 - 16 = 120 px (a longer counter is cut, long locales only)
 local FRAME_CHROME = 76       -- the window's height beyond its content: 36 above it, 40 below
 local GOLD, GREEN, ORANGE, GRAY = "|cffffd100", "|cff40ff40", "|cffffa000", "|cff909090"
 
@@ -103,15 +105,16 @@ function Wizard.ScanRows(status)
     end
     rows[#rows + 1] = { text = header, kind = "header" }
     for _, p in ipairs(entry.professions) do
-      local kind, state
+      -- One whole sentence per state, so a translation can order the name and the state as its language needs.
+      local kind, sentence
       if p.scanned then
-        kind, state = "ok", L["scanned"]
+        kind, sentence = "ok", L["%s - scanned"]:format(p.name)
       elseif p.needsOpen then
-        kind, state = "open", L["open this profession window now"]
+        kind, sentence = "open", L["%s - open this profession window now"]:format(p.name)
       else
-        kind, state = "wait", L["log in to this character and open it"]
+        kind, sentence = "wait", L["%s - log in to this character and open it"]:format(p.name)
       end
-      rows[#rows + 1] = { text = p.name .. " - " .. state, kind = kind, indent = true }
+      rows[#rows + 1] = { text = sentence, kind = kind, indent = true }
     end
     if #entry.professions == 0 then
       rows[#rows + 1] = { text = L["no profession found yet"], kind = "empty", indent = true }
@@ -185,10 +188,23 @@ local function attach_tooltip(frame, title, body)
   end))
 end
 
+-- The width of a button's text: the font string's unbounded width when the client has it (GetTextWidth can be cut at
+-- the width the button had), else GetTextWidth. Every call is guarded; 0 when nothing measures.
+local function button_text_width(b)
+  local ok, width = pcall(function()
+    if type(b.GetFontString) ~= "function" then return nil end
+    local fs = b:GetFontString()
+    if type(fs) ~= "table" or type(fs.GetUnboundedStringWidth) ~= "function" then return nil end
+    return fs:GetUnboundedStringWidth()
+  end)
+  if ok and type(width) == "number" then return width end
+  return tonumber(b.GetTextWidth and b:GetTextWidth()) or 0
+end
+
 -- A button's text, and its width fitted to it: today's width is the minimum, maxWidth the limit.
 local function set_button_text(b, text)
   b:SetText(text)
-  local textWidth = tonumber(b.GetTextWidth and b:GetTextWidth()) or 0
+  local textWidth = button_text_width(b)
   b:SetWidth(math.min(b.maxWidth, math.max(b.minWidth, textWidth + BUTTON_PAD)))
 end
 
@@ -332,7 +348,7 @@ function refreshers.auctionator(c)
 end
 
 function builders.scan(frame)
-  local c = { heading = heading(frame), rows = {}, rowCount = 0 }
+  local c = { heading = heading(frame), rows = {}, rowHits = {}, rowCount = 0 }
   c.body = label(frame, "GameFontHighlight", 0, 28, CONTENT_WIDTH, 46, true)
   c.body:SetText(L["Log in to each crafter and open each profession window once. FabricationStation reads recipes, skill and specialization from that window."])
   c.scroll = CreateFrame("ScrollFrame", nil, frame)
@@ -369,6 +385,23 @@ function refreshers.scan(c)
       fs:SetMaxLines(1)
       c.rows[i] = fs
     end
+    local hit = c.rowHits[i]
+    if not hit then
+      -- Over the row: a line that was cut shows its full text in a tooltip.
+      hit = CreateFrame("Frame", nil, c.child)
+      hit:SetAllPoints(fs)
+      hit:EnableMouse(true)
+      hit:SetScript("OnEnter", ns.FS:Wrap(TOOLTIP_SOURCE, function(self)
+        if not (GameTooltip and self.text) then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(self.text, 1, 1, 1, 1, true)
+        GameTooltip:Show()
+      end))
+      hit:SetScript("OnLeave", ns.FS:Wrap(TOOLTIP_SOURCE, function()
+        if GameTooltip then GameTooltip:Hide() end
+      end))
+      c.rowHits[i] = hit
+    end
     local indent = row.indent and 14 or 0
     fs:ClearAllPoints()
     fs:SetPoint("TOPLEFT", c.child, "TOPLEFT", indent, -(i - 1) * ROW_HEIGHT)
@@ -376,8 +409,15 @@ function refreshers.scan(c)
     fs:SetHeight(ROW_HEIGHT)
     fs:SetText(ROW_COLOR[row.kind] .. row.text .. "|r")
     fs:Show()
+    local width, box = fs:GetStringWidth(), fs:GetWidth()
+    hit.text = (type(width) == "number" and type(box) == "number" and width > box) and row.text or nil
+    hit:Show()
   end
-  for i = #rows + 1, #c.rows do c.rows[i]:Hide() end
+  for i = #rows + 1, #c.rows do
+    c.rows[i]:Hide()
+    c.rowHits[i]:Hide()
+    c.rowHits[i].text = nil
+  end
   c.rowCount = #rows
   c.child:SetHeight(math.max(ROW_HEIGHT, #rows * ROW_HEIGHT))
   c.scroll:SetVerticalScroll(0)
@@ -509,6 +549,9 @@ function refreshers.social(c)
   set_button_text(c.levelButton, level_button_text())
   set_button_text(c.altsButton, alts_button_text())
   c.chatScanCheck:SetChecked(choices.chatScan and true or false)
+  -- The two small headings above the cycle buttons dim with the buttons.
+  c.levelLabel:SetFontObject(on and "GameFontNormalSmall" or "GameFontDisableSmall")
+  c.altsLabel:SetFontObject(on and "GameFontNormalSmall" or "GameFontDisableSmall")
   if on then
     set_check_enabled(c.shareCheck, true); c.levelButton:Enable(); c.altsButton:Enable(); c.guildOff:Hide()
   else
@@ -574,9 +617,13 @@ local function ensure_view()
   v.next:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -(PAD - 2), 10)
   v.back = button(frame, L["Back"], 80, function() Wizard:Back() end, NAV_MAX_WIDTH)
   v.back:SetPoint("RIGHT", v.next, "LEFT", -6, 0)
-  v.stepLabel = label(frame, "GameFontDisableSmall", 0, 0, 160, 14, false)
+  -- The counter fills the gap between Skip and Back (both anchors, no width of its own), so it is never under a
+  -- button; a counter longer than the gap is cut.
+  v.stepLabel = label(frame, "GameFontDisableSmall", 0, 0, 0, 14, false)
+  v.stepLabel:SetWidth(0)
   v.stepLabel:ClearAllPoints()
-  v.stepLabel:SetPoint("BOTTOM", frame, "BOTTOM", 0, 15)
+  v.stepLabel:SetPoint("LEFT", v.skip, "RIGHT", 8, 0)
+  v.stepLabel:SetPoint("RIGHT", v.back, "LEFT", -8, 0)
   v.stepLabel:SetJustifyH("CENTER")
   v.stepFrames = {}
 
@@ -619,8 +666,9 @@ end
 -- Public API
 ---------------------------------------------------------------------------
 
--- The built frame and its controls (tests and tooling): { frame, back, next, skip, stepLabel, steps = { [id] = {...} },
--- moduleChecks, shareCheck, levelButton, altsButton, chatScanCheck }.
+-- The built frame and its controls (tests and tooling): { frame, content (the area the steps live in), back, next, skip,
+-- stepLabel, steps = { [id] = {...} }, moduleChecks, shareCheck, levelButton, altsButton, chatScanCheck }. The scan
+-- step's controls carry rows and rowHits (the hover frame of each row).
 function Wizard:GetControls() return ensure_view() end
 
 function Wizard:IsShown() return view ~= nil and view.frame:IsShown() and true or false end
