@@ -130,6 +130,48 @@ describe("CraftingData", function()
     end)
   end)
 
+  -- A schematic can hold a basic type-1 slot and a type-2 (modified reagent) slot with the same dataSlotIndex: the real
+  -- Rootbound Vat has s1/s3 on index 1 and s2/s4 on index 2 (tests/fixtures/orders/rootbound_vat.lua).
+  describe("slots sharing a dataSlotIndex (Rootbound Vat, real schematic)", function()
+    local VAT = require("tests.fixtures.orders.rootbound_vat")
+    local function info(itemID, dataSlotIndex, quantity, dataSlotType, slotIndex)
+      return { reagent = { itemID = itemID }, dataSlotIndex = dataSlotIndex, quantity = quantity,
+        dataSlotType = dataSlotType, slotIndex = slotIndex }
+    end
+    local function slots_of(alloc)
+      local out = {}
+      for _, row in ipairs(alloc) do out[row.slotIndex] = { row.itemID, row.quantity } end
+      return out
+    end
+    it("puts the reagents for s3 and s4 in s3 and s4, not s1 and s2", function()
+      local alloc = CD.AllocationFromReagentInfo(VAT.schematic, { info(241281, 1, 4), info(241283, 2, 4) })
+      assert.same({ [3] = { 241281, 4 }, [4] = { 241283, 4 } }, slots_of(alloc))
+    end)
+    it("does not depend on the order the schematic lists its slots in", function()
+      local schematic = { reagentSlots = {} }
+      for i = #VAT.schematic.reagentSlots, 1, -1 do schematic.reagentSlots[#schematic.reagentSlots + 1] = VAT.schematic.reagentSlots[i] end
+      local alloc = CD.AllocationFromReagentInfo(schematic, { info(241281, 1, 4), info(241283, 2, 4) })
+      assert.same({ [3] = { 241281, 4 }, [4] = { 241283, 4 } }, slots_of(alloc))
+    end)
+    it("maps by (dataSlotType, dataSlotIndex) when the info carries the type", function()
+      local alloc = CD.AllocationFromReagentInfo(VAT.schematic, { info(236950, 1, 6, 1), info(256963, 2, 16, 1),
+        info(241281, 1, 4, 2), info(241283, 2, 4, 2) })
+      assert.same({ [1] = { 236950, 6 }, [2] = { 256963, 16 }, [3] = { 241281, 4 }, [4] = { 241283, 4 } }, slots_of(alloc))
+    end)
+    it("maps by slotIndex when the info carries it", function()
+      local alloc = CD.AllocationFromReagentInfo(VAT.schematic, { info(236950, 1, 6, nil, 1), info(241281, 1, 4, nil, 3) })
+      assert.same({ [1] = { 236950, 6 }, [3] = { 241281, 4 } }, slots_of(alloc))
+    end)
+    it("skips an info whose type has no slot at that index", function()
+      local schematic = { reagentSlots = { { slotIndex = 1, dataSlotIndex = 4, dataSlotType = 1, kind = "basic", reagents = { 1 } } } }
+      assert.same({}, CD.AllocationFromReagentInfo(schematic, { info(1, 4, 1, 2) }))
+    end)
+    it("still maps infos without a type onto slots without one", function()
+      local schematic = { reagentSlots = { { slotIndex = 7, dataSlotIndex = 4, kind = "basic", reagents = { 1 } } } }
+      assert.same({ { slotIndex = 7, itemID = 5, quantity = 2 } }, (CD.AllocationFromReagentInfo(schematic, { info(5, 4, 2, 2) })))
+    end)
+  end)
+
   describe("with empty or missing GameData tables", function()
     local function empty()
       for _, name in ipairs({ "ReagentQuality", "ReagentCategories", "OptionalReagents", "CraftingData",

@@ -126,13 +126,9 @@ end
 local function game_allocation(schematic, allocation, infos)
   local out = {}
   for i, row in ipairs(allocation) do out[i] = row end
-  local slotByData = {}
-  for _, slot in ipairs(schematic.reagentSlots or {}) do
-    local empty = type(slot.reagents) == "table" and #slot.reagents == 0
-    if slot.dataSlotIndex ~= nil and slot.currencyID == nil and not empty then slotByData[slot.dataSlotIndex] = slot end
-  end
+  local slotFor = ns.CraftingData.SlotResolver(schematic)
   for _, info in ipairs(infos) do
-    local slot = slotByData[info.dataSlotIndex]
+    local slot = slotFor(info)
     local itemID = info.reagent and info.reagent.itemID
     if slot and itemID and not ns.CraftingData.IsAllocated(slot) then
       out[#out + 1] = { slotIndex = slot.slotIndex, itemID = itemID, quantity = info.quantity or slot.quantity or 1 }

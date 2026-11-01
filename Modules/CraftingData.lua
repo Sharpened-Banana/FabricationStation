@@ -140,22 +140,55 @@ function CraftingData.IsAllocated(slot)
   return slot.kind == "basic" or slot.required == true
 end
 
--- Converts Blizzard-style reagent infos ({ reagent = { itemID }, dataSlotIndex, quantity }) back to a
--- ReagentAllocation over the schematic's slotIndex (basic slots and required optional/finishing slots, see
--- IsAllocated) and a list of the other optional/finishing itemIDs. Infos for unknown data slots or without an
--- itemID are skipped, as are slots with a currencyID or an empty reagents list (Scanner:ToCraftingReagentInfo
--- never emits those).
-function CraftingData.AllocationFromReagentInfo(schematic, infos)
-  local slotByData = {}
+-- A function mapping one Blizzard-style reagent info ({ reagent, dataSlotIndex, quantity } and, where the caller has
+-- them, dataSlotType and slotIndex) to its schematic slot, or nil. A schematic can hold a basic type-1 slot and a
+-- type-2 (modified reagent) slot with the same dataSlotIndex (Rootbound Vat: slots 1 and 3 share index 1, slots 2 and
+-- 4 share index 2), so dataSlotIndex alone is not a key. In order: the info's slotIndex when it has one; else its
+-- (dataSlotType, dataSlotIndex) pair (a slot without a stored type matches any type); an info without a type is
+-- one of the game's reagent infos, which cover modified-reagent slots, so the modified-reagent slot of that index is
+-- taken first, else the first slot of that index. Slots with a currencyID or an empty reagents list never match
+-- (Scanner:ToCraftingReagentInfo never emits those).
+function CraftingData.SlotResolver(schematic)
+  local bySlot, byData = {}, {}
   for _, slot in ipairs(schematic and schematic.reagentSlots or EMPTY) do
     local empty = type(slot.reagents) == "table" and #slot.reagents == 0
     if slot.dataSlotIndex ~= nil and slot.currencyID == nil and not empty then
-      slotByData[slot.dataSlotIndex] = slot
+      if slot.slotIndex ~= nil then bySlot[slot.slotIndex] = slot end
+      local list = byData[slot.dataSlotIndex]
+      if not list then list = {}; byData[slot.dataSlotIndex] = list end
+      list[#list + 1] = slot
     end
   end
+  local modified = 2   -- Enum.TradeskillSlotDataType.ModifiedReagent (this file reads no WoW global)
+  return function(info)
+    if type(info) ~= "table" then return nil end
+    if info.slotIndex ~= nil and bySlot[info.slotIndex] then return bySlot[info.slotIndex] end
+    local list = byData[info.dataSlotIndex]
+    if not list then return nil end
+    local want = info.dataSlotType
+    if want ~= nil then
+      for _, slot in ipairs(list) do
+        if slot.dataSlotType == want or slot.dataSlotType == nil then return slot end
+      end
+      return nil
+    end
+    for _, slot in ipairs(list) do
+      if slot.dataSlotType == modified then return slot end
+    end
+    return list[1]
+  end
+end
+
+-- Converts Blizzard-style reagent infos ({ reagent = { itemID }, dataSlotIndex, quantity }) back to a
+-- ReagentAllocation over the schematic's slotIndex (basic slots and required optional/finishing slots, see
+-- IsAllocated) and a list of the other optional/finishing itemIDs. Infos for unknown data slots or without an
+-- itemID are skipped, as are slots with a currencyID or an empty reagents list. Slots are found by SlotResolver
+-- (slotIndex, else dataSlotType + dataSlotIndex), never by dataSlotIndex alone.
+function CraftingData.AllocationFromReagentInfo(schematic, infos)
+  local slotFor = CraftingData.SlotResolver(schematic)
   local allocation, optionalItemIDs = {}, {}
   for _, info in ipairs(infos or EMPTY) do
-    local slot = slotByData[info.dataSlotIndex]
+    local slot = slotFor(info)
     local itemID = info.reagent and info.reagent.itemID
     if slot and itemID then
       if CraftingData.IsAllocated(slot) then
