@@ -20,10 +20,6 @@ UI/OnboardingWizard.lua:Guild
 Modules/CraftingData.lua:*
 Modules/PlanCalc.lua:*
 
-# Not localized on purpose, and not flagged by find_literals: Util.LogError / Diagnostics texts, slash command
-# names, saved-data and setting keys, message names, module ids, Auctionator search terms, CSV field names, and
-# Ledger's mail-subject and invoice matching (compared against the client's own text).
-
 # ChatMatcher is a pure file (specs load it without Core): its words are chat keywords matched against player text.
 Modules/Social/ChatMatcher.lua:*
 
@@ -41,7 +37,9 @@ Modules/Social/GuildOptions.lua:no profile
 Modules/Social/GuildOptions.lua:build failed
 
 # Pieces of sentences that code joins with `..`, table.concat or plural logic. They cannot be translated one by
-# one; turning each sentence into one format string is a follow-up (see the Task 13 report).
+# one; the area task that turns each sentence into one format string (Tasks 7-11) deletes its entries here, and
+# stale_allowlist fails while an entry matches nothing. What the checkers skip on purpose is explained above
+# NON_DISPLAY_LINE in tools/check_locale.lua.
 UI/Tabs/Queue.lua: in Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear
 UI/Tabs/Queue.lua: item name
 UI/Tabs/Queue.lua: item names

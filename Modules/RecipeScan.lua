@@ -312,7 +312,7 @@ local function on_data_changed(_, charKey, kind)
   end
   -- "warband" carries the current character but is account-wide.
   local target = kind ~= "warband" and charKey or nil
-  debounced("RecipeScan:" .. tostring(target), target)
+  debounced("RecipeScan:" .. tostring(target), target)  -- locale: joined (debounce key)
 end
 
 -- A crafting setting changed: every cached evaluation is stale (the scan budget only affects timing).

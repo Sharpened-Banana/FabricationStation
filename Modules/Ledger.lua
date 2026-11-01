@@ -638,7 +638,7 @@ function Ledger:OnCraftResult(_, data)
     self:CostOfCraft(craft.recipeID, craft.craftingReagents, craft.provided, data.resourcesReturned)
   if cost == nil then
     if craft.orderID ~= nil then skippedOrderCrafts[craft.orderID] = true end
-    log_once("craftCost", "craft cost of recipe " .. tostring(craft.recipeID) .. " is not a number; craft not recorded")
+    log_once("craftCost", "craft cost of recipe " .. tostring(craft.recipeID) .. " is not a number; craft not recorded")  -- locale: joined (log text)
     return
   end
   local stored = self:Add({
@@ -675,7 +675,7 @@ function Ledger:OnOrderFulfilled(_, fulfilled)
   local recraft = fulfilled.isRecraft == true or (orderID ~= nil and untrackedOrders[orderID] == true)
   local amount = to_copper(fulfilled.commission)
   if amount == nil then
-    log_once("commission", "commission of order " .. tostring(orderID) .. " is unknown; not recorded")
+    log_once("commission", "commission of order " .. tostring(orderID) .. " is unknown; not recorded")  -- locale: joined (log text)
     return
   end
   local cost, incomplete, estimated = nil, false, false

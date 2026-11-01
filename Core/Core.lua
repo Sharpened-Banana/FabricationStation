@@ -233,7 +233,7 @@ local function add_stopped_modules(self, args)
     }
     -- Wrapped under the module's name: if it fails again while enabling, it is stopped again and
     -- listed here again instead of the error escaping into the options dialog.
-    args["turnOn_" .. name] = {
+    args["turnOn_" .. name] = {  -- locale: joined (setting id built for AceConfig, not text)
       type = "execute", order = order + 1, name = L["Turn on again"],
       func = self:Wrap(name, function() self:SetModuleEnabled(name, true) end),
     }

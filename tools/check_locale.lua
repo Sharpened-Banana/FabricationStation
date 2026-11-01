@@ -4,10 +4,16 @@
 --   C.collect_keys(paths)               -> set of every L["..."] key that appears in the .lua files under `paths`
 --   C.defined_keys(enUSPath)            -> set of keys the enUS file assigns (`L["key"] = ...`)
 --   C.missing_keys(codePaths, enUSPath) -> sorted list of keys used in code but not defined in enUS
+--   C.unused_keys(codePaths, enUSPath)  -> sorted list of keys enUS defines that no code uses
 --   C.find_literals(paths, allowlist)   -> { {file, line, text} } user-facing string literals not routed through L
+--   C.find_concatenations(paths, allowlist) -> { {file, line, text} } display sentences built with `..` or plurals
+--   C.stale_allowlist(paths, allowlist) -> sorted list of allowlist entries that no longer match anything
 --
--- As a script (`lua tools/check_locale.lua [codePath ... enUSPath]`) it prints the missing keys and exits 1 when
--- there are any. Defaults: Core, Modules, UI against Locales/enUS.lua, relative to the repository root.
+-- A "use" of a key is `L["key"]` or the call form `L("key")` (GuildDirectory's `local function L(key)`).
+--
+-- As a script (`lua tools/check_locale.lua [codePath ... enUSPath]`) it prints the missing keys (`missing from
+-- enUS: ...`) and the unused ones (`unused in code: ...`) and exits 1 when there are any; otherwise it prints
+-- `locale keys OK`. Defaults: Core, Modules, UI against Locales/enUS.lua, relative to the repository root.
 --
 -- `paths` entries are .lua files or directories (searched recursively with `find`, so run from a POSIX shell).
 -- The allowlist has one entry per line, `file:literal` (that literal in that file is fine) or `file:*` (skip the
@@ -82,20 +88,22 @@ end
 
 local function is_comment(line) return line:match("^%s*%-%-") ~= nil end
 
--- Calls fn(key, hasAssign, line) for each L["key"] on a line. L must start an identifier (so IL[...] and
--- ns.L[...] differ: the latter counts, the former does not).
+-- Calls fn(key, hasAssign, line) for each L["key"] or L("key") on a line. L must start an identifier (so IL[...]
+-- and ns.L[...] differ: the latter counts, the former does not). Only the bracket form can be an assignment.
 local function each_key(line, fn)
-  local init = 1
-  while true do
-    local s, e = line:find("%f[%w_]L%[%s*", init)
-    if not s then return end
-    local key, after = parse_string(line, e + 1)
-    init = e + 1
-    if key then
-      local close = line:match("^%s*%]()", after)
-      if close then
-        init = close
-        fn(key, line:match("^%s*=[^=]", close) ~= nil)
+  for _, form in ipairs({ { "%f[%w_]L%[%s*", "%]" }, { "%f[%w_]L%(%s*", "%)" } }) do
+    local init = 1
+    while true do
+      local s, e = line:find(form[1], init)
+      if not s then break end
+      local key, after = parse_string(line, e + 1)
+      init = e + 1
+      if key then
+        local close = line:match("^%s*" .. form[2] .. "()", after)
+        if close then
+          init = close
+          fn(key, form[2] == "%]" and line:match("^%s*=[^=]", close) ~= nil)
+        end
       end
     end
   end
@@ -129,6 +137,15 @@ function M.missing_keys(codePaths, enUSPath)
   end
   table.sort(missing)
   return missing
+end
+
+function M.unused_keys(codePaths, enUSPath)
+  local used, unused = M.collect_keys(codePaths), {}
+  for key in pairs(M.defined_keys(enUSPath)) do
+    if not used[key] then unused[#unused + 1] = key end
+  end
+  table.sort(unused)
+  return unused
 end
 
 ---------------------------------------------------------------------------
@@ -180,6 +197,10 @@ end
 local KEYED = { "tooltip", "text", "long", "hint", "header" }
 
 -- Lines carrying one of these calls hold ids, log sources, developer errors or lookup patterns, not display text.
+-- Not localized on purpose, and therefore not flagged by find_literals or find_concatenations: Util.LogError /
+-- Diagnostics texts, slash command names, saved-data and setting keys, message names, module ids, Auctionator
+-- search terms, CSV field names, and Ledger's mail-subject and invoice matching (compared against the client's
+-- own text). A line outside these calls that must stay joined carries `-- locale: joined (<reason>)`.
 local NON_DISPLAY_LINE = {
   "%f[%w_]error%(", "%f[%w_]assert%(", "LogError%(", "SafeCall%(", "Debounce%(", "RegisterEvent%(", "RegisterMessage%(",
   "SendMessage%(", "NewModule%(", "GetModule%(", "LibStub%(", "CreateFrame%(", "hooksecurefunc%(", "%f[%w_]require%(",
@@ -360,6 +381,293 @@ function M.find_literals(paths, allowlistPath)
 end
 
 ---------------------------------------------------------------------------
+-- Concatenated display sentences
+---------------------------------------------------------------------------
+
+-- `-- locale: joined (<reason>)` at the end of a line marks a join that has to stay (an id built for code, a value
+-- the game compares).
+local JOINED_MARK = "%-%-%s*locale:%s*joined"
+
+-- The code part of a line: string-aware, cut at the first `--` outside a string.
+local function code_of(line)
+  local i = 1
+  while i <= #line do
+    local c = line:sub(i, i)
+    if c == '"' or c == "'" then
+      local _, after = parse_string(line, i)
+      if not after then return line end
+      i = after
+    elseif c == "-" and line:sub(i, i + 1) == "--" then
+      return line:sub(1, i - 1)
+    else
+      i = i + 1
+    end
+  end
+  return line
+end
+
+-- A literal that is only colour codes, only newlines, or the " · " separator is not a sentence piece.
+local function is_plain_literal(text)
+  if text == " \194\183 " then return true end
+  local rest = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+  return rest == "" or rest:match("^\n+$") ~= nil
+end
+
+-- Names the file assigns at top level a string that is text, not a colour code or separator (AH_HINT, ELLIPSIS, ...).
+-- Any other all-caps name (GOLD, DIM, WARN, a colour table, an imported constant) is not a sentence piece.
+local function text_constants(codes)
+  local texty = {}
+  for _, code in ipairs(codes) do
+    local names, rhs = code:match("^local%s+([%w_,%s]-)%s*=%s*(.-)%s*$")
+    if names and rhs then
+      local lits = line_literals(rhs)
+      if #lits > 0 then
+        local bare, last = {}, 1
+        for _, lit in ipairs(lits) do bare[#bare + 1] = rhs:sub(last, lit[1] - 1); last = lit[2] end
+        bare[#bare + 1] = rhs:sub(last)
+        local list = {}
+        for name in names:gmatch("[%w_]+") do list[#list + 1] = name end
+        if (table.concat(bare)):gsub("[%s,]", "") == "" and #list == #lits then
+          for i, name in ipairs(list) do
+            if not is_plain_literal(lits[i][3]) then texty[name] = true end
+          end
+        else
+          for _, name in ipairs(list) do texty[name] = true end   -- an expression with text in it
+        end
+      end
+    end
+  end
+  return texty
+end
+
+-- Previous / next line that has code, for operands that start or end a line.
+local function code_before(codes, i)
+  local j = i - 1
+  while j >= 1 and codes[j]:match("^%s*$") do j = j - 1 end
+  return codes[j] or ""
+end
+
+local function code_after(codes, i)
+  local j = i + 1
+  while j <= #codes and codes[j]:match("^%s*$") do j = j + 1 end
+  return codes[j] or ""
+end
+
+-- The text before position pos / from position pos on, continued across a line break when the line has no more code.
+local function left_of(codes, i, pos)
+  local before = codes[i]:sub(1, pos - 1)
+  if before:match("^%s*$") then before = code_before(codes, i) .. " " .. before end
+  return before
+end
+
+local function right_of(codes, i, pos)
+  local after = codes[i]:sub(pos)
+  if after:match("^%s*$") then after = after .. " " .. code_after(codes, i) end
+  return after
+end
+
+local function ends_with_concat(before) return before:match("%.%.%s*$") ~= nil and before:match("%.%.%.%s*$") == nil end
+local function starts_with_concat(after) return after:match("^%s*%.%.") ~= nil and after:match("^%s*%.%.%.") == nil end
+
+-- The operand just left of a trailing `..`: ("literal", text), ("name", identifier) or ("other").
+local function left_operand(before)
+  local head = before:gsub("%s*%.%.%s*$", "")
+  local lits = line_literals(head)
+  local last = lits[#lits]
+  if last and last[2] == #head + 1 then return "literal", last[3] end
+  local name = head:match("([%w_]+)$")
+  if name then
+    local prev = head:sub(-#name - 1, -#name - 1)
+    if prev ~= "." and prev ~= ":" then return "name", name end
+  end
+  return "other"
+end
+
+-- The operand just right of a leading `..`.
+local function right_operand(after)
+  local tail = after:gsub("^%s*%.%.%s*", "")
+  local first = tail:sub(1, 1)
+  if first == '"' or first == "'" then
+    local text = parse_string(tail, 1)
+    if text then return "literal", text end
+  end
+  local name = tail:match("^([%w_]+)")
+  if name then
+    local rest = tail:sub(#name + 1)
+    if not (rest:match("^%s*[%(:%[{]") or rest:match("^%.[^%.]")) then return "name", name end
+  end
+  return "other"
+end
+
+-- A neighbour that does not make the key part of a sentence: colour code, separator, or a constant of those.
+local function plain_neighbour(kind, value, texty)
+  if kind == "literal" then return is_plain_literal(value) end
+  if kind == "name" then
+    return value == "DOT" or value == "SEP" or value == "NL" or (value:match("^%u[%u%d_]*$") ~= nil and not texty[value])
+  end
+  return false
+end
+
+-- Positions of every L["key"] / L("key") on a code line, each extended over a following :format(...) call:
+-- { startPos, endPos (after the last char) }.
+local function l_calls(code)
+  local out = {}
+  for _, form in ipairs({ { "%f[%w_]L%[%s*", "%]" }, { "%f[%w_]L%(%s*", "%)" } }) do
+    local init = 1
+    while true do
+      local s, e = code:find(form[1], init)
+      if not s then break end
+      init = e + 1
+      local key, after = parse_string(code, e + 1)
+      local close = key and code:match("^%s*" .. form[2] .. "()", after)
+      if close then
+        local stop = close
+        local open = code:match("^:format%(()", close)
+        if open then
+          local depth, k = 1, open
+          while k <= #code and depth > 0 do
+            local c = code:sub(k, k)
+            if c == '"' or c == "'" then
+              local _, aft = parse_string(code, k)
+              k = aft or #code + 1
+            else
+              if c == "(" then depth = depth + 1 elseif c == ")" then depth = depth - 1 end
+              k = k + 1
+            end
+          end
+          stop = k
+        end
+        out[#out + 1] = { s, stop }
+        init = stop
+      end
+    end
+  end
+  return out
+end
+
+local function is_id_like(text) return text:match("^[%l%d_%.:/%-]*$") ~= nil end
+
+-- Does any display piece on code line i look like a joined sentence? Returns true on the first reason found.
+local function joined_sentence(codes, i, texty)
+  local code = codes[i]
+  -- 1. a literal with words that is an operand of `..` (a chain of nothing but literals is one literal split over lines)
+  for _, lit in ipairs(line_literals(code)) do
+    local text = lit[3]
+    if has_words(text) and not is_id_like(text) and not text:find("^Interface[\\/]") and not text:find("://") then
+      local before, after = left_of(codes, i, lit[1]), right_of(codes, i, lit[2])
+      local joinedLeft, joinedRight = ends_with_concat(before), starts_with_concat(after)
+      if joinedLeft or joinedRight then
+        local lk = joinedLeft and left_operand(before) or "literal"
+        local rk = joinedRight and right_operand(after) or "literal"
+        if lk ~= "literal" or rk ~= "literal" then return true end
+      end
+    end
+  end
+  -- 2. an L key (with or without :format) that is an operand of `..` next to something that is not plain
+  for _, call in ipairs(l_calls(code)) do
+    local before, after = left_of(codes, i, call[1]), right_of(codes, i, call[2])
+    local bad = false
+    if ends_with_concat(before) then
+      local kind, value = left_operand(before)
+      bad = not plain_neighbour(kind, value, texty)
+    end
+    if not bad and starts_with_concat(after) then
+      local kind, value = right_operand(after)
+      bad = not plain_neighbour(kind, value, texty)
+    end
+    if bad then return true end
+  end
+  -- 3. a plural choice between words: `n == 1 and " item" or " items"`
+  local init = 1
+  while true do
+    local _, e = code:find("[=~]=%s*1%s+and%s+", init)
+    if not e then break end
+    init = e + 1
+    local text = parse_string(code, e + 1)
+    if text and has_words(text) then return true end
+  end
+  return false
+end
+
+function M.find_concatenations(paths, allowlistPath)
+  local _, allowFile = load_allowlist(allowlistPath)
+  local hits = {}
+  for _, file in ipairs(lua_files(paths)) do
+    local src = not allowFile[file] and read_file(file)
+    if src then
+      local lines, codes = {}, {}
+      for line in (src .. "\n"):gmatch("(.-)\r?\n") do
+        lines[#lines + 1] = line
+        codes[#codes + 1] = is_comment(line) and "" or code_of(line)
+      end
+      local texty = text_constants(codes)
+      for i, line in ipairs(lines) do
+        local skip = codes[i]:match("^%s*$") ~= nil or line:find(JOINED_MARK) ~= nil
+        if not skip then
+          for _, p in ipairs(NON_DISPLAY_LINE) do
+            if codes[i]:find(p) then skip = true; break end
+          end
+        end
+        if not skip and joined_sentence(codes, i, texty) then
+          hits[#hits + 1] = { file = file, line = i, text = (line:gsub("^%s+", ""):gsub("%s+$", "")) }
+        end
+      end
+    end
+  end
+  return hits
+end
+
+-- Allowlist entries that cannot match any more: a `file:literal` whose literal is no longer a string literal of that
+-- file (alone or as a whole `..` chain of literals), and any entry whose file does not exist.
+function M.stale_allowlist(paths, allowlistPath)
+  local src = read_file(allowlistPath or "")
+  if not src then error("cannot read allowlist " .. tostring(allowlistPath), 2) end
+  local present = {}
+  for _, file in ipairs(lua_files(paths)) do present[file] = true end
+  local cache = {}
+  local function literals_of(file)
+    if cache[file] == nil then
+      local text = read_file(file)
+      if not text then
+        cache[file] = false
+      else
+        local set = {}
+        local prevJoin = nil
+        for line in (text .. "\n"):gmatch("(.-)\r?\n") do
+          if not is_comment(line) then
+            local lits = line_literals(line)
+            local chain = prevJoin
+            for _, lit in ipairs(lits) do
+              set[lit[3]] = true
+              local between = chain and lit[4]:match("^%s*%.?%.?%s*$")
+              if between then chain = chain .. lit[3]; set[chain] = true else chain = lit[3] end
+            end
+            local code = code_of(line)
+            prevJoin = (#lits > 0 and code:match("%.%.%s*$")) and chain or nil
+          end
+        end
+        cache[file] = set
+      end
+    end
+    return cache[file]
+  end
+  local stale = {}
+  for line in (src .. "\n"):gmatch("(.-)\r?\n") do
+    if line:match("%S") and not line:match("^%s*#") then
+      local file, literal = line:match("^([^:]+):(.*)$")
+      if file then
+        local set = (present[file] or read_file(file)) and literals_of(file)
+        local ok
+        if literal == "*" then ok = set ~= nil and set ~= false else ok = set and set[literal] end
+        if not ok then stale[#stale + 1] = line end
+      end
+    end
+  end
+  table.sort(stale)
+  return stale
+end
+
+---------------------------------------------------------------------------
 -- Script entry point
 ---------------------------------------------------------------------------
 
@@ -377,9 +685,11 @@ local function main(argv)
     enUS = root .. "/Locales/enUS.lua"
   end
   local missing = M.missing_keys(codePaths, enUS)
+  local unused = M.unused_keys(codePaths, enUS)
   for _, key in ipairs(missing) do print("missing from enUS: " .. key) end
-  if #missing > 0 then
-    print(("%d locale key(s) missing"):format(#missing))
+  for _, key in ipairs(unused) do print("unused in code: " .. key) end
+  if #missing > 0 or #unused > 0 then
+    print(("%d locale key(s) missing, %d unused"):format(#missing, #unused))
     os.exit(1)
   end
   print("locale keys OK")

@@ -25,7 +25,7 @@ ns.UI = ns.UI or {}
 ns.UI.AltsDashboard = M
 
 local WIDGET_ID, WIDGET_TITLE, WIDGET_ORDER = "altsKnowledge", L["Knowledge left this week"], 65
-local WIDGET_SOURCE = "Dashboard:" .. WIDGET_ID
+local WIDGET_SOURCE = "Dashboard:" .. WIDGET_ID  -- locale: joined (message source id)
 local REFRESH_SOURCE = "AltsWidgets:Refresh"
 local REFRESH_KEY, REFRESH_DELAY = "altsWidgets.refresh", 0.5
 local PLANNER_TAB = "planner"
