@@ -12,9 +12,6 @@ local Orders = ns.FS:NewModule("Orders", "AceEvent-3.0")
 Orders.ORDER_TYPES = { [0] = "public", [1] = "guild", [2] = "personal", [3] = "npc" }
 Orders.REAGENT_STATES = { [0] = "all", [1] = "some", [2] = "none" }
 
--- Enum.CraftingOrderReagentSource.Customer (wow-ui-source, live).
-local SOURCE_CUSTOMER = 1
-
 -- Defaults for db.global.settings.orders. Money is copper: 10g low-tip margin, 50g per knowledge point, 2g per
 -- Moxie (guesses until checked in game; editable in Settings). minScore = nil means "no minimum".
 Orders.SETTINGS_DEFAULTS = {
@@ -101,13 +98,16 @@ local function customer_name(name)
   if type(name) == "string" and name ~= "" then return name end
 end
 
--- Customer-provided (source Customer) reagents summed by itemID; currency-only entries are skipped.
+-- Customer-provided reagents summed by itemID; currency-only entries are skipped. Every entry of order.reagents is
+-- provided, whatever its `source`: Blizzard's own order view marks each entry's slot as provided by the customer
+-- without reading source (ProfessionsCrafterOrderViewMixin:SchematicPostInit). A source == Customer check dropped what
+-- patrons provide (a saved Rootbound Vat order, reagents "some", kept none; tests/fixtures/orders/rootbound_vat.lua).
 -- Midnight shape: { reagentInfo = { reagent = {itemID?, currencyID?}, dataSlotIndex, quantity }, slotIndex, source }.
 local function provided_reagents(reagents)
   local provided = {}
   if type(reagents) ~= "table" then return provided end
   for _, entry in ipairs(reagents) do
-    local info = type(entry) == "table" and entry.source == SOURCE_CUSTOMER and entry.reagentInfo
+    local info = type(entry) == "table" and entry.reagentInfo
     local reagent = type(info) == "table" and info.reagent
     local itemID = type(reagent) == "table" and reagent.itemID
     if type(itemID) == "number" then

@@ -18,7 +18,7 @@ describe("Orders:Normalize / ValueRewards", function()
                    {reagentInfo={reagent={itemID=200}, quantity=1, dataSlotIndex=3}, slotIndex=3, source=2, isBasicReagent=true} },
       npcOrderRewards = { {itemLink="|cff0070dd|Hitem:12345::::|h[X]|h|r", count=2}, {currencyType=3056, count=10} } }))
     assert.equal("npc", i.orderType); assert.equal("none", i.reagentState); assert.equal(4444, i.recipeID)
-    assert.same({[100]=3, [101]=2}, i.provided)
+    assert.same({[100]=3, [101]=2, [200]=1}, i.provided)   -- any source (as Blizzard)
     assert.same({ {itemID=12345, count=2}, {currencyID=3056, count=10} }, i.rewards)
     assert.equal(4600, i.expiresAt)              -- Now 1000 + (8600 - 5000)
     -- Ruling (review round 1): an NPC patron is not a player customer, so an NPC order has no customer even when
