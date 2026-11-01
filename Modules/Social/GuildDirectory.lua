@@ -27,6 +27,9 @@ local PROFILES_PER_TICK = 20   -- stored profiles put into the recipe index per 
 local INDEX_TICK = 200           -- most recipes resolved per index tick (also bounded by a time budget)
 local DEFAULT_BUDGET_MS = 4    -- per index tick when Recipes' scanBudgetMs is unavailable
 local INDEX_RETRY = 300          -- seconds before a recipe that resolved to nothing is tried again (not on a rebuild)
+local MIN_SEARCH = 3             -- characters of a typed search before it looks for recipes by name
+local MAX_FOUND = 25             -- recipes a name search finds at most
+local CATALOGUE_RETRY = 300      -- seconds before a catalogue that left out unnamed recipes is built again
 local SOURCE = "Guild:Directory"
 
 local function L(key) return ns.L[key] end
@@ -324,33 +327,231 @@ local function lowest(set)
   return best
 end
 
-local function recipe_name(recipeID)
+-- The client's name for a recipe, or nil while it has none.
+local function spell_name(recipeID)
   local api = type(C_Spell) == "table" and C_Spell.GetSpellName
   if type(api) == "function" then
     local ok, name = pcall(api, recipeID)
     if ok and type(name) == "string" and name ~= "" then return name end
   end
-  return ns.L["Recipe %d"]:format(recipeID)
+end
+
+local function recipe_name(recipeID)
+  return spell_name(recipeID) or ns.L["Recipe %d"]:format(recipeID)
+end
+
+---------------------------------------------------------------------------
+-- Recipe search (the Guild tab's typed search)
+---------------------------------------------------------------------------
+
+local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
+
+-- Characters of a UTF-8 string.
+local function char_count(s)
+  local _, continuation = s:gsub("[\128-\191]", "")
+  return #s - continuation
+end
+
+local function sorted_ids(t)
+  local out = {}
+  for id in pairs(t) do out[#out + 1] = id end
+  table.sort(out)
+  return out
+end
+
+-- Every recipe a search can find, built on the first search (never from a tooltip) and kept for the session:
+-- { key = guildKey, at = Now(), incomplete = boolean, list = { entry }, byId = { [recipeID] = entry } } with
+-- entry = { recipeID, recipeName, skillLineID|nil, lname }. Sources, in the order whose skill line wins: the generated
+-- RecipeSources (the current expansion, including recipes nobody on the account knows), the account's own
+-- professions (dropped records skipped), the current guild's stored profiles and the native cache. A recipe the client
+-- has no name for yet is left out (incomplete): the next search 300 s later builds the catalogue again. Dropped on a
+-- guild-key change and in _DirectoryDisable.
+local catalogue
+
+local function build_catalogue(self)
+  local lines, ids = {}, {}       -- [recipeID] = skillLineID | false (no line known yet)
+  local function note(recipeID, skillLineID)
+    if type(recipeID) ~= "number" then return end
+    local line = type(skillLineID) == "number" and skillLineID or false
+    if lines[recipeID] == nil then
+      lines[recipeID] = line
+      ids[#ids + 1] = recipeID
+    elseif lines[recipeID] == false and line then
+      lines[recipeID] = line
+    end
+  end
+  local sources = ns.GameData and ns.GameData.Get("RecipeSources")
+  local bySkillLine = type(sources) == "table" and sources.bySkillLine
+  if type(bySkillLine) == "table" then
+    for _, skillLineID in ipairs(sorted_ids(bySkillLine)) do
+      if type(bySkillLine[skillLineID]) == "table" then
+        for recipeID in pairs(bySkillLine[skillLineID]) do note(recipeID, skillLineID) end
+      end
+    end
+  end
+  local S = ns.FS:GetModule("Scanner", true)
+  for _, charKey in ipairs(S and S:GetCharacters() or {}) do
+    local character = S:GetCharacter(charKey)
+    local professions = type(character) == "table" and character.professions
+    if type(professions) == "table" then
+      for _, skillLineID in ipairs(sorted_ids(professions)) do
+        local p = professions[skillLineID]
+        if type(p) == "table" and not p.dropped and type(p.recipes) == "table" then
+          for recipeID in pairs(p.recipes) do note(recipeID, skillLineID) end
+        end
+      end
+    end
+  end
+  local dir = peek(self)
+  if dir and type(dir.profiles) == "table" then
+    for charKey, profile in pairs(dir.profiles) do
+      if type(charKey) == "string" and type(profile) == "table" and type(profile.pr) == "table" then
+        for _, line in ipairs(profile.pr) do
+          if type(line) == "table" then
+            ProfileStore.Each(line, profile.lv, function(recipeID) note(recipeID, line.s) end)
+          end
+        end
+      end
+    end
+  end
+  if dir and type(dir.native) == "table" then
+    for recipeID, entry in pairs(dir.native) do
+      if type(entry) == "table" then note(recipeID, entry.skillLineID) end
+    end
+  end
+  local c = { key = self.guildKey, at = ns.FS:Now(), incomplete = false, list = {}, byId = {} }
+  for _, recipeID in ipairs(ids) do
+    local name = spell_name(recipeID)
+    if name then
+      local entry = { recipeID = recipeID, recipeName = name, skillLineID = lines[recipeID] or nil, lname = name:lower() }
+      c.list[#c.list + 1] = entry
+      c.byId[recipeID] = entry
+    else
+      c.incomplete = true
+    end
+  end
+  return c
+end
+
+local function get_catalogue(self)
+  local c = catalogue
+  if c then
+    local now = ns.FS:Now()
+    if c.key ~= self.guildKey or (c.incomplete and (now < c.at or now - c.at >= CATALOGUE_RETRY)) then c = nil end
+  end
+  if not c then
+    c = build_catalogue(self)
+    catalogue = c
+  end
+  return c
+end
+
+local function by_name_then_id(a, b)
+  if a.recipeName ~= b.recipeName then return a.recipeName < b.recipeName end
+  return a.recipeID < b.recipeID
+end
+
+-- The text of an item link's bracket, without atlas markup, trimmed ("" when it has none).
+local function bracket_name(link)
+  local inner = type(link) == "string" and link:match("|h%[(.-)%]|h") or nil
+  if not inner then return "" end
+  return trim((inner:gsub("|A.-|a", "")))
+end
+
+-- The recipes a pasted link stands for: a recipe link is its recipeID; an item link is the account's schematics that
+-- craft it plus the guild's recipes for it, else the recipes named like the item's bracket text.
+local function find_by_link(self, cat, recipeLink, itemLink)
+  local ids, seen = {}, {}
+  local function add(recipeID)
+    if type(recipeID) == "number" and not seen[recipeID] then
+      seen[recipeID] = true
+      ids[#ids + 1] = recipeID
+    end
+  end
+  if recipeLink then
+    add(recipeLink.recipeID)
+  else
+    local Recipes = ns.FS:GetModule("Recipes", true)
+    if Recipes and Recipes:IsEnabled() and type(Recipes.FindRecipesForItem) == "function" then
+      local ok, found = pcall(Recipes.FindRecipesForItem, Recipes, itemLink.itemID)
+      if ok and type(found) == "table" then
+        for _, e in ipairs(found) do add(type(e) == "table" and e.recipeID or nil) end
+      end
+    end
+    for _, recipeID in ipairs(self:GetItemIndex():RecipesFor(itemLink.itemID)) do add(recipeID) end
+    if #ids == 0 then
+      local name = bracket_name(itemLink.link):lower()
+      if name ~= "" then
+        for _, entry in ipairs(cat.list) do
+          if entry.lname == name then add(entry.recipeID) end
+        end
+      end
+    end
+  end
+  local recipes = {}
+  for _, recipeID in ipairs(ids) do
+    local entry = cat.byId[recipeID]
+    recipes[#recipes + 1] = { recipeID = recipeID, recipeName = entry and entry.recipeName or recipe_name(recipeID),
+      skillLineID = entry and entry.skillLineID or nil }
+  end
+  table.sort(recipes, by_name_then_id)
+  return { kind = "link", recipes = recipes }
+end
+
+-- What a typed search stands for -> { kind = "link"|"name"|"none", recipes = { { recipeID, recipeName,
+-- skillLineID|nil } } }, sorted by name then recipeID. A pasted recipe or item link (kind "link") resolves as
+-- find_by_link says; other text of at least MIN_SEARCH characters is a case-insensitive plain substring of the
+-- catalogue's recipe names (kind "name", at most MAX_FOUND); shorter text finds nothing (kind "none"). The catalogue
+-- is built on the first call that needs it. Read-only; never queries the server.
+function Guild:FindRecipes(text)
+  local none = { kind = "none", recipes = {} }
+  if not self:IsEnabled() or type(text) ~= "string" then return none end
+  text = trim(text)
+  if text == "" then return none end
+  local matcher = ns.Social.ChatMatcher            -- loads after this file: looked up at call time
+  if matcher and text:find("|H", 1, true) then
+    local parsed = matcher.Parse(text, { include = {}, exclude = {} })
+    local recipeLink, itemLink = parsed.recipeLinks[1], parsed.itemLinks[1]
+    if recipeLink or itemLink then return find_by_link(self, get_catalogue(self), recipeLink, itemLink) end
+  end
+  if char_count(text) < MIN_SEARCH then return none end
+  local needle = text:lower()
+  local recipes = {}
+  for _, entry in ipairs(get_catalogue(self).list) do
+    if entry.lname:find(needle, 1, true) then
+      recipes[#recipes + 1] = { recipeID = entry.recipeID, recipeName = entry.recipeName, skillLineID = entry.skillLineID }
+    end
+  end
+  table.sort(recipes, by_name_then_id)
+  for i = #recipes, MAX_FOUND + 1, -1 do recipes[i] = nil end
+  return { kind = "name", recipes = recipes }
 end
 
 -- The Guild tab's rows: { { recipeID, recipeName, skillLineID, crafter = CrafterRow } } for every recipe of the
--- current guild's stored profiles and native cache, one row per crafter. filter = { text = string|nil,
--- skillLineID = number|nil }: text is a plain, case-insensitive substring of the recipe name (all its crafters) or of
--- a crafter's name (just those crafters); skillLineID keeps the recipes of that profession. Recipe names come from
--- C_Spell.GetSpellName ("Recipe <id>" while the client has none). Sorted by recipe name, then GetCrafters' order. The
--- crafters are exactly GetCrafters' (own characters, contested copies and members who left are out). Read-only.
+-- current guild's stored profiles and native cache, one row per crafter, and meta = { kind, found } (FindRecipes' kind
+-- for filter.text and how many recipes it found). filter = { text = string|nil, skillLineID = number|nil }. Text that
+-- is a pasted recipe or item link (kind "link") keeps only the rows of the recipes it stands for; other text is a
+-- plain, case-insensitive substring of the recipe name (all its crafters) or of a crafter's name (just those crafters).
+-- A found recipe without a row (nobody is known to craft it) gets one placeholder row { recipeID, recipeName,
+-- skillLineID, crafter = nil } (when it fits filter.skillLineID), so the tab can still offer "Ask guild" for it.
+-- skillLineID keeps the recipes of that profession. Recipe names come from C_Spell.GetSpellName ("Recipe <id>" while
+-- the client has none). Sorted by recipe name, then recipeID, then GetCrafters' order. The crafters are exactly
+-- GetCrafters' (own characters, contested copies and members who left are out). Read-only.
 function Guild:BuildTabRows(filter)
-  local out = {}
-  if not self:IsEnabled() then return out end
-  local dir = peek(self)
-  if not dir then return out end
+  local out, meta = {}, { kind = "none", found = 0 }
+  if not self:IsEnabled() or not self.guildKey then return out, meta end
+  local dir = peek(self) or {}
   filter = type(filter) == "table" and filter or {}
-  local text = type(filter.text) == "string" and filter.text:lower() or ""
+  local text = type(filter.text) == "string" and trim(filter.text):lower() or ""
   local skillLineID = type(filter.skillLineID) == "number" and filter.skillLineID or nil
+  local search = self:FindRecipes(filter.text)
+  meta = { kind = search.kind, found = #search.recipes }
+  local wanted = {}
+  for _, recipe in ipairs(search.recipes) do wanted[recipe.recipeID] = recipe end
   local byRecipe, lines = tab_candidates(dir)
   local recipes = {}
   for recipeID in pairs(byRecipe) do
-    if not skillLineID or lines[recipeID][skillLineID] then
+    if (not skillLineID or lines[recipeID][skillLineID]) and (search.kind ~= "link" or wanted[recipeID]) then
       recipes[#recipes + 1] = { id = recipeID, name = recipe_name(recipeID) }
     end
   end
@@ -360,17 +561,35 @@ function Guild:BuildTabRows(filter)
   end)
   local ctx = context(self)
   local contested = type(dir.contested) == "table" and dir.contested or {}
+  local hasRow = {}
   for _, recipe in ipairs(recipes) do
-    local recipeMatches = text == "" or recipe.name:lower():find(text, 1, true) ~= nil
+    local recipeMatches = search.kind == "link" or text == "" or recipe.name:lower():find(text, 1, true) ~= nil
     local rows = tab_crafters(ctx, contested, byRecipe[recipe.id], recipe.id)
     local line = skillLineID or lowest(lines[recipe.id])
     for _, crafter in ipairs(rows) do
       if recipeMatches or crafter.name:lower():find(text, 1, true) then
         out[#out + 1] = { recipeID = recipe.id, recipeName = recipe.name, skillLineID = line, crafter = crafter }
+        hasRow[recipe.id] = true
       end
     end
   end
-  return out
+  local placeholders = false
+  for _, recipe in ipairs(search.recipes) do
+    if not hasRow[recipe.recipeID] and (not skillLineID or recipe.skillLineID == skillLineID) then
+      out[#out + 1] = { recipeID = recipe.recipeID, recipeName = recipe.recipeName, skillLineID = recipe.skillLineID }
+      placeholders = true
+    end
+  end
+  if placeholders then          -- the placeholders join the rows in recipe-name order; a recipe's crafters keep theirs
+    local at = {}
+    for i, entry in ipairs(out) do at[entry] = i end
+    table.sort(out, function(a, b)
+      if a.recipeName ~= b.recipeName then return a.recipeName < b.recipeName end
+      if a.recipeID ~= b.recipeID then return a.recipeID < b.recipeID end
+      return at[a] < at[b]
+    end)
+  end
+  return out, meta
 end
 
 -- The profession lines (skill line IDs, ascending) with at least one row in the tab under the current settings: the
@@ -804,5 +1023,6 @@ end
 function Guild:_DirectoryDisable()
   cancel_index()
   recipeIndex, staleSet, passKey, passVersion, forceItems = nil, {}, nil, nil, false
+  catalogue = nil
   attempted, lastKey, ownCache = {}, nil, nil
 end

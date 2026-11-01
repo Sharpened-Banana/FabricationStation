@@ -2,9 +2,11 @@
 -- directory. Boots 1a's real MainWindow (last = "UI/MainWindow.lua") so the tab registers with it and the options land in
 -- the real GetOptionsTable(); Scanner and Recipes are p4.fake_module overrides (the real modules exist, only the methods
 -- the specs need are replaced), the roster, the native query, AceComm and the encoding are the phase-4 harness fakes.
-local FILES = { "Modules/Social/GuildOptions.lua", "UI/Widgets/ExpandGrid.lua", "UI/Tabs/Guild.lua" }
+local FILES = { "Modules/Social/GuildOptions.lua", "UI/Widgets/ExpandGrid.lua", "UI/Tabs/Guild.lua",
+  "Modules/Social/ChatMatcher.lua" }
 
-local NAMES = { [100] = "Everforged Mace", [101] = "Everforged Axe", [200] = "Silk Bandage", [300] = "Midnight Flask" }
+local NAMES = { [100] = "Everforged Mace", [101] = "Everforged Axe", [200] = "Silk Bandage", [300] = "Midnight Flask",
+  [700] = "Everforged Helm" }
 local DIM = "|cff9d9d9d"
 local EM_DASH = "\226\128\148"
 
@@ -40,6 +42,9 @@ local function wrap_frames()
       function f:SetText(t) text = t end
       function f:GetText() return text end
       function f:Type(t) text = t; local s = self:GetScript("OnTextChanged"); if s then s(self, true) end end
+      function f:HasFocus() return self.focused == true end                -- a spec flag
+      function f:SetMaxLetters(n) self.maxLetters = n end
+      function f:Insert(t) text = text .. t; local s = self:GetScript("OnTextChanged"); if s then s(self, true) end end
       function f:SetChecked(v) checked = v and true or false end
       function f:GetChecked() return checked end
       function f:SetEnabled(v) enabled = v and true or false end
@@ -138,6 +143,8 @@ describe("Guild tab, settings and diagnostics", function()
       },
     } })
     wrap_frames()
+    -- The generated recipe list holds a recipe nobody on the account or in the guild knows (700 "Everforged Helm").
+    ns.GameData.Define("RecipeSources", nil, { bySkillLine = { [2907] = { [700] = { kind = "auto" } } } })
     Protocol = ns.Social.Protocol
     chars = fixture_chars()
     p4.fake_module(ns, "Scanner", {
@@ -966,6 +973,220 @@ describe("Guild tab, settings and diagnostics", function()
         v.askButton:GetScript("OnClick")(v.askButton)
         p4.advance(6)
         assert.truthy(v.status:GetText():find("did not answer", 1, true))
+      end)
+    end)
+
+    describe("typed search", function()
+      local ITEM_LINK = "|cffa335ee|Hitem:6001::::::::|h[Everforged Mace]|h|r"
+
+      before_each(function()
+        _G.ChatFrameUtil.InsertLink = function() return false end       -- the game's own function, hooked at build
+      end)
+
+      local function shown(v)
+        local out = {}
+        for i = 1, v.grid.shownRows do
+          out[i] = plain(row_frame(v.grid, i).cells.recipe:GetText()) .. "/" .. plain(row_frame(v.grid, i).cells.crafter:GetText())
+        end
+        return out
+      end
+
+      it("takes a link or a long text and says so in the box", function()
+        local v = open()
+        assert.are.equal(255, v.search.maxLetters)
+        assert.are.equal("Recipe, crafter or item link...", v.search.Instructions:GetText())
+      end)
+
+      it("selects the only found recipe and asks the guild about it on click", function()
+        local v = open()
+        v.search:Type("Everforged Helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)
+        assert.are.equal(2907, v.selected.skillLineID)
+        assert.is_nil(v.selected.whisper)
+        assert.are.equal(0, p4.guild.queryCount)                         -- never asks without a click
+        assert.is_true(v.askButton:IsEnabled())
+        assert.truthy(v.status:GetText():find("Everforged Helm", 1, true))
+        click(v.askButton)
+        assert.are.equal(1, p4.guild.queryCount)
+        assert.same({ skillLineID = 2907, recipeID = 700 }, { skillLineID = p4.guild.lastQuery.skillLineID,
+          recipeID = p4.guild.lastQuery.recipeID })
+        assert.truthy(v.status:GetText():find("Asking", 1, true))
+        p4.guild.postQuery = { skillLineID = 2907, recipeID = 700, list = { { "Zed", "Zed-Realm", "MAGE", true } } }
+        W.fire("GUILD_RECIPE_KNOWN_BY_MEMBERS")
+        assert.truthy(v.status:GetText():find("1 can craft", 1, true))
+      end)
+
+      it("shows a placeholder row with dashes and a tooltip that says what to do", function()
+        local v = open()
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(1, v.grid.shownRows)
+        local row = row_frame(v.grid, 1)
+        assert.are.same({ "Everforged Helm", DIM .. "no known crafter|r", EM_DASH, EM_DASH, EM_DASH, EM_DASH },
+          { row.cells.recipe:GetText(), row.cells.crafter:GetText(), row.cells.q:GetText(), row.cells.qc:GetText(),
+            row.cells.source:GetText(), row.cells.age:GetText() })
+        assert.is_false(v.empty:IsShown())
+        hover(row)
+        assert.are.same({ "Everforged Helm",
+          "No guildmate is known to craft this yet. Select the row, then click \"Ask guild\"." }, tooltip.lines)
+      end)
+
+      it("selects a placeholder row on a click and a double click, without a whisper target", function()
+        local v = open()
+        v.search:Type("everforged"); p4.advance(0.3)
+        assert.is_nil(v.selected)                                        -- three recipes found: nothing chosen for you
+        local helm
+        for i = 1, v.grid.shownRows do
+          if row_frame(v.grid, i).cells.recipe:GetText() == "Everforged Helm" then helm = row_frame(v.grid, i) end
+        end
+        click(helm)
+        assert.are.equal(700, v.selected.recipeID)
+        assert.is_nil(v.selected.whisper)
+        assert.is_false(v.whisperButton:IsEnabled())
+        assert.is_true(v.askButton:IsEnabled())
+        helm:GetScript("OnDoubleClick")(helm)
+        assert.are.same({}, W.tells)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("lists a recipe's crafters and selects it when the search finds just that recipe", function()
+        local v = open()
+        v.search:Type("mace"); p4.advance(0.3)
+        assert.same({ "Everforged Mace/B-Realm", "Everforged Mace/C-Realm" }, shown(v))
+        assert.are.equal(100, v.selected.recipeID)
+        assert.is_nil(v.selected.whisper)
+        assert.are.equal(2907, v.selected.skillLineID)
+        click(row_frame(v.grid, 2))                                      -- choosing a crafter keeps the recipe
+        assert.are.equal("C-Realm", v.selected.whisper)
+        v.search:Type("everforged mace"); p4.advance(0.3)
+        assert.are.equal("C-Realm", v.selected.whisper)                  -- the same recipe stays as chosen
+      end)
+
+      it("selects the newly found recipe when another one was selected", function()
+        local v = open()
+        click(row_frame(v.grid, 5))                                      -- Silk Bandage
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("explains an item link it cannot resolve", function()
+        local v = open()
+        v.search:Type("|cffffffff|Hitem:1::::|h[Nothing Here]|h|r"); p4.advance(0.3)
+        assert.are.equal(0, v.grid.shownRows)
+        assert.are.equal("No recipe found for this item. Type the recipe's name instead.", plain(v.empty:GetText()))
+        assert.is_true(v.empty:IsShown())
+        assert.is_nil(v.selected)
+        assert.is_false(v.askButton:IsEnabled())
+        v.search:Type("zzz"); p4.advance(0.3)
+        assert.truthy(v.empty:GetText():find("No crafters match", 1, true))
+      end)
+
+      it("shows the crafters for a pasted recipe or item link", function()
+        p4.fake_module(ns, "Recipes", { FindRecipesForItem = function(_, id)
+          return id == 6001 and { { recipeID = 100, quality = 1 } } or {} end })
+        local v = open()
+        v.search:Type(ITEM_LINK); p4.advance(0.3)
+        assert.same({ "Everforged Mace/B-Realm", "Everforged Mace/C-Realm" }, shown(v))
+        assert.are.equal(100, v.selected.recipeID)
+        v.search:Type("|cffffd000|Henchant:700|h[Everforged Helm]|h|r"); p4.advance(0.3)
+        assert.same({ "Everforged Helm/no known crafter" }, shown(v))
+        assert.are.equal(700, v.selected.recipeID)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("cannot ask about a recipe link whose profession is unknown", function()
+        local v = open()
+        v.search:Type("|cffffd000|Henchant:424242|h[Mystery]|h|r"); p4.advance(0.3)
+        assert.are.equal(424242, v.selected.recipeID)
+        assert.is_nil(v.selected.skillLineID)
+        assert.is_false(v.askButton:IsEnabled())
+        click(v.askButton)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("never asks the guild without a click", function()
+        local v = open()
+        for _, text in ipairs({ "helm", "everforged", "mace", ITEM_LINK, "he" }) do
+          v.search:Type(text); p4.advance(0.3)
+        end
+        v.search:Type("Everforged Helm"); p4.advance(0.3)
+        p4.advance(70)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("keeps the selected recipe when guild data arrives and the tab refreshes", function()
+        local v = open()
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)
+        store("N-Realm", "Peer-Realm", { recipes = { [700] = { 2, 3 } } })       -- a DATA for the selected recipe
+        Guild:_Changed()
+        p4.advance(2)
+        assert.is_true(#refreshed >= 1)
+        assert.are.equal(700, v.selected.recipeID)
+        assert.same({ "Everforged Helm/N-Realm" }, shown(v))
+        assert.is_true(v.askButton:IsEnabled())
+        assert.truthy(v.status:GetText():find("Everforged Helm", 1, true))
+      end)
+
+      it("keeps the selected recipe when a refresh no longer lists it", function()
+        local v = open()
+        click(row_frame(v.grid, 5))
+        v.search:Type("zzz"); p4.advance(0.3)
+        assert.are.equal(200, v.selected.recipeID)
+        assert.is_true(v.askButton:IsEnabled())
+      end)
+
+      it("inserts a shift-clicked link only while the search box has focus", function()
+        local v = open()
+        v.search.focused = true
+        _G.ChatFrameUtil.InsertLink(ITEM_LINK)
+        assert.truthy(v.search:GetText():find("Hitem:6001", 1, true))
+        v.search.focused = false
+        v.search:SetText("")
+        _G.ChatFrameUtil.InsertLink("|Hitem:1|h[x]|h")
+        assert.are.equal("", v.search:GetText())
+      end)
+
+      it("runs the search for an inserted link after the usual 0.3 s", function()
+        local v = open()
+        v.search.focused = true
+        _G.ChatFrameUtil.InsertLink("|cffffd000|Henchant:700|h[Everforged Helm]|h|r")
+        assert.are.equal(6, v.grid.shownRows)
+        p4.advance(0.3)
+        assert.same({ "Everforged Helm/no known crafter" }, shown(v))
+      end)
+
+      it("inserts nothing while the tab is turned off", function()
+        local v = open()
+        v.search.focused = true
+        ns.FS:GetModule("GuildTab"):Disable()
+        _G.ChatFrameUtil.InsertLink(ITEM_LINK)
+        assert.are.equal("", v.search:GetText())
+      end)
+
+      it("hooks the game's function once, and its post-hook never raises", function()
+        local before = #W.hooks
+        open()
+        assert.are.equal(before + 1, #W.hooks)
+        local v = open()                                                 -- a second build hooks nothing more
+        assert.are.equal(before + 1, #W.hooks)
+        v.search.Insert = function() error("boom") end
+        v.search.focused = true
+        assert.has_no.errors(function() _G.ChatFrameUtil.InsertLink(ITEM_LINK) end)
+      end)
+
+      it("falls back to the older ChatEdit_InsertLink, and to nothing without either", function()
+        _G.ChatFrameUtil.InsertLink = nil
+        _G.ChatEdit_InsertLink = function() return false end
+        finally(function() _G.ChatEdit_InsertLink = nil end)
+        boot()
+        local v = open()
+        v.search.focused = true
+        _G.ChatEdit_InsertLink(ITEM_LINK)
+        assert.truthy(v.search:GetText():find("Hitem:6001", 1, true))
+        _G.ChatEdit_InsertLink = nil
+        boot()
+        assert.has_no.errors(function() open() end)
       end)
     end)
 

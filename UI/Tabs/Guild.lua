@@ -8,10 +8,16 @@ local _, ns = ...
 -- Peer text always goes through Util.EscapePipes (Guild.CrafterLabel). Every value a narrow window hides is in the row
 -- tooltip.
 --
--- Bar: a search box (recipe or crafter name, 0.3 s after the last keystroke), a profession button that cycles through
+-- Bar: a search box (a recipe name, a crafter name, or a recipe or item link shift-clicked or pasted into it; 0.3 s
+-- after the last keystroke; a name of three letters or more also finds recipes nobody here is known to craft), a
+-- profession button that cycles through
 -- the professions the directory knows ("All professions" first; as the Planner's pickers, the stubs have no dropdown)
--- and the "Whisper" and "Ask guild" buttons. A click on a row only selects it (its recipe for "Ask guild", its crafter
--- for "Whisper"); a double click on a row or the Whisper button opens a whisper (ChatFrameUtil.SendTell, from the click
+-- and the "Whisper" and "Ask guild" buttons. A recipe the search found that no guildmate is known to craft gets one
+-- "no known crafter" row (Guild:BuildTabRows' placeholder): it can be selected, and "Ask guild" can ask about it, but
+-- there is nobody to whisper. When the search finds exactly one recipe it is selected for you (a selection sends
+-- nothing; the guild is asked only by a click on "Ask guild"). A link shift-clicked in the game is inserted into the
+-- search box while it has the keyboard focus (a hook on ChatFrameUtil.InsertLink, else ChatEdit_InsertLink). A click on
+-- a row only selects it (its recipe for "Ask guild", its crafter for "Whisper"); a double click on a row or the Whisper button opens a whisper (ChatFrameUtil.SendTell, from the click
 -- only: nothing is sent, the player types and sends). The whisper goes to the crafter, or for a copy the character has
 -- not confirmed ("<char> (via <owner>)") to the owner who shared it, who is the one known to be online. "Ask guild"
 -- calls GuildNative:Query for the selected recipe, so it checks settings.guild.useNative itself (the profession
@@ -50,10 +56,11 @@ local BAR_HEIGHT = ROW2_TOP + CONTROL_HEIGHT + 2                                
 local GRID_TOP = BAR_HEIGHT + 2                                                    -- 56
 local FOOTER_HEIGHT, FOOTER_BOTTOM = 18, 2
 local GRID_BOTTOM = FOOTER_HEIGHT + 2 * FOOTER_BOTTOM                              -- 22
-local MAX_SEARCH = 60
+local MAX_SEARCH = 255      -- a pasted link is long
 local EM_DASH = "\226\128\148"
 local DOT = " \194\183 "
 local DIM, WARN = "|cff9d9d9d", "|cffffd100"
+local hooked = false          -- the shift-click link hook is installed (once per session)
 
 Tab.COLUMNS = {
   { key = "recipe", label = L["Recipe"], flex = true },
@@ -117,6 +124,10 @@ end
 -- game's roster says is offline is dim.
 function Tab.RowCells(entry, now)
   local c = entry.crafter
+  if not c then          -- a recipe nobody is known to craft: only its name and a dim note
+    return { recipe = entry.recipeName, crafter = DIM .. L["no known crafter"] .. "|r", q = EM_DASH, qc = EM_DASH,
+      source = EM_DASH, age = EM_DASH }
+  end
   local label = ns.FS:GetModule("Guild", true).CrafterLabel(c)
   if c.online == false then label = DIM .. label .. "|r" end
   return {
@@ -134,6 +145,9 @@ end
 function Tab.RowTooltip(entry, now)
   local Util = ns.Social.Util
   local c = entry.crafter
+  if not c then
+    return { entry.recipeName, L["No guildmate is known to craft this yet. Select the row, then click \"Ask guild\"."] }
+  end
   local lines = { entry.recipeName, L["Crafter: %s"]:format(ns.FS:GetModule("Guild", true).CrafterLabel(c)) }
   if c.source == "addon" and c.verified == false and type(c.owner) == "string" then
     lines[#lines + 1] = L["Reported by %s; the character itself has not confirmed it"]:format(Util.EscapePipes(c.owner))
@@ -216,6 +230,7 @@ function Tab.AskState(s)
   if s.available == false then return false, "unavailable" end
   if s.locked then return false, "locked" end
   if not s.selected then return false, "select" end
+  if type(s.selected) == "table" and s.selected.skillLineID == nil then return false, "unavailable" end   -- no line to ask
   return true, nil
 end
 
@@ -243,10 +258,12 @@ function Tab.QueryNotice(members, err)
   return L["The guild question failed"]
 end
 
--- ok, no-rows context -> the text for an empty list. enabled/guildKey/filtered describe why.
-function Tab.EmptyText(enabled, guildKey, filtered)
+-- ok, no-rows context -> the text for an empty list. enabled/guildKey/filtered describe why; unresolvedLink: the search
+-- is an item link no recipe could be found for.
+function Tab.EmptyText(enabled, guildKey, filtered, unresolvedLink)
   if not enabled then return L["Guild sync is turned off: turn it on in Settings > Modules"] end
   if not guildKey then return L["Not in a guild"] end
+  if unresolvedLink then return L["No recipe found for this item. Type the recipe's name instead."] end
   if filtered then return L["No crafters match"] end
   return L["No guild crafters yet. Guildmates who run FabricationStation share their recipes when they log in; \"Ask guild\" asks the game for the selected recipe."]
 end
@@ -440,7 +457,7 @@ end
 local function grid_rows(entries)
   local out = {}
   for i, entry in ipairs(entries) do
-    out[i] = { key = entry.recipeID .. ":" .. entry.crafter.name, entry = entry }
+    out[i] = { key = entry.recipeID .. ":" .. (entry.crafter and entry.crafter.name or ""), entry = entry }
   end
   return out
 end
@@ -463,6 +480,20 @@ local function show_empty(text)
     view.empty:SetText("")
     view.empty:Hide()
   end
+end
+
+-- The search found exactly one recipe: select it when nothing, or another recipe, is selected. A selection sends
+-- nothing; only the "Ask guild" click asks the guild.
+local function select_only_found(G, guildKey, entries)
+  local recipe = G:FindRecipes(activeSearch).recipes[1]
+  if not recipe or (view.selected and view.selected.recipeID == recipe.recipeID) then return end
+  local skillLineID = recipe.skillLineID
+  for _, entry in ipairs(entries) do
+    if entry.recipeID == recipe.recipeID then skillLineID = skillLineID or entry.skillLineID; break end
+  end
+  view.selected = { recipeID = recipe.recipeID, skillLineID = skillLineID, recipeName = recipe.recipeName,
+    guildKey = guildKey }
+  notice = nil
 end
 
 function refresh()
@@ -493,14 +524,16 @@ function refresh()
   view.profButton:SetText(skillFilter and profession_name(skillFilter) or L["All professions"])
   view.profCount = #lines
 
-  local entries = G:BuildTabRows({ text = activeSearch, skillLineID = skillFilter })
+  local entries, meta = G:BuildTabRows({ text = activeSearch, skillLineID = skillFilter })
   view.grid.frame:Show()
   view.grid:SetRows(grid_rows(entries))
   if #entries == 0 then
-    show_empty(Tab.EmptyText(true, status.guildKey, activeSearch ~= "" or skillFilter ~= nil))
+    show_empty(Tab.EmptyText(true, status.guildKey, activeSearch ~= "" or skillFilter ~= nil,
+      meta.kind == "link" and meta.found == 0))
   else
     show_empty(nil)
   end
+  if meta.found == 1 then select_only_found(G, status.guildKey, entries) end
   view.footer:SetText(Tab.FooterText(status))
   view.footerTooltip = Tab.FooterTooltip(status)
   update_status_line()
@@ -514,6 +547,28 @@ end
 -- Build
 ---------------------------------------------------------------------------
 
+-- A link the player shift-clicked in the game, inserted into the search box while it has the keyboard focus. Runs after
+-- Blizzard's own function (hooksecurefunc), so it never replaces what the chat box or another window does with the link.
+local function on_insert(link)
+  if not view or not live() or type(link) ~= "string" then return end
+  local search = view.search
+  if search and search:HasFocus() then search:Insert(link) end
+end
+
+-- Hooks the game's link-insertion function once per session: ChatFrameUtil.InsertLink where it exists, else the older
+-- global ChatEdit_InsertLink, else nothing (typing and pasting still work). Hooks only: no Blizzard field is written.
+local function hook_link_insertion()
+  if hooked then return end
+  local run = ns.FS:Wrap(SOURCE, on_insert)
+  if type(ChatFrameUtil) == "table" and type(ChatFrameUtil.InsertLink) == "function" then
+    hooksecurefunc(ChatFrameUtil, "InsertLink", run)
+    hooked = true
+  elseif type(ChatEdit_InsertLink) == "function" then
+    hooksecurefunc("ChatEdit_InsertLink", run)
+    hooked = true
+  end
+end
+
 local function build_bar(container, created)
   local bar = CreateFrame("Frame", nil, container)
   bar:SetPoint("TOPLEFT", container, "TOPLEFT", PAD, 0)
@@ -526,10 +581,11 @@ local function build_bar(container, created)
   search:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, -LINE_TOP)
   search:SetAutoFocus(false)
   search:SetMaxLetters(MAX_SEARCH)
-  if type(search.Instructions) == "table" then search.Instructions:SetText(L["Find a recipe or crafter..."]) end
+  if type(search.Instructions) == "table" then search.Instructions:SetText(L["Recipe, crafter or item link..."]) end
   -- Hooked, not set: SearchBoxTemplate's own handler keeps its placeholder and clear button working.
   search:HookScript("OnTextChanged", ns.FS:Wrap(SOURCE, on_search_changed))
   created.search = search
+  hook_link_insertion()
 
   local prof = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
   prof:SetSize(PICKER_WIDTH, CONTROL_HEIGHT)

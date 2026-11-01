@@ -960,6 +960,13 @@ P5-4. **A cinematic or loading screen while the guide is open (Task 3).** With t
 trigger a cinematic or zone through a portal. Expected: afterwards the guide is still open (or, if the client closed
 it, it comes back at the next login), and `/dump FabricationStationDB.global.onboarding` is still nil.
 
+P5-5. **Search the Guild tab for any recipe (Task 4).** Open `/fs` > Guild, click into the search box and shift-click a
+crafted item from your bags: its link appears in the box (if not, note which of `ChatFrameUtil.InsertLink` /
+`ChatEdit_InsertLink` exists: `/dump ChatFrameUtil.InsertLink, ChatEdit_InsertLink`). The rows show who can craft it, or
+one "no known crafter" row that is selected. Type the name of a current-expansion recipe nobody on your account knows:
+a "no known crafter" row appears; click "Ask guild": "Asking the guild..." then "Guild answered: N can craft this".
+Nothing is asked before the click.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

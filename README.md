@@ -129,6 +129,11 @@ one list from one sender. Choose "Only the character I am playing" if you do not
 | Recipes and expected quality (`quality`, default) | Recipes and the expected quality of each. |
 | Recipes only (`recipes`) | Recipes, no quality. |
 
+**The Guild tab:** it lists who in your guild can craft what. Type a recipe name (three letters or more) or a
+crafter's name into the search box, or shift-click an item or a recipe into it while the box is selected, to find a
+recipe. A recipe no guildmate is known to craft gets a "no known crafter" row; select it and click "Ask guild" to ask the
+game who in your guild knows it. Nothing is asked until you click.
+
 **How to opt out:**
 
 - Turn off "Share my recipes with my guild" under Settings > Guild. This stops sending and withdraws what you shared

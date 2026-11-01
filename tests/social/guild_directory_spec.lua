@@ -5,7 +5,7 @@
 local SOCIAL_FILES = { "Modules/Social/Util.lua", "Modules/Social/Gate.lua", "Modules/Social/Codec.lua",
   "Modules/Social/Protocol.lua", "Modules/Social/ProfileStore.lua", "Modules/Social/Comm.lua",
   "Modules/Social/ItemIndex.lua", "Modules/Social/RecipeIndex.lua", "Modules/Social/Guild.lua",
-  "Modules/Social/GuildNative.lua", "Modules/Social/GuildDirectory.lua" }
+  "Modules/Social/GuildNative.lua", "Modules/Social/GuildDirectory.lua", "Modules/Social/ChatMatcher.lua" }
 local HOUR = 3600
 
 describe("Social.ItemIndex", function()
@@ -771,6 +771,255 @@ describe("Guild directory", function()
       assert.are.equal("Ask guild", actions[1].text)
       ns.FS:SetModuleEnabled("Guild", false)
       assert.are.same({}, panel:CollectActions(300, "Me-Realm"))
+    end)
+  end)
+
+  ---------------------------------------------------------------------------
+  -- Recipe search (the Guild tab's typed search)
+  ---------------------------------------------------------------------------
+
+  describe("recipe search", function()
+    local NAMES, chars
+    local function map(list, key)
+      local out = {}
+      for i, v in ipairs(list) do out[i] = v[key] end
+      return out
+    end
+    local function item_link(id, text)
+      return "|cffa335ee|Hitem:" .. id .. "::::::::|h[" .. text .. "]|h|r"
+    end
+
+    before_each(function()
+      NAMES = { [700] = "Everforged Helm", [100] = "Everforged Mace", [101] = "Everforged Axe" }
+      chars = {}
+      C_Spell.GetSpellName = function(id) return NAMES[id] end
+      ns.GameData.Define("RecipeSources", nil, { bySkillLine = { [2907] = { [700] = { kind = "auto" } } } })
+      p4.fake_module(ns, "Scanner", {
+        GetCharacters = function() return { "Me-Realm" } end,
+        GetCharacter = function() return { professions = chars } end,
+        GetCachedSchematic = function(_, id) return schematics[id] end,
+      })
+    end)
+
+    it("finds recipes by name from the generated list, own recipes and the guild data", function()
+      local r = Guild:FindRecipes("  HELM ")
+      assert.are.equal("name", r.kind)
+      assert.are.same({ { recipeID = 700, recipeName = "Everforged Helm", skillLineID = 2907 } }, r.recipes)
+      chars[2906] = { recipes = { [101] = true } }
+      store("B-Realm", "Peer-Realm")                                       -- recipe 100 on line 2907
+      NAMES[555] = "Everforged Boots"
+      native_members(555, { NATIVE_B })
+      Guild:_DirectoryDisable()                                             -- a new catalogue
+      local all = Guild:FindRecipes("everforged")
+      assert.are.same({ "Everforged Axe", "Everforged Boots", "Everforged Helm", "Everforged Mace" },
+        map(all.recipes, "recipeName"))
+      assert.are.same({ 2906, 2907, 2907, 2907 }, map(all.recipes, "skillLineID"))
+    end)
+
+    it("ignores searches under three letters, counting letters and not bytes", function()
+      assert.are.same({ kind = "none", recipes = {} }, Guild:FindRecipes("he"))
+      assert.are.same({ kind = "none", recipes = {} }, Guild:FindRecipes("\195\169\195\169"))
+      assert.are.same({ kind = "none", recipes = {} }, Guild:FindRecipes("   "))
+      assert.are.same({ kind = "none", recipes = {} }, Guild:FindRecipes(nil))
+      assert.are.equal("name", Guild:FindRecipes("hel").kind)
+    end)
+
+    it("answers nothing while Guild is turned off", function()
+      Guild:Disable()
+      assert.are.same({ kind = "none", recipes = {} }, Guild:FindRecipes("helm"))
+    end)
+
+    it("takes the skill line from the generated list first, then own, profile and native records", function()
+      chars[2999] = { recipes = { [700] = true, [101] = true } }
+      store("B-Realm", "Peer-Realm", { recipes = { [101] = { 1, 1 }, [100] = { 3, 5 } }, line = 2950 })
+      native_members(100, { NATIVE_B })
+      local lines = {}
+      for _, r in ipairs(Guild:FindRecipes("everforged").recipes) do lines[r.recipeID] = r.skillLineID end
+      assert.are.same({ [700] = 2907, [101] = 2999, [100] = 2950 }, lines)
+    end)
+
+    it("skips dropped professions of the account", function()
+      chars[2906] = { dropped = true, recipes = { [101] = true } }
+      assert.are.same({ 700 }, map(Guild:FindRecipes("everforged").recipes, "recipeID"))
+    end)
+
+    it("resolves an item link through the account's schematics and the guild item index", function()
+      p4.fake_module(ns, "Recipes", { FindRecipesForItem = function(_, id)
+        return (id == 6001 or id == 5101) and { { recipeID = 100, quality = 1 }, { recipeID = 100, quality = 2 } } or {} end })
+      local r = Guild:FindRecipes(item_link(6001, "Whatever"))
+      assert.are.equal("link", r.kind)
+      assert.are.same({ 100 }, map(r.recipes, "recipeID"))
+      assert.are.equal("Everforged Mace", r.recipes[1].recipeName)
+      -- Recipe 101 (item 5101) is in the guild's data: the guild's recipe joins the account's, once each, by name.
+      store("C-Realm", "Peer-Realm", { recipes = { [101] = { 1, 1 } } })
+      Guild:RebuildItemIndex(); for _ = 1, 3 do p4.advance(0) end
+      assert.are.same({ 101, 100 }, map(Guild:FindRecipes(item_link(5101, "Whatever")).recipes, "recipeID"))
+    end)
+
+    it("resolves an item link through the guild item index alone when the account has no schematic for it", function()
+      store("C-Realm", "Peer-Realm", { recipes = { [101] = { 1, 1 } } })
+      Guild:RebuildItemIndex(); for _ = 1, 3 do p4.advance(0) end
+      assert.are.same({ 101 }, map(Guild:FindRecipes(item_link(5101, "Whatever")).recipes, "recipeID"))
+    end)
+
+    it("ignores the account's schematics while Recipes is turned off", function()
+      p4.fake_module(ns, "Recipes", { FindRecipesForItem = function() return { { recipeID = 100, quality = 1 } } end })
+      ns.FS:GetModule("Recipes"):Disable()
+      assert.are.same({}, Guild:FindRecipes(item_link(6001, "Nothing Known")).recipes)
+    end)
+
+    it("falls back to the item's name when no recipe is known to make it", function()
+      local r = Guild:FindRecipes("|cffa335ee|Hitem:9999::::|h[Everforged Helm |A:Professions-ChatIcon-Quality-Tier3:17:15::1|a]|h|r")
+      assert.are.equal("link", r.kind)
+      assert.are.same({ 700 }, map(r.recipes, "recipeID"))
+      assert.are.same({}, Guild:FindRecipes(item_link(9999, "Everforged")).recipes)       -- exact, not a substring
+      assert.are.same({ 700 }, map(Guild:FindRecipes(item_link(9999, "EVERFORGED helm")).recipes, "recipeID"))
+    end)
+
+    it("takes the recipe of a recipe link, whether the game writes it as enchant or spell", function()
+      assert.are.same({ 100 }, map(Guild:FindRecipes("|cffffd000|Henchant:100|h[Everforged Mace]|h|r").recipes, "recipeID"))
+      assert.are.same({ 101 }, map(Guild:FindRecipes("|cffffd000|Hspell:101|h[Everforged Axe]|h|r").recipes, "recipeID"))
+      local unknown = Guild:FindRecipes("|cffffd000|Henchant:424242|h[Mystery]|h|r")
+      assert.are.same({ { recipeID = 424242, recipeName = "Recipe 424242" } }, unknown.recipes)
+    end)
+
+    it("caps name matches at 25, sorted by name", function()
+      local sources = {}
+      for i = 1, 30 do
+        sources[9000 + i] = { kind = "auto" }
+        NAMES[9000 + i] = ("Helm %02d"):format(31 - i)
+      end
+      ns.GameData.Define("RecipeSources", nil, { bySkillLine = { [2907] = sources } })
+      local r = Guild:FindRecipes("helm ")
+      assert.are.equal(25, #r.recipes)
+      assert.are.equal("Helm 01", r.recipes[1].recipeName)
+      assert.are.equal("Helm 25", r.recipes[25].recipeName)
+    end)
+
+    it("leaves out a recipe the client has no name for and builds the catalogue again 300 s later", function()
+      ns.GameData.Define("RecipeSources", nil, { bySkillLine = { [2907] = { [700] = {}, [800] = {} } } })
+      local calls = 0
+      C_Spell.GetSpellName = function(id) calls = calls + 1; return NAMES[id] end
+      assert.are.same({ 700 }, map(Guild:FindRecipes("helm").recipes, "recipeID"))
+      local built = calls
+      NAMES[800] = "Everforged Wand"
+      Guild:FindRecipes("wand")
+      assert.are.equal(built, calls)                                       -- cached: nothing asked again
+      assert.are.same({}, Guild:FindRecipes("wand").recipes)
+      p4.advance(301)
+      assert.are.same({ 800 }, map(Guild:FindRecipes("wand").recipes, "recipeID"))
+    end)
+
+    it("builds the catalogue once, from a search, and not from a tooltip or the rows of an empty search", function()
+      local calls = 0
+      C_Spell.GetSpellName = function(id) calls = calls + 1; return NAMES[id] end
+      seed()
+      Guild:RebuildItemIndex(); p4.advance(0)
+      Guild:TooltipLines(5001)
+      Guild:BuildTabRows({})
+      Guild:BuildTabRows({ text = "he" })
+      Guild:PanelLines(100, "Me-Realm")
+      local before = calls
+      Guild:FindRecipes("everforged")
+      local built = calls
+      assert.is_true(built > before)
+      Guild:FindRecipes("everforged"); Guild:FindRecipes("mace")
+      assert.are.equal(built, calls)
+    end)
+
+    it("drops the catalogue on a guild change and when Guild is turned off", function()
+      store("B-Realm", "Peer-Realm", { recipes = { [100] = { 3, 5 } } })
+      assert.are.same({ 100 }, map(Guild:FindRecipes("mace").recipes, "recipeID"))
+      p4.guild.key = { "H", "Realm" }
+      Guild:OnGuildUpdate()
+      assert.are.same({}, Guild:FindRecipes("mace").recipes)               -- the other guild's profile is not in it
+      p4.guild.key = { "G", "Realm" }
+      Guild:OnGuildUpdate()
+      assert.are.same({ 100 }, map(Guild:FindRecipes("mace").recipes, "recipeID"))
+      Guild:_DirectoryDisable()
+      dir().profiles["B-Realm"] = nil
+      assert.are.same({}, Guild:FindRecipes("mace").recipes)
+    end)
+
+    it("reads only: nothing is written", function()
+      store("B-Realm", "Peer-Realm")
+      local before = ns.Util.DeepCopy(ns.FS.db.global)
+      Guild:FindRecipes("helm"); Guild:FindRecipes(item_link(6001, "Everforged Mace"))
+      Guild:BuildTabRows({ text = "helm" })
+      assert.are.same(before, ns.FS.db.global)
+    end)
+
+    describe("rows", function()
+      it("adds a placeholder row for a found recipe nobody is known to craft", function()
+        store("B-Realm", "Peer-Realm")                                     -- recipe 100 has a crafter
+        local rows, meta = Guild:BuildTabRows({ text = "everforged" })
+        assert.are.same({ kind = "name", found = 2 }, meta)
+        assert.are.same({ 700, 100 }, map(rows, "recipeID"))
+        local helm = rows[1]
+        assert.are.equal("Everforged Helm", helm.recipeName)
+        assert.are.equal(2907, helm.skillLineID)
+        assert.is_nil(helm.crafter)
+        assert.are.equal("B-Realm", rows[2].crafter.name)
+      end)
+
+      it("sorts the placeholders in with the rest by recipe name, keeping a recipe's crafters in order", function()
+        NAMES[300] = "Everforged Chestplate"
+        ns.GameData.Define("RecipeSources", nil, { bySkillLine = { [2907] = { [700] = {}, [300] = {} } } })
+        store("B-Realm", "Peer-Realm", { recipes = { [100] = { 3, 5 }, [101] = { 2, 4 } } })
+        store("C-Realm", "Peer2-Realm", { lv = "r", recipes = { [100] = true } })
+        local rows = Guild:BuildTabRows({ text = "everforged" })
+        local seen = {}
+        for i, r in ipairs(rows) do seen[i] = r.recipeName .. "/" .. (r.crafter and r.crafter.name or "-") end
+        assert.are.same({ "Everforged Axe/B-Realm", "Everforged Chestplate/-", "Everforged Helm/-",
+          "Everforged Mace/B-Realm", "Everforged Mace/C-Realm" }, seen)
+      end)
+
+      it("keeps today's matches for a crafter name and adds no placeholder for it", function()
+        store("B-Realm", "Peer-Realm")
+        local rows, meta = Guild:BuildTabRows({ text = "b-real" })
+        assert.are.same({ kind = "name", found = 0 }, meta)
+        assert.are.same({ 100 }, map(rows, "recipeID"))
+        local none, noneMeta = Guild:BuildTabRows({ text = "he" })
+        assert.are.same({ kind = "none", found = 0 }, noneMeta)
+        assert.are.same({}, none)
+      end)
+
+      it("shows just the recipes of a pasted link, with a placeholder when nobody crafts them", function()
+        store("B-Realm", "Peer-Realm", { recipes = { [100] = { 3, 5 }, [101] = { 2, 4 } } })
+        local rows, meta = Guild:BuildTabRows({ text = "|cffffd000|Henchant:100|h[Everforged Mace]|h|r" })
+        assert.are.same({ kind = "link", found = 1 }, meta)
+        assert.are.same({ 100 }, map(rows, "recipeID"))
+        rows, meta = Guild:BuildTabRows({ text = item_link(9999, "Everforged Helm") })
+        assert.are.same({ kind = "link", found = 1 }, meta)
+        assert.are.same({ 700 }, map(rows, "recipeID"))
+        assert.is_nil(rows[1].crafter)
+        rows, meta = Guild:BuildTabRows({ text = item_link(1, "Nothing Here") })
+        assert.are.same({ kind = "link", found = 0 }, meta)
+        assert.are.same({}, rows)
+      end)
+
+      it("keeps a placeholder only under the profession it belongs to", function()
+        local _, meta = Guild:BuildTabRows({ text = "helm", skillLineID = 2907 })
+        assert.are.equal(1, meta.found)
+        assert.are.same({ 700 }, map((Guild:BuildTabRows({ text = "helm", skillLineID = 2907 })), "recipeID"))
+        assert.are.same({}, (Guild:BuildTabRows({ text = "helm", skillLineID = 2906 })))
+      end)
+
+      it("still lists a placeholder in a guild that has no stored data yet", function()
+        assert.is_nil(dir().profiles["B-Realm"])
+        ns.FS.db.global.guildDirectory["G-Realm"] = nil
+        local rows = Guild:BuildTabRows({ text = "helm" })
+        assert.are.same({ 700 }, map(rows, "recipeID"))
+        assert.is_nil(ns.FS.db.global.guildDirectory["G-Realm"])            -- and creates nothing
+      end)
+
+      it("answers nothing outside a guild", function()
+        p4.guild.key = nil
+        Guild:OnGuildUpdate()
+        local rows, meta = Guild:BuildTabRows({ text = "helm" })
+        assert.are.same({}, rows)
+        assert.are.same({ kind = "none", found = 0 }, meta)
+      end)
     end)
   end)
 
