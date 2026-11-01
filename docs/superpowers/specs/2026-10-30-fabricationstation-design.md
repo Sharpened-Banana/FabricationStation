@@ -269,6 +269,47 @@ Out of scope for phase 6: the guild privacy defaults; the `Protocol.VERSION` and
 that needs the game client to verify (it becomes `P6-` lines in `docs/in-game-checklist.md`); releasing, tagging or
 pushing; the spec items listed as not built in the phase 6 plan's appendix, unless trivial; everything in §10.
 
+## 9c. Phase 7 — competitive features
+
+The features other retail crafting addons have that a seller needs most (`reports/Feature gaps 2026-11-01.md`; ids in
+brackets). Every action stays a player click or key press (rule 3). In dependency order:
+
+1. **Orders across characters** [C5, C1, C6]. Each character keeps its own last order board (a saved-data migration;
+   alts with the same profession no longer overwrite each other). The Orders tab lists every character's orders in
+   one list, with each board's age, expiry, sorting and filters. Patron rewards are priced: knowledge points at the
+   player's gold value per point, Moxie and reagent rewards by value, any other reward at a value the player gives
+   it, and a "costs too much" risk
+   when an order costs more per knowledge point or Moxie than the player allows. Selected orders become one
+   Auctionator shopping list of their missing reagents.
+2. **Ready alerts** [V5]. Opt-in, in-game only: concentration full, Moxie over a threshold, a cooldown ready, and a
+   taskbar flash (`FlashClientIcon`) on new orders that match the filters. A Refresh button on the order board asks
+   for the board once per click; nothing refreshes on a timer.
+3. **Sales and stock** [C12, C2]. The player's own auction posts, cancels, expiries and sales (own events and own
+   mail; this is the player's own history, not the excluded TSM sale-rate data), a personal sale rate and last sale
+   price per item in a Ledger view and in item tooltips. Restock targets get a minimum profit per craft, and count
+   the player's own auction listings and mail as held.
+4. **Craft log** [C11]. Every craft's real result (quality, Multicraft extra items, Resourcefulness returns,
+   concentration spent) next to FabricationStation's and the game's prediction, per recipe over time, and an exporter
+   that turns logged crafts and `/fs capture` records into the golden fixtures of §11.
+5. **Better crafting choices** [C3, C4, C13]. A finishing and optional reagent optimizer (one slot at a time, or every
+   combination when there are few) whose pick shows in the side panel and is crafted by Craft Next. Saved craft lists
+   with rules (minimum profit, minimum quality, concentration off / single best / across recipes) queued with one
+   click, and "Queue plan" for the Planner's concentration schedule. For reagents a character can craft: craft cost
+   against buy price, the player's choice per reagent, and the sub-crafts queued ahead of the craft that needs them
+   (at most 3 levels, never in a cycle).
+6. **Getting reagents** [C14, C15]. A gathering plan per missing reagent (alts' bags and banks, mail, crafting it,
+   vendor, auction house). At the bank, a button moves exactly what the queue still needs from the bank or warband
+   bank into the bags, one move per click; at a merchant, a button buys the queue's vendor reagents, one click per
+   batch. Nothing moves or buys when a window opens.
+7. **Chat requests and key bindings** [V7, V8]. Chat requests are kept in a list across characters with reply status,
+   the whisper history and auto-dismiss; replying fills the chat box and sends nothing. Key bindings for Craft Next,
+   Claim Best Order, opening FabricationStation and replying to the latest request, each a key press that runs the
+   same click handler as its button.
+
+Out of scope for phase 7: automatic crafting, claiming, posting, buying or item moves; board auto-refresh on a timer;
+TSM; Syndicator; notifications outside the game; anything that needs the game client to verify (it becomes `P7-` lines
+in `docs/in-game-checklist.md`); releasing, tagging or pushing; everything in §10.
+
 ## 10. Out of scope
 
 - Classic clients.
