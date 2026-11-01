@@ -6,8 +6,9 @@ local _, ns = ...
 -- along the bottom. Own frames and Blizzard templates only: no AceGUI, no dropdowns (checkboxes and a cycle button).
 --
 -- Closing the window in any way (X, Escape, Skip) counts as Skip: it is recorded once, while the guide is still due
--- (reopening a finished guide with /fs setup and closing it changes nothing). Finish records a completed guide.
--- Onboarding:OnDisable closes it with Close(true), which records nothing.
+-- (reopening a finished guide with /fs setup and closing it changes nothing). Finish records a completed guide, and so
+-- does closing it on the last step ("All set": every choice was already applied). Onboarding:OnDisable closes it with
+-- Close(true), which records nothing.
 --
 -- The choices are kept in a table that starts from the live state each time the guide opens. The module choices are
 -- applied when the user leaves the modules step with Next, the social choices when they leave the social step; a Skip
@@ -119,8 +120,9 @@ local function initial_choices()
   local module = onboarding()
   local settings = guild_settings()
   local out = { modules = {}, share = settings.share ~= false, shareLevel = settings.shareLevel,
-    chatScan = ns.FS:IsModuleEnabled("ChatScan") }
+    shareAlts = settings.shareAlts, chatScan = ns.FS:IsModuleEnabled("ChatScan") }
   if out.shareLevel ~= "quality" and out.shareLevel ~= "recipes" then out.shareLevel = "quality" end
+  if out.shareAlts ~= "current" and out.shareAlts ~= "guild" and out.shareAlts ~= "all" then out.shareAlts = "guild" end
   for _, name in ipairs(module and module.OPTIONAL_MODULES or {}) do
     out.modules[name] = ns.FS:IsModuleEnabled(name)
   end
@@ -200,7 +202,13 @@ function builders.welcome(frame)
   c.body:SetText(L["FabricationStation helps you pick profitable crafts, spend concentration well and keep track of all your crafters. This short guide sets up the essentials. Everything in it can be changed later in /fs settings."])
   c.more = label(frame, "GameFontHighlight", 0, 112, CONTENT_WIDTH, 50, true)
   c.more:SetText(L["You can close this window at any time. It does not come back by itself, and /fs setup opens it again."])
+  c.readOnly = label(frame, "GameFontHighlight", 0, 172, CONTENT_WIDTH, 50, true)
+  c.readOnly:SetText(ORANGE .. L["The saved data is from a newer version of FabricationStation, so the choices you make in this guide will not be saved."] .. "|r")
   return c
+end
+
+function refreshers.welcome(c)
+  if ns.FS.dbIsNewer then c.readOnly:Show() else c.readOnly:Hide() end
 end
 
 local function auctionator_text(state)
@@ -325,6 +333,25 @@ local function level_button_text()
   return L["What to share: %s"]:format(level)
 end
 
+-- GuildOptions' shareAlts values, in its order, with its labels.
+local ALTS_ORDER = { "current", "guild", "all" }
+local function alts_label(value)
+  if value == "current" then return L["Only the character I am playing"] end
+  if value == "all" then return L["All my characters"] end
+  return L["My characters in this guild"]
+end
+
+local function alts_button_text()
+  return L["Which characters to share: %s"]:format(alts_label(choices and choices.shareAlts))
+end
+
+local function next_alts(value)
+  for i, v in ipairs(ALTS_ORDER) do
+    if v == value then return ALTS_ORDER[i % #ALTS_ORDER + 1] end
+  end
+  return ALTS_ORDER[1]
+end
+
 function builders.social(frame)
   local c = { heading = heading(frame) }
   c.body = label(frame, "GameFontHighlight", 0, 28, CONTENT_WIDTH, 48, true)
@@ -340,11 +367,18 @@ function builders.social(frame)
   c.levelButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 28, -114)
   attach_tooltip(c.levelButton, L["What to share"],
     L["Expected quality is what your character would craft with and without concentration."])
-  c.guildOff = label(frame, "GameFontDisableSmall", 28, 142, CONTENT_WIDTH - 28, 14, false)
+  c.altsButton = button(frame, "", 360, function(self)
+    choices.shareAlts = next_alts(choices.shareAlts)
+    self:SetText(alts_button_text())
+  end)
+  c.altsButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 28, -140)
+  attach_tooltip(c.altsButton, L["Which characters to share"],
+    L["Sharing several characters lets guildmates see that they belong to the same player."])
+  c.guildOff = label(frame, "GameFontDisableSmall", 28, 168, CONTENT_WIDTH - 28, 14, false)
   c.guildOff:SetText(L["Guild sharing is off because the Guild feature is turned off on the previous step."])
-  c.chatBody = label(frame, "GameFontHighlight", 0, 172, CONTENT_WIDTH, 62, true)
+  c.chatBody = label(frame, "GameFontHighlight", 0, 194, CONTENT_WIDTH, 62, true)
   c.chatBody:SetText(L["Chat scanning watches Trade, Services and guild chat for someone asking for something you can craft, and shows a small toast. It never sends a message for you: you click Whisper yourself."])
-  c.chatScanCheck = check(frame, 0, 240, L["Scan chat for crafting requests"], CONTENT_WIDTH - 32, function()
+  c.chatScanCheck = check(frame, 0, 262, L["Scan chat for crafting requests"], CONTENT_WIDTH - 32, function()
     choices.chatScan = not choices.chatScan
     return choices.chatScan
   end)
@@ -355,11 +389,12 @@ function refreshers.social(c)
   local on = guild_chosen()
   c.shareCheck:SetChecked(choices.share and true or false)
   c.levelButton:SetText(level_button_text())
+  c.altsButton:SetText(alts_button_text())
   c.chatScanCheck:SetChecked(choices.chatScan and true or false)
   if on then
-    c.shareCheck:Enable(); c.levelButton:Enable(); c.guildOff:Hide()
+    c.shareCheck:Enable(); c.levelButton:Enable(); c.altsButton:Enable(); c.guildOff:Hide()
   else
-    c.shareCheck:Disable(); c.levelButton:Disable(); c.guildOff:Show()
+    c.shareCheck:Disable(); c.levelButton:Disable(); c.altsButton:Disable(); c.guildOff:Show()
   end
 end
 
@@ -434,6 +469,7 @@ local function ensure_view()
   v.moduleChecks = v.steps.modules and v.steps.modules.checks or {}
   v.shareCheck = v.steps.social and v.steps.social.shareCheck
   v.levelButton = v.steps.social and v.steps.social.levelButton
+  v.altsButton = v.steps.social and v.steps.social.altsButton
   v.chatScanCheck = v.steps.social and v.steps.social.chatScanCheck
 
   frame:HookScript("OnDragStart", function(self) self:StartMoving() end)
@@ -455,7 +491,7 @@ end
 ---------------------------------------------------------------------------
 
 -- The built frame and its controls (tests and tooling): { frame, back, next, skip, stepLabel, steps = { [id] = {...} },
--- moduleChecks, shareCheck, levelButton, chatScanCheck }.
+-- moduleChecks, shareCheck, levelButton, altsButton, chatScanCheck }.
 function Wizard:GetControls() return ensure_view() end
 
 function Wizard:IsShown() return view ~= nil and view.frame:IsShown() and true or false end
@@ -502,7 +538,9 @@ function Wizard:Next()
     module:ApplyModuleChoices(choices.modules)
   elseif step.id == "social" then
     local social = { chatScan = choices.chatScan }
-    if guild_chosen() then social.share, social.shareLevel = choices.share, choices.shareLevel end
+    if guild_chosen() then
+      social.share, social.shareLevel, social.shareAlts = choices.share, choices.shareLevel, choices.shareAlts
+    end
     module:ApplySocialChoices(social)
   end
   if current >= #list then
@@ -520,12 +558,14 @@ function Wizard:Finish()
   if view then view.frame:Hide() end
 end
 
--- The window was hidden (by Close, the X button or Escape): a guide that is still due counts as skipped.
+-- The window was hidden (by Close, the X button or Escape): a guide that is still due counts as skipped, except on the
+-- last step, where every choice was applied already and closing it means the same as Finish.
 function on_hidden()
   if not active then return end
   active = false
   local module = onboarding()
-  if module and module:ShouldShow() then module:Complete(true) end
+  local onLast = current >= #steps()
+  if module and module:ShouldShow() then module:Complete(not onLast) end
 end
 
 -- Opens the guide at the first step with the choices read from the live state. Already open: just raised.

@@ -44,9 +44,10 @@ describe("public docs and release metadata", function()
     end
   end)
 
-  it("describes the in-session re-request", function()
+  it("discloses the alt linkage, the wait for the setup guide and the in-session re-request", function()
     local r = read("README.md"):gsub("%s+", " ")
-    for _, s in ipairs({ "asks again for a character whose data did not arrive" }) do
+    for _, s in ipairs({ "belong to the same player", "nothing is sent until you finish or skip the setup guide",
+      "asks again for a character whose data did not arrive" }) do
       assert.truthy(r:find(s, 1, true), s)
     end
     assert.falsy(r:find("Anything lost this way is recovered at the next hello", 1, true))

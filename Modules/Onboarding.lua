@@ -16,6 +16,12 @@ local ADDON_NAME, ns = ...
 -- they leave the social step. Both go through the owning modules' own switches (ns.FS:SetModuleEnabled and
 -- Guild:Settings()), never through another module's saved table.
 --
+-- Consent before send: HoldsSync() is true while the guide will be or is being offered this session and was never
+-- finished or skipped (no completedVersion at all). Guild then sends no HELLO listing characters and no DATA. The
+-- hold is never permanent: without a guide to offer (completed, even for an older VERSION; saved data from a newer
+-- version; Onboarding off; the guide not scheduled this session; no wizard) there is none, and Complete() and
+-- OnDisable send FS_ONBOARDING_DONE so Guild starts at once.
+--
 -- Timers: one Debounce key ("onboarding.show"), cancelled in OnDisable.
 local Onboarding = ns.FS:NewModule("Onboarding", "AceEvent-3.0")
 
@@ -73,11 +79,27 @@ function Onboarding:ShouldShow()
   return type(done) ~= "number" or done < self.VERSION
 end
 
--- Records that the guide was finished or skipped for the current VERSION. -> true when it was written.
+-- Records that the guide was finished or skipped for the current VERSION, then tells Guild the hold is over. -> true
+-- when it was written.
 function Onboarding:Complete(skipped)
   if not writable() then return false end
   global().onboarding = { completedVersion = self.VERSION, time = ns.FS:Now(), skipped = skipped and true or false }
+  ns.FS:SendMessage(ns.Msg.ONBOARDING_DONE)
   return true
+end
+
+local offerPending = false     -- the first loading screen scheduled the guide and Onboarding stayed on since
+local sessionHandled = false   -- the first PLAYER_ENTERING_WORLD of the session was handled
+local worldEntered = false     -- the first PLAYER_ENTERING_WORLD happened (seen even while Onboarding is off)
+
+-- True while guild sync must wait for the guide (see the header): Onboarding is on, the saved data is writable, the
+-- wizard exists, the guide was never finished or skipped, and it is scheduled for this session (or will be at the
+-- first loading screen, which has not happened yet).
+function Onboarding:HoldsSync()
+  if not self:IsEnabled() or not writable() or not wizard() then return false end
+  local r = record()
+  if r and type(r.completedVersion) == "number" then return false end
+  return offerPending or (not sessionHandled and not worldEntered)
 end
 
 -- Opens the guide when it is due. In combat it waits for the end of combat instead. -> true when it was opened.
@@ -243,6 +265,8 @@ function Onboarding:GetSteps()
   }
 end
 
+local guildJustEnabled = false   -- ApplyModuleChoices turned Guild on; the next ApplySocialChoices announces
+
 -- Turns the optional modules on or off: choices = { [name] = boolean }. Only names in OPTIONAL_MODULES count, and
 -- only a module whose state would change is touched. Nothing happens while the saved data is from a newer version
 -- (the choice could not be stored). -> true when the choices were applied.
@@ -252,29 +276,41 @@ function Onboarding:ApplyModuleChoices(choices)
     local want = choices[name]
     if type(want) == "boolean" and ns.FS:IsModuleEnabled(name) ~= want then
       ns.FS:SetModuleEnabled(name, want)
+      if name == "Guild" then guildJustEnabled = want end
     end
   end
   return true
 end
 
 local VALID_LEVEL = { quality = true, recipes = true }
+local VALID_ALTS = { current = true, guild = true, all = true }   -- GuildOptions' shareAlts values
 
--- choices = { share = boolean, shareLevel = "quality"|"recipes", chatScan = boolean } (any of them may be missing).
--- Writes Guild's privacy settings through Guild:Settings(), switches the ChatScan module, then calls
--- Guild:OnPrivacyChanged() when Guild is on. Nothing happens while the saved data is from a newer version.
--- -> true when the choices were applied.
+-- choices = { share = boolean, shareLevel = "quality"|"recipes", shareAlts = "current"|"guild"|"all",
+-- chatScan = boolean } (any of them may be missing). Writes Guild's privacy settings through Guild:Settings(),
+-- switches the ChatScan module, then calls Guild:OnPrivacyChanged() when Guild is on and a sharing setting actually
+-- changed, or Guild was just turned on by ApplyModuleChoices. Nothing happens while the saved data is from a newer
+-- version. -> true when the choices were applied.
 function Onboarding:ApplySocialChoices(choices)
   if read_only() or type(choices) ~= "table" then return false end
   local guild = module("Guild")
+  local changed = false
   if guild and type(guild.Settings) == "function" then
     local settings = guild:Settings()
-    if type(choices.share) == "boolean" then settings.share = choices.share end
-    if VALID_LEVEL[choices.shareLevel] then settings.shareLevel = choices.shareLevel end
+    local function set(key, value)
+      if settings[key] ~= value then settings[key] = value; changed = true end
+    end
+    if type(choices.share) == "boolean" then set("share", choices.share) end
+    if VALID_LEVEL[choices.shareLevel] then set("shareLevel", choices.shareLevel) end
+    if VALID_ALTS[choices.shareAlts] then set("shareAlts", choices.shareAlts) end
   end
   if type(choices.chatScan) == "boolean" and ns.FS:IsModuleEnabled("ChatScan") ~= choices.chatScan then
     ns.FS:SetModuleEnabled("ChatScan", choices.chatScan)
   end
-  if guild and guild:IsEnabled() and type(guild.OnPrivacyChanged) == "function" then guild:OnPrivacyChanged() end
+  local announce = changed or guildJustEnabled
+  guildJustEnabled = false
+  if announce and guild and guild:IsEnabled() and type(guild.OnPrivacyChanged) == "function" then
+    guild:OnPrivacyChanged()
+  end
   return true
 end
 
@@ -291,9 +327,6 @@ end
 -- Lifecycle
 ---------------------------------------------------------------------------
 
-local sessionHandled = false   -- the first PLAYER_ENTERING_WORLD of the session was handled
-local worldEntered = false     -- the first PLAYER_ENTERING_WORLD happened (seen even while Onboarding is off)
-
 -- A tiny always-on listener (not the module, so the module's own registrations stay empty while it is off): a module
 -- turned on after the first loading screen does not open the guide at the next loading screen.
 do
@@ -309,6 +342,7 @@ end
 function Onboarding:OnEnteringWorld()
   if sessionHandled then return end
   sessionHandled = true
+  offerPending = true
   self:UnregisterEvent("PLAYER_ENTERING_WORLD")
   ns.FS:Debounce(SHOW_KEY, self.SHOW_DELAY, ns.FS:Wrap(SOURCE, function() self:MaybeShow() end))
 end
@@ -324,6 +358,10 @@ function Onboarding:OnDisable()
   self:UnregisterAllEvents()
   local w = wizard()
   if w then w:Close(true) end   -- hidden without recording a skip: the user did not close it
+  local held = offerPending
+  offerPending = false          -- the guide is no longer scheduled this session, so it holds nothing
+  guildJustEnabled = false
+  if held then ns.FS:SendMessage(ns.Msg.ONBOARDING_DONE) end
 end
 
 ns.FS:RegisterSlash("setup", function()

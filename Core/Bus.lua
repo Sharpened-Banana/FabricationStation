@@ -18,4 +18,5 @@ ns.Msg = {
   COMM_GATE_CHANGED = "FS_COMM_GATE_CHANGED",
   GUILD_CHANGED = "FS_GUILD_CHANGED",
   CHATSCAN_MATCH = "FS_CHATSCAN_MATCH",
+  ONBOARDING_DONE = "FS_ONBOARDING_DONE",   -- the setup guide no longer holds guild sync (finished, skipped or off)
 }

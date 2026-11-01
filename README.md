@@ -88,7 +88,8 @@ come out at, how much concentration it takes, what it earns, and what your other
 ## Guild sync and privacy
 
 Guild sync is **on by default** for characters in your guild and covers the current expansion's professions only. It
-is the one feature that sends data to other players, so this is exactly what goes out.
+is the one feature that sends data to other players, so this is exactly what goes out. On a fresh install nothing is
+sent until you finish or skip the setup guide, whose "Guild and chat" step has these choices.
 
 **What is shared, for each character you share:**
 
@@ -116,6 +117,9 @@ What you receive from guildmates is stored in your SavedVariables and dropped af
 | Only the character I am playing (`current`) | The one you are logged in on. |
 | My characters in this guild (`guild`, default) | Characters of your account last seen in this guild. |
 | All my characters (`all`) | Every character of the account that has been scanned. |
+
+Sharing more than one character lets guildmates see that those characters belong to the same player: they arrive in
+one list from one sender. Choose "Only the character I am playing" if you do not want your alts linked.
 
 **What to share (Settings > Guild > What to share):**
 

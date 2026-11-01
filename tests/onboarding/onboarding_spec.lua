@@ -263,6 +263,30 @@ describe("Onboarding", function()
       assert.is_false(guild_settings.share); assert.are.equal(0, privacy_calls)
     end)
 
+    it("announces the privacy change only when a sharing setting actually changed", function()
+      Onboarding:ApplySocialChoices({ share = true, shareLevel = "quality", shareAlts = "guild", chatScan = false })
+      assert.are.equal(0, privacy_calls)                       -- the live values: no rebuild, no HELLO
+      Onboarding:ApplySocialChoices({ shareAlts = "current" })
+      assert.are.equal("current", guild_settings.shareAlts)
+      assert.are.equal(1, privacy_calls)
+      Onboarding:ApplySocialChoices({ shareAlts = "current" })
+      assert.are.equal(1, privacy_calls)
+    end)
+
+    it("writes shareAlts with GuildOptions' values only", function()
+      Onboarding:ApplySocialChoices({ shareAlts = "all" }); assert.are.equal("all", guild_settings.shareAlts)
+      Onboarding:ApplySocialChoices({ shareAlts = "everyone" }); assert.are.equal("all", guild_settings.shareAlts)
+    end)
+
+    it("announces once after the modules step turned Guild on, even with unchanged settings", function()
+      ns.FS:SetModuleEnabled("Guild", false)
+      Onboarding:ApplyModuleChoices({ Guild = true })
+      Onboarding:ApplySocialChoices({ share = true })
+      assert.are.equal(1, privacy_calls)
+      Onboarding:ApplySocialChoices({ share = true })
+      assert.are.equal(1, privacy_calls)
+    end)
+
     it("changes nothing while the saved data is from a newer version", function()
       ns.FS.dbIsNewer = true
       Onboarding:ApplyModuleChoices({ ChatScan = false })
@@ -270,6 +294,77 @@ describe("Onboarding", function()
       ns.FS.dbIsNewer = nil
       assert.is_true(ns.FS:IsModuleEnabled("ChatScan")); assert.is_true(guild_settings.share)
       assert.are.equal(0, privacy_calls)
+    end)
+  end)
+
+  describe("holding guild sync until the guide is done", function()
+    local function done_messages() return #p4.messages("FS_ONBOARDING_DONE") end
+
+    it("holds on a fresh install from before the first loading screen until the guide is finished", function()
+      assert.is_true(Onboarding:HoldsSync())                   -- the first loading screen will schedule the guide
+      W.fire("PLAYER_ENTERING_WORLD", true, false)
+      p4.advance(6)
+      assert.is_true(wizard_open())
+      assert.is_true(Onboarding:HoldsSync())
+      assert.are.equal(0, done_messages())
+      Wizard:Finish()
+      assert.is_false(Onboarding:HoldsSync())
+      assert.are.equal(1, done_messages())
+    end)
+
+    it("stops holding when the guide is skipped", function()
+      W.fire("PLAYER_ENTERING_WORLD", true, false); p4.advance(6)
+      Wizard:Close()
+      assert.is_true(record().skipped)
+      assert.is_false(Onboarding:HoldsSync())
+      assert.are.equal(1, done_messages())
+    end)
+
+    it("holds while the guide waits for the end of combat", function()
+      p4.inCombat = true
+      W.fire("PLAYER_ENTERING_WORLD", true, false); p4.advance(6)
+      assert.is_false(wizard_open())
+      assert.is_true(Onboarding:HoldsSync())
+      p4.inCombat = false
+      W.fire("PLAYER_REGEN_ENABLED")
+      assert.is_true(wizard_open())
+    end)
+
+    it("does not hold once the guide was finished or skipped, even for an older guide version", function()
+      Onboarding:Complete(true)
+      W.fire("PLAYER_ENTERING_WORLD", true, false)
+      assert.is_false(Onboarding:HoldsSync())
+      Onboarding.VERSION = 2                                    -- an upgrader: the guide shows again, holding nothing
+      finally(function() Onboarding.VERSION = 1 end)
+      assert.is_true(Onboarding:ShouldShow())
+      assert.is_false(Onboarding:HoldsSync())
+    end)
+
+    it("does not hold while the saved data is from a newer version", function()
+      ns.FS.dbIsNewer = true
+      W.fire("PLAYER_ENTERING_WORLD", true, false)
+      assert.is_false(Onboarding:HoldsSync())
+      ns.FS.dbIsNewer = nil
+    end)
+
+    it("does not hold while Onboarding is off, and turning it off releases a hold at once", function()
+      W.fire("PLAYER_ENTERING_WORLD", true, false); p4.advance(6)
+      assert.is_true(Onboarding:HoldsSync())
+      ns.FS:SetModuleEnabled("Onboarding", false)
+      assert.is_false(Onboarding:HoldsSync())
+      assert.are.equal(1, done_messages())
+      assert.is_nil(record())                                   -- nothing recorded: the user did not close it
+      ns.FS:SetModuleEnabled("Onboarding", true)
+      assert.is_false(Onboarding:HoldsSync())                   -- not scheduled again this session
+    end)
+
+    it("does not hold when Onboarding is turned on after the first loading screen", function()
+      ns.FS:SetModuleEnabled("Onboarding", false)
+      W.fire("PLAYER_ENTERING_WORLD", true, false)
+      ns.FS:SetModuleEnabled("Onboarding", true)
+      assert.is_false(Onboarding:HoldsSync())
+      p4.advance(10)
+      assert.is_false(wizard_open())
     end)
   end)
 
@@ -534,6 +629,50 @@ describe("OnboardingWizard", function()
     assert.is_nil(record())
     assert.is_true(ns.FS:IsModuleEnabled("Orders"))
     assert.are.equal(0, privacy_calls)
+  end)
+
+  it("cycles which characters to share with GuildOptions' values and applies it with the social step", function()
+    Wizard:Open()
+    goto_step("social")
+    local c = Wizard:GetControls()
+    assert.are.equal("Which characters to share: My characters in this guild", c.altsButton:GetText())
+    click(c.altsButton)
+    assert.are.equal("Which characters to share: All my characters", c.altsButton:GetText())
+    click(c.altsButton)
+    assert.are.equal("Which characters to share: Only the character I am playing", c.altsButton:GetText())
+    assert.are.equal("guild", guild_settings.shareAlts)        -- not applied yet
+    click(c.next)
+    assert.are.equal("current", guild_settings.shareAlts)
+    assert.are.equal(1, privacy_calls)
+    goto_step("modules"); click(c.moduleChecks.Guild); goto_step("social")
+    assert.is_false(c.altsButton:IsEnabled())
+  end)
+
+  it("leaves the privacy settings and Guild alone when the social step changes nothing", function()
+    Wizard:Open()
+    goto_step("social")
+    click(Wizard:GetControls().next)
+    assert.are.equal(0, privacy_calls)
+  end)
+
+  it("records a finished guide when the window is closed on the last step", function()
+    Wizard:Open()
+    goto_step("done")
+    Wizard:GetControls().frame:GetScript("OnHide")(Wizard:GetControls().frame)   -- the X button
+    assert.is_false(record().skipped)
+    assert.are.equal(1, record().completedVersion)
+  end)
+
+  it("says on the first step that nothing will be saved while the saved data is from a newer version", function()
+    Wizard:Open()
+    assert.is_false(Wizard:GetControls().steps.welcome.readOnly:IsShown())
+    Wizard:Close(true)
+    ns.FS.dbIsNewer = true
+    Wizard:Open()
+    assert.are.equal(1, Wizard:GetStep())
+    assert.is_true(Wizard:GetControls().steps.welcome.readOnly:IsShown())
+    Wizard:Close(true)
+    ns.FS.dbIsNewer = nil
   end)
 
   it("does not raise or log anything while stepping through every step", function()

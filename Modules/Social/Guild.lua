@@ -21,6 +21,8 @@ local ADDON_NAME, ns = ...
 --     by the character's own HELLO; unverified claims never replace verified copies, and two unverified claimants
 --     of one character contest it: the copy is deleted until a verified claim arrives; claimants whose own HELLOs
 --     list each other are one account and do not contest: the newer claim replaces the copy, still unverified).
+--   * While Onboarding holds sync (the first-run guide will be or is being shown and was never finished or skipped),
+--     no HELLO that lists characters and no DATA goes out; both go out as soon as the guide is finished or skipped.
 --   * Whispered messages count only from guild members (Guild:IsGuildMember); GUILD traffic proves membership.
 -- No comm exists at all outside a guild, without C_EncodingUtil, while the module is off or while the saved data is
 -- from a newer version (then nothing is written either; settings live in a session copy).
@@ -130,6 +132,7 @@ local requested = {}       -- [sender .. " " .. charKey .. " " .. hash] = { send
 local pending = {}         -- [charKey] = { [requester] = true }, collected for REQUEST_WINDOW
 local flushTimer           -- C_Timer handle of the pending FlushRequests
 local retryTimer           -- C_Timer handle of the next re-request pass
+local heldHello = {}       -- [target | "GUILD"] = true: HELLOs held while Onboarding holds sync
 local lastData = {}        -- [charKey] = { [requester | "GUILD"] = Now() of our DATA }
 local announced = {}       -- the { [charKey] = hash } of our last GUILD HELLO
 local deferredHello = {}   -- [target | "GUILD"] = true: HELLOs asked for while the refresh runs
@@ -144,9 +147,15 @@ local function cancel_retry()
 end
 
 local function reset_sync_state()
-  requested, pending, lastData, announced, deferredHello = {}, {}, {}, {}, {}
+  requested, pending, lastData, announced, deferredHello, heldHello = {}, {}, {}, {}, {}, {}
   if flushTimer then flushTimer:Cancel(); flushTimer = nil end
   cancel_retry()
+end
+
+-- True while the first-run guide holds sync (Onboarding:HoldsSync; looked up at call time, false without it).
+local function sync_held()
+  local onboarding = ns.FS:GetModule("Onboarding", true)
+  return onboarding ~= nil and type(onboarding.HoldsSync) == "function" and onboarding:HoldsSync() == true
 end
 
 local function clear_own()
@@ -728,10 +737,15 @@ end
 
 -- Sends a HELLO with the shared characters' hashes (nil target = GUILD, queue key "hello"; else a whisper, key
 -- "hello:" .. target). Re-checks enabled/share/shared characters when it runs; while a refresh runs the HELLO waits
--- for it. Returns Comm's status, "deferred", or nil when nothing can be sent.
+-- for it, and while Onboarding holds sync it waits for the guide (an empty sharing-off HELLO is never held). Returns
+-- Comm's status, "deferred", "held", or nil when nothing can be sent.
 function Guild:SendHello(target)
   if not can_sync(self) or not self.comm then return nil end
   local share = self:Settings().share
+  if share and sync_held() then
+    heldHello[target or "GUILD"] = true
+    return "held"
+  end
   if share and refresh.co then
     deferredHello[target or "GUILD"] = true
     return "deferred"
@@ -760,12 +774,17 @@ end
 -- Sends the collected requests (scheduled REQUEST_WINDOW after the first one). Each character goes out once: to
 -- GUILD for two or more requesters, else whispered; a target (requester or "GUILD") that got this character within
 -- RESEND_COOLDOWN is skipped, and a GUILD copy covers every requester. Re-checks enabled, sharing and the shared
--- characters first. Characters whose profile is still being built wait for the refresh.
+-- characters first. Characters whose profile is still being built wait for the refresh; while Onboarding holds sync
+-- every request waits for the guide.
 function Guild:FlushRequests()
   if flushTimer then flushTimer:Cancel(); flushTimer = nil end
   local batch = pending
   pending = {}
   if not can_sync(self) or not self.comm or not self:Settings().share then return end
+  if sync_held() then
+    pending = batch                                     -- sent by Guild:ReleaseHold
+    return
+  end
   local shared = {}
   for _, c in ipairs(self:GetSharedCharKeys()) do shared[c] = true end
   local t = now()
@@ -1130,7 +1149,7 @@ function Guild:OnPrivacyChanged()
   if not self:Settings().share then
     cancel_refresh()
     clear_own()
-    pending, deferredHello = {}, {}
+    pending, deferredHello, heldHello = {}, {}, {}
     if flushTimer then flushTimer:Cancel(); flushTimer = nil end
     ns.FS:CancelDebounce(HELLO_KEY)
     self:SendHello()
@@ -1138,6 +1157,20 @@ function Guild:OnPrivacyChanged()
     clear_own()                   -- the old profiles (maybe with qualities) must not go out during the rebuild
     self:RefreshOwnProfiles("always")
   end
+end
+
+-- Onboarding stopped holding sync (the guide was finished or skipped, or Onboarding was turned off): the held HELLOs
+-- go out now (a GUILD one covers every whispered reply) and the held requests are answered after the usual window.
+function Guild:ReleaseHold()
+  if not self:IsEnabled() or sync_held() then return end
+  local held = heldHello
+  heldHello = {}
+  if held.GUILD then
+    self:SendHello()
+  else
+    for _, target in ipairs(sorted_keys(held)) do self:SendHello(target) end
+  end
+  arm_flush(self)
 end
 
 local function on_own_change(self)
@@ -1215,6 +1248,7 @@ function Guild:OnEnable()
   self:RegisterMessage(ns.Msg.COMM_GATE_CHANGED, ns.FS:Wrap("Guild", function(_, locked)
     if locked == false and self.comm then self.comm:Flush() end
   end))
+  self:RegisterMessage(ns.Msg.ONBOARDING_DONE, ns.FS:Wrap("Guild", function() self:ReleaseHold() end))
   if self._DirectoryEnable then self:_DirectoryEnable() end     -- tooltip/panel providers, index upkeep (GuildDirectory)
   self.guildKey, self.syncKey = nil, nil
   if worldEntered and not sessionStarted then
