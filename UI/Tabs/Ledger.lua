@@ -24,6 +24,12 @@ local L = ns.L
 -- returned reagents; "0 procs" only when the crafts reported their Multicraft numbers, else "?") and Concentration
 -- (spent next to predicted). A number the game did not report is "?", never 0, and
 -- the row tooltip says how many crafts it leaves out. Concentration and Resourcefulness are hidden first when narrow.
+-- Above the rows a "This session: N crafts, profit X" line (Tab.SessionSummary / SessionItem): the craft log's entries
+-- and the Ledger's sales and commissions recorded since the addon's session start (ns.FS:SessionStart(): this login
+-- or reload), for every character. The profit is the Ledger's own (ByRecipe + Unattributed per kind), so a cost it
+-- does not know is not subtracted: such a profit starts with "~" and the tooltip says how many entries lack a cost.
+-- No sale or commission yet reads "no profit recorded yet" (unknown is not 0g). One truncated line; the tooltip has
+-- the full text and the breakdown by kind.
 -- The page is one pooled virtual list in a plain scroll frame, as in the Orders and Queue tabs; each list item is a
 -- heading, a column header, a data row, a note or a spacer, and a pooled row keeps one set of cells per section.
 --
@@ -655,6 +661,70 @@ local function line(text, rgb)
   return { text = text, color = rgb or WHITE }
 end
 
+-- What this session has done since `since` (seconds, the session start): { crafts = craft log entries, n = sales and
+-- commissions, profit = their summed profit (nil when n is 0), incomplete, estimated = how many lack a known cost / have
+-- an estimated one, kinds = { { type, profit, n } } for the kinds that have entries, in commission, sale order }.
+-- Profit comes from the Ledger's own ByRecipe and Unattributed (do not re-derive it); nil `since` gives nil.
+function Tab.SessionSummary(craftLog, ledger, since)
+  if not is_money(since) then return nil end
+  local crafts = 0
+  if craftLog and craftLog.GetEntries then crafts = #(craftLog:GetEntries({ since = since }) or {}) end
+  local out = { crafts = crafts, n = 0, incomplete = 0, estimated = 0, kinds = {} }
+  if ledger and ledger.ByRecipe and ledger.Unattributed then
+    local profit = 0
+    for _, kind in ipairs({ "commission", "sale" }) do
+      local filter = { type = kind, since = since }
+      local sum = { type = kind, profit = 0, n = 0 }
+      local function add(totals)
+        if type(totals) ~= "table" then return end
+        sum.profit, sum.n = sum.profit + count(totals.profit), sum.n + count(totals.n)
+        out.incomplete, out.estimated = out.incomplete + count(totals.incomplete), out.estimated + count(totals.estimated)
+      end
+      add(ledger:Unattributed(filter))
+      for _, totals in pairs(ledger:ByRecipe(filter) or {}) do add(totals) end
+      if sum.n > 0 then
+        out.kinds[#out.kinds + 1] = sum
+        out.n, profit = out.n + sum.n, profit + sum.profit
+      end
+    end
+    if out.n > 0 then out.profit = profit end
+  end
+  return out
+end
+
+-- The list item for the session line, or nil: { kind = "session", text, lines (the tooltip), crafts, n } from a
+-- SessionSummary. The text is one whole sentence per case ("craft" / "crafts", a profit / "no profit recorded yet").
+function Tab.SessionItem(summary)
+  if type(summary) ~= "table" then return nil end
+  local crafts = count(summary.crafts)
+  local approximate = count(summary.incomplete) > 0 or count(summary.estimated) > 0
+  local text
+  if is_money(summary.profit) then
+    local money = (approximate and "~" or "") .. ns.UI.FormatMoney(summary.profit)
+    text = (crafts == 1 and L["This session: %d craft, profit %s"] or L["This session: %d crafts, profit %s"])
+      :format(crafts, money)
+  else
+    text = (crafts == 1 and L["This session: %d craft, no profit recorded yet"]
+      or L["This session: %d crafts, no profit recorded yet"]):format(crafts)
+  end
+  local lines = { line(text), line(L["Since you logged in or reloaded the interface."], GREY) }
+  if is_money(summary.profit) then
+    lines[#lines + 1] = line((L["Profit: %s"]):format((approximate and "~" or "") .. ns.UI.FormatMoney(summary.profit)))
+    for _, kind in ipairs(summary.kinds or {}) do
+      lines[#lines + 1] = line((L["%s: %s"]):format(TYPE_NAMES[kind.type] or tostring(kind.type),
+        ns.UI.FormatMoney(kind.profit)))
+    end
+    if count(summary.incomplete) > 0 then
+      lines[#lines + 1] = line((L["Partial: %d with missing or partial cost"]):format(summary.incomplete), GOLD)
+      lines[#lines + 1] = line(PARTIAL_DETAIL, GOLD)
+    end
+    if count(summary.estimated) > 0 then
+      lines[#lines + 1] = line((L["Estimate: %d with an estimated craft cost"]):format(summary.estimated), GREY)
+    end
+  end
+  return { kind = "session", text = text, lines = lines, crafts = crafts, n = count(summary.n) }
+end
+
 -- The income / cost / profit lines of a weekly or recipe row, with what makes them partial or estimated.
 local function totals_lines(lines, data)
   local est = count(data.estimated) > 0
@@ -714,6 +784,7 @@ function Tab.TooltipLines(item)
     lines[1] = line(tostring(item.text))
     return lines
   end
+  if item.kind == "session" then return item.lines or { line(tostring(item.text)) } end
   if item.kind ~= "row" then return lines end
   local data = type(item.data) == "table" and item.data or {}
   if item.section == "weekly" then
@@ -963,8 +1034,9 @@ local function bind_row(row, item, index)
   end
   if active then show_group(active, true) end
 
-  row.heading:SetText(item.kind == "heading" and item.text or "")
-  if item.kind == "heading" then row.heading:Show() else row.heading:Hide() end
+  local headed = item.kind == "heading" or item.kind == "session"
+  row.heading:SetText(headed and item.text or "")
+  if headed then row.heading:Show() else row.heading:Hide() end
   row.note:SetText(item.kind == "note" and color(DIM, item.text) or "")
   if item.kind == "note" then row.note:Show() else row.note:Hide() end
 
@@ -1095,7 +1167,11 @@ local function crafts_page(now)
   for _, row in ipairs(rows) do total = total + count(row.crafts) end
   local header = total == 0 and L["No crafts yet"]
     or (total == 1 and (L["%d craft"]):format(1) or (L["%d crafts"]):format(total))
-  return Tab.CraftDisplayRows(rows), header,
+  local items = Tab.CraftDisplayRows(rows)
+  -- This session's line leads the page; an empty page keeps its message unless the session already made a sale.
+  local session = Tab.SessionItem(Tab.SessionSummary(craftLog, module("Ledger"), ns.FS:SessionStart()))
+  if session and (#items > 0 or session.crafts > 0 or session.n > 0) then table.insert(items, 1, session) end
+  return items, header,
     L["No crafts logged yet. Each craft you make is logged with the result it gave, next to the prediction."]
 end
 

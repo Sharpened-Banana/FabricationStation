@@ -33,6 +33,16 @@ function FS:Now()
   return GetServerTime()
 end
 
+-- The time this session began (this login or /reload): set once when the addon is enabled, never moved afterwards.
+-- nil before that.
+function FS:SessionStart()
+  return self.sessionStart
+end
+
+function FS:OnEnable()
+  if self.sessionStart == nil then self.sessionStart = self:Now() end
+end
+
 ---------------------------------------------------------------------------
 -- Error isolation
 ---------------------------------------------------------------------------

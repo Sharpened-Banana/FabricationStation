@@ -1273,6 +1273,15 @@ dims or hides such orders; Claim Best Order never picks one (Orders options > cl
 order for a recipe the game has not told the addon about yet shows no red flag. If the source line is missing for a
 recipe you know the game gives a source for, report the recipe name.
 
+P7-18d. **Profit this session.** Open the Ledger tab and press Crafts. Expected: the first line above the recipe rows
+reads "This session: N crafts, profit X" (or "no profit recorded yet" before your first sale or commission since you
+logged in). Craft something, then collect an order commission or an auction sale from the mail and keep the tab open:
+within a second the line should count the craft and add the sale's profit (income minus cost). It should count every
+character's crafts since this login, not only the one you are playing. A sale whose cost the addon did not know should
+turn the profit into "~X"; the line's tooltip then says how many entries are partial and lists the order and auction
+parts. `/reload` and check that the line starts again at zero. Make the window as narrow as it goes (516 px): the line
+is cut off, and its tooltip shows all of it.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

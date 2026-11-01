@@ -1165,6 +1165,146 @@ describe("Ledger tab Crafts section", function()
     ns.FS.dbIsNewer = nil
   end)
 
+  describe("this session (Task 10c)", function()
+    local MONEY = function(copper) return ns.UI.FormatMoney(copper) end
+    local function session_item(v)
+      for _, item in ipairs(v.items) do if item.kind == "session" then return item end end
+    end
+    local function tooltip_text(v)
+      local row = v.pool[1]
+      row:GetScript("OnEnter")(row)
+      return table.concat(tooltip.lines, "\n")
+    end
+    local function ledger() return ns.FS:GetModule("Ledger") end
+
+    before_each(function() ns.FS.sessionStart = W.now - 100 end)
+
+    it("starts from the addon's session start, set once when it is enabled", function()
+      local t0 = W.now
+      ns.FS.sessionStart = nil
+      ns.FS:OnEnable()
+      assert.equal(t0, ns.FS:SessionStart())
+      W.advance(500)
+      ns.FS:OnEnable()
+      assert.equal(t0, ns.FS:SessionStart())   -- set once
+    end)
+
+    it("heads the page with this session's crafts and profit, counting nothing older", function()
+      seed({ craft(9001, { time = W.now - 50 }), craft(9002, { time = W.now - 10 }), craft(9001, { time = W.now - 100 }),
+        craft(9003, { time = W.now - 101 }), craft(9003, { time = W.now - 5000, charKey = "Alt-Silvermoon" }) })
+      ledger():Add({ type = "commission", amount = 5000, cost = 1000, time = W.now - 50, recipeID = 9001 })
+      ledger():Add({ type = "sale", amount = 3000, cost = 500, time = W.now - 20, recipeID = 9001 })
+      ledger():Add({ type = "sale", amount = 700, cost = 100, time = W.now - 5 })           -- no recipe: unattributed
+      ledger():Add({ type = "sale", amount = 99999, cost = 0, time = W.now - 101 })         -- before this session
+      ledger():Add({ type = "craft", amount = 777, time = W.now - 5 })                      -- a cost record: no profit
+      local v = open()
+      show(v, "crafts")
+      assert.equal("session", v.items[1].kind)       -- above the column header and the rows
+      assert.equal("header", v.items[2].kind)
+      assert.equal("This session: 3 crafts, profit " .. MONEY(7100), v.items[1].text)
+      assert.equal("This session: 3 crafts, profit " .. MONEY(7100), v.pool[1].heading:GetText())
+    end)
+
+    it("counts alts' crafts too, and says '1 craft' for one", function()
+      seed({ craft(9001, { charKey = "Alt-Silvermoon" }) })
+      ledger():Add({ type = "sale", amount = 300, cost = 100 })
+      local v = open()
+      show(v, "crafts")
+      assert.equal("This session: 1 craft, profit " .. MONEY(200), session_item(v).text)
+    end)
+
+    it("marks a profit with an unknown cost with ~ and explains it in the tooltip", function()
+      seed({ craft(9001) })
+      ledger():Add({ type = "sale", amount = 3000, cost = 500 })
+      ledger():Add({ type = "sale", amount = 400 })    -- no known cost
+      local v = open()
+      show(v, "crafts")
+      assert.equal("This session: 1 craft, profit ~" .. MONEY(2900), session_item(v).text)
+      local text = tooltip_text(v)
+      assert.is_truthy(text:find("Partial: 1 with missing or partial cost", 1, true))
+      assert.is_truthy(text:find("the real profit may be lower than shown", 1, true))
+    end)
+
+    it("says no profit is recorded yet when the Ledger has no sale or commission since the start", function()
+      seed({ craft(9001), craft(9002) })
+      ledger():Add({ type = "sale", amount = 1, cost = 0, time = W.now - 500 })
+      local v = open()
+      show(v, "crafts")
+      assert.equal("This session: 2 crafts, no profit recorded yet", session_item(v).text)
+      seed({ craft(9001) })
+      reg.ledger.refresh(container)
+      assert.equal("This session: 1 craft, no profit recorded yet", session_item(v).text)
+    end)
+
+    it("shows a profit even before the first craft of the session, and nothing at all on an empty page", function()
+      local v = open()
+      show(v, "crafts")
+      assert.is_nil(session_item(v)); assert.is_true(v.empty:IsShown())
+      ledger():Add({ type = "commission", amount = 900, cost = 100 })
+      reg.ledger.refresh(container)
+      assert.equal("This session: 0 crafts, profit " .. MONEY(800), session_item(v).text)
+      assert.is_false(v.empty:IsShown())
+    end)
+
+    it("breaks the profit down by kind in the tooltip", function()
+      seed({ craft(9001) })
+      ledger():Add({ type = "commission", amount = 5000, cost = 1000, recipeID = 9001 })
+      ledger():Add({ type = "sale", amount = 3000, cost = 500, recipeID = 9001 })
+      local v = open()
+      show(v, "crafts")
+      local text = tooltip_text(v)
+      assert.is_truthy(text:find("This session: 1 craft, profit " .. MONEY(6500), 1, true))
+      assert.is_truthy(text:find("Order commission: " .. MONEY(4000), 1, true))
+      assert.is_truthy(text:find("Auction sale: " .. MONEY(2500), 1, true))
+      assert.is_nil(text:find("Partial", 1, true))
+    end)
+
+    it("is not drawn when the session start is unknown", function()
+      ns.FS.sessionStart = nil
+      seed({ craft(9001) })
+      local v = open()
+      show(v, "crafts")
+      assert.is_nil(session_item(v))
+    end)
+
+    it("keeps the full text in the tooltip at the 516 px minimum width", function()
+      seed({ craft(9001) })
+      ledger():Add({ type = "sale", amount = 123456789, cost = 0 })
+      local v = open(516)
+      show(v, "crafts")
+      local row = v.pool[1]
+      assert.equal(session_item(v).text, row.heading:GetText())   -- one unwrapped line; the tooltip carries all of it
+      assert.is_truthy(tooltip_text(v):find(session_item(v).text, 1, true))
+    end)
+
+    it("refreshes on a Ledger change and on a craft log change", function()
+      seed({ craft(9001) })
+      local v = open()
+      show(v, "crafts")
+      assert.is_truthy(session_item(v).text:find("no profit recorded yet", 1, true))
+      ledger():Add({ type = "sale", amount = 300, cost = 100 })    -- sends FS_LEDGER_CHANGED
+      W.advance(1)
+      assert.equal("This session: 1 craft, profit " .. MONEY(200), session_item(v).text)
+      ns.FS.db.global.craftLog.entries[#ns.FS.db.global.craftLog.entries + 1] = craft(9002)
+      ns.FS:GetModule("CraftLog"):SendMessage(ns.Msg.CRAFTLOG_CHANGED)
+      W.advance(1)
+      assert.equal("This session: 2 crafts, profit " .. MONEY(200), session_item(v).text)
+    end)
+
+    it("writes nothing while the saved data is from a newer version", function()
+      seed({ craft(9001) })
+      ledger():Add({ type = "sale", amount = 300, cost = 100 })
+      ns.FS.dbIsNewer = true
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      local v = open()
+      show(v, "crafts")
+      assert.is_not_nil(session_item(v))
+      tooltip_text(v)
+      assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+      ns.FS.dbIsNewer = nil
+    end)
+  end)
+
   it("refreshes when a craft is logged", function()
     seed_crafts()
     local v = open()
