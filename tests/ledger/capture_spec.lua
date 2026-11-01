@@ -18,7 +18,7 @@ describe("Ledger capture", function()
     P2.fake_module(ns, "Prices", { Get = function(_, id) return {value = price[id]} end })
     P2.fake_module(ns, "Scanner", { GetSchematic = function() return schematic end })
     P2.fake_module(ns, "Orders", { GetClaimedOrder = function() return claimed end })
-    P2.load(ns, {"Modules/Ledger.lua"}); L = ns.FS:GetModule("Ledger")
+    P2.load(ns, {"Modules/CraftingData.lua", "Modules/Ledger.lua"}); L = ns.FS:GetModule("Ledger")
   end)
   local function craft(orderID)
     op = op + 1
@@ -126,6 +126,33 @@ describe("Ledger capture", function()
     it("sums only priced items and marks the cost incomplete when one has no price", function()
       local reagents = { {reagent={itemID=999}, quantity=3, dataSlotIndex=1} }
       assert.same({10000, true, false}, {L:CostOfCraft(4444, reagents, {}, nil)})
+    end)
+    describe("slots sharing a dataSlotIndex (Rootbound Vat, real schematic)", function()
+      local VAT = require("tests.fixtures.orders.rootbound_vat")
+      -- craftingReagents holds the modified-reagent slots only (s3 and s4: dataSlotIndex 1 and 2, as s1 and s2 have).
+      local reagents
+      before_each(function()
+        schematic = VAT.schematic
+        price = { [236950] = 10, [256963] = 20, [241281] = 100, [241283] = 1000 }
+        reagents = { { reagent = { itemID = 241281 }, quantity = 4, dataSlotIndex = 1 },
+          { reagent = { itemID = 241283 }, quantity = 4, dataSlotIndex = 2 } }
+      end)
+      it("costs each reagent exactly once: the sum of every slot's reagents", function()
+        -- s1 6 x 10 + s2 16 x 20 (fixed, lowest rank) + s3 4 x 100 + s4 4 x 1000, not s3 and s4 again under s1 and s2
+        assert.same({ 4780, false, false }, { L:CostOfCraft(1233133, reagents, nil, nil) })
+      end)
+      it("charges what the patron provides nothing, once", function()
+        local provided = { [236950] = 6, [256963] = 16, [241281] = 4 }
+        assert.same({ 4000, false, false }, { L:CostOfCraft(1233133, reagents, provided, nil) })
+      end)
+      it("logs a craft cost entry that is not inflated", function()
+        L:OnCraftRecipe(1233133, 1, reagents, nil, nil, false)
+        L:OnCraftResult("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 253506, quantity = 1, operationID = 1,
+          hyperlink = "|cff1eff00|Hitem:253506::|h[Rootbound Vat]|h|r" })
+        local e = L:Query({ type = "craft" })[1]
+        assert.equal(-4780, e.amount)
+        assert.is_nil(e.incomplete)
+      end)
     end)
     it("is incomplete without a schematic", function()
       schematic = nil

@@ -475,7 +475,7 @@ end
 -- What one craft cost: cost (whole copper, nil when not a finite number), incomplete, estimated.
 -- craftingReagents = { {reagent = {itemID?, currencyID?}, dataSlotIndex, quantity} } (ModifiedReagent slots only),
 -- provided = { [itemID] = n } customer-provided items (free), returned = { {reagent = {itemID?}, quantity} }.
--- Each schematic slot uses the entries with its dataSlotIndex. A required slot with none is a fixed reagent
+-- Each entry belongs to one schematic slot (CraftingData.SlotResolver: its dataSlotIndex, told apart by slot type). A required slot with none is a fixed reagent
 -- (lowest rank × quantity, exact) or a ModifiedReagent slot (same, but estimated), unless the customer provided it:
 -- Blizzard leaves customer-provided slots out of an order's craftingReagents. Optional slots with no entry and
 -- currency costs add nothing. A provided item is free once (max(0, used - provided)). Returned reagents are
@@ -508,12 +508,31 @@ function Ledger:CostOfCraft(recipeID, craftingReagents, provided, returned)
   local used = {}  -- [entry index] = true once charged through a slot
   if not slots then incomplete = true; slots = {} end
   local modified = modified_reagent_type()
+  -- The one slot each entry belongs to. A basic type-1 slot and a type-2 slot can share a dataSlotIndex (Rootbound Vat),
+  -- and craftingReagents holds the type-2 ones, so the index alone would cost the entry under both. CraftingData loads
+  -- before this file; without it (a spec) the index alone decides, as before.
+  local owner = {}
+  local crafting = ns.CraftingData
+  local resolve = crafting and crafting.SlotResolver and schematic and crafting.SlotResolver(schematic) or nil
+  for i, r in ipairs(entries) do
+    if type(r) == "table" then
+      if resolve then
+        owner[i] = resolve(r)
+      else
+        for _, slot in ipairs(slots) do
+          if type(slot) == "table" and r.dataSlotIndex ~= nil and r.dataSlotIndex == slot.dataSlotIndex then
+            owner[i] = slot
+          end
+        end
+      end
+    end
+  end
   for _, slot in ipairs(slots) do
     local items = type(slot) == "table" and type(slot.reagents) == "table" and slot.reagents or {}
     if type(slot) == "table" and not (slot.currencyID ~= nil and #items == 0) then
       local found = false
       for i, r in ipairs(entries) do
-        if type(r) == "table" and r.dataSlotIndex ~= nil and r.dataSlotIndex == slot.dataSlotIndex then
+        if type(r) == "table" and r.dataSlotIndex ~= nil and owner[i] == slot then
           found, used[i] = true, true
           charge(reagent_item(r), r.quantity)
         end
