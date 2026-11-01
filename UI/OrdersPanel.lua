@@ -29,8 +29,7 @@ local L = ns.L
 -- the end of the name and the cells (the last visible slot becomes "+N"), and it is hidden with the cell strip.
 -- The Reagents cover is replaced, not edited: Blizzard's cell and its text are never written (no SetText, SetAlpha or
 -- Hide on them). Our own frame, in our own container, is anchored over the cell (measured read-only from the row's
--- fourth cell or the column header, else Blizzard's fixed 90 px before the 60 px Expiration column) with an opaque
--- background of COVER_COLOR, so the word underneath cannot be seen. It fails closed: the cover goes only over a column
+-- column header, or its own cells when there is no header) with an opaque background of COVER_COLOR, so the word underneath cannot be seen. It fails closed: the cover goes only over a column
 -- identified as Reagents (the header's own text, else the known five-column layout, headers sorted by position); on any
 -- other layout, or on a row with no view of ours, there is no cover and Blizzard's text shows. Because the cover hides
 -- the row's tint and Blizzard's hover highlight in that cell, it repaints both itself (the hover through post-hooks on
@@ -74,9 +73,8 @@ local STRIP_WIDTH = CORE_WIDTH + WARN_SLOT + PROFIT_SLOT
 local PAD, GAP = 6, 4
 local ICON_SIZE, ICON_GAP, MORE_WIDTH = 14, 1, 22   -- icons: 14 px, 1 px apart; the "+N" slot has a width of its own
 local UNKNOWN_ICON = 134400                           -- the question mark, for an icon the client cannot give
--- The Reagents cover over Blizzard's cell (ProfessionsCraftingOrderPageMixin:SetupTable, 12.1.5: the Reagents column
--- is 90 px wide and the 60 px Expiration column is last).
-local COVER_WIDTH, COVER_RIGHT, COVER_PAD = 90, 60, 4
+-- The Reagents cover's padding inside Blizzard's cell.
+local COVER_PAD = 4
 -- The cover goes only over a column that is identified as Reagents: by the header's own text (the global string below),
 -- else by the known layout: five columns (name, Customer, Tip, Reagents, Expiration) whose fourth is 80 to 100 px wide
 -- and ends where the last begins. Anything else gets no cover, and Blizzard's text shows.
@@ -836,7 +834,7 @@ local function new_cells(row)
   c.icons:EnableMouse(true)
   pass_through(c.icons)
   c.icons:SetScript("OnEnter", function() M.Guard(ROWS, hover_enter, c, "icons") end)
-  c.icons:SetScript("OnLeave", function() hover_leave(c) end)
+  c.icons:SetScript("OnLeave", function() M.Guard(ROWS, hover_leave, c) end)
   c.iconBank = new_bank(c.icons)
   c.slots, c.more = c.iconBank.slots, c.iconBank.more
 
@@ -1001,8 +999,8 @@ end
 -- Which column is Reagents, read-only, or nil when it cannot be told (then there is no cover and Blizzard's text
 -- shows). In order: the header whose text is Blizzard's Reagents header string; the known five-column layout read from
 -- the headers (sorted by their left edge); with no headers to read, the same from the row's own cells. Returns
--- left, right (screen coordinates), or "fixed" when exactly the known number of headers exist but none can be read:
--- then Blizzard's fixed layout stands (Reagents 90 px, then 60 px of Expiration at the right edge).
+-- left, right (screen coordinates). There is no assumed layout to fall back on: while a header or cell cannot be read
+-- (not laid out yet) nothing is identified, and a later re-fit pass tries again.
 local function reagents_column(row)
   local headers = header_frames()
   if #headers > 0 then
@@ -1014,7 +1012,6 @@ local function reagents_column(row)
       end
     end
     if unreadable == 0 then return known_reagents_span(spans) end
-    if #headers == KNOWN_COLUMNS then return "fixed" end
     return nil
   end
   local cellList = {}
@@ -1032,16 +1029,10 @@ end
 -- right edge is unknown) when there is to be no cover.
 local function place_cover(c, row)
   local left, right = reagents_column(row)
-  local offset, width
-  if left == "fixed" then
-    offset, width = COVER_RIGHT, COVER_WIDTH
-  elseif left then
-    local rowRight = read_number(row, "GetRight")
-    if not rowRight or rowRight < right then return nil end
-    offset, width = rowRight - right, right - left
-  else
-    return nil
-  end
+  if not left then return nil end
+  local rowRight = read_number(row, "GetRight")
+  if not rowRight or rowRight < right then return nil end
+  local offset, width = rowRight - right, right - left
   c.cover:ClearAllPoints()
   c.cover:SetPoint("TOPRIGHT", row, "TOPRIGHT", -offset, 0)
   c.cover:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -offset, 0)

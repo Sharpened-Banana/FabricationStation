@@ -1017,7 +1017,7 @@ resizing the window and scrolling. It is only drawn over a column it can identif
 the real one with `/dump ProfessionsFrame.OrdersPage.BrowseFrame.OrderList.HeaderContainer:GetChildren()` and look at the
 headers' `:GetText()`), else the known five columns (name, Customer, Tip, Reagents 80-100 px, then the last column
 touching it), read from those header children sorted by their left edge, else from the row's own `row.cells`. On any
-other layout there is NO panel and Blizzard's "Some" / "None" / "All" shows: if you see no panel at all, that is why,
+other layout, or while the headers are not laid out yet (the panel then appears on the next frame), there is NO panel and Blizzard's "Some" / "None" / "All" shows: if you see no panel at all, that is why,
 so report the header children's GetLeft/GetRight/GetText. With more reagents than fit, the last slot
 reads "+N" and stays inside the panel. In the item-name column, a long name keeps the reward icons clear of it: fewer
 icons are drawn and the last slot reads "+N" (N counts the hidden icons too); when the cells are hidden for lack of room,

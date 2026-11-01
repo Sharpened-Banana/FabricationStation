@@ -519,15 +519,44 @@ describe("OrdersPanel row icons", function()
       assert.is_false(cells_of(row_for(raw, g)).cover:IsShown())
       assert.is_false(cells_of(row_for(raw, false)).cover:IsShown())   -- not laid out, nothing to read
     end)
-    it("uses the fixed layout (Reagents 90 px, then Expiration 60 px) only for five headers whose edges cannot be read", function()
+    it("has no fixed fallback: five headers whose edges cannot be read give no cover", function()
       local raw = one_order()
       local unread = {}
       for i = 1, 5 do unread[i] = { GetText = function() return nil end } end
       form.raw(form.orderList).HeaderContainer.GetChildren = function() return unpack(unread) end
       local row = row_for(raw, false)   -- the row is not laid out either
-      assert.same(expect(row, 60, 90), points(cells_of(row)))
-      unread[6] = unread[1]   -- six headers: not the known layout
-      assert.is_false(cells_of(row_for(raw, false)).cover:IsShown())
+      assert.is_false(cells_of(row).cover:IsShown())
+      assert.is_true(cells_of(row).frame:IsShown())
+    end)
+    it("has no cover for mixed headers: four readable ones in another order and one unreadable", function()
+      local raw = one_order()
+      local mixed = {
+        { GetLeft = function() return 100 end, GetRight = function() return 400 end, GetText = function() return nil end },
+        { GetLeft = function() return 400 end, GetRight = function() return 490 end, GetText = function() return nil end },
+        { GetLeft = function() return 490 end, GetRight = function() return 650 end, GetText = function() return nil end },
+        { GetLeft = function() return 650 end, GetRight = function() return 800 end, GetText = function() return nil end },
+        { GetText = function() return nil end },   -- not laid out
+      }
+      form.raw(form.orderList).HeaderContainer.GetChildren = function() return unpack(mixed) end
+      local row = row_for(raw)
+      assert.is_false(cells_of(row).cover:IsShown())
+    end)
+    it("covers once the headers are laid out: none at init, the cover after the next re-fit", function()
+      local raw = one_order()
+      local laid = false
+      local function edge(left, right)
+        return { GetLeft = function() return laid and left or nil end, GetRight = function() return laid and right or nil end,
+          GetText = function() return nil end }
+      end
+      local cols = { edge(100, 400), edge(400, 545), edge(545, 705), edge(705, 795), edge(795, 860) }
+      form.raw(form.orderList).HeaderContainer.GetChildren = function() return unpack(cols) end
+      local row = row_for(raw)
+      local c = cells_of(row)
+      assert.is_false(c.cover:IsShown())
+      laid = true   -- Blizzard lays the headers out
+      W.advance(0)
+      assert.is_true(c.cover:IsShown())
+      assert.same(expect(row, 65, 90), points(c))
     end)
     it("is an opaque background of one named colour under the icons, in our own container", function()
       local raw = one_order()
@@ -918,6 +947,13 @@ describe("OrdersPanel row icons", function()
       form.raw(row):GetScript("OnEnter")(row)
       form.releaseOrderRow(row)
       assert.is_false(c.coverHover:IsShown())
+    end)
+    it("runs the strip's and the cover's leave handlers through the guard", function()
+      local _, c = setup()
+      _G.GameTooltip = { SetOwner = function() end, GetOwner = function() end, Hide = function() error("boom") end }
+      c.icons:GetScript("OnLeave")(c.icons)
+      assert.is_false(rows():IsEnabled())
+      assert.is_true(ns.FS:GetModule("OrdersSidePanel"):IsEnabled())
     end)
     it("turns off only OrdersRowAddons when a hover handler fails", function()
       local _, c = setup()
