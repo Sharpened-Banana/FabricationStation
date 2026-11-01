@@ -45,6 +45,16 @@ describe("Social.ProfileStore", function()
     assert.are.equal(3, PS.Count(p))
   end)
 
+  it("finds a well-formed entry after a malformed one in the same line, as Each does", function()
+    for _, r in ipairs({ ",100:9x,100:35,", ",100:95,100:35," }) do
+      local p = { lv = "q", pr = { { s = 1, r = r } } }
+      assert.are.same({ 1, 3, 5 }, { PS.Find(p, 100) })
+      local seen = {}
+      PS.Each(p.pr[1], "q", function(id, q, qc) seen[#seen + 1] = { id, q, qc } end)
+      assert.are.same({ { 100, 3, 5 } }, seen)
+    end
+  end)
+
   it("reads a recipes-only profile with zero qualities", function()
     local p = { lv = "r", pr = { { s = 1, k = 0, m = 0, r = "," }, { s = 2, k = 1, m = 2, r = ",7,9," } } }
     local seen = {}

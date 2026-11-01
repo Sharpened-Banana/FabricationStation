@@ -1082,6 +1082,22 @@ holds the amount. If the money's end cannot be read the addon assumes it takes 1
 a short and a long amount. On a layout where the column cannot be identified there are no reward icons at all (the info
 tooltip still lists them).
 
+## Phase 6
+
+P6-1. **New recipes appear in the Guild tab search without a reload.** Search the Guild tab for a recipe once. Learn
+a recipe on this character, or have a guildmate log in with a recipe nobody else had. Expected: within 5 minutes
+(guild data) or 30 minutes (your own new recipe) the next search finds it by name, without `/reload`.
+
+P6-2. **Count identical recipe lines in your saved data (decides scope item 7).** Log out, so the file is written,
+then run this with `F` set to `WTF/Account/<acct>/SavedVariables/FabricationStation.lua`:
+
+```
+luajit -e "F = '<path>'" -e 'dofile(F) local n, d, b, db, s = 0, 0, 0, 0, {} for _, g in pairs(FabricationStationDB.global.guildDirectory or {}) do for _, p in pairs(type(g) == "table" and type(g.profiles) == "table" and g.profiles or {}) do for _, l in ipairs(type(p) == "table" and type(p.pr) == "table" and p.pr or {}) do if type(l) == "table" and type(l.r) == "string" and #l.r >= 64 then n = n + 1; b = b + #l.r; if not s[l.r] then s[l.r] = true; d = d + 1; db = db + #l.r end end end end end local f = io.open(F, "rb"); local size = #f:read("*a"); f:close() print(("%d lines, %d distinct, %d duplicate bytes, %.1f %% of the file"):format(n, d, b - db, (b - db) / size * 100))'
+```
+
+Expected: the printed percentage is well under 20 %. If it is 20 % or more, report it: item 7 (Appendix B) comes
+back.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

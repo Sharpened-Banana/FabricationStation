@@ -29,7 +29,8 @@ local DEFAULT_BUDGET_MS = 4    -- per index tick when Recipes' scanBudgetMs is u
 local INDEX_RETRY = 300          -- seconds before a recipe that resolved to nothing is tried again (not on a rebuild)
 local MIN_SEARCH = 3             -- characters of a typed search before it looks for recipes by name
 local MAX_FOUND = 25             -- recipes a name search finds at most
-local CATALOGUE_RETRY = 300      -- seconds before a catalogue that left out unnamed recipes is built again
+local CATALOGUE_RETRY = 300      -- seconds before an incomplete or out-of-date catalogue is built again
+local CATALOGUE_MAX_AGE = 1800   -- seconds after which the catalogue is built again whatever happened (new own recipes)
 local SOURCE = "Guild:Directory"
 
 local function L(key) return ns.L[key] end
@@ -357,13 +358,19 @@ local function sorted_ids(t)
   return out
 end
 
--- Every recipe a search can find, built on the first search (never from a tooltip) and kept for the session:
--- { key = guildKey, at = Now(), incomplete = boolean, list = { entry }, byId = { [recipeID] = entry } } with
--- entry = { recipeID, recipeName, skillLineID|nil, lname }. Sources, in the order whose skill line wins: the generated
--- RecipeSources (the current expansion, including recipes nobody on the account knows), the account's own
--- professions (dropped records skipped), the current guild's stored profiles and the native cache. A recipe the client
--- has no name for yet is left out (incomplete): the next search 300 s later builds the catalogue again. Dropped on a
--- guild-key change and in _DirectoryDisable.
+-- Every recipe a search can find, built on the first search (never from a tooltip):
+-- { key = guildKey, at = Now(), version = directoryVersion, incomplete = boolean, list = { entry },
+-- byId = { [recipeID] = entry } } with entry = { recipeID, recipeName, skillLineID|nil, lname }. Sources, in the order
+-- whose skill line wins: the generated RecipeSources (the current expansion, including recipes nobody on the account
+-- knows), the account's own professions (dropped records skipped), then the current guild's stored profiles and native
+-- cache (tab_candidates; a recipe on several lines takes the lowest). A recipe the client has no name for yet is left
+-- out (incomplete). The next search builds it again when
+--   1. the guild key differs, or
+--   2. the clock went back (now < at), or
+--   3. it is incomplete or its directoryVersion is out of date, and CATALOGUE_RETRY (300 s) have passed, or
+--   4. CATALOGUE_MAX_AGE (1800 s) have passed: this picks up the account's newly learned recipes, which do not bump
+--      directoryVersion.
+-- Dropped in _DirectoryDisable.
 local catalogue
 
 local function build_catalogue(self)
@@ -401,23 +408,12 @@ local function build_catalogue(self)
     end
   end
   local dir = peek(self)
-  if dir and type(dir.profiles) == "table" then
-    for charKey, profile in pairs(dir.profiles) do
-      if type(charKey) == "string" and type(profile) == "table" and type(profile.pr) == "table" then
-        for _, line in ipairs(profile.pr) do
-          if type(line) == "table" then
-            ProfileStore.Each(line, profile.lv, function(recipeID) note(recipeID, line.s) end)
-          end
-        end
-      end
-    end
+  if dir then
+    local byRecipe, guildLines = tab_candidates(dir)
+    for _, recipeID in ipairs(sorted_ids(byRecipe)) do note(recipeID, lowest(guildLines[recipeID])) end
   end
-  if dir and type(dir.native) == "table" then
-    for recipeID, entry in pairs(dir.native) do
-      if type(entry) == "table" then note(recipeID, entry.skillLineID) end
-    end
-  end
-  local c = { key = self.guildKey, at = ns.FS:Now(), incomplete = false, list = {}, byId = {} }
+  local c = { key = self.guildKey, at = ns.FS:Now(), version = self.directoryVersion, incomplete = false, list = {},
+    byId = {} }
   for _, recipeID in ipairs(ids) do
     local name = spell_name(recipeID)
     if name then
@@ -435,7 +431,12 @@ local function get_catalogue(self)
   local c = catalogue
   if c then
     local now = ns.FS:Now()
-    if c.key ~= self.guildKey or (c.incomplete and (now < c.at or now - c.at >= CATALOGUE_RETRY)) then c = nil end
+    local age = now - c.at
+    if c.key ~= self.guildKey or now < c.at
+        or ((c.incomplete or c.version ~= self.directoryVersion) and age >= CATALOGUE_RETRY)
+        or age >= CATALOGUE_MAX_AGE then
+      c = nil
+    end
   end
   if not c then
     c = build_catalogue(self)

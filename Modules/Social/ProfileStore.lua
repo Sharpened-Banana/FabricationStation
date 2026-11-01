@@ -140,11 +140,12 @@ function ProfileStore.Find(profile, recipeID)
     local r = type(line) == "table" and line.r
     if type(r) == "string" then
       local at = r:find(needle, 1, true)
-      if at then
+      while at do
         if lv == "r" then return i, 0, 0 end
         local q, qc = r:match("^(%d)(%d),", at + #needle)
         q, qc = tonumber(q), tonumber(qc)
         if q and q <= maxQ and qc <= maxQ then return i, q, qc end
+        at = r:find(needle, at + 1, true)           -- a malformed match: keep looking in this line, as Each does
       end
     end
   end
@@ -176,12 +177,13 @@ end
 function ProfileStore.Evict(profiles, cap, keep)
   local removed = {}
   if type(profiles) ~= "table" or type(cap) ~= "number" then return removed end
-  local candidates, n = {}, 0
+  local n = 0
+  for _ in pairs(profiles) do n = n + 1 end
+  if n <= cap then return removed end
+  local candidates = {}
   for key, p in pairs(profiles) do
-    n = n + 1
     if key ~= keep then candidates[#candidates + 1] = { key = key, rt = rt_of(p) } end
   end
-  if n <= cap then return removed end
   table.sort(candidates, function(a, b)
     if a.rt ~= b.rt then return a.rt < b.rt end
     return key_before(a.key, b.key)

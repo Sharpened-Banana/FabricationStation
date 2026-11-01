@@ -256,6 +256,31 @@ describe("Guild directory", function()
       assert.are.same({}, Guild:GetRecipeIndex():Keys())
     end)
 
+    it("keeps a profile whose stored hash is not a string stale and still lists it", function()
+      store("B-Realm", "Peer-Realm")
+      dir().profiles["B-Realm"].h = 5
+      Guild:_Changed()
+      Guild:RebuildItemIndex(); for _ = 1, 3 do p4.advance(0) end
+      assert.are.same({ "B-Realm" }, names(Guild:GetCrafters(100)))
+      assert.is_nil(Guild:GetRecipeIndex():HashOf("B-Realm"))
+    end)
+
+    it("keeps the profiles already indexed when a DATA arrives mid-worklist", function()
+      for i = 1, 45 do store("C" .. i .. "-Realm", "Peer-Realm", { recipes = { [100 + i] = { 1, 1 } } }) end
+      Guild:RebuildItemIndex()
+      p4.advance(0)                                                      -- 20 profiles are fresh now
+      local sets, idx = 0, Guild:GetRecipeIndex()
+      local orig = idx.Set
+      idx.Set = function(self, ...) sets = sets + 1; return orig(self, ...) end
+      store("C46-Realm", "Peer-Realm", { recipes = { [146] = { 1, 1 } } })
+      for _ = 1, 5 do p4.advance(0) end
+      assert.are.equal(26, sets)                                         -- 25 stale + the new one, not all 46
+      for i = 1, 46 do
+        local k = "C" .. i .. "-Realm"
+        assert.are.equal(dir().profiles[k].h, Guild:GetRecipeIndex():HashOf(k))
+      end
+    end)
+
     it("gives a rebuild a fresh index and re-indexes every profile", function()
       store("B-Realm", "Peer-Realm")
       Guild:RebuildItemIndex(); p4.advance(0)
@@ -790,7 +815,8 @@ describe("Guild directory", function()
     end
 
     before_each(function()
-      NAMES = { [700] = "Everforged Helm", [100] = "Everforged Mace", [101] = "Everforged Axe" }
+      NAMES = { [700] = "Everforged Helm", [100] = "Everforged Mace", [101] = "Everforged Axe",
+        [800] = "Everforged Boots" }
       chars = {}
       C_Spell.GetSpellName = function(id) return NAMES[id] end
       ns.GameData.Define("RecipeSources", nil, { bySkillLine = { [2907] = { [700] = { kind = "auto" } } } })
@@ -829,13 +855,13 @@ describe("Guild directory", function()
       assert.are.same({ kind = "none", recipes = {} }, Guild:FindRecipes("helm"))
     end)
 
-    it("takes the skill line from the generated list first, then own, profile and native records", function()
+    it("takes the skill line from the generated list first, then own, then the lowest line of the guild's profile and native records", function()
       chars[2999] = { recipes = { [700] = true, [101] = true } }
       store("B-Realm", "Peer-Realm", { recipes = { [101] = { 1, 1 }, [100] = { 3, 5 } }, line = 2950 })
       native_members(100, { NATIVE_B })
       local lines = {}
       for _, r in ipairs(Guild:FindRecipes("everforged").recipes) do lines[r.recipeID] = r.skillLineID end
-      assert.are.same({ [700] = 2907, [101] = 2999, [100] = 2950 }, lines)
+      assert.are.same({ [700] = 2907, [101] = 2999, [100] = 2907 }, lines)   -- 100: profile 2950, native 2907
     end)
 
     it("skips dropped professions of the account", function()
@@ -898,6 +924,7 @@ describe("Guild directory", function()
 
     it("leaves out a recipe the client has no name for and builds the catalogue again 300 s later", function()
       ns.GameData.Define("RecipeSources", nil, { bySkillLine = { [2907] = { [700] = {}, [800] = {} } } })
+      NAMES[800] = nil
       local calls = 0
       C_Spell.GetSpellName = function(id) calls = calls + 1; return NAMES[id] end
       assert.are.same({ 700 }, map(Guild:FindRecipes("helm").recipes, "recipeID"))
@@ -908,6 +935,45 @@ describe("Guild directory", function()
       assert.are.same({}, Guild:FindRecipes("wand").recipes)
       p4.advance(301)
       assert.are.same({ 800 }, map(Guild:FindRecipes("wand").recipes, "recipeID"))
+    end)
+
+    it("keeps the catalogue for a directory change within 300 s", function()
+      assert.are.same({}, Guild:FindRecipes("boots").recipes)             -- builds the catalogue
+      store("B-Realm", "Peer-Realm", { recipes = { [800] = { 1, 1 } } })   -- bumps directoryVersion
+      p4.advance(299); assert.are.same({}, Guild:FindRecipes("boots").recipes)
+    end)
+
+    it("rebuilds the catalogue after the directory changed and 300 s passed", function()
+      assert.are.same({}, Guild:FindRecipes("boots").recipes)
+      store("B-Realm", "Peer-Realm", { recipes = { [800] = { 1, 1 } } })
+      p4.advance(301)
+      assert.are.same({ 800 }, map(Guild:FindRecipes("boots").recipes, "recipeID"))
+    end)
+
+    -- The catalogue here is complete (every RecipeSources ID has a NAMES entry): an incomplete one would be built
+    -- again after 300 s whatever the rules say.
+    it("rebuilds the catalogue after 1800 s for newly learned recipes", function()
+      assert.are.same({}, Guild:FindRecipes("boots").recipes)
+      chars[2907] = { recipes = { [800] = true } }                        -- learned; directoryVersion unchanged
+      p4.advance(301); assert.are.same({}, Guild:FindRecipes("boots").recipes)
+      p4.advance(1500); assert.are.same({ 800 }, map(Guild:FindRecipes("boots").recipes, "recipeID"))
+    end)
+
+    it("rebuilds the catalogue when the clock went back", function()
+      assert.are.same({}, Guild:FindRecipes("boots").recipes)
+      chars[2907] = { recipes = { [800] = true } }
+      p4.setNow(now() - 10)
+      assert.are.same({ 800 }, map(Guild:FindRecipes("boots").recipes, "recipeID"))
+    end)
+
+    it("takes a guild recipe's line from the lowest line that lists it", function()
+      -- stored lines in descending order (a hand-edited or older file): 800 is on 2910 first, then on 2907
+      dir().profiles["B-Realm"] = { c = "B-Realm", ts = 1, lv = "r", h = "00000001", owner = "Peer-Realm", verified = true,
+        rt = now(), pr = { { s = 2910, k = 1, m = 10, r = ",800," }, { s = 2907, k = 1, m = 10, r = ",800," } } }
+      Guild:_Changed()
+      local r = Guild:FindRecipes("boots").recipes
+      assert.are.same({ 800 }, map(r, "recipeID"))
+      assert.are.equal(2907, r[1].skillLineID)
     end)
 
     it("builds the catalogue once, from a search, and not from a tooltip or the rows of an empty search", function()

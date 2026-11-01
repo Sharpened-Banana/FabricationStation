@@ -499,6 +499,20 @@ describe("Guild sync", function()
       assert.are.equal(before + 1, Guild.stats.evicted)
     end)
 
+    it("evicts nothing while the saved data is from a newer version", function()
+      local cap = ns.Social.ProfileStore.MAX_PER_GUILD
+      ns.Social.ProfileStore.MAX_PER_GUILD = 1
+      finally(function() ns.Social.ProfileStore.MAX_PER_GUILD = cap end)
+      seed_peer_with_profile("PA-Realm", profile_of("A-Realm"))
+      p4.advance(1)
+      ns.FS.dbIsNewer = true
+      local snapshot = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      local before = Guild.stats.evicted
+      seed_peer_with_profile("PB-Realm", profile_of("B-Realm"))
+      assert.are.same(snapshot, ns.Util.DeepCopy(ns.FS.db.global, 30))
+      assert.are.equal(before, Guild.stats.evicted)
+    end)
+
     it("never evicts the profile just stored, even when it is the oldest", function()
       local cap = ns.Social.ProfileStore.MAX_PER_GUILD
       ns.Social.ProfileStore.MAX_PER_GUILD = 1
