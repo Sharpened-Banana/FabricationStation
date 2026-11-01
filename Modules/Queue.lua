@@ -35,14 +35,15 @@ local function store()
   return q
 end
 
--- The saved queue for reads: { entries, restock } without repairing or reassigning anything in the
--- saved data (a newer or damaged save stays as it is; missing or malformed parts read as empty).
+-- The saved queue for reads: { entries, restock, restockMinProfit } without repairing or reassigning anything in
+-- the saved data (a newer or damaged save stays as it is; missing or malformed parts read as empty).
 local function view()
   local g = global()
   local q = g and g.queue
-  if type(q) ~= "table" then return { entries = {}, restock = {} } end
+  if type(q) ~= "table" then return { entries = {}, restock = {}, restockMinProfit = {} } end
   return { entries = type(q.entries) == "table" and q.entries or {},
-    restock = type(q.restock) == "table" and q.restock or {} }
+    restock = type(q.restock) == "table" and q.restock or {},
+    restockMinProfit = type(q.restockMinProfit) == "table" and q.restockMinProfit or {} }
 end
 
 local function recipes()
@@ -86,13 +87,39 @@ local function profit_of(result)
   return result and result.profit or nil
 end
 
--- The restock entry for itemID topped up to target, or nil when nothing needs crafting. `real` is the
--- stored entries (crafts already queued count towards the target). A crafter whose result cannot reach the
--- item's quality (flags.unreachableTarget) is skipped: it would craft a lower quality, the count of this item
--- would never rise and the entry would stay forever. With no crafter reaching it there is no entry.
-local function restock_entry(itemID, target, real)
+-- How many of itemID count as held for a restock target: the owned total (every character and the warband), plus the
+-- mail attachments while settings.crafting.restockCountMail, plus the player's own auction listings while
+-- restockCountListed and SaleLog is on. An outside count that cannot be known (no mailbox or Auctions tab visit
+-- recorded yet) stays nil in held.mail / held.listed and sets held.mailUnknown / held.listedUnknown: it adds nothing to
+-- total (the total is what is known), but it is never shown as none. A source that is not counted is simply absent.
+-- mailAge / listedAge: seconds since the snapshot data behind those counts.
+local function held_of(itemID)
+  local owned = scanner():GetItemCount(itemID, nil).total
+  local held = { owned = owned, total = owned }
+  if recipes():GetSetting("restockCountMail") then
+    local count, age = scanner():GetMailCount(itemID, nil)
+    if count == nil then held.mailUnknown = true else held.mail, held.mailAge = count, age end
+  end
+  local saleLog = recipes():GetSetting("restockCountListed") and ns.FS:IsModuleEnabled("SaleLog")
+    and ns.FS:GetModule("SaleLog", true)
+  if saleLog then
+    local count, age = saleLog:GetListedCount(itemID, nil)
+    if count == nil then held.listedUnknown = true else held.listed, held.listedAge = count, age end
+  end
+  held.total = owned + (held.mail or 0) + (held.listed or 0)
+  return held
+end
+
+-- The one decision behind a restock target, used by the entry and by GetRestockStatus. `real` is the stored entries
+-- (crafts already queued count towards the target). Returns a RestockStatus (see GetRestockStatus) plus the entry when
+-- status is "queued". A crafter whose result cannot reach the item's quality (flags.unreachableTarget) is skipped: it
+-- would craft a lower quality, the count of this item would never rise and the entry would stay forever. With no
+-- crafter reaching it there is no entry. With a min profit set, the chosen crafter's profit must be a number at or
+-- above it; an unknown profit makes no entry.
+local function restock_decision(itemID, target, minProfit, real)
+  local status = { itemID = itemID, target = target, minProfit = minProfit, held = held_of(itemID) }
   local found = recipes():FindRecipesForItem(itemID)[1]
-  if not found then return nil end
+  if not found then status.status = "noRecipe"; return status end
   local crafter, best, bestResult
   for _, charKey in ipairs(recipes():WhoCanCraft(found.recipeID)) do
     local result = recipes():Evaluate(found.recipeID, charKey, { targetQuality = found.quality })
@@ -103,17 +130,29 @@ local function restock_entry(itemID, target, real)
       crafter, best, bestResult = charKey, profit, result
     end
   end
-  if not crafter then return nil end
-  local held = scanner():GetItemCount(itemID, nil).total
+  if not crafter then status.status = "noCrafter"; return status end
+  status.crafter, status.profit = crafter, profit_of(bestResult)
   local yield = bestResult.expectedYield
   if type(yield) ~= "number" or yield <= 0 then yield = 1 end
-  local crafts = math.ceil((target - held) / yield)
+  local crafts = math.ceil((target - status.held.total) / yield)
   for _, e in ipairs(real) do
     if e.recipeID == found.recipeID and e.targetQuality == found.quality then crafts = crafts - e.quantity end
   end
-  if crafts <= 0 then return nil end
-  return { id = RESTOCK_PREFIX .. itemID, recipeID = found.recipeID, quantity = crafts, charKey = crafter,
+  if crafts <= 0 then status.status, status.crafts = "stocked", 0; return status end
+  status.crafts = crafts
+  if minProfit ~= nil then
+    if status.profit == nil then status.status = "unknownProfit"; return status end
+    if status.profit < minProfit then status.status = "belowMinProfit"; return status end
+  end
+  status.status = "queued"
+  return status, { id = RESTOCK_PREFIX .. itemID, recipeID = found.recipeID, quantity = crafts, charKey = crafter,
     targetQuality = found.quality, isRestock = true, itemID = itemID }
+end
+
+-- The restock entry for itemID topped up to target, or nil when nothing needs crafting.
+local function restock_entry(itemID, target, minProfit, real)
+  local _, entry = restock_decision(itemID, target, minProfit, real)
+  return entry
 end
 
 ---------------------------------------------------------------------------
@@ -205,6 +244,11 @@ local function restock_target(q, itemID)
   return type(target) == "number" and target or nil
 end
 
+local function restock_min_profit(q, itemID)
+  local n = q.restockMinProfit[itemID]
+  return type(n) == "number" and n == n and n >= 0 and n or nil
+end
+
 function Queue:GetEntries()
   local q = view()
   local real = stored_entries(q)
@@ -216,7 +260,7 @@ function Queue:GetEntries()
   end
   table.sort(itemIDs)
   for _, itemID in ipairs(itemIDs) do
-    local e = restock_entry(itemID, restock_target(q, itemID), real)
+    local e = restock_entry(itemID, restock_target(q, itemID), restock_min_profit(q, itemID), real)
     if e then out[#out + 1] = e end
   end
   return out
@@ -229,7 +273,7 @@ local function find_entry(id)
   if type(id) == "string" and id:sub(1, #RESTOCK_PREFIX) == RESTOCK_PREFIX then
     local itemID = tonumber(id:sub(#RESTOCK_PREFIX + 1))
     local target = itemID and restock_target(q, itemID)
-    return target and restock_entry(itemID, target, stored_entries(q)) or nil
+    return target and restock_entry(itemID, target, restock_min_profit(q, itemID), stored_entries(q)) or nil
   end
   for _, e in ipairs(stored_entries(q)) do
     if e.id == id then return copy_entry(e) end
@@ -241,19 +285,62 @@ end
 -- Restock targets
 ---------------------------------------------------------------------------
 
--- Keeps `target` of itemID in stock across all characters and the warband; nil (or less than 1) removes it.
+-- Keeps `target` of itemID in stock across all characters and the warband; nil (or less than 1) removes it, and its
+-- min profit with it.
 function Queue:SetRestock(itemID, target)
   if type(itemID) ~= "number" then return end
   local q = store()
   if not q then return end
   local value = type(target) == "number" and positive_int(target) or nil
-  if q.restock[itemID] == value then return end
-  q.restock[itemID] = value
-  changed(self)
+  local dirty = false
+  if q.restock[itemID] ~= value then q.restock[itemID] = value; dirty = true end
+  if value == nil and type(q.restockMinProfit) == "table" and q.restockMinProfit[itemID] ~= nil then
+    q.restockMinProfit[itemID] = nil
+    dirty = true
+  end
+  if dirty then changed(self) end
 end
 
 function Queue:GetRestockTargets()
   return copy_map(view().restock)
+end
+
+-- Requires a craft of itemID's restock target to profit at least `copper` (floored); nil removes the requirement. A
+-- negative or non-number (other than nil) is ignored.
+function Queue:SetRestockMinProfit(itemID, copper)
+  if type(itemID) ~= "number" then return end
+  local value
+  if copper ~= nil then
+    if type(copper) ~= "number" or copper ~= copper or copper < 0 or copper == math.huge then return end
+    value = math.floor(copper)
+  end
+  local q = store()
+  if not q then return end
+  if type(q.restockMinProfit) ~= "table" then
+    if value == nil then return end
+    q.restockMinProfit = {}
+  end
+  if q.restockMinProfit[itemID] == value then return end
+  q.restockMinProfit[itemID] = value
+  changed(self)
+end
+
+-- The min profit per craft set for itemID's restock target, copper; nil when none.
+function Queue:GetRestockMinProfit(itemID)
+  return restock_min_profit(view(), itemID)
+end
+
+-- RestockStatus = { itemID, target, held = { owned, mail?, listed?, total, mailAge?, listedAge?, mailUnknown?,
+-- listedUnknown? }, minProfit?, profit?, crafter?, crafts?, status } for itemID's restock target; nil without one.
+-- status: "queued" (a restock entry of `crafts` exists), "stocked" (held plus queued crafts reach the target),
+-- "belowMinProfit" / "unknownProfit" (the chosen crafter's `profit` fails the min profit, or is unknown; no entry; `crafts`
+-- is what would be needed), "noRecipe" (no recipe makes the item), "noCrafter" (no one reaches the item's quality).
+-- It decides exactly as the computed restock entry does. held is explained at held_of.
+function Queue:GetRestockStatus(itemID)
+  local q = view()
+  local target = type(itemID) == "number" and restock_target(q, itemID)
+  if not target then return nil end
+  return (restock_decision(itemID, target, restock_min_profit(q, itemID), stored_entries(q)))
 end
 
 ---------------------------------------------------------------------------
@@ -421,7 +508,8 @@ end
 function Queue:OnEnable()
   local handler = ns.FS:Wrap("Queue:Recompute", schedule_recompute)
   self:RegisterMessage(ns.Msg.RECIPES_CHANGED, handler)
-  self:RegisterMessage(ns.Msg.DATA_CHANGED, handler)
+  self:RegisterMessage(ns.Msg.DATA_CHANGED, handler)   -- includes (charKey, "mail")
+  self:RegisterMessage(ns.Msg.SALELOG_CHANGED, handler) -- own listings count as held
   -- A source name, not the module's: Queue is a core module and an error here must not turn it off.
   self:RegisterMessage(ns.Msg.ORDER_FULFILLED, ns.FS:Wrap("Queue:OrderFulfilled", on_order_fulfilled))
   self:RegisterEvent("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", ns.FS:Wrap("Queue:OrderFulfilled", on_fulfill_response))

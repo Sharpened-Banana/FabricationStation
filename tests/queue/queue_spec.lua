@@ -302,6 +302,179 @@ describe("Queue", function()
     end)
   end)
 
+  describe("restock gates and outside stock", function()
+    local saleLog
+    -- A stand-in SaleLog: GetListedCount answers (count, age); nil = unknown. Its enabled state is the module's.
+    local function fake_sale_log(count, age)
+      saleLog = ns.FS:NewModule("SaleLog")
+      saleLog.calls = 0
+      function saleLog:GetListedCount() self.calls = self.calls + 1; return count, age end
+      saleLog:Enable()
+      return saleLog
+    end
+    local function mail(items, time)
+      ns.FS.db.global.characters["Main-Realm"].mail = { time = time or W.now, items = items }
+    end
+    local function crafting(settings) ns.FS.db.global.settings.crafting = settings end
+
+    it("gates a restock entry below the min profit", function()
+      world.counts[5002] = 12; Q:SetRestock(5002, 20)
+      Q:SetRestockMinProfit(5002, 5001)
+      assert.same({}, Q:GetEntries())
+      Q:SetRestockMinProfit(5002, 5000)                      -- equal passes
+      assert.equals(7, Q:GetEntries()[1].quantity)
+      Q:SetRestockMinProfit(5002, nil)
+      assert.equals(7, Q:GetEntries()[1].quantity)
+    end)
+    it("judges the gate on the chosen crafter's profit", function()
+      world.fakeEvaluate(9001, function(charKey)
+        return { allocation = {}, reagentCost = 1, expectedYield = 1, flags = {}, profit = charKey == "Main-Realm" and 900 or 100 }
+      end)
+      world.counts[5002] = 0; Q:SetRestock(5002, 1)
+      Q:SetRestockMinProfit(5002, 900)
+      assert.equals("Main-Realm", Q:GetEntries()[1].charKey)
+      Q:SetRestockMinProfit(5002, 901)
+      assert.same({}, Q:GetEntries())
+    end)
+    it("makes no entry when the profit is unknown and a gate is set", function()
+      world.fakeEvaluate(9001, { allocation = {}, expectedYield = 1, flags = { noPrice = true } })
+      world.counts[5002] = 0; Q:SetRestock(5002, 1)
+      assert.equals(1, #Q:GetEntries())                      -- no gate: falls back to the first crafter
+      Q:SetRestockMinProfit(5002, 0)
+      assert.same({}, Q:GetEntries())
+    end)
+    it("counts mail and own listings as held", function()
+      fake_sale_log(2, 60)
+      world.counts[5002] = 12; Q:SetRestock(5002, 20)
+      mail({ [5002] = 3 })
+      assert.equals(3, Q:GetEntries()[1].quantity)           -- 20 - (12 + 3 + 2) = 3 short, yield 1.31 -> 3 crafts
+      assert.same({ owned = 12, mail = 3, listed = 2, total = 17, mailAge = 0, listedAge = 60 }, Q:GetRestockStatus(5002).held)
+    end)
+    it("leaves mail out with restockCountMail off", function()
+      fake_sale_log(2, 60)
+      world.counts[5002] = 12; Q:SetRestock(5002, 20)
+      mail({ [5002] = 3 }); crafting({ restockCountMail = false })
+      assert.equals(5, Q:GetEntries()[1].quantity)           -- 20 - (12 + 2) = 6 short -> 5 crafts
+      local held = Q:GetRestockStatus(5002).held
+      assert.same({ 12, nil, 2, 14 }, { held.owned, held.mail, held.listed, held.total })
+    end)
+    it("leaves listings out with restockCountListed off", function()
+      local sl = fake_sale_log(2, 60)
+      world.counts[5002] = 12; Q:SetRestock(5002, 20)
+      crafting({ restockCountListed = false })
+      assert.equals(7, Q:GetEntries()[1].quantity)
+      assert.is_nil(Q:GetRestockStatus(5002).held.listed); assert.equals(0, sl.calls)
+    end)
+    it("leaves listings out while SaleLog is off", function()
+      local sl = fake_sale_log(2, 60)
+      world.counts[5002] = 12; Q:SetRestock(5002, 20)
+      sl:Disable()
+      assert.equals(7, Q:GetEntries()[1].quantity)
+      assert.is_nil(Q:GetRestockStatus(5002).held.listed); assert.equals(0, sl.calls)
+    end)
+    it("leaves listings out when there is no SaleLog module", function()
+      world.counts[5002] = 12; Q:SetRestock(5002, 20)
+      assert.equals(7, Q:GetEntries()[1].quantity)
+      assert.is_nil(Q:GetRestockStatus(5002).held.listed)
+    end)
+    it("keeps an unknown outside count unknown instead of showing it as none", function()
+      fake_sale_log(nil, nil)                                -- SaleLog on, no listing snapshot
+      world.counts[5002] = 12; Q:SetRestock(5002, 20)        -- no mail snapshot either
+      local held = Q:GetRestockStatus(5002).held
+      assert.same({ nil, nil, true, true, 12 }, { held.mail, held.listed, held.mailUnknown, held.listedUnknown, held.total })
+      assert.equals(7, Q:GetEntries()[1].quantity)           -- decided on what is known
+      mail({})                                               -- a snapshot that holds none: a known zero
+      held = Q:GetRestockStatus(5002).held
+      assert.same({ 0, true }, { held.mail, held.listedUnknown }); assert.is_nil(held.mailUnknown)
+    end)
+    it("GetRestockStatus explains each case", function()
+      assert.is_nil(Q:GetRestockStatus(5002))                -- no target
+      world.counts[5002] = 12; Q:SetRestock(5002, 20)
+      local s = Q:GetRestockStatus(5002)
+      assert.same({ "queued", 7, 20, 5000, "Alt-Realm" }, { s.status, s.crafts, s.target, s.profit, s.crafter })
+      assert.same({ 12, 12 }, { s.held.owned, s.held.total }); assert.is_nil(s.minProfit)
+      assert.equals(5002, s.itemID)
+      world.counts[5002] = 20
+      assert.equals("stocked", Q:GetRestockStatus(5002).status)
+      world.counts[5002] = 12
+      Q:SetRestockMinProfit(5002, 6000)
+      s = Q:GetRestockStatus(5002)
+      assert.same({ "belowMinProfit", 6000, 5000 }, { s.status, s.minProfit, s.profit })
+      world.fakeEvaluate(9001, { allocation = {}, expectedYield = 1, flags = { noPrice = true } })
+      s = Q:GetRestockStatus(5002)
+      assert.equals("unknownProfit", s.status); assert.is_nil(s.profit)
+      world.fakeEvaluate(9001, { allocation = {}, reagentCost = 1, expectedYield = 1, profit = 9, flags = { unreachableTarget = true } })
+      assert.equals("noCrafter", Q:GetRestockStatus(5002).status)
+      world.counts[9999] = 0; Q:SetRestock(9999, 5)
+      assert.equals("noRecipe", Q:GetRestockStatus(9999).status)
+    end)
+    it("agrees with GetEntries on every gate", function()
+      world.counts[5002] = 12; Q:SetRestock(5002, 20)
+      for _, minProfit in ipairs({ 0, 5000, 5001 }) do
+        Q:SetRestockMinProfit(5002, minProfit)
+        local s = Q:GetRestockStatus(5002)
+        local e = Q:GetEntries()[1]
+        assert.equals(s.status == "queued", e ~= nil)
+        if e then assert.equals(s.crafts, e.quantity) end
+      end
+    end)
+    it("counts crafts already queued against the shortfall in the status", function()
+      world.counts[5002] = 12; Q:SetRestock(5002, 20)
+      Q:Add({ recipeID = 9001, quantity = 7, charKey = "Main-Realm", targetQuality = 2 })
+      assert.equals("stocked", Q:GetRestockStatus(5002).status)
+    end)
+    it("floors the min profit and ignores a bad one", function()
+      Q:SetRestock(5002, 20)
+      Q:SetRestockMinProfit(5002, 1234.9)
+      assert.equals(1234, Q:GetRestockMinProfit(5002))
+      Q:SetRestockMinProfit(5002, -1); Q:SetRestockMinProfit(5002, "9"); Q:SetRestockMinProfit(5002, 0 / 0)
+      Q:SetRestockMinProfit(5002, math.huge)
+      assert.equals(1234, Q:GetRestockMinProfit(5002))
+      Q:SetRestockMinProfit(5002, 0); assert.equals(0, Q:GetRestockMinProfit(5002))
+      Q:SetRestockMinProfit("x", 5); assert.is_nil(Q:GetRestockMinProfit("x"))
+      Q:SetRestockMinProfit(5002, nil); assert.is_nil(Q:GetRestockMinProfit(5002))
+    end)
+    it("announces a min profit change once, and nothing for a no-op", function()
+      Q:SetRestock(5002, 20)
+      local n = #world.messages("FS_QUEUE_CHANGED")
+      Q:SetRestockMinProfit(5002, 100); Q:SetRestockMinProfit(5002, 100); Q:SetRestockMinProfit(5002, nil)
+      Q:SetRestockMinProfit(5002, nil); Q:SetRestockMinProfit(5002, -5)
+      assert.equals(n + 2, #world.messages("FS_QUEUE_CHANGED"))
+    end)
+    it("SetRestock nil clears the min profit", function()
+      Q:SetRestock(5002, 20); Q:SetRestockMinProfit(5002, 100)
+      Q:SetRestock(5002, nil)
+      assert.is_nil(Q:GetRestockMinProfit(5002))
+      assert.same({}, ns.FS.db.global.queue.restockMinProfit)
+      Q:SetRestock(5002, 20)
+      assert.is_nil(Q:GetRestockMinProfit(5002))
+    end)
+    it("recomputes when the sale log changes", function()
+      local n = #world.messages("FS_QUEUE_CHANGED")
+      Q:SendMessage("FS_SALELOG_CHANGED")
+      W.advance(0.6)
+      assert.equals(n + 1, #world.messages("FS_QUEUE_CHANGED"))
+    end)
+    it("writes nothing while the saved data is from a newer version", function()
+      Q:SetRestock(5002, 20); Q:SetRestockMinProfit(5002, 50)
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      ns.FS.dbIsNewer = true
+      Q:SetRestockMinProfit(5002, 100); Q:SetRestockMinProfit(5002, nil)
+      Q:SetRestock(5002, nil)
+      assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+      assert.equals(50, Q:GetRestockMinProfit(5002))
+    end)
+    it("reads a damaged min profit table without repairing it", function()
+      local g = ns.FS.db.global
+      g.queue = { entries = {}, restock = { [5002] = 3 }, restockMinProfit = "future" }
+      ns.FS.dbIsNewer = true
+      world.counts[5002] = 0
+      assert.is_nil(Q:GetRestockMinProfit(5002))
+      assert.equals(1, #Q:GetEntries())
+      assert.equals("future", g.queue.restockMinProfit)
+    end)
+  end)
+
   describe("entry results", function()
     it("returns the evaluation the cost comes from, nil for an unknown entry", function()
       local id = Q:Add({ recipeID = 9001, quantity = 3, charKey = "Alt-Realm", targetQuality = 2 })

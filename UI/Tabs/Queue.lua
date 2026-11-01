@@ -216,26 +216,85 @@ function Tab.ShoppingText(ok, info)
   return L["Shopping list failed (%s)"]:format(tostring(info))
 end
 
--- The restock editor inputs -> itemID, target; or nil, nil, the problem in words.
-function Tab.ParseRestock(itemText, targetText)
+-- The restock editor inputs -> itemID, target, minProfit (copper; nil when the box is empty = no gate); or nil, nil,
+-- the problem in words.
+function Tab.ParseRestock(itemText, targetText, minProfitText)
   local itemID = ns.UI.ParseItemID(itemText)
   if not itemID then return nil, nil, L["Enter an item ID or shift-click an item link"] end
   local text = type(targetText) == "string" and strtrim(targetText) or ""
   local target = text:match("^%d+$") and tonumber(text) or nil
   if not target or target < 1 then return nil, nil, L["Enter a target of 1 or more"] end
-  return itemID, target
+  local gold = type(minProfitText) == "string" and strtrim(minProfitText) or ""
+  if gold == "" then return itemID, target end
+  local minProfit = ns.UI.ParseMoney(gold)
+  if not minProfit then return nil, nil, L["Enter the min profit in gold (for example 5 or 2g 50s), or leave it empty"] end
+  return itemID, target, minProfit
 end
 
--- targets = Queue:GetRestockTargets output -> rows by item ID.
-function Tab.BuildRestockRows(targets)
+-- targets = Queue:GetRestockTargets output, statuses|nil = { [itemID] = Queue:GetRestockStatus } -> rows by item ID.
+function Tab.BuildRestockRows(targets, statuses)
   local ids = {}
   for itemID, target in pairs(targets) do
     if type(itemID) == "number" and type(target) == "number" then ids[#ids + 1] = itemID end
   end
   table.sort(ids)
   local rows = {}
-  for i, itemID in ipairs(ids) do rows[i] = { itemID = itemID, name = item_name(itemID), target = targets[itemID] } end
+  for i, itemID in ipairs(ids) do
+    rows[i] = { itemID = itemID, name = item_name(itemID), target = targets[itemID], status = statuses and statuses[itemID] }
+  end
   return rows
+end
+
+-- "Target 10 · held 9 (mail 0, listed 5)" for a row with a RestockStatus. The parenthesis appears when mail or
+-- listings are above 0 or cannot be known yet (shown as "?", never as 0); without a status only the target is known.
+function Tab.RestockHeldText(row)
+  local s = row.status
+  local held = type(s) == "table" and s.held
+  if type(held) ~= "table" then return L["Target %d"]:format(row.target) end
+  local unknown = held.mailUnknown or held.listedUnknown
+  if unknown then
+    return L["Target %d \194\183 held %d (mail %s, listed %s)"]:format(row.target, held.total,
+      held.mailUnknown and "?" or tostring(held.mail or 0), held.listedUnknown and "?" or tostring(held.listed or 0))
+  end
+  if (held.mail or 0) > 0 or (held.listed or 0) > 0 then
+    return L["Target %d \194\183 held %d (mail %d, listed %d)"]:format(row.target, held.total, held.mail or 0, held.listed or 0)
+  end
+  return L["Target %d \194\183 held %d"]:format(row.target, held.total)
+end
+
+-- The status cell of a restock row: text, tone ("good", "warn", "dim"). Nil without a status.
+function Tab.RestockStatusText(row)
+  local s = row.status
+  if type(s) ~= "table" then return nil end
+  local kind = s.status
+  if kind == "queued" then
+    local crafts = s.crafts or 0
+    return (crafts == 1 and L["%d craft queued"] or L["%d crafts queued"]):format(crafts), "good"
+  elseif kind == "stocked" then return L["Stocked"], "dim"
+  elseif kind == "belowMinProfit" then
+    return L["Below min profit (%s per craft)"]:format(ns.UI.FormatMoney(s.profit)), "warn"
+  elseif kind == "unknownProfit" then return L["Profit unknown: not restocked"], "warn"
+  elseif kind == "noRecipe" then return L["No recipe makes this item"], "dim"
+  elseif kind == "noCrafter" then return L["No crafter reaches this quality"], "dim"
+  end
+  return nil
+end
+
+-- The tooltip lines of a restock row (the name, then what the row cannot fit), or nil without a status.
+function Tab.RestockTooltip(row)
+  local s = row.status
+  local held = type(s) == "table" and s.held
+  if type(held) ~= "table" then return nil end
+  local lines = { row.name }
+  lines[#lines + 1] = Tab.RestockHeldText(row)
+  local text = Tab.RestockStatusText(row)
+  if text then lines[#lines + 1] = text end
+  if s.minProfit then lines[#lines + 1] = L["Min profit: %s per craft"]:format(ns.UI.FormatMoney(s.minProfit)) end
+  if held.mailUnknown then lines[#lines + 1] = L["Mail not counted: open a mailbox to record it"] end
+  if held.listedUnknown then lines[#lines + 1] = L["Listings not counted: open the Auctions tab at the auction house"] end
+  if held.mail and held.mailAge then lines[#lines + 1] = L["Mail counted as of %s ago"]:format(ns.UI.FormatAge(held.mailAge)) end
+  if held.listed and held.listedAge then lines[#lines + 1] = L["Listings counted as of %s ago"]:format(ns.UI.FormatAge(held.listedAge)) end
+  return lines
 end
 
 ---------------------------------------------------------------------------
@@ -476,25 +535,48 @@ end
 -- Restock rows
 ---------------------------------------------------------------------------
 
+local STATUS_WIDTH = 170
+
 local function create_restock_row(list)
   local row = CreateFrame("Frame", nil, list.child)
   row:SetHeight(RESTOCK_ROW)
   row.remove = create_button(row, L["Remove"], 64)
   row.remove:SetPoint("RIGHT", row, "RIGHT", -PAD, 0)
+  row.status = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.status:SetPoint("RIGHT", row.remove, "LEFT", -GAP, 0)
+  row.status:SetWidth(STATUS_WIDTH)
+  row.status:SetJustifyH("RIGHT")
+  row.status:SetWordWrap(false)
   row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   row.text:SetPoint("LEFT", row, "LEFT", PAD + 8, 0)
-  row.text:SetPoint("RIGHT", row.remove, "LEFT", -GAP, 0)
+  row.text:SetPoint("RIGHT", row.status, "LEFT", -GAP, 0)
   row.text:SetJustifyH("LEFT")
   row.text:SetWordWrap(false)
   row.remove:SetScript("OnClick", ns.FS:Wrap("QueueTab:Restock", function()
     local d = row.data
     if d then edit_queue(function(queue) queue:SetRestock(d.itemID, nil) end) end
   end))
+  row:EnableMouse(true)
+  row:SetScript("OnEnter", ns.FS:Wrap("QueueTab:Tooltip", function(self)
+    local lines = self.data and Tab.RestockTooltip(self.data)
+    if not lines or type(GameTooltip) ~= "table" then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(lines[1])
+    for i = 2, #lines do GameTooltip:AddLine(lines[i], 1, 1, 1, true) end
+    GameTooltip:Show()
+  end))
+  row:SetScript("OnLeave", function()
+    if type(GameTooltip) == "table" then GameTooltip:Hide() end
+  end)
   return row
 end
 
+local STATUS_COLORS = { good = "|cff40ff40", warn = WARN, dim = DIM }
+
 local function bind_restock_row(row, data)
-  row.text:SetText(data.name .. "  " .. color(DIM, L["(keep %s)"]:format(data.target)))
+  row.text:SetText(data.name .. "  " .. color(DIM, Tab.RestockHeldText(data)))
+  local text, tone = Tab.RestockStatusText(data)
+  row.status:SetText(text and color(STATUS_COLORS[tone] or DIM, text) or "")
 end
 
 ---------------------------------------------------------------------------
@@ -523,7 +605,12 @@ local function refresh()
     view.empty:SetText("")
     view.empty:Hide()
   end
-  list_set_rows(view.restock, Tab.BuildRestockRows(queue and queue:GetRestockTargets() or {}))
+  local targets = queue and queue:GetRestockTargets() or {}
+  local statuses = {}
+  for itemID in pairs(targets) do
+    if type(itemID) == "number" then statuses[itemID] = queue:GetRestockStatus(itemID) end
+  end
+  list_set_rows(view.restock, Tab.BuildRestockRows(targets, statuses))
   show_status()
 end
 
@@ -567,16 +654,24 @@ end
 
 local function set_restock()
   if read_only() then return end
-  local itemID, target, problem = Tab.ParseRestock(view.itemEdit:GetText(), view.targetEdit:GetText())
+  local itemID, target, minProfit = Tab.ParseRestock(view.itemEdit:GetText(), view.targetEdit:GetText(),
+    view.minProfitEdit:GetText())
   if not itemID then
-    set_status(problem, "bad")
+    set_status(minProfit, "bad")   -- on failure the third value is the problem
     return
   end
   edit_queue(function(queue)
     queue:SetRestock(itemID, target)
-    set_status(L["Restocking %s to %s"]:format(item_name(itemID), target), "good")
+    queue:SetRestockMinProfit(itemID, minProfit)   -- an empty box removes the gate
+    if minProfit then
+      set_status(L["Restocking %s to %s, at least %s profit per craft"]:format(item_name(itemID), target,
+        ns.UI.FormatMoney(minProfit)), "good")
+    else
+      set_status(L["Restocking %s to %s"]:format(item_name(itemID), target), "good")
+    end
     view.itemEdit:SetText("")
     view.targetEdit:SetText("")
+    view.minProfitEdit:SetText("")
   end)
 end
 
@@ -642,19 +737,24 @@ local function build_restock_panel(container, created)
   title:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD, -4)
   title:SetText(L["Restock targets: keep this many in stock"])
 
-  created.itemEdit = create_edit(panel, PAD + 8, 200)
+  created.itemEdit = create_edit(panel, PAD + 8, 150)
   local itemHint = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   itemHint:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -PAD, -6)
   itemHint:SetText(color(DIM, L["item ID or shift-click an item link"]))
-  created.targetEdit = create_edit(panel, PAD + 8 + 200 + 70, 50)
+  created.targetEdit = create_edit(panel, PAD + 8 + 150 + 50, 44)
   created.targetEdit:SetNumeric(true)
   created.targetEdit:SetMaxLetters(5)
   local targetLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
   targetLabel:SetPoint("RIGHT", created.targetEdit, "LEFT", -8, 0)
   targetLabel:SetText(L["Target"])
+  created.minProfitEdit = create_edit(panel, PAD + 8 + 150 + 50 + 44 + 104, 56)
+  created.minProfitEdit:SetMaxLetters(12)
+  local minProfitLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  minProfitLabel:SetPoint("RIGHT", created.minProfitEdit, "LEFT", -8, 0)
+  minProfitLabel:SetText(L["Min profit (gold)"])
   created.setButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-  created.setButton:SetSize(60, BAR_ROW - 4)
-  created.setButton:SetPoint("LEFT", created.targetEdit, "RIGHT", 10, 0)
+  created.setButton:SetSize(48, BAR_ROW - 4)
+  created.setButton:SetPoint("LEFT", created.minProfitEdit, "RIGHT", 8, 0)
   created.setButton:SetText(L["Set"])
   created.setButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:Restock", set_restock))
 

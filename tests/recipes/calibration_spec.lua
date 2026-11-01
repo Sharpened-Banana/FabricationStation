@@ -145,7 +145,8 @@ describe("Recipes settings", function()
   end)
   it("has the defaults", function()
     assert.same({ staleCalibrationDays = 14, queueUseWarband = true, tooltipCraftCost = true,
-      applyWritesBlizzardSlots = false, selfCheck = true, scanBudgetMs = 4 }, R.DEFAULTS)
+      applyWritesBlizzardSlots = false, selfCheck = true, scanBudgetMs = 4,
+      restockCountMail = true, restockCountListed = true }, R.DEFAULTS)
     for key, value in pairs(R.DEFAULTS) do assert.equals(value, R:GetSetting(key), key) end
   end)
   it("Apply does not write Blizzard's reagent slots until the user turns it on", function()
@@ -161,6 +162,14 @@ describe("Recipes settings", function()
     local group = ns.FS:GetOptionsTable().args.crafting
     assert.equals(30, group.order)
     for key in pairs(R.DEFAULTS) do assert.is_truthy(group.args[key], key) end
+  end)
+  it("has toggles for counting mail and own listings as held for restock", function()
+    local args = ns.FS:GetOptionsTable().args.crafting.args
+    for _, key in ipairs({ "restockCountMail", "restockCountListed" }) do
+      assert.equals("toggle", args[key].type, key); assert.is_true(args[key].get(), key)
+      args[key].set(nil, false)
+      assert.is_false(R:GetSetting(key), key)
+    end
   end)
   it("reads and writes settings through the options lazily", function()
     local args = ns.FS:GetOptionsTable().args.crafting.args

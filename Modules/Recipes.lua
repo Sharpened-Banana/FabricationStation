@@ -19,6 +19,9 @@ Recipes.DEFAULTS = {
   applyWritesBlizzardSlots = false,
   selfCheck = true,
   scanBudgetMs = 4,
+  -- Restock targets count mail attachments and the player's own auction listings as held.
+  restockCountMail = true,
+  restockCountListed = true,
 }
 
 -- bonusStatName -> stat key, for Math.Stats.ParseBonusStats. enUS only: other client languages get
@@ -118,6 +121,8 @@ local function build_options()
         L["Apply fills the reagent slots in Blizzard's crafting window"]),
       selfCheck = toggle(5, "selfCheck", L["Check predictions against the game while the profession window is open"]),
       scanBudgetMs = range(6, "scanBudgetMs", L["Recipe scan time per frame (ms)"], 1, 16),
+      restockCountMail = toggle(7, "restockCountMail", L["Count items in mail as held for restock targets"]),
+      restockCountListed = toggle(8, "restockCountListed", L["Count my auction listings as held for restock targets"]),
     },
   }
 end

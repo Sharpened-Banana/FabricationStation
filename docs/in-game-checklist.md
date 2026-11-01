@@ -1211,6 +1211,12 @@ updates again. Expected: still one `"expire"` event for that mail. If a second o
 `GetInboxHeaderInfo` is not refreshed between updates (the mail signature drifts): report it, with the two `daysLeft`
 values from `/dump select(7, GetInboxHeaderInfo(1))` taken an hour apart.
 
+P7-14. **Restock with listings.** Open the mailbox once (so the mail count is known as 0 rather than unknown) and the
+Auctions tab at the auction house once. Set a restock target of 10 for an item you have 4 of, with 5 on the AH.
+Expected: 1 craft's worth is queued, and the row says "held 9 (mail 0, listed 5)". Before the mailbox visit the row
+shows "mail ?" instead of 0. Set Min profit above the item's profit: the entry goes and the row says "Below min
+profit".
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in
