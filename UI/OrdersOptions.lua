@@ -134,11 +134,20 @@ local function gold(order, key, name, desc, limits)
   })
 end
 
--- Copper -> the text a money input shows: whole gold as "50", else "1g 50s" (ns.UI.ParseMoney reads both back).
+-- Copper -> the text a money input shows, always plain (never GetMoneyString's coin markup): whole gold as "50",
+-- else "2g 50s" (the non-zero units). ns.UI.ParseMoney reads both back.
 local function money_text(copper)
   if type(copper) ~= "number" then return "" end
+  copper = math.floor(copper)
   if copper % COPPER_PER_GOLD == 0 then return tostring(copper / COPPER_PER_GOLD) end
-  return ns.UI.FormatMoney(copper)
+  local whole = math.floor(copper / COPPER_PER_GOLD)
+  local silver = math.floor((copper % COPPER_PER_GOLD) / 100)
+  local rest = copper % 100
+  local parts = {}
+  if whole > 0 then parts[#parts + 1] = ("%dg"):format(whole) end
+  if silver > 0 then parts[#parts + 1] = ("%ds"):format(silver) end
+  if rest > 0 then parts[#parts + 1] = ("%dc"):format(rest) end
+  return table.concat(parts, " ")
 end
 
 -- A text input over a copper amount kept by store(settings, copper|nil). `name` is a string or a function. Empty clears it; text that is not money
@@ -199,7 +208,7 @@ end
 
 -- The inputs of the unknown rewards group: one per key of db.global.ordersUnknownRewards (at most MAX_UNKNOWN, the
 -- most seen first, then by key), each setting rewardOverrides[key] in gold per unit.
-local function unknown_args()
+local function unknown_list()
   local g = ns.FS.db and ns.FS.db.global
   local seen = g and type(g.ordersUnknownRewards) == "table" and g.ordersUnknownRewards or {}
   local list = {}
@@ -210,11 +219,24 @@ local function unknown_args()
     if a.count ~= b.count then return a.count > b.count end
     return tostring(a.key) < tostring(b.key)
   end)
+  while #list > MAX_UNKNOWN do list[#list] = nil end
+  return list
+end
+
+-- What the options show of that list, as one string: the list changed when this did.
+local function signature(list)
+  local parts = {}
+  for i, item in ipairs(list) do parts[i] = tostring(item.key) .. "=" .. item.count end
+  return table.concat(parts, ",")
+end
+
+local function unknown_args(list)
   local args = {}
-  for i = 1, math.min(#list, MAX_UNKNOWN) do
+  for i = 1, #list do
     local key = list[i].key
     args[key] = money_input({
-      order = i, name = function() return reward_name(key) end, desc = (L["seen on %d orders"]):format(list[i].count),
+      order = i, name = function() return reward_name(key) end,
+      desc = (list[i].count == 1 and L["seen on %d order"] or L["seen on %d orders"]):format(list[i].count),
       after = rescore,
       current = function(s) return type(s.rewardOverrides) == "table" and s.rewardOverrides[key] or nil end,
       store = function(s, copper)
@@ -226,22 +248,27 @@ local function unknown_args()
   return args
 end
 
-local lastGroup, lastUnknown   -- the group Build() returned last and its unknown rewards subgroup
+local lastUnknown, lastSignature   -- the unknown rewards subgroup Build() made last, and the list it shows
 
 -- Lists the unknown rewards again (the group's args are fixed tables, so it replaces them) and asks the options
--- dialog to redraw. Runs when the orders change and whenever a test asks.
+-- dialog to redraw, only when a key or a count changed. Runs when the orders change and whenever a test asks.
 function M.RefreshUnknown()
   if not lastUnknown then return end
-  lastUnknown.args = unknown_args()
-  if lastGroup then ns.FS:RegisterOptions("orders", lastGroup) end
+  local list = unknown_list()
+  local sig = signature(list)
+  if sig == lastSignature then return end
+  lastSignature = sig
+  lastUnknown.args = unknown_args(list)
+  LibStub("AceConfigRegistry-3.0"):NotifyChange("FabricationStation")
 end
 
 local function unknown_group()
+  local list = unknown_list()
+  lastSignature = signature(list)
   lastUnknown = {
     type = "group", order = 30, name = L["Unknown rewards"], inline = true,
     disabled = disabled_for("Orders"),
-    desc = L["Rewards FabricationStation could not value. Give one a value and orders with it are scored."],
-    args = unknown_args(),
+    args = unknown_args(list),
   }
   return lastUnknown
 end
@@ -413,7 +440,7 @@ end
 
 -- The AceConfig group. Getters and setters look modules up when they run, so a test can replace them.
 function M.Build()
-  lastGroup = {
+  return {
     type = "group", name = L["Orders & Ledger"], order = 40,
     args = {
       scoring = scoring_group(),
@@ -422,7 +449,6 @@ function M.Build()
       ledger = ledger_group(),
     },
   }
-  return lastGroup
 end
 
 ns.FS:RegisterOptions("orders", M.Build())

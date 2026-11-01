@@ -501,10 +501,10 @@ function Orders:ScoreInput(input, ctx)
   if blocked(input, ctx) then risks[#risks + 1] = "blockedCustomer" end
 
   -- What the order costs per knowledge point or Moxie it pays: nothing when the commission covers the reagents and
-  -- the concentration, unknown when the commission or the reagent cost is.
+  -- the concentration, unknown (nil) when the commission, the reagent cost or the concentration charge is unknown.
   local costPerReward, tooCostly = {}, false
-  local base = (commission ~= nil and type(reagentCost) == "number")
-    and commission - reagentCost - (charge or 0) or nil
+  local base = (commission ~= nil and type(reagentCost) == "number" and charge ~= nil)
+    and commission - reagentCost - charge or nil
   local units = {}
   for _, reward in ipairs(rewards) do
     if type(reward.units) == "number" and reward.units > 0 then

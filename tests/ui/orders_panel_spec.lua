@@ -103,6 +103,8 @@ describe("OrdersPanel", function()
         P.Notes({ net = 5, costPerReward = { knowledge = 300000, moxie = 5000 } }))
       assert.same({}, P.Notes({ net = 5, costPerReward = { knowledge = 0 } }))
       assert.same({}, P.Notes({ net = 5, costPerReward = {} }))
+      assert.same({ "Concentration value unknown" },
+        P.Notes({ net = 5, flags = { unknownConcentrationValue = true }, costPerReward = { knowledge = nil } }))
     end)
     it("builds the queue entry for an order", function()
       local view = { orderID = 10, recipeID = 4444, minQuality = 3, charKey = "Me-Silvermoon", usedConcentration = true,

@@ -217,6 +217,12 @@ describe("Orders options", function()
     local function scoring() return g.args.scoring.args end
     local function unknown() return scoring().unknownRewards end
 
+    local function seen(counts)
+      ns.FS.db.global.ordersUnknownRewards = {}
+      for key, count in pairs(counts) do ns.FS.db.global.ordersUnknownRewards[key] = { count = count, lastSeen = 1 } end
+      ns.UI.OrdersOptions.RefreshUnknown()
+    end
+
     it("stores a limit in copper, and no limit for an empty input", function()
       local limit = scoring().knowledgeLimit
       assert.equal("input", limit.type); assert.equal("", limit.get())
@@ -230,6 +236,53 @@ describe("Orders options", function()
       assert.is_nil(orders():Settings().rewardCostLimits.knowledge)
       assert.equal(25000, orders():Settings().rewardCostLimits.moxie); assert.equal("", limit.get())
     end)
+    it("shows a limit as plain text that ParseMoney reads back, never coin markup", function()
+      _G.GetMoneyString = function(copper) return "|TInterface\\MoneyFrame\\UI-GoldIcon:0|t " .. copper .. "|cffffd700g|r" end
+      local limit = scoring().knowledgeLimit
+      limit.set(nil, "2g 50s")
+      assert.equal(25000, orders():Settings().rewardCostLimits.knowledge)
+      local text = limit.get()
+      assert.equal("2g 50s", text)
+      assert.is_nil(text:find("|T", 1, true)); assert.is_nil(text:find("|c", 1, true))
+      assert.equal(25000, ns.UI.ParseMoney(text))
+      scoring().moxieLimit.set(nil, "0.5")
+      assert.equal("50s", scoring().moxieLimit.get())
+      orders():Settings().rewardCostLimits.moxie = 12345
+      assert.equal("1g 23s 45c", scoring().moxieLimit.get())
+      limit.set(nil, text)   -- committing the shown text again keeps the value
+      assert.equal(25000, orders():Settings().rewardCostLimits.knowledge)
+      _G.GetMoneyString = nil
+    end)
+    it("shows an unknown reward's override as plain text too", function()
+      _G.GetMoneyString = function() return "|TIcon|t" end
+      ns.FS.db.global.ordersUnknownRewards = { ["item:5"] = { count = 1 } }
+      ns.UI.OrdersOptions.RefreshUnknown()
+      local opt = unknown().args["item:5"]
+      opt.set(nil, "1.5")
+      assert.equal("1g 50s", opt.get())
+      _G.GetMoneyString = nil
+    end)
+    it("says \"seen on 1 order\" for a single order", function()
+      seen({ ["item:1"] = 1, ["item:2"] = 2 })
+      assert.equal("seen on 1 order", unknown().args["item:1"].desc)
+      assert.equal("seen on 2 orders", unknown().args["item:2"].desc)
+    end)
+    it("redraws the options only when the unknown list changed", function()
+      seen({ ["item:1"] = 1 })
+      local before = W.config.notified
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.equal(0, W.config.notified - before)
+      ns.FS.db.global.ordersUnknownRewards["item:1"].count = 2
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.equal(1, W.config.notified - before)
+      ns.FS.db.global.ordersUnknownRewards["item:9"] = { count = 1 }
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.equal(2, W.config.notified - before)
+    end)
+    it("says the unknown rewards sentence once", function()
+      assert.is_truthy(scoring().unknownNote)
+      assert.is_nil(unknown().desc)
+    end)
     it("keeps the limit when the input is not money", function()
       local limit = scoring().knowledgeLimit
       limit.set(nil, "50"); limit.set(nil, "lots"); limit.set(nil, "-5")
@@ -242,12 +295,6 @@ describe("Orders options", function()
       scoring().knowledgeLimit.set(nil, "50"); scoring().moxieLimit.set(nil, "1")
       assert.equal(0, calls); W.advance(0.5); assert.equal(1, calls)
     end)
-
-    local function seen(counts)
-      ns.FS.db.global.ordersUnknownRewards = {}
-      for key, count in pairs(counts) do ns.FS.db.global.ordersUnknownRewards[key] = { count = count, lastSeen = 1 } end
-      ns.UI.OrdersOptions.RefreshUnknown()
-    end
 
     it("lists the unknown rewards, most seen first, at most 20, named from the game", function()
       local counts = {}
@@ -296,7 +343,7 @@ describe("Orders options", function()
       assert.same({}, unknown().args)
       assert.equal("Unknown rewards", unknown().name)
       assert.equal("Rewards FabricationStation could not value. Give one a value and orders with it are scored.",
-        unknown().desc)
+        scoring().unknownNote.name)
     end)
     it("shows the new list when an order changes", function()
       seen({})

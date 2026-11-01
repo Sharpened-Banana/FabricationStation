@@ -1020,6 +1020,7 @@ L["The most an order may cost you for each knowledge point it pays (reagents and
 L["The most an order may cost you for each Moxie it pays (reagents and concentration beyond the tip). Leave empty for no limit. An order over it is flagged \"Reward costs too much\"."] = true   -- quotes the risk label
 L["Unknown rewards"] = true
 L["Rewards FabricationStation could not value. Give one a value and orders with it are scored."] = true
+L["seen on %d order"] = true
 L["seen on %d orders"] = true
 L["Pays %s per knowledge point"] = true   -- order row tooltip (%s is money): what the order costs per knowledge point
 L["Pays %s per Moxie"] = true   -- order row tooltip (%s is money): what the order costs per Moxie
