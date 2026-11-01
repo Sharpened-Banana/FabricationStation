@@ -995,7 +995,7 @@ the guide opens again (it is still due). Then step through the guide with Next t
 `/dump FabricationStationDB.global.onboarding` shows `skipped = false`, and it does not return after `/reload`.
 
 P5-10. **Reward icons and the Reagents cover on the order rows.** Open a profession's Crafting Orders list (Patron tab,
-then Public or Personal). Patron orders show their rewards as 14 px icons in the item-name column, left of the row's cells
+then Public or Personal). Patron orders show their rewards as 20 px icons in the item-name column, left of the row's cells
 (item or currency icon, a count bottom-right when above 1). In the Reagents column (the 90 px one before Expiration) the
 word Blizzard writes there ("Some", "None", "All") is gone, covered by a dark panel with the reagents you must supply as
 icons (the count they need, red while you own fewer, white otherwise; white when the game cannot tell). A green check
@@ -1010,6 +1010,12 @@ tint shows on the panel too, and hovering the row (or the panel) lights the pane
 whether both look like the rest of the row. A dimmed row's panel is darker and its icons are as faint as the reward
 icons. An order whose customer provides everything shows the check even when the addon has no result for it
 (Blizzard's reagent state "All", or the allocation minus what is provided is empty).
+
+The icons (rewards and reagents) are 20 px with a 2 px gap, and the "+N" slot is 24 px. Check that they do not touch the
+row's top and bottom edges (rows are about 25 px tall; the icons are centred vertically), that the count (the
+NumberFontNormal font object, one size up from before) is readable on the icon without covering it, and that "+N" stays
+inside its slot. If a size is wrong, ICON_SIZE, ICON_GAP and MORE_WIDTH in UI/OrdersPanel.lua are the one line to edit
+(the specs follow them). Tooltip lines keep a 14 px inline icon.
 
 P5-11. **Where the cover sits and how it gives way.** The panel lines up with the Reagents column on every row, also after
 resizing the window and scrolling. It is only drawn over a column it can identify as Reagents: the header whose text is

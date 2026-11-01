@@ -21,6 +21,22 @@ end
 describe("OrdersPanel row icons", function()
   local ns, W, form, tooltip, owned, ownedCalls, evalResult, board, cached, requests, headers
 
+  -- The icon geometry comes from the module (read at boot), so a size change is a one-line edit there: S = icon size,
+  -- G = gap, MW = the "+N" slot's width.
+  local S, G, MW
+  local function strip_width(n) return n * (S + G) - G end        -- n icons side by side
+  local function with_more(n) return n * (S + G) + MW end          -- n icons, then a "+N" slot
+  local function slot_x(i) return (i - 1) * (S + G) end            -- the left edge of slot i
+  local function fit_count(room)                                    -- icons drawn beside a "+N" in `room` px
+    local n = 0
+    while with_more(n + 1) <= room do n = n + 1 end
+    return n
+  end
+  -- Name widths that leave a given room for the reward icons: with the whole strip (132 px of cells) room = 132 - w;
+  -- without the profit cell (86 px) room = 178 - w, and only for w above 136 (below that the profit cell fits).
+  local function width_for_room(room) return 132 - room end
+  local function width_for_room_without_profit(room) return 178 - room end
+
   -- The list's column headers (read-only for the addon): the name column and `columns`, handed out in a scrambled
   -- creation order. texts[i] = the text of the i-th column (nil: the header has no text).
   local function set_headers(columns, texts)
@@ -91,6 +107,7 @@ describe("OrdersPanel row icons", function()
     P2.fake_module(ns, "Queue", { Add = function() return 1 end, GetEntries = function() return {} end })
     form = fake_professions_frame()
     P2.load(ns, FILES)
+    S, G, MW = ns.UI.OrdersPanel.ICON_SIZE, ns.UI.OrdersPanel.ICON_GAP, ns.UI.OrdersPanel.MORE_WIDTH
     W.fire("ADDON_LOADED", "Blizzard_Professions")
     headers = nil
     set_headers(COLUMNS, nil)
@@ -152,7 +169,7 @@ describe("OrdersPanel row icons", function()
       show_board({ raw })
       local c = cells_of(row_for(raw))
       assert.equal(1, #c.iconEntries); assert.equal(1, #shown(c.slots))
-      assert.equal(14, c.icons:GetWidth())
+      assert.equal(S, c.icons:GetWidth())
       assert.same({ 901001 }, files_of(c.coverSlots))
     end)
     it("has no strip for an order without rewards", function()
@@ -183,7 +200,7 @@ describe("OrdersPanel row icons", function()
   end)
 
   describe("fitting the reward icons beside the item name", function()
-    -- Five rewards: five icons need 74 px (15 per icon less 1); a "+N" slot is 22 px wide.
+    -- Five rewards.
     local function five(textWidth)
       boot()
       local rewards = {}
@@ -198,26 +215,28 @@ describe("OrdersPanel row icons", function()
     end
 
     it("shows every icon when they all fit", function()
-      local c = five(50)   -- room 82
+      local c = five(width_for_room(strip_width(5) + 8))
       assert.same({ "all", true, 5, nil }, state(c))
-      assert.equal(74, c.icons:GetWidth())
+      assert.equal(strip_width(5), c.icons:GetWidth())
     end)
     it("shows as many as fit and turns the last slot into +N", function()
-      local c = five(80)   -- room 52: 2 icons and a 22 px "+3"
+      local c = five(width_for_room(with_more(2) + 2))   -- 2 icons and a "+3"
       assert.same({ "all", true, 2, "+3" }, state(c))
-      assert.equal(52, c.icons:GetWidth())
-      assert.same({ "LEFT", c.icons, "LEFT", 30, 0 }, { c.more:GetPoint(1) })
-      assert.same({ "all", true, 3, "+2" }, state(five(60)))   -- room 72: 3 icons and "+2"
+      assert.equal(with_more(2), c.icons:GetWidth())
+      assert.same({ "LEFT", c.icons, "LEFT", slot_x(3), 0 }, { c.more:GetPoint(1) })
+      assert.same({ "all", true, 3, "+2" }, state(five(width_for_room(with_more(3) + 2))))   -- 3 icons and "+2"
     end)
     it("gives +N a width of its own, so it cannot run into the cells", function()
-      local c = five(80)
-      assert.equal(22, c.more:GetWidth()); assert.is_false(c.more:GetWordWrap())
+      local c = five(width_for_room(with_more(2) + 2))
+      assert.equal(MW, c.more:GetWidth()); assert.is_false(c.more:GetWordWrap())
       assert.is_true(c.icons.clips)
     end)
     it("shows only +N when one slot fits, and hides the icons when none does", function()
-      assert.same({ "noProfit", true, 1, "+4" }, state(five(140)))   -- no profit cell: room 38
-      assert.same({ "noProfit", true, 0, "+5" }, state(five(150)))   -- room 28
-      assert.same({ "all", false, 0, nil }, state(five(125)))   -- room 7: not even one
+      -- no profit cell (the name is long): room for the "+N" slot alone
+      assert.same({ "noProfit", true, 0, "+5" }, state(five(width_for_room_without_profit(MW + 4))))
+      -- room one pixel short of a "+N" slot: nothing
+      assert.same({ "all", false, 0, nil }, state(five(width_for_room(MW - 1))))
+      assert.same({ "noProfit", false, 0, nil }, state(five(width_for_room_without_profit(MW - 1))))
     end)
     it("hides the icons with the main strip", function()
       local c = five(200)
@@ -259,8 +278,8 @@ describe("OrdersPanel row icons", function()
       local row = form.newOrderRow(g)
       form.acquireOrderRow(row, form.orderElement(raw), true)
       local c = cells_of(row)
-      assert.same({ 3, false }, { #shown(c.slots), c.more:IsShown() })   -- 3 icons: 44 <= room 82
-      g.textWidth = 110   -- room 22: one slot, so only "+3"
+      assert.same({ 3, false }, { #shown(c.slots), c.more:IsShown() })   -- 3 icons fit beside the short name
+      g.textWidth = width_for_room(MW + 4)   -- room for the "+N" slot alone: only "+3"
       W.advance(0)
       assert.same({ 0, true, "+3" }, { #shown(c.slots), c.more:IsShown(), c.more:GetText() })
       g.textWidth = 50
@@ -284,29 +303,34 @@ describe("OrdersPanel row icons", function()
       assert.same({ "reagent", "reagent" }, { c.reagentEntries[1].kind, c.reagentEntries[2].kind })
       assert.is_false(c.coverCheck:IsShown()); assert.is_false(c.coverQuestion:IsShown())
     end)
-    it("draws the icons left-aligned with a small padding, 14 px with a 1 px gap", function()
+    it("draws the icons left-aligned with a small padding, icon size apart by the gap", function()
       boot()
       evalResult = slots_needed(3)
       local raw = order()
       show_board({ raw })
       local c = cells_of(row_for(raw))
       local function x(i) local _, _, _, px = c.coverSlots[i].icon:GetPoint(1); return px end
-      assert.same({ 4, 19, 34 }, { x(1), x(2), x(3) })
+      assert.same({ 4, 4 + slot_x(2), 4 + slot_x(3) }, { x(1), x(2), x(3) })
       assert.same({ "LEFT", c.coverContent, "LEFT", 4, 0 }, { c.coverSlots[1].icon:GetPoint(1) })
-      assert.same({ 14, 14 }, { c.coverSlots[1].icon:GetSize() })
+      assert.same({ S, S }, { c.coverSlots[1].icon:GetSize() })
     end)
     it("colours a count red when you own less than it needs, white otherwise or when unknown", function()
       boot()
-      evalResult = allocation({ itemID = 1001, quantity = 3 }, { itemID = 1002, quantity = 4 }, { itemID = 1003, quantity = 2 },
-        { itemID = 1004, quantity = 1 })
-      owned[1001], owned[1002], owned[1003] = 2, 4, 0   -- short, exactly enough, none at all; 1004 unknown (nil)
+      evalResult = allocation({ itemID = 1001, quantity = 3 }, { itemID = 1002, quantity = 4 }, { itemID = 1003, quantity = 2 })
+      owned[1001], owned[1002] = 2, 4   -- short, exactly enough; 1003 unknown (nil)
       local raw = order()
       show_board({ raw })
       local c = cells_of(row_for(raw))
       local s = c.coverSlots
-      assert.same({ RED, WHITE, RED, WHITE }, { count_color(s[1]), count_color(s[2]), count_color(s[3]), count_color(s[4]) })
-      assert.same({ 2, 4, 0 }, { c.reagentEntries[1].have, c.reagentEntries[2].have, c.reagentEntries[3].have })
-      assert.is_nil(c.reagentEntries[4].have)
+      assert.same({ RED, WHITE, WHITE }, { count_color(s[1]), count_color(s[2]), count_color(s[3]) })
+      assert.same({ 2, 4 }, { c.reagentEntries[1].have, c.reagentEntries[2].have })
+      assert.is_nil(c.reagentEntries[3].have)
+      -- none at all is a known 0: red
+      evalResult = allocation({ itemID = 1005, quantity = 2 })
+      owned[1005] = 0
+      show_board({ order({ orderID = 11 }) })
+      c = cells_of(row_for(order({ orderID = 11 })))
+      assert.same({ 0, RED }, { c.reagentEntries[1].have, count_color(c.coverSlots[1]) })
       -- the logged-in character's count from the game, the warband bank included
       assert.is_true(#ownedCalls > 0)
       for _, call in ipairs(ownedCalls) do assert.is_true(call[2]) end
@@ -339,9 +363,11 @@ describe("OrdersPanel row icons", function()
       local raw = order()
       show_board({ raw })
       local c = cells_of(row_for(raw, geometry(50)))
-      assert.equal(4, #shown(c.coverSlots))   -- room 82: 4 icons (59) and a 22 px "+3"
-      assert.same({ true, "+3", 22 }, { c.coverMore:IsShown(), c.coverMore:GetText(), c.coverMore:GetWidth() })
-      assert.same({ "LEFT", c.coverContent, "LEFT", 4 + 60, 0 }, { c.coverMore:GetPoint(1) })
+      local n = fit_count(90 - 2 * 4)   -- the 90 px column less its padding
+      assert.is_true(n > 0 and n < 6)
+      assert.equal(n, #shown(c.coverSlots))
+      assert.same({ true, "+" .. (7 - n), MW }, { c.coverMore:IsShown(), c.coverMore:GetText(), c.coverMore:GetWidth() })
+      assert.same({ "LEFT", c.coverContent, "LEFT", 4 + slot_x(n + 1), 0 }, { c.coverMore:GetPoint(1) })
       assert.is_true(c.cover.clips)
     end)
   end)
@@ -993,15 +1019,15 @@ describe("OrdersPanel row icons", function()
       assert.equal("unsure", P.ReagentState({ input = {} }))
       assert.is_nil(P.ReagentState(nil))
     end)
-    it("IconLayout counts the slots that fit, with a 22 px +N slot", function()
+    it("IconLayout counts the slots that fit, with a +N slot of its own width", function()
       boot()
       local P = ns.UI.OrdersPanel
       local entries = { {}, {}, {}, {} }
-      assert.same({ shown = 4, width = 59 }, P.IconLayout(entries, nil))
-      assert.same({ shown = 4, width = 59 }, P.IconLayout(entries, 59))
-      assert.same({ shown = 2, more = 2, width = 52 }, P.IconLayout(entries, 58))   -- 2 icons + "+2"
-      assert.same({ shown = 0, more = 4, width = 22 }, P.IconLayout(entries, 22))
-      assert.same({ shown = 0, width = 0 }, P.IconLayout(entries, 21))
+      assert.same({ shown = 4, width = strip_width(4) }, P.IconLayout(entries, nil))
+      assert.same({ shown = 4, width = strip_width(4) }, P.IconLayout(entries, strip_width(4)))
+      assert.same({ shown = 2, more = 2, width = with_more(2) }, P.IconLayout(entries, strip_width(4) - 1))   -- 2 icons + "+2"
+      assert.same({ shown = 0, more = 4, width = MW }, P.IconLayout(entries, MW))
+      assert.same({ shown = 0, width = 0 }, P.IconLayout(entries, MW - 1))
       assert.same({ shown = 0, width = 0 }, P.IconLayout({}, 100))
     end)
   end)

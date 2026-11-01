@@ -5,10 +5,10 @@ local L = ns.L
 -- are each switched on and off by 1a's module toggles (Settings > Modules) and fail on their own:
 --   OrdersRowAddons   per order row: a tint for VIP / repeat / blocked customers, a dark overlay on rows the filters
 --                     hide, a strip of cells (net profit, score, risk count with a tooltip, Add to Queue), left of it a
---                     strip of small icons for the rewards of a patron order, and a cover over Blizzard's Reagents
+--                     strip of 20 px icons for the rewards of a patron order, and a cover over Blizzard's Reagents
 --                     cell that replaces its "Some" / "None" / "All" with the reagents the crafter must supply (the
---                     allocation minus what the customer provides, as icons whose count is red while the character
---                     owns fewer), a green check when the customer provides every reagent, or "?" when they are not
+--                     allocation minus what the customer provides, as 20 px icons whose count is red while the
+--                     character owns fewer), a green check when the customer provides every reagent, or "?" when they are not
 --                     known (a recraft, no result). Both have tooltips (setting Orders.showRowIcons turns them off).
 --   OrdersSidePanel   a panel docked at ProfessionsFrame's right edge while the order list is shown: risk filters,
 --                     public claims remaining, the best claimable order and the Claim Best Order button.
@@ -71,7 +71,9 @@ local CORE_WIDTH = ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP + CELL_WIDTH   --
 local WARN_SLOT, PROFIT_SLOT = WARN_SIZE + CELL_GAP, CELL_WIDTH + CELL_GAP
 local STRIP_WIDTH = CORE_WIDTH + WARN_SLOT + PROFIT_SLOT
 local PAD, GAP = 6, 4
-local ICON_SIZE, ICON_GAP, MORE_WIDTH = 14, 1, 22   -- icons: 14 px, 1 px apart; the "+N" slot has a width of its own
+local ICON_SIZE, ICON_GAP, MORE_WIDTH = 20, 2, 24   -- row icons: 20 px, 2 px apart; the "+N" slot has a width of its own
+M.ICON_SIZE, M.ICON_GAP, M.MORE_WIDTH = ICON_SIZE, ICON_GAP, MORE_WIDTH   -- read-only (the specs derive their geometry)
+local TOOLTIP_ICON = 14                               -- the inline icon in a tooltip line (keeps the line height)
 local UNKNOWN_ICON = 134400                           -- the question mark, for an icon the client cannot give
 -- The Reagents cover's padding inside Blizzard's cell.
 local COVER_PAD = 4
@@ -506,7 +508,7 @@ end
 -- A list of icons + the room for them in pixels (nil: unlimited) -> { shown = icons drawn, more = N|nil, width }.
 -- With room for all of them: all drawn. Otherwise the slots that fit (k) draw k-1 icons and the last one becomes "+N"
 -- (N = the entries not drawn; a slot of its own width MORE_WIDTH); no room for one slot: nothing (width 0). Icons are
--- 14 px, 1 px apart.
+-- ICON_SIZE (20 px), ICON_GAP (2 px) apart.
 function M.IconLayout(entries, room)
   local total = #entries
   if total == 0 then return { shown = 0, width = 0 } end
@@ -576,7 +578,7 @@ local function icon_lines(entries)
     end
     if entry.kind == "reward" then
       local name = entry.itemID and item_label(entry.itemID) or currency_label(entry.currencyID)
-      lines[#lines + 1] = { text = L["%s x%d"]:format(("|T%s:%d|t %s"):format(tostring(icon_of(entry)), ICON_SIZE, name),
+      lines[#lines + 1] = { text = L["%s x%d"]:format(("|T%s:%d|t %s"):format(tostring(icon_of(entry)), TOOLTIP_ICON, name),
         entry.count), color = TEXT_COLORS.white }
     else
       local name, have = item_label(entry.itemID), entry.have
@@ -731,7 +733,7 @@ end
 local function bank_slot(bank, i)
   local slot = bank.slots[i]
   if not slot then
-    slot = { icon = bank.frame:CreateTexture(nil, "ARTWORK"), count = text(bank.frame, "NumberFontNormalSmall") }
+    slot = { icon = bank.frame:CreateTexture(nil, "ARTWORK"), count = text(bank.frame, "NumberFontNormal") }
     slot.icon:SetSize(ICON_SIZE, ICON_SIZE)
     slot.count:SetPoint("BOTTOMRIGHT", slot.icon, "BOTTOMRIGHT", 1, -1)
     bank.slots[i] = slot
