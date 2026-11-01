@@ -123,7 +123,7 @@ describe("tools/export_math_fixtures.lua", function()
   it("prints the skipped counts", function()
     local code, s = run(write_sv(global()) .. " " .. outdir())
     assert.equals(0, code)
-    assert.equals("exported 2 fixtures (1 captures skipped: no calibration, 1 crafts skipped: no schematic)\n", s)
+    assert.equals("exported 2 fixtures (1 captures skipped: no calibration, 1 crafts skipped: no schematic, 1 crafts skipped: no fixture)\n", s)
   end)
 
   it("keeps only the recipe's GameData rows", function()
@@ -188,7 +188,7 @@ describe("tools/export_math_fixtures.lua", function()
     local out = outdir()
     local code, s = run(write_sv(g) .. " " .. out)
     assert.equals(0, code)
-    assert.equals("exported 1 fixtures (0 captures skipped: no calibration, 1 crafts skipped: no schematic)\n", s)
+    assert.equals("exported 1 fixtures (0 captures skipped: no calibration, 1 crafts skipped: no schematic, 1 crafts skipped: no fixture)\n", s)
     assert.same({ "craft_9001_1.lua" }, dofile(out .. "/index.lua"))
   end)
 
@@ -197,15 +197,47 @@ describe("tools/export_math_fixtures.lua", function()
     local out = outdir()
     local code, s = run(write_sv(g) .. " " .. out)
     assert.equals(0, code)
-    assert.equals("exported 1 fixtures (1 captures skipped: no calibration, 1 crafts skipped: no schematic, 1 crafts skipped: no calibration)\n", s)
+    assert.equals("exported 1 fixtures (1 captures skipped: no calibration, 1 crafts skipped: no schematic, 1 crafts skipped: no fixture, 1 crafts skipped: no calibration)\n", s)
   end)
 
-  it("leaves out crafts without the game's quality or the quality they made", function()
+  it("counts every craft it leaves out by reason", function()
     local g = global()
-    g.craftLog.entries[1].game.quality = nil
+    local function extra(id, game, actual, fixture)
+      g.craftLog.entries[#g.craftLog.entries + 1] = { id = id, recipeID = 9001, charKey = "Main-Realm", game = game,
+        actual = actual, fixture = fixture }
+    end
+    local fixture = { reagents = reagent_infos(), calib = calib(500) }
+    extra(5, nil, { quality = 1 }, fixture)                      -- no game prediction
+    extra(6, { concentrationCost = 3 }, { quality = 1 }, fixture) -- the game gave no quality
+    extra(7, { quality = 1 }, { quantity = 1 }, fixture)          -- the craft's quality is unknown
+    extra(8, { quality = 1 }, nil, fixture)
     local code, s = run(write_sv(g) .. " " .. outdir())
     assert.equals(0, code)
-    assert.equals("exported 1 fixtures (1 captures skipped: no calibration, 1 crafts skipped: no schematic)\n", s)
+    assert.equals("exported 2 fixtures (1 captures skipped: no calibration, 1 crafts skipped: no schematic, "
+      .. "1 crafts skipped: no fixture, 2 crafts skipped: no game quality, 2 crafts skipped: no actual quality)\n", s)
+  end)
+
+  it("stops when two fixtures would have the same name", function()
+    local g = global()
+    g.captures.list[3] = { id = 1, recipeID = 9001, charKey = "Main-Realm", schematic = schematic(9001),
+      reagents = reagent_infos(), operationInfo = { craftingQuality = 1 } }   -- the same id twice
+    local out = outdir()
+    local code, s = run(write_sv(g) .. " " .. out)
+    assert.equals(1, code); assert.is_truthy(s:find("capture_9001_1.lua", 1, true))
+    assert.is_truthy(s:find("twice", 1, true))
+    assert.is_nil(slurp(out .. "/index.lua"))
+  end)
+
+  it("says which files --force replaced", function()
+    local out = outdir()
+    local h = io.open(out .. "/craft_9001_1.lua", "w"); h:write("return { committed = true }\n"); h:close()
+    local code, s = run("--force " .. write_sv(global()) .. " " .. out)
+    assert.equals(0, code)
+    assert.is_truthy(s:find("replaced " .. out .. "/craft_9001_1.lua\n", 1, true))
+    assert.is_nil(s:find("replaced " .. out .. "/capture_9001_1.lua", 1, true))   -- new files are not replacements
+    -- A rerun with identical files replaces nothing.
+    local _, again = run("--force " .. write_sv(global()) .. " " .. out)
+    assert.is_nil(again:find("replaced", 1, true))
   end)
 
   it("cannot reach globals from the SavedVariables file", function()

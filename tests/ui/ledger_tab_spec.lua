@@ -1022,8 +1022,29 @@ describe("Ledger tab Crafts section", function()
     assert.same({ "Potion", "3", "2 of 3 as predicted", "+2 (expected +1.0)", "1 proc", "70 of 80 predicted" },
       { potion.recipe, potion.crafts, potion.quality, potion.multicraft, potion.resourcefulness, potion.concentration })
     local flask = cells(v, 9003)
-    assert.same({ "Flask", "2", "1 of 2 as predicted", "0 procs", "\226\128\148" },
+    -- Flask's crafts reported no Multicraft number, so "0 procs" would not be known either.
+    assert.same({ "Flask", "2", "1 of 2 as predicted", "?", "\226\128\148" },
       { flask.recipe, flask.crafts, flask.quality, flask.resourcefulness, flask.concentration })
+  end)
+
+  it("shows 0 procs only when Multicraft was reported", function()
+    seed({ craft(9001, { actual = { quality = 1, multicraft = 0, resourcesReturned = {} } }),
+      craft(9002, { actual = { quality = 1, resourcesReturned = {} } }),
+      craft(9003, { actual = { quality = 1, resourcesReturned = { [100] = 1 } } }) })
+    local v = open()
+    show(v, "crafts")
+    assert.same({ "0 procs", "?", "1 proc" }, { cells(v, 9001).resourcefulness, cells(v, 9002).resourcefulness,
+      cells(v, 9003).resourcefulness })
+    local row = row_of(v, 9002)
+    row:GetScript("OnEnter")(row)
+    assert.is_truthy(table.concat(tooltip.lines, "\n"):find("Resourcefulness: ?", 1, true))
+  end)
+
+  it("shows ? for expected extras when no craft knows its base quantity", function()
+    seed({ craft(9001, { predicted = { quality = 1, yield = 2.5 }, actual = { quality = 1, multicraft = 1 } }) })
+    local v = open()
+    show(v, "crafts")
+    assert.equal("+1 (expected +?)", cells(v, 9001).multicraft)
   end)
 
   it("shows ? for what the game did not report, never 0", function()

@@ -21,7 +21,8 @@ local L = ns.L
 -- Crafts (phase 7) is the craft log over the last WEEKS weeks (CraftLog:Summary), one row per recipe, most crafted first:
 -- Crafts, Quality ("2 of 3 as predicted": the crafts whose quality matched FabricationStation's prediction, of those
 -- where both are known), Multicraft (the extra items seen next to the expected ones), Resourcefulness (crafts that
--- returned reagents) and Concentration (spent next to predicted). A number the game did not report is "?", never 0, and
+-- returned reagents; "0 procs" only when the crafts reported their Multicraft numbers, else "?") and Concentration
+-- (spent next to predicted). A number the game did not report is "?", never 0, and
 -- the row tooltip says how many crafts it leaves out. Concentration and Resourcefulness are hidden first when narrow.
 -- The page is one pooled virtual list in a plain scroll frame, as in the Orders and Queue tabs; each list item is a
 -- heading, a column header, a data row, a note or a spacer, and a pooled row keeps one set of cells per section.
@@ -546,6 +547,14 @@ local function procs_text(n)
   return (n == 1 and L["%d proc"] or L["%d procs"]):format(n)
 end
 
+-- The Resourcefulness text: a count of procs; "0 procs" only when the crafts reported their Multicraft numbers (else a
+-- game that sends no result fields would read as a known 0); otherwise "?".
+local function resourcefulness_text(data)
+  local n = count(data.resourcefulnessProcs)
+  if n > 0 or count(data.multicraftReported) > 0 then return procs_text(n), true end
+  return "?", false
+end
+
 -- The Multicraft cell: the extras seen next to the expected ones; "?" for a part nobody reported, and a trailing "?"
 -- when some of the crafts did not report theirs.
 local function multicraft_text(data)
@@ -561,12 +570,13 @@ function Tab.CellTexts(section, data)
   data = type(data) == "table" and data or {}
   if section == "craft" then
     local known = count(data.qualityKnown) > 0
+    local procs_cell, procs_known = resourcefulness_text(data)
     return {
       recipe = tostring(data.name or recipe_name(data.recipeID)),
       crafts = tostring(count(data.crafts)),
       quality = known and (L["%d of %d as predicted"]):format(count(data.asPredicted), data.qualityKnown) or color(DIM, "?"),
       multicraft = multicraft_text(data),
-      resourcefulness = procs_text(count(data.resourcefulnessProcs)),
+      resourcefulness = procs_known and procs_cell or color(DIM, procs_cell),
       concentration = (is_money(data.concentrationSpent) and is_money(data.concentrationPredicted))
         and (L["%s of %s predicted"]):format(rounded(data.concentrationSpent), rounded(data.concentrationPredicted))
         or color(DIM, EM_DASH),
@@ -749,7 +759,7 @@ function Tab.TooltipLines(item)
       lines[#lines + 1] = line((L["Multicraft reported for %d of %d crafts"]):format(count(data.multicraftReported),
         count(data.crafts)), GOLD)
     end
-    lines[#lines + 1] = line((L["Resourcefulness: %s"]):format(procs_text(count(data.resourcefulnessProcs))))
+    lines[#lines + 1] = line((L["Resourcefulness: %s"]):format((resourcefulness_text(data))))
     if is_money(data.concentrationSpent) and is_money(data.concentrationPredicted) then
       lines[#lines + 1] = line((L["Concentration: %s spent, %s predicted"]):format(rounded(data.concentrationSpent),
         rounded(data.concentrationPredicted)))

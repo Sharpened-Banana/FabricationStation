@@ -16,8 +16,9 @@
 --     (the cached one, schematics[recipeID]), calib = fixture.calib, reagents = fixture.reagents, operationInfo = {
 --     craftingQuality = game.quality, concentrationCost, baseSkill, bonusSkill, baseDifficulty, bonusDifficulty,
 --     lowerSkillThreshold, upperSkillTreshold }, actualQuality = actual.quality, applyConcentration, gameData }. An
---     entry without a cached schematic is skipped ("no schematic"); one whose fixture holds no calibration is skipped
---     too ("no calibration", named in the summary only when there is one).
+--     entry is skipped, and counted by its first reason in this order: "no fixture" (older than the newest 100),
+--     "no game quality" (no game prediction, or one without a quality), "no actual quality" (the craft's quality is
+--     unknown), "no schematic" (none cached), "no calibration" (its fixture holds none).
 -- gameData holds only the recipe's rows: the ReagentQuality, ReagentCategories and OptionalReagents of its reagents
 -- (the schematic's slots and the reagents of the capture or craft), and the CraftingData, ItemCraftingData,
 -- QualityThresholds and ConcentrationCurves rows its crafting data leads to.
@@ -26,10 +27,13 @@
 -- wiped, so a committed golden fixture could be replaced) stops the export unless --force is given. index.lua in
 -- outDir becomes the sorted union of the names it already lists and the ones exported now.
 --
--- Prints `exported N fixtures (M captures skipped: no calibration, K crafts skipped: no schematic)`.
+-- Prints `exported N fixtures (M captures skipped: no calibration, K crafts skipped: no schematic)`, then adds
+-- `, J crafts skipped: <reason>` for each of the other craft reasons above that is not 0. With --force it also prints
+-- `replaced <path>` for each existing fixture it overwrote with different content.
 -- Exits 0 on success; 1 with a message on stderr when the file is missing, does not parse, fails to run, holds no
 -- captures and no crafts, holds a capture or an exportable craft without integer id and recipeID, a calibrated capture
--- without its schematic, reagents or operationInfo, when a fixture cannot be written or would be overwritten, or when
+-- without its schematic, reagents or operationInfo, when two fixtures would have the same name, when a fixture cannot
+-- be written or would be overwritten, or when
 -- the GameData files or an existing index.lua cannot be read. Nothing is written unless every fixture passes.
 local here = (arg and arg[0] or ""):match("^(.*)[/\\][^/\\]*$") or "."
 package.path = here .. "/lib/?.lua;tools/lib/?.lua;" .. package.path
@@ -178,16 +182,23 @@ local GAME_FIELDS = { "concentrationCost", "baseSkill", "bonusSkill", "baseDiffi
 
 -- Serialize everything first so a bad fixture leaves the output directory untouched.
 local files, names = {}, {}
-local skippedCaptures, skippedNoSchematic, skippedNoCalibration = 0, 0, 0
+local skippedCaptures, skippedNoSchematic = 0, 0
+local craftSkips = { noFixture = 0, noGame = 0, noActual = 0, noCalibration = 0 }
+local chosen = {}   -- [name] = true: the names this run writes
 
 local function add(kind, recipeID, id, fixture)
   local okSer, text = pcall(serialize, fixture)
   if not okSer then fail(("%s %d does not serialize: %s"):format(kind, id, tostring(text))) end
   local name = ("%s_%d_%d.lua"):format(kind, recipeID, id)
+  if chosen[name] then fail(name .. " would be written twice: the same id appears twice in " .. path) end
+  chosen[name] = true
   local file = { path = outDir .. "/" .. name, text = "return " .. text .. "\n" }
   local existing = read_file(file.path)
-  if existing and existing ~= file.text and not force then
-    fail(file.path .. " already exists with different content; rerun with --force to replace it")
+  if existing and existing ~= file.text then
+    if not force then
+      fail(file.path .. " already exists with different content; rerun with --force to replace it")
+    end
+    file.replaced = true
   end
   files[#files + 1] = file
   names[#names + 1] = name
@@ -215,29 +226,36 @@ for i, capture in ipairs(captures) do
 end
 
 for i, entry in ipairs(crafts) do
-  local game = type(entry) == "table" and type(entry.game) == "table" and entry.game or nil
-  local actual = type(entry) == "table" and type(entry.actual) == "table" and entry.actual or nil
-  -- Only crafts that kept their fixture and have both the game's prediction and the quality they made are fixtures.
-  if type(entry) == "table" and type(entry.fixture) == "table" and game and actual
-    and is_number(game.quality) and is_number(actual.quality) then
-    if not is_integer(entry.recipeID) or not is_integer(entry.id) then
-      fail(("craft %d has no integer recipeID and id"):format(i))
-    end
-    local schematic = schematics[entry.recipeID]
-    if type(schematic) ~= "table" then
-      skippedNoSchematic = skippedNoSchematic + 1
-    elseif type(entry.fixture.calib) ~= "table" then
-      skippedNoCalibration = skippedNoCalibration + 1
+  if type(entry) == "table" then
+    local game = type(entry.game) == "table" and entry.game or nil
+    local actual = type(entry.actual) == "table" and entry.actual or nil
+    -- Only crafts that kept their fixture and have both the game's prediction and the quality they made are fixtures.
+    if type(entry.fixture) ~= "table" then
+      craftSkips.noFixture = craftSkips.noFixture + 1
+    elseif not (game and is_number(game.quality)) then
+      craftSkips.noGame = craftSkips.noGame + 1
+    elseif not (actual and is_number(actual.quality)) then
+      craftSkips.noActual = craftSkips.noActual + 1
     else
-      local reagents = type(entry.fixture.reagents) == "table" and entry.fixture.reagents or {}
-      local operationInfo = { craftingQuality = game.quality }
-      for _, field in ipairs(GAME_FIELDS) do operationInfo[field] = game[field] end
-      add("craft", entry.recipeID, entry.id, {
-        source = "craft", recipeID = entry.recipeID, schematic = schematic, calib = entry.fixture.calib,
-        reagents = reagents, operationInfo = operationInfo, actualQuality = actual.quality,
-        applyConcentration = entry.applyConcentration == true,
-        gameData = recipe_game_data(schematic, reagents, entry.fixture.calib),
-      })
+      if not is_integer(entry.recipeID) or not is_integer(entry.id) then
+        fail(("craft %d has no integer recipeID and id"):format(i))
+      end
+      local schematic = schematics[entry.recipeID]
+      if type(schematic) ~= "table" then
+        skippedNoSchematic = skippedNoSchematic + 1
+      elseif type(entry.fixture.calib) ~= "table" then
+        craftSkips.noCalibration = craftSkips.noCalibration + 1
+      else
+        local reagents = type(entry.fixture.reagents) == "table" and entry.fixture.reagents or {}
+        local operationInfo = { craftingQuality = game.quality }
+        for _, field in ipairs(GAME_FIELDS) do operationInfo[field] = game[field] end
+        add("craft", entry.recipeID, entry.id, {
+          source = "craft", recipeID = entry.recipeID, schematic = schematic, calib = entry.fixture.calib,
+          reagents = reagents, operationInfo = operationInfo, actualQuality = actual.quality,
+          applyConcentration = entry.applyConcentration == true,
+          gameData = recipe_game_data(schematic, reagents, entry.fixture.calib),
+        })
+      end
     end
   end
 end
@@ -275,10 +293,14 @@ for _, f in ipairs(files) do
   if not h then fail("cannot write " .. f.path .. ": " .. tostring(openErr)) end
   h:write(f.text)
   h:close()
+  if f.replaced then print("replaced " .. f.path) end
 end
 
 local summary = ("%d captures skipped: no calibration, %d crafts skipped: no schematic"):format(skippedCaptures, skippedNoSchematic)
-if skippedNoCalibration > 0 then
-  summary = summary .. (", %d crafts skipped: no calibration"):format(skippedNoCalibration)
+for _, reason in ipairs({ { "noFixture", "no fixture" }, { "noGame", "no game quality" },
+  { "noActual", "no actual quality" }, { "noCalibration", "no calibration" } }) do
+  if craftSkips[reason[1]] > 0 then
+    summary = summary .. (", %d crafts skipped: %s"):format(craftSkips[reason[1]], reason[2])
+  end
 end
 print(("exported %d fixtures (%s)"):format(#names, summary))

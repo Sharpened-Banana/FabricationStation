@@ -308,8 +308,8 @@ end
 -- that sum, never counted as 0:
 --   * qualityKnown: entries with both actual.quality and predicted.quality, split into asPredicted / above / below;
 --     gameAgreed: entries whose game.quality and actual.quality are both known and equal;
---   * expectedExtra = sum of (predicted.yield - (actual.baseQuantity or predicted.yield)) over the entries with a
---     predicted yield; actualExtra = sum of actual.multicraft over the entries that have one. Each is nil when no
+--   * expectedExtra = sum of (predicted.yield - actual.baseQuantity) over the entries that have both (an unknown base
+--     quantity, as for a recipe whose yield is a range, is unknown, not 0 extra); actualExtra = sum of actual.multicraft over the entries that have one. Each is nil when no
 --     entry has the number (P7-16: the payload's multicraft may be absent); multicraftReported counts the entries
 --     that have one, so a page can say when the sum leaves crafts out;
 --   * multicraftProcs: entries with extras (actual.multicraft > 0); resourcefulnessProcs: entries that returned reagents;
@@ -339,8 +339,8 @@ function CraftLog:Summary(filter)
       end
       if actualQuality and number_or_nil(game.quality) == actualQuality then s.gameAgreed = s.gameAgreed + 1 end
 
-      local yield = number_or_nil(predicted.yield)
-      if yield then s.expectedExtra = (s.expectedExtra or 0) + (yield - (number_or_nil(actual.baseQuantity) or yield)) end
+      local yield, base = number_or_nil(predicted.yield), number_or_nil(actual.baseQuantity)
+      if yield and base then s.expectedExtra = (s.expectedExtra or 0) + (yield - base) end
       local multicraft = number_or_nil(actual.multicraft)
       if multicraft then
         s.actualExtra = (s.actualExtra or 0) + multicraft

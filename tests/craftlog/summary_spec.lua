@@ -47,10 +47,10 @@ describe("CraftLog Summary", function()
       entry(2, 9001, { predicted = { quality = 1, yield = 1.4 }, actual = { quality = 1, baseQuantity = 1, multicraft = 0,
         resourcesReturned = {} } }),
       entry(3, 9001, { predicted = { quality = 1, yield = 2 }, actual = { quality = 1, multicraft = 1,
-        resourcesReturned = { [100] = 2, [101] = 1 } } }),   -- no baseQuantity: nothing expected beyond the yield
+        resourcesReturned = { [100] = 2, [101] = 1 } } }),   -- no baseQuantity: left out of the expected sum
     })
     local a = CL:Summary()[9001]
-    assert.near(1.0, a.expectedExtra, 1e-9)          -- 0.6 + 0.4 + 0
+    assert.near(1.0, a.expectedExtra, 1e-9)          -- 0.6 + 0.4
     assert.equals(3, a.actualExtra)
     assert.equals(3, a.multicraftReported)
     assert.equals(2, a.multicraftProcs)              -- the crafts that made extras
@@ -71,6 +71,18 @@ describe("CraftLog Summary", function()
     assert.equals(0, b.multicraftReported)
     assert.near(0.5, b.expectedExtra, 1e-9)
     assert.equals(0, b.multicraftProcs)
+  end)
+
+  it("leaves an unknown base quantity out of the expected extras instead of counting it as 0", function()
+    seed({
+      entry(1, 9001, { predicted = { quality = 1, yield = 2.5 }, actual = { quality = 1 } }),       -- a range recipe
+      entry(2, 9001, { predicted = { quality = 1, yield = 2.5 }, actual = { quality = 1 } }),
+      entry(3, 9002, { predicted = { quality = 1, yield = 1.5 }, actual = { baseQuantity = 1 } }),
+      entry(4, 9002, { predicted = { quality = 1, yield = 2.5 }, actual = {} }),                    -- no base: not counted
+    })
+    local s = CL:Summary()
+    assert.is_nil(s[9001].expectedExtra)             -- every entry lacks it: unknown
+    assert.near(0.5, s[9002].expectedExtra, 1e-9)    -- only entry 3
   end)
 
   it("leaves the concentration sums nil without data", function()
