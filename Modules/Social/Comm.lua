@@ -12,18 +12,23 @@ local ADDON_NAME, ns = ...
 -- of that send are ignored). A message that hits lockdown 3 times, or a permanent failure, is dropped. Throttling
 -- is ChatThrottleLib's business, not ours.
 --
--- Inbound: only this addon's prefix, GUILD and WHISPER, never ourselves. The per-sender rate limit (20 messages per
--- 60 s, sliding) runs BEFORE anything is unwired or decoded, so a spammer cannot make us decompress repeatedly;
--- text over Codec.MAX_WIRE is dropped before the rate limit costs it anything. Dispatch runs under a log-only error
--- source, so a hostile or buggy message can never turn a module off; such errors count in stats.invalid.
+-- Inbound: only this addon's prefix, GUILD and WHISPER, never ourselves. Text over Codec.MAX_WIRE is dropped first;
+-- then the optional acceptSender(sender, distribution) predicate (Guild: a whisper must come from a guild member) and
+-- the per-sender limit run BEFORE anything is unwired or decoded, so a stranger or a spammer cannot make us decompress.
+-- The limit is a sliding RATE_WINDOW (60 s) with two budgets per sender: BYTE_BUDGET bytes of wire text (what bounds
+-- the decode cost: DecompressString has no output limit, so the expansion scales with the wire bytes) and RATE_LIMIT
+-- messages (above LIMITS.MAX_CHARS, so one full answer of one DATA per shared character, plus HELLOs, fits).
+-- Dispatch runs under a log-only error source, so a hostile or buggy message can never turn a module off; such errors
+-- count in stats.invalid.
 ns.Social = ns.Social or {}
 local Comm = {}
 ns.Social.Comm = Comm
 
 Comm.MAX_QUEUE = 50
 Comm.MAX_ATTEMPTS = 3          -- sends of one message that may hit lockdown before it is dropped
-Comm.RATE_LIMIT = 20           -- inbound messages per sender ...
-Comm.RATE_WINDOW = 60          -- ... per this many seconds
+Comm.RATE_LIMIT = 80           -- inbound messages per sender (LIMITS.MAX_CHARS = 50 DATA plus headroom) ...
+Comm.BYTE_BUDGET = 262144      -- ... and inbound wire bytes per sender (16 full-size messages) ...
+Comm.RATE_WINDOW = 60          -- ... per this many seconds (sliding)
 Comm.FLUSH_INTERVAL = 15       -- seconds between flush attempts while the queue is non-empty
 Comm.ERROR_SOURCE = "Guild:Comm"
 
@@ -154,8 +159,9 @@ end
 -- Public API
 ---------------------------------------------------------------------------
 
--- deps = { ace, gate, selfName = fun(): string, now = fun(): number }. `ace` needs SendCommMessage(self, prefix, text,
--- distribution, target, prio, callbackFn, callbackArg). Creating a Comm starts it (and the gate).
+-- deps = { ace, gate, selfName = fun(): string, now = fun(): number, acceptSender = fun(sender, distribution): boolean
+-- (optional; false drops the message before it is rate-counted or unwired) }. `ace` needs SendCommMessage(self, prefix,
+-- text, distribution, target, prio, callbackFn, callbackArg). Creating a Comm starts it (and the gate).
 function Comm.New(deps)
   assert(type(deps) == "table" and deps.ace and deps.gate, "Comm.New: ace and gate are required")
   local self = setmetatable({
@@ -166,10 +172,11 @@ function Comm.New(deps)
     errorSource = deps.errorSource or Comm.ERROR_SOURCE,
     queue = {},
     handlers = {},
-    senders = {},          -- [normalized sender] = { receive times, oldest first }
+    acceptSender = deps.acceptSender,   -- optional fun(sender, distribution): boolean, asked before Unwire
+    senders = {},          -- [normalized sender] = { times = { oldest first }, sizes = { wire bytes }, total }
     senderCount = 0,
     lastSweep = 0,
-    stats = { sent = 0, queued = 0, dropped = 0, invalid = 0, rateLimited = 0 },
+    stats = { sent = 0, queued = 0, dropped = 0, invalid = 0, rateLimited = 0, refused = 0 },
     stopped = true,
   }, Meta)
   self:Start()
@@ -248,29 +255,34 @@ end
 local function sweep(self, now)
   self.lastSweep = now
   local cutoff = now - Comm.RATE_WINDOW
-  for name, times in pairs(self.senders) do
-    if times[#times] <= cutoff then
+  for name, rec in pairs(self.senders) do
+    if rec.times[#rec.times] == nil or rec.times[#rec.times] <= cutoff then
       self.senders[name] = nil
       self.senderCount = self.senderCount - 1
     end
   end
 end
 
--- Sliding window: at most RATE_LIMIT receive times within the last RATE_WINDOW seconds per sender.
-local function allow(self, sender)
+-- Sliding window per sender: within the last RATE_WINDOW seconds at most RATE_LIMIT messages and BYTE_BUDGET bytes
+-- of wire text. A refused message is not recorded (it costs nothing and does not extend the window).
+local function allow(self, sender, bytes)
   local now = self.now()
-  local times = self.senders[sender]
-  if not times then
+  local rec = self.senders[sender]
+  if not rec then
     if self.senderCount >= SWEEP_AT and now - self.lastSweep >= SWEEP_EVERY then sweep(self, now) end
-    times = {}
-    self.senders[sender] = times
+    rec = { times = {}, sizes = {}, total = 0 }
+    self.senders[sender] = rec
     self.senderCount = self.senderCount + 1
   end
-  if #times >= Comm.RATE_LIMIT then
-    if now - times[1] < Comm.RATE_WINDOW then return false end
+  local times, sizes = rec.times, rec.sizes
+  while times[1] ~= nil and now - times[1] >= Comm.RATE_WINDOW do
     table.remove(times, 1)
+    rec.total = rec.total - table.remove(sizes, 1)
   end
+  if #times >= Comm.RATE_LIMIT or rec.total + bytes > Comm.BYTE_BUDGET then return false end
   times[#times + 1] = now
+  sizes[#sizes + 1] = bytes
+  rec.total = rec.total + bytes
   return true
 end
 
@@ -290,7 +302,11 @@ local function receive(self, prefix, text, distribution, sender)
     self.stats.invalid = self.stats.invalid + 1
     return
   end
-  if not allow(self, senderName) then
+  if self.acceptSender and not self.acceptSender(senderName, distribution) then
+    self.stats.refused = self.stats.refused + 1
+    return
+  end
+  if not allow(self, senderName, #text) then
     self.stats.rateLimited = self.stats.rateLimited + 1
     return
   end

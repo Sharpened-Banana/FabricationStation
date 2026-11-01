@@ -332,10 +332,53 @@ describe("Comm", function()
 
     it("drops oversized text and rate-limits floods", function()
       comm:OnCommReceived("FabStn", "1:" .. string.rep("A", 20000), "GUILD", "X-R")
-      for _ = 1, 21 do comm:OnCommReceived("FabStn", wire("1"), "GUILD", "X-R") end
+      for _ = 1, Comm.RATE_LIMIT + 1 do comm:OnCommReceived("FabStn", wire("1"), "GUILD", "X-R") end
       comm:OnCommReceived("FabStn", wire("1"), "GUILD", "Y-R")
-      assert.are.equal(21, #got)                 -- 20 from X, 1 from Y
+      assert.are.equal(Comm.RATE_LIMIT + 1, #got)   -- RATE_LIMIT from X, 1 from Y
       assert.are.equal(1, comm.stats.rateLimited)
+    end)
+
+    it("lets a whole sync burst through: one DATA per shared character plus a HELLO and headroom", function()
+      assert.is_true(Comm.RATE_LIMIT >= Protocol.LIMITS.MAX_CHARS + 10)
+      for _ = 1, Protocol.LIMITS.MAX_CHARS + 2 do comm:OnCommReceived("FabStn", wire("1"), "WHISPER", "X-R") end
+      assert.are.equal(Protocol.LIMITS.MAX_CHARS + 2, #got)
+      assert.are.equal(0, comm.stats.rateLimited)
+    end)
+
+    it("budgets each sender's wire bytes per window, before anything is decoded", function()
+      local decodes = 0
+      C_EncodingUtil.DecodeBase64 = function() decodes = decodes + 1 end
+      local text = "1:" .. string.rep("A", Codec.MAX_WIRE - 2)          -- MAX_WIRE bytes on the wire
+      local fit = math.floor(Comm.BYTE_BUDGET / #text)
+      assert.is_true(fit < Comm.RATE_LIMIT)                           -- the byte budget binds before the count
+      for _ = 1, fit + 5 do comm:OnCommReceived("FabStn", text, "GUILD", "X-R") end
+      assert.are.equal(fit, decodes)
+      assert.are.equal(5, comm.stats.rateLimited)
+      comm:OnCommReceived("FabStn", text, "GUILD", "Y-R")             -- another sender has its own budget
+      assert.are.equal(fit + 1, decodes)
+      p4.advance(Comm.RATE_WINDOW)
+      comm:OnCommReceived("FabStn", text, "GUILD", "X-R")             -- the window slid
+      assert.are.equal(fit + 2, decodes)
+    end)
+
+    it("asks acceptSender before anything is unwired, rate-counted or recorded", function()
+      local decodes, asked = 0, {}
+      local base = C_EncodingUtil.DecodeBase64
+      C_EncodingUtil.DecodeBase64 = function(...) decodes = decodes + 1; return base(...) end
+      comm = new_comm({ acceptSender = function(sender, distribution)
+        asked[#asked + 1] = { sender, distribution }
+        return distribution ~= "WHISPER"
+      end })
+      comm:RegisterHandler("H", function(m, s, d) got[#got + 1] = { m, s, d } end)
+      comm:OnCommReceived("FabStn", wire("1"), "WHISPER", "Stranger")
+      assert.are.equal(0, decodes)
+      assert.are.equal(0, #got)
+      assert.are.equal(0, comm:SenderCount())
+      assert.are.equal(1, comm.stats.refused)
+      assert.are.same({ "Stranger-Realm", "WHISPER" }, asked[1])
+      comm:OnCommReceived("FabStn", wire("1"), "GUILD", "Stranger")
+      assert.are.equal(1, decodes)
+      assert.are.equal(1, #got)
     end)
 
     it("rate-limits before it unwires or decodes anything", function()
@@ -343,8 +386,8 @@ describe("Comm", function()
       local base = C_EncodingUtil.DecodeBase64
       C_EncodingUtil.DecodeBase64 = function(...) decodes = decodes + 1; return base(...) end
       local text = wire("1")
-      for _ = 1, 100 do comm:OnCommReceived("FabStn", text, "GUILD", "X-R") end
-      assert.are.equal(20, decodes)
+      for _ = 1, Comm.RATE_LIMIT + 80 do comm:OnCommReceived("FabStn", text, "GUILD", "X-R") end
+      assert.are.equal(Comm.RATE_LIMIT, decodes)
       assert.are.equal(80, comm.stats.rateLimited)
     end)
 
@@ -364,21 +407,22 @@ describe("Comm", function()
     end)
 
     it("lets the window slide: a sender can talk again after 60 s", function()
-      for _ = 1, 20 do comm:OnCommReceived("FabStn", wire("1"), "GUILD", "X-R") end
+      local n = Comm.RATE_LIMIT
+      for _ = 1, n do comm:OnCommReceived("FabStn", wire("1"), "GUILD", "X-R") end
       comm:OnCommReceived("FabStn", wire("1"), "GUILD", "X-R")
-      assert.are.equal(20, #got)
+      assert.are.equal(n, #got)
       p4.advance(30)
       comm:OnCommReceived("FabStn", wire("1"), "GUILD", "X-R")
-      assert.are.equal(20, #got)
+      assert.are.equal(n, #got)
       p4.advance(30)
       comm:OnCommReceived("FabStn", wire("1"), "GUILD", "X-R")
-      assert.are.equal(21, #got)
+      assert.are.equal(n + 1, #got)
     end)
 
     it("counts a sender by its normalized name", function()
-      for _ = 1, 20 do comm:OnCommReceived("FabStn", wire("1"), "GUILD", "X-Some Realm") end
+      for _ = 1, Comm.RATE_LIMIT do comm:OnCommReceived("FabStn", wire("1"), "GUILD", "X-Some Realm") end
       comm:OnCommReceived("FabStn", wire("1"), "GUILD", "X-SomeRealm")
-      assert.are.equal(20, #got)
+      assert.are.equal(Comm.RATE_LIMIT, #got)
       assert.are.equal(1, comm.stats.rateLimited)
       assert.are.equal("X-SomeRealm", got[1][2])
     end)

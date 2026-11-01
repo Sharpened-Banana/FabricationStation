@@ -136,8 +136,9 @@ What you receive from guildmates is stored in your SavedVariables and dropped af
 **When sync pauses:** the game blocks addon messages in instances and in some other restricted states, so sync
 pauses there and resumes by itself afterwards. Messages that could not be sent are queued in memory (up to 50; the
 oldest is dropped when the queue is full) and retried while they last. A message that hits the lockdown three times
-is dropped, and the queue is lost on `/reload` or logout. Anything lost this way is recovered at the next hello and
-request exchange between you and your guildmates.
+is dropped, and the queue is lost on `/reload` or logout. A guildmate's addon asks again for a character whose data
+did not arrive: every two minutes, up to three more times, while the sender was seen in the last 15 minutes. What is
+still missing after that is recovered at the next hello and request exchange, usually the next login of either side.
 
 ## Chat scanner
 

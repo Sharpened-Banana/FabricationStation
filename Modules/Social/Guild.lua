@@ -7,15 +7,20 @@ local ADDON_NAME, ns = ...
 -- Sync, per guild (protocol shapes in Modules/Social/Protocol.lua):
 --   * Login (first loading screen of the session only) and every own profile change send a HELLO to GUILD listing
 --     { [charKey] = hash } for the characters shared; a sharing-off HELLO lists nothing, which withdraws them.
---   * A HELLO's receiver whispers one REQUEST for the listed characters whose stored hash differs (each pair at most
---     once per REREQUEST_COOLDOWN), and answers a GUILD HELLO with a whispered HELLO of its own (once per
---     HELLO_REPLY_COOLDOWN per sender; never answers a whispered HELLO).
+--   * A HELLO's receiver whispers one REQUEST for the listed characters whose stored hash differs (each sender + char +
+--     hash at most once per REREQUEST_COOLDOWN; a verified claim is not held back by its own earlier unverified one),
+--     and answers a GUILD HELLO with a whispered HELLO of its own (once per HELLO_REPLY_COOLDOWN per sender; never
+--     answers a whispered HELLO).
+--   * A requested pair whose DATA has not arrived is asked for again by an owned timer, every REREQUEST_COOLDOWN, at
+--     most RETRY_MAX times, while the sender was seen within RETRY_RECENT, still lists that hash and may still publish
+--     the character. A DATA lost to the rate limit, a lockdown or a loading screen is so recovered within the session.
 --   * Requests collect for REQUEST_WINDOW seconds; then each character goes out once: whispered to a single requester,
 --     to GUILD for two or more (never to the same target twice within RESEND_COOLDOWN).
 --   * DATA is stored only when its content hashes to the hash it carries and to the one the sender's last HELLO
 --     listed, and the claim rules let the sender publish that character (see claim(): verified = own name or named
 --     by the character's own HELLO; unverified claims never replace verified copies, and two unverified claimants
---     of one character contest it: the copy is deleted until a verified claim arrives).
+--     of one character contest it: the copy is deleted until a verified claim arrives; claimants whose own HELLOs
+--     list each other are one account and do not contest: the newer claim replaces the copy, still unverified).
 --   * Whispered messages count only from guild members (Guild:IsGuildMember); GUILD traffic proves membership.
 -- No comm exists at all outside a guild, without C_EncodingUtil, while the module is off or while the saved data is
 -- from a newer version (then nothing is written either; settings live in a session copy).
@@ -39,6 +44,8 @@ local Util = ns.Social.Util
 Guild.REQUEST_WINDOW = 3
 Guild.HELLO_REPLY_COOLDOWN = 600
 Guild.REREQUEST_COOLDOWN = 120
+Guild.RETRY_MAX = 3               -- re-requests of one sender + char + hash after the first REQUEST
+Guild.RETRY_RECENT = 900          -- ... only while that sender's last HELLO is at most this old
 Guild.RESEND_COOLDOWN = 60
 Guild.HELLO_DEBOUNCE = 120
 Guild.PROFILE_MAX_AGE = 30 * 86400
@@ -118,20 +125,28 @@ local warnedNewer = false      -- the newer-protocol notice was printed this ses
 
 local own = { profiles = {}, hashes = {}, info = {} }   -- built own profiles, their hashes, { wireBytes, trimmed }
 local refresh = { co = nil, ticker = nil, dirty = false, mode = nil }
-local requested = {}       -- [charKey .. " " .. hash] = Now() of our REQUEST for that pair
+local requested = {}       -- [sender .. " " .. charKey .. " " .. hash] = { sender, c, h, t = Now() of our last
+                           --   REQUEST, verified = the claim was verified then, tries = re-requests so far }
 local pending = {}         -- [charKey] = { [requester] = true }, collected for REQUEST_WINDOW
 local flushTimer           -- C_Timer handle of the pending FlushRequests
+local retryTimer           -- C_Timer handle of the next re-request pass
 local lastData = {}        -- [charKey] = { [requester | "GUILD"] = Now() of our DATA }
 local announced = {}       -- the { [charKey] = hash } of our last GUILD HELLO
 local deferredHello = {}   -- [target | "GUILD"] = true: HELLOs asked for while the refresh runs
 local replyKeys = {}       -- [debounce key] = true
 local loggedDrops = {}     -- [charKey] = true: the oversize/dropped DATA was logged
 
-Guild.stats = { helloSent = 0, requestSent = 0, dataSent = 0, dataDropped = 0, rejected = 0, trimmed = 0, strangers = 0 }
+Guild.stats = { helloSent = 0, requestSent = 0, dataSent = 0, dataDropped = 0, rejected = 0, trimmed = 0, strangers = 0,
+  retried = 0 }
+
+local function cancel_retry()
+  if retryTimer then retryTimer:Cancel(); retryTimer = nil end
+end
 
 local function reset_sync_state()
   requested, pending, lastData, announced, deferredHello = {}, {}, {}, {}, {}
   if flushTimer then flushTimer:Cancel(); flushTimer = nil end
+  cancel_retry()
 end
 
 local function clear_own()
@@ -230,6 +245,10 @@ local function ensure_comm(self)
     gate = ns.Social.Gate,
     selfName = function() return Util.NormalizeName(ns.FS:CharKey()) end,
     now = now,
+    -- A whisper from outside the guild is dropped before Comm unwires it (GUILD traffic proves membership).
+    acceptSender = function(sender, distribution)
+      return distribution ~= "WHISPER" or self:_FromGuild(sender, distribution)
+    end,
   })
   comm:RegisterHandler("H", function(msg, sender, distribution) self:OnHello(msg, sender, distribution) end)
   comm:RegisterHandler("Q", function(msg, sender, distribution) self:OnRequest(msg, sender, distribution) end)
@@ -257,6 +276,7 @@ local function cancel_timers()
   for key in pairs(replyKeys) do ns.FS:CancelDebounce(key) end
   replyKeys = {}
   if flushTimer then flushTimer:Cancel(); flushTimer = nil end
+  cancel_retry()
 end
 
 -- GuildNative's pending queries belong to one guild and one enabled session: fail them with err.
@@ -351,7 +371,11 @@ local function recipe_ids(p, cap)
     if known and type(id) == "number" and id >= 1 and id <= maxID and id == floor(id) then ids[#ids + 1] = id end
   end
   table.sort(ids)
-  while #ids > cap do table.remove(ids) end
+  if #ids > cap then                                    -- like fit(): the lowest recipeIDs go first
+    local kept = {}
+    for i = #ids - cap + 1, #ids do kept[#kept + 1] = ids[i] end
+    ids = kept
+  end
   return ids
 end
 
@@ -369,7 +393,8 @@ local function wire_size(profile)
 end
 
 -- Makes the profile fit Codec.MAX_WIRE on the wire: quality data goes first (lv "q" -> "r"), then every line keeps a
--- proportional share of its recipes (lowest recipeIDs first) until it fits. -> { wireBytes|nil, trimmed|nil }.
+-- proportional share of its recipes until it fits, dropping the LOWEST recipeIDs first (the highest are the newest
+-- recipes of the expansion, usually the most valuable). -> { wireBytes|nil, trimmed|nil }.
 local function fit(profile)
   local info = {}
   if not ns.Social.Codec.IsAvailable() then return info end
@@ -390,8 +415,11 @@ local function fit(profile)
     rounds = rounds + 1
     local factor = max / size * 0.9
     for _, line in ipairs(profile.pr) do
-      local keep = floor(#line.r * factor)
-      for i = #line.r, keep + 1, -1 do line.r[i] = nil end
+      local n = #line.r
+      local cut = n - floor(n * factor)                 -- r is sorted ascending: drop its first `cut` ids
+      local r = {}
+      for i = cut + 1, n do r[#r + 1] = line.r[i] end
+      line.r = r
     end
     info.trimmed = "recipes"
     size = wire_size(profile)
@@ -820,6 +848,11 @@ local function from_guild(self, sender, distribution)
   return false
 end
 
+-- Comm's acceptSender (internal): the same check, before Comm unwires a whisper.
+function Guild:_FromGuild(sender, distribution)
+  return from_guild(self, sender, distribution)
+end
+
 -- Verified claim (controller ruling, Task 6 review): the sender publishes its own name, or the character's OWN record
 -- (its own HELLO) names the sender as a linked character. The holder's record is never evidence.
 local function verified(dir, sender, charKey)
@@ -828,24 +861,109 @@ local function verified(dir, sender, charKey)
   return type(m) == "table" and type(m.chars) == "table" and m.chars[sender] ~= nil
 end
 
--- Whether sender may publish charKey now: "verified", "unverified" or nil. A verified claim always wins and clears a
--- contest. An unverified claim is accepted only when nothing is stored (and the character is not contested) or the
--- same sender's unverified copy is stored. A different sender's unverified claim on an unverified copy deletes that
--- copy and marks the character contested until a verified claim arrives, so a squatter yields "no data", never "fake
--- data". A verified copy is never touched by an unverified claim.
-local function claim(dir, sender, charKey, t)
-  if verified(dir, sender, charKey) then
-    dir.contested[charKey] = nil
-    return "verified"
-  end
+-- Mutual self-attestation: a's own record (its HELLO) lists b and b's own record lists a, so both are characters of
+-- one account. Each side's evidence is its own HELLO, never the holder's copy.
+local function mutual(dir, a, b)
+  local ma, mb = dir.members[a], dir.members[b]
+  return type(ma) == "table" and type(ma.chars) == "table" and ma.chars[b] ~= nil
+    and type(mb) == "table" and type(mb.chars) == "table" and mb.chars[a] ~= nil
+end
+
+-- What a claim by sender on charKey would be, without changing anything: "verified", "unverified", "contest" (it
+-- would delete an unverified copy of another claimant) or nil (refused).
+local function claim_kind(dir, sender, charKey)
+  if verified(dir, sender, charKey) then return "verified" end
   if dir.contested[charKey] ~= nil then return nil end
   local p = dir.profiles[charKey]
   if type(p) ~= "table" then return "unverified" end
   if p.verified then return nil end
   if p.owner == sender then return "unverified" end
-  dir.profiles[charKey] = nil
-  dir.contested[charKey] = t
-  return nil
+  if type(p.owner) == "string" and mutual(dir, sender, p.owner) then return "unverified" end
+  return "contest"
+end
+
+-- Whether sender may publish charKey now: "verified", "unverified" or nil. A verified claim always wins and clears a
+-- contest. An unverified claim is accepted only when nothing is stored (and the character is not contested), the
+-- same sender's unverified copy is stored, or the copy's owner and the sender list each other in their own HELLOs
+-- (one account: the claim replaces the copy, which stays unverified with owner = sender). Any other sender's
+-- unverified claim on an unverified copy deletes that copy and marks the character contested until a verified claim
+-- arrives, so a squatter yields "no data", never "fake data". A verified copy is never touched by an unverified claim.
+local function claim(dir, sender, charKey, t)
+  local kind = claim_kind(dir, sender, charKey)
+  if kind == "verified" then
+    dir.contested[charKey] = nil
+  elseif kind == "contest" then
+    dir.profiles[charKey] = nil
+    dir.contested[charKey] = t
+    return nil
+  end
+  return kind
+end
+
+local function request_key(sender, charKey, hash)
+  return sender .. " " .. charKey .. " " .. hash
+end
+
+-- Arms the next re-request pass in `delay` seconds (owned handle; one at a time; nothing when nothing is requested).
+local function arm_retry(self, delay)
+  if retryTimer or next(requested) == nil then return end
+  retryTimer = C_Timer.NewTimer(delay, ns.FS:Wrap("Guild", function()
+    retryTimer = nil
+    self:_RetryRequests()
+  end))
+end
+
+-- The re-request pass: forgets requested pairs that were answered, whose sender no longer lists that hash, was not
+-- seen within RETRY_RECENT, may no longer publish the character or is out of tries; whispers one REQUEST per sender
+-- for the due ones; then re-arms for the next due pair.
+function Guild:_RetryRequests()
+  if not can_sync(self) or not self.comm then return end
+  local dir = self:GetDirectory()
+  if not dir then return end
+  local t = now()
+  local due, nextDue = {}, nil
+  for rk, r in pairs(requested) do
+    local member = dir.members[r.sender]
+    local p = dir.profiles[r.c]
+    local listed = type(member) == "table" and type(member.chars) == "table" and member.chars[r.c] == r.h
+    local recent = listed and type(member.lastSeen) == "number" and t - member.lastSeen <= Guild.RETRY_RECENT
+    local kind = recent and claim_kind(dir, r.sender, r.c)
+    local answered = type(p) == "table" and p.h == r.h
+    local cooled = t - r.t >= Guild.REREQUEST_COOLDOWN
+    local spent = r.tries >= Guild.RETRY_MAX     -- out of tries: kept only as the cooldown of its last REQUEST
+    if not recent or answered or (kind ~= "verified" and kind ~= "unverified") or (spent and cooled) then
+      requested[rk] = nil
+    elseif cooled then
+      local list = due[r.sender] or {}
+      list[#list + 1] = r
+      due[r.sender] = list
+    elseif not spent then
+      local at = r.t + Guild.REREQUEST_COOLDOWN
+      if not nextDue or at < nextDue then nextDue = at end
+    end
+  end
+  for _, sender in ipairs(sorted_keys(due)) do
+    local list = due[sender]
+    table.sort(list, function(a, b) return a.c < b.c end)
+    local chars = {}
+    for _, r in ipairs(list) do chars[#chars + 1] = r.c end
+    local status = self.comm:Send(ns.Social.Protocol.Request(chars), "WHISPER", sender)
+    for _, r in ipairs(list) do
+      r.t, r.tries = t, r.tries + 1
+      local at = t + Guild.REREQUEST_COOLDOWN
+      if r.tries < Guild.RETRY_MAX and (not nextDue or at < nextDue) then nextDue = at end
+    end
+    if status ~= "dropped" then
+      self.stats.requestSent = self.stats.requestSent + 1
+      self.stats.retried = self.stats.retried + 1
+    end
+  end
+  if nextDue then arm_retry(self, math.max(1, nextDue - t)) end
+end
+
+-- Whether a re-request pass is scheduled (tests and the disable check).
+function Guild:IsRetryArmed()
+  return retryTimer ~= nil
 end
 
 -- A HELLO from a guildmate: stores the member, withdraws what it stopped listing, requests what differs and answers a
@@ -876,7 +994,7 @@ function Guild:OnHello(msg, sender, distribution)
     end
   end
 
-  local want = {}
+  local want, kinds = {}, {}
   for _, charKey in ipairs(sorted_keys(chars)) do
     local hash = chars[charKey]
     local kind = claim(dir, sender, charKey, t)
@@ -886,17 +1004,23 @@ function Guild:OnHello(msg, sender, distribution)
         p.rt = t                                   -- confirmed unchanged by an allowed publisher
         if kind == "verified" and not p.verified then p.owner, p.verified = sender, true end
       else
-        local rk = charKey .. " " .. hash
-        if not requested[rk] or t - requested[rk] >= Guild.REREQUEST_COOLDOWN then want[#want + 1] = charKey end
+        -- The cooldown is this sender's own; a verified claim is not held back by its own earlier unverified one.
+        local r = requested[request_key(sender, charKey, hash)]
+        if not r or t - r.t >= Guild.REREQUEST_COOLDOWN or (kind == "verified" and not r.verified) then
+          want[#want + 1] = charKey
+          kinds[charKey] = kind
+        end
       end
     end
   end
   if #want > 0 and self.comm then
     local status = self.comm:Send(ns.Social.Protocol.Request(want), "WHISPER", sender)
-    if status ~= "dropped" then
-      self.stats.requestSent = self.stats.requestSent + 1
-      for _, charKey in ipairs(want) do requested[charKey .. " " .. chars[charKey]] = t end
+    if status ~= "dropped" then self.stats.requestSent = self.stats.requestSent + 1 end
+    for _, charKey in ipairs(want) do       -- a dropped REQUEST is retried like a lost DATA
+      requested[request_key(sender, charKey, chars[charKey])] = { sender = sender, c = charKey, h = chars[charKey],
+        t = t, verified = kinds[charKey] == "verified", tries = 0 }
     end
+    arm_retry(self, Guild.REREQUEST_COOLDOWN)
   end
 
   if distribution == "GUILD" and self.comm

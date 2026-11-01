@@ -44,6 +44,14 @@ describe("public docs and release metadata", function()
     end
   end)
 
+  it("describes the in-session re-request", function()
+    local r = read("README.md"):gsub("%s+", " ")
+    for _, s in ipairs({ "asks again for a character whose data did not arrive" }) do
+      assert.truthy(r:find(s, 1, true), s)
+    end
+    assert.falsy(r:find("Anything lost this way is recovered at the next hello", 1, true))
+  end)
+
   it("documents every registered slash command", function()
     local r = read("README.md")
     local names, count = {}, 0

@@ -195,6 +195,9 @@ describe("Guild sync", function()
       local p = Guild:BuildProfile("Huge-Realm")
       assert.are.equal("r", p.lv)
       assert.is_true(#p.pr[1].r > 0 and #p.pr[1].r < 3000)
+      -- The lowest recipe IDs go first: the newest (highest) recipes of the expansion are kept.
+      assert.are.equal(103000, p.pr[1].r[#p.pr[1].r])
+      assert.are.equal(103000 - #p.pr[1].r + 1, p.pr[1].r[1])
       assert.is_true(#Protocol.Wire(Protocol.Data(p)) <= Codec.MAX_WIRE)
       assert.is_true(Guild.stats.trimmed >= 1)
     end)
@@ -728,10 +731,13 @@ describe("Guild sync", function()
     end)
 
     it("leaves no registrations, timers or comm behind when disabled", function()
-      Guild:OnHello(Protocol.Hello("1.0.0", {}), "Peer-Realm", "GUILD")     -- reply pending
+      Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = "0000bbbb" }), "Peer-Realm", "GUILD") -- reply + retry
       Guild:OnRequest(Protocol.Request({ "Me-Realm" }), "P1-Realm")        -- flush pending
       ns.FS:SendMessage("FS_RECIPES_CHANGED")                               -- guildHello pending
+      assert.is_true(Guild:IsRetryArmed())
+      clear_sent()                                                          -- the REQUEST went out at once
       Guild:Disable()
+      assert.is_false(Guild:IsRetryArmed())
       assert.are.same({ events = {}, messages = {} }, W.registrations(Guild))
       assert.is_nil(p4.comm.registered[Protocol.PREFIX])
       assert.is_nil(Guild.comm)
@@ -832,6 +838,217 @@ describe("Guild sync", function()
       assert.is_nil(Guild.comm)
       assert.are.equal(0, #p4.comm.sent)
       unchanged()
+    end)
+  end)
+
+  ---------------------------------------------------------------------------
+  -- Sync robustness: request cooldown per sender, bounded re-requests, whole bursts through Comm
+  ---------------------------------------------------------------------------
+
+  describe("sync robustness", function()
+    local function deliver(msg, dist, sender) return p4.comm.deliver(Protocol.PREFIX, Protocol.Wire(msg), dist, sender) end
+    local function requests_to(target)
+      local out = {}
+      for _, s in ipairs(sent_list()) do
+        if s.msg.t == "Q" and s.target == target then out[#out + 1] = sorted(s.msg.c) end
+      end
+      return out
+    end
+    local function profile(c, id)
+      return { c = c, ts = 1, lv = "r", pr = { { s = 2907, k = 1, m = 10, r = { id } } } }
+    end
+    -- A sharer whose HELLO lists `n` characters: its own name first, then alts. -> sender, { [charKey] = profile }
+    local function sharer(n)
+      local list = {}
+      for i = 1, n do
+        local c = "Bx" .. i .. "-Realm"
+        list[c] = profile(c, 1000 + i)
+      end
+      return "Bx1-Realm", list
+    end
+    local function hello_of(list)
+      local c = {}
+      for key, p in pairs(list) do c[key] = Protocol.HashProfile(p) end
+      return Protocol.Hello("1.0.0", c)
+    end
+    local function stored_count()
+      local n = 0
+      for _ in pairs(dir().profiles) do n = n + 1 end
+      return n
+    end
+
+    it("keys the request cooldown by sender: a whisperer listing the owner's hash cannot delay the owner", function()
+      local H = Protocol.HashProfile(profile("V-Realm", 5))
+      Guild:OnHello(Protocol.Hello("1", { ["V-Realm"] = H }), "Liar-Realm", "GUILD")
+      assert.are.same({ { "V-Realm" } }, requests_to("Liar-Realm"))
+      Guild:OnHello(Protocol.Hello("1", { ["V-Realm"] = H }), "V-Realm", "GUILD")          -- 0 s later
+      assert.are.same({ { "V-Realm" } }, requests_to("V-Realm"))
+    end)
+
+    it("lets a verified claim bypass the cooldown its earlier unverified claim set", function()
+      local HW = Protocol.HashProfile(profile("W-Realm", 7))
+      Guild:OnHello(Protocol.Hello("1", { ["W-Realm"] = HW }), "V-Realm", "GUILD")         -- unverified: W never seen
+      assert.are.same({ { "W-Realm" } }, requests_to("V-Realm"))
+      Guild:OnHello(Protocol.Hello("1", { ["V-Realm"] = "0000aaaa" }), "W-Realm", "GUILD") -- W's own HELLO names V
+      p4.advance(10)
+      Guild:OnHello(Protocol.Hello("1", { ["W-Realm"] = HW }), "V-Realm", "WHISPER")       -- now verified, 10 s later
+      assert.are.same({ { "W-Realm" }, { "W-Realm" } }, requests_to("V-Realm"))
+      p4.advance(10)
+      Guild:OnHello(Protocol.Hello("1", { ["W-Realm"] = HW }), "V-Realm", "WHISPER")       -- verified again: cooldown
+      assert.are.equal(2, #requests_to("V-Realm"))
+    end)
+
+    it("re-requests a pair whose DATA never came, after the cooldown, at most RETRY_MAX times", function()
+      Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = Protocol.HashProfile(PB) }), "Peer-Realm", "GUILD")
+      assert.are.equal(1, #requests_to("Peer-Realm"))
+      assert.is_true(Guild:IsRetryArmed())
+      p4.advance(Guild.REREQUEST_COOLDOWN - 1)
+      assert.are.equal(1, #requests_to("Peer-Realm"))
+      p4.advance(1)
+      assert.are.same({ { "B-Realm" }, { "B-Realm" } }, requests_to("Peer-Realm"))
+      p4.advance(Guild.REREQUEST_COOLDOWN * (Guild.RETRY_MAX + 3))
+      assert.are.equal(1 + Guild.RETRY_MAX, #requests_to("Peer-Realm"))
+      assert.is_false(Guild:IsRetryArmed())
+    end)
+
+    it("stops re-requesting once the DATA arrived", function()
+      Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = Protocol.HashProfile(PB) }), "Peer-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(PB), "Peer-Realm", "WHISPER")
+      p4.advance(Guild.REREQUEST_COOLDOWN * 5)
+      assert.are.equal(1, #requests_to("Peer-Realm"))
+      assert.is_false(Guild:IsRetryArmed())
+    end)
+
+    it("re-requests only from members seen recently that still list the hash", function()
+      Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = Protocol.HashProfile(PB) }), "Peer-Realm", "GUILD")
+      Guild:OnHello(Protocol.Hello("1.0.0", { ["C-Realm"] = "0000cccc" }), "Old-Realm", "GUILD")
+      dir().members["Old-Realm"].lastSeen = ns.FS:Now() - Guild.RETRY_RECENT - 1          -- not seen recently
+      Guild:OnHello(Protocol.Hello("1.0.0", {}), "Gone-Realm", "GUILD")
+      dir().members["Peer-Realm"].chars["B-Realm"] = "0000ffff"                            -- now lists another hash
+      p4.advance(Guild.REREQUEST_COOLDOWN * 3)
+      assert.are.equal(1, #requests_to("Peer-Realm"))
+      assert.are.equal(1, #requests_to("Old-Realm"))
+    end)
+
+    it("never re-requests a character it may no longer accept from that sender", function()
+      seed_peer_with_profile("Peer-Realm", PB)                                             -- verified? no: Peer's copy
+      local X = profile("X-Realm", 9)
+      Guild:OnHello(Protocol.Hello("1", { ["X-Realm"] = Protocol.HashProfile(X) }), "X-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(X), "X-Realm", "WHISPER")                                 -- verified copy of X
+      local X2 = profile("X-Realm", 10)
+      Guild:OnHello(Protocol.Hello("1", { ["X-Realm"] = Protocol.HashProfile(X2) }), "Liar-Realm", "GUILD")
+      assert.are.equal(0, #requests_to("Liar-Realm"))
+      p4.advance(Guild.REREQUEST_COOLDOWN * 3)
+      assert.are.equal(0, #requests_to("Liar-Realm"))
+    end)
+
+    it("syncs a sharer with 26 characters completely to a fresh receiver through Comm", function()
+      local from, list = sharer(26)
+      assert.is_true(deliver(hello_of(list), "GUILD", from))
+      local q = requests_to(from)
+      assert.are.equal(1, #q)
+      assert.are.equal(26, #q[1])
+      for _, c in ipairs(q[1]) do deliver(Protocol.Data(list[c]), "WHISPER", from) end
+      assert.are.equal(26, stored_count())
+      assert.are.equal(0, Guild.comm.stats.rateLimited)
+      assert.is_true(dir().profiles["Bx1-Realm"].verified)
+      assert.are.equal("Bx1-Realm", dir().profiles["Bx26-Realm"].owner)
+    end)
+
+    it("recovers a dropped DATA with the bounded re-request in the same session", function()
+      local from, list = sharer(3)
+      deliver(hello_of(list), "GUILD", from)
+      deliver(Protocol.Data(list["Bx1-Realm"]), "WHISPER", from)
+      deliver(Protocol.Data(list["Bx3-Realm"]), "WHISPER", from)                          -- Bx2's DATA is lost
+      assert.are.equal(2, stored_count())
+      p4.advance(Guild.REREQUEST_COOLDOWN)
+      local q = requests_to(from)
+      assert.are.same({ "Bx2-Realm" }, q[#q])
+      deliver(Protocol.Data(list["Bx2-Realm"]), "WHISPER", from)
+      assert.are.equal(3, stored_count())
+      p4.advance(Guild.REREQUEST_COOLDOWN * 3)
+      assert.are.equal(2, #requests_to(from))
+    end)
+
+    it("never unwires a stranger's whisper", function()
+      p4.guild.members = { { "Peer-Realm", true } }
+      p4.guild.exists["Stranger-Realm"] = false
+      local unwire = spy.on(Protocol, "Unwire")
+      deliver(Protocol.Request({ "Me-Realm" }), "WHISPER", "Stranger-Realm")
+      assert.spy(unwire).was_not_called()
+      assert.are.equal(1, Guild.comm.stats.refused)
+      deliver(Protocol.Request({ "Me-Realm" }), "WHISPER", "Peer-Realm")
+      assert.spy(unwire).was_called(1)
+      deliver(Protocol.Hello("1", {}), "GUILD", "Stranger-Realm")                         -- GUILD proves membership
+      assert.spy(unwire).was_called(2)
+      unwire:revert()
+    end)
+  end)
+
+  ---------------------------------------------------------------------------
+  -- Mutual self-attestation: the sender's and the holder's own records list each other (same account)
+  ---------------------------------------------------------------------------
+
+  describe("mutual self-attestation", function()
+    local X1 = { c = "X-Realm", ts = 1, lv = "r", pr = { { s = 2907, k = 1, m = 10, r = { 100 } } } }
+    local X2 = { c = "X-Realm", ts = 2, lv = "r", pr = { { s = 2907, k = 2, m = 10, r = { 100, 101 } } } }
+    local function hx(p) return Protocol.HashProfile(p) end
+
+    -- O logs in sharing itself, its alt S and the never-logged-in alt X; O's copy of X is stored unverified.
+    local function seed_o()
+      Guild:OnHello(Protocol.Hello("1", { ["O-Realm"] = "0000aaaa", ["S-Realm"] = "0000bbbb", ["X-Realm"] = hx(X1) }),
+        "O-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(X1), "O-Realm", "WHISPER")
+      assert.are.equal("O-Realm", dir().profiles["X-Realm"].owner)
+      assert.is_false(dir().profiles["X-Realm"].verified)
+    end
+
+    it("replaces the copy as an unverified copy owned by the sender, without a contest", function()
+      seed_o()
+      Guild:OnHello(Protocol.Hello("1", { ["S-Realm"] = "0000bbbb", ["O-Realm"] = "0000aaaa", ["X-Realm"] = hx(X2) }),
+        "S-Realm", "GUILD")
+      assert.is_nil(dir().contested["X-Realm"])
+      assert.is_not_nil(dir().profiles["X-Realm"])                 -- not deleted by a contest
+      Guild:OnData(Protocol.Data(X2), "S-Realm", "WHISPER")
+      local p = dir().profiles["X-Realm"]
+      assert.are.equal("S-Realm", p.owner)
+      assert.is_false(p.verified)
+      assert.are.equal(hx(X2), p.h)
+    end)
+
+    it("never becomes verified, not even through a same-hash HELLO", function()
+      seed_o()
+      Guild:OnHello(Protocol.Hello("1", { ["S-Realm"] = "0000bbbb", ["O-Realm"] = "0000aaaa", ["X-Realm"] = hx(X2) }),
+        "S-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(X2), "S-Realm", "WHISPER")
+      Guild:OnHello(Protocol.Hello("1", { ["S-Realm"] = "0000bbbb", ["O-Realm"] = "0000aaaa", ["X-Realm"] = hx(X2) }),
+        "S-Realm", "WHISPER")
+      assert.is_false(dir().profiles["X-Realm"].verified)
+      Guild:OnHello(Protocol.Hello("1", { ["O-Realm"] = "0000aaaa", ["S-Realm"] = "0000bbbb", ["X-Realm"] = hx(X2) }),
+        "O-Realm", "WHISPER")
+      assert.is_false(dir().profiles["X-Realm"].verified)
+    end)
+
+    it("never replaces a verified copy", function()
+      seed_o()
+      Guild:OnHello(Protocol.Hello("1", { ["X-Realm"] = hx(X1) }), "X-Realm", "GUILD")          -- X itself: verified
+      assert.is_true(dir().profiles["X-Realm"].verified)
+      assert.are.equal("X-Realm", dir().profiles["X-Realm"].owner)
+      Guild:OnHello(Protocol.Hello("1", { ["S-Realm"] = "0000bbbb", ["O-Realm"] = "0000aaaa", ["X-Realm"] = hx(X2) }),
+        "S-Realm", "GUILD")
+      Guild:OnData(Protocol.Data(X2), "S-Realm", "WHISPER")
+      local p = dir().profiles["X-Realm"]
+      assert.are.equal("X-Realm", p.owner)
+      assert.is_true(p.verified)
+      assert.are.equal(hx(X1), p.h)
+    end)
+
+    it("still contests when only one side lists the other", function()
+      seed_o()
+      Guild:OnHello(Protocol.Hello("1", { ["T-Realm"] = "0000bbbb", ["O-Realm"] = "0000aaaa", ["X-Realm"] = hx(X2) }),
+        "T-Realm", "GUILD")                                       -- T names O, but O's HELLO does not name T
+      assert.is_nil(dir().profiles["X-Realm"])
+      assert.is_not_nil(dir().contested["X-Realm"])
     end)
   end)
 
