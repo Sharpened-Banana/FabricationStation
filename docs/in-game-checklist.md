@@ -1294,6 +1294,20 @@ the order has one. Tinted rows (VIP, repeat, blocked) tint the panel too, hoveri
 panel is darker with fainter icons. Turn off Settings > Orders & Ledger > "Show reward and reagent icons on order rows":
 both panels go and Blizzard's Commission and Reagents columns show as normal.
 
+P7-19b. **Header gold: pocket, session, expansion.** Open the main window. Expected: the centre of the header reads
+"<gold in your pocket> · session +412g · Midnight 1,234g", the session part being your gold now minus your gold when you
+logged in (or reloaded), signed ("+0g" before anything changed), and the last part the crafting profit of every
+character this expansion (the Ledger's own profit: sales and commissions minus their known costs). Earn or spend gold
+and craft and sell something (collect the sale from the mail) with the window open: the three parts update within a
+second (the profit after the Ledger records it); `/reload` and check that the session part starts again at +0g. A sale
+whose cost the addon did not know puts "~" before the expansion profit. Hover the centre text: the full text, then
+"Crafting profit this session: X" with "Gold change includes everything, not only crafting.", then the expansion profit
+per character and per kind (Order commission, Auction sale) and "Counted since FabricationStation recorded it."; a
+character with no profit this expansion shows "No crafting profit recorded this expansion yet" instead. The expansion
+name should be the game's own ("Midnight"). Make the window as narrow as it goes (700 px, a 516 px content area): the
+expansion part goes first, then the session part; the left (character) and right (prices) texts stay whole, and the
+tooltip still shows everything. Drag the window by the centre of the header: it still moves.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

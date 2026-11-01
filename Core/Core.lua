@@ -39,8 +39,22 @@ function FS:SessionStart()
   return self.sessionStart
 end
 
+-- The character's money (copper) at the same moment, kept in memory only (nothing is saved). nil when the client
+-- gave no number then: unknown is nil, never 0.
+function FS:SessionMoney()
+  return self.sessionMoney
+end
+
 function FS:OnEnable()
-  if self.sessionStart == nil then self.sessionStart = self:Now() end
+  if self.sessionStart == nil then
+    self.sessionStart = self:Now()
+    local money
+    if type(GetMoney) == "function" then
+      local ok, value = pcall(GetMoney)
+      if ok and type(value) == "number" and value == value then money = value end
+    end
+    self.sessionMoney = money
+  end
 end
 
 ---------------------------------------------------------------------------

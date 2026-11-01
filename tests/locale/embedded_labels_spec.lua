@@ -103,6 +103,8 @@ local EXEMPT = {
     "Recipes compared for spec advice", "Characters that have no profession of the current expansion are never shared.",
     "Characters listed in a tooltip", "Characters: %d", "Characters: all", "Characters: this one",
     "The reagent search, the Planner, the holdings tooltip lines and the knowledge widget always leave them out." } },
+  { "crafting as the kind of profit the header shows, not the Crafts page button", {
+    "Crafting profit this session: %s", "Crafting profit in %s: %s" } },
 }
 
 local function is_exempt(exempt, key)

@@ -1053,7 +1053,7 @@ L["Missing: %d recipe"] = true   -- Missing recipes status: number of recipes (o
 L["Missing: %d recipes"] = true   -- Missing recipes status: number of recipes (not one)
 L["%s x"] = true   -- Customers tab: a custom tag chip and its remove mark
 L["%s  %s  %d/%d  %s"] = true   -- Dashboard concentration widget: character, profession, current/max, then full or full in
-L["%s %s"] = true   -- a character name, then a profession name (Planner rows and tooltips)
+L["%s %s"] = true   -- a character name, then a profession name (Planner rows and tooltips); in the main window header, the expansion name, then its crafting profit
 L["Reward costs too much"] = true   -- order risk: the order costs more per knowledge point or Moxie than your limit
 L["Most you pay per knowledge point (gold)"] = true
 L["Most you pay per Moxie (gold)"] = true
@@ -1143,3 +1143,16 @@ L["Multicraft reported for %d of %d crafts"] = true   -- Crafts row tooltip: som
 L["Resourcefulness: %s"] = true   -- Crafts row tooltip (a proc count)
 L["Concentration: %s spent, %s predicted"] = true   -- Crafts row tooltip
 L["Concentration: no data yet"] = true
+
+-- Main window header: gold in pocket, session change, crafting profit this expansion (phase 7, Task 11b)
+L["%s · %s"] = true   -- main window header: two parts of the gold text (pocket, session change, expansion profit) joined
+L["session %s"] = true   -- main window header: the gold change this session, signed ("session +412g")
+L["Midnight"] = true   -- name of the current expansion when the game has not told the addon its name
+L["This expansion"] = true   -- name of the current expansion when neither the game nor the addon knows it
+L["Crafting profit this session: %s"] = true   -- header tooltip; a money amount ("~" before it when some cost is unknown)
+L["No crafting profit recorded this session yet"] = true   -- header tooltip
+L["Gold change includes everything, not only crafting."] = true   -- header tooltip, under the session gold change
+L["Crafting profit in %s: %s"] = true   -- header tooltip: the expansion name, then a money amount
+L["%s (%s): %s"] = true   -- header tooltip: a character, the kind (Order commission, Auction sale), its profit
+L["Counted since FabricationStation recorded it."] = true   -- header tooltip, under the expansion profit
+L["No crafting profit recorded this expansion yet"] = true   -- header tooltip

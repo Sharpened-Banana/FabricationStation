@@ -661,6 +661,40 @@ local function line(text, rgb)
   return { text = text, color = rgb or WHITE }
 end
 
+-- The kinds that count as profit, in the order the session line and the header list them.
+local PROFIT_KINDS = { "commission", "sale" }
+
+-- The Ledger's own profit rule over the entries `base` selects ({ since?, charKey? }), per kind: { n, profit (nil when
+-- n is 0), incomplete, estimated, kinds = { { type, profit, n } } for the kinds that have entries }. Profit comes
+-- from the Ledger's ByRecipe and Unattributed (do not re-derive it). With `keep` (a function of a recipeID) only
+-- the recipe-attributed totals it accepts count and Unattributed is left out. Shared by the session line, the
+-- header's session crafting profit and its expansion profit.
+local function profit_kinds(ledger, base, keep)
+  local out = { n = 0, incomplete = 0, estimated = 0, kinds = {} }
+  if not (ledger and ledger.ByRecipe and ledger.Unattributed) then return out end
+  local profit = 0
+  for _, kind in ipairs(PROFIT_KINDS) do
+    local filter = { type = kind }
+    for k, v in pairs(base) do filter[k] = v end
+    local sum = { type = kind, profit = 0, n = 0 }
+    local function add(totals)
+      if type(totals) ~= "table" then return end
+      sum.profit, sum.n = sum.profit + count(totals.profit), sum.n + count(totals.n)
+      out.incomplete, out.estimated = out.incomplete + count(totals.incomplete), out.estimated + count(totals.estimated)
+    end
+    if not keep then add(ledger:Unattributed(filter)) end
+    for recipeID, totals in pairs(ledger:ByRecipe(filter) or {}) do
+      if not keep or keep(recipeID) then add(totals) end
+    end
+    if sum.n > 0 then
+      out.kinds[#out.kinds + 1] = sum
+      out.n, profit = out.n + sum.n, profit + sum.profit
+    end
+  end
+  if out.n > 0 then out.profit = profit end
+  return out
+end
+
 -- What this session has done since `since` (seconds, the session start): { crafts = craft log entries, n = sales and
 -- commissions, profit = their summed profit (nil when n is 0), incomplete, estimated = how many lack a known cost / have
 -- an estimated one, kinds = { { type, profit, n } } for the kinds that have entries, in commission, sale order }.
@@ -669,27 +703,143 @@ function Tab.SessionSummary(craftLog, ledger, since)
   if not is_money(since) then return nil end
   local crafts = 0
   if craftLog and craftLog.GetEntries then crafts = #(craftLog:GetEntries({ since = since }) or {}) end
-  local out = { crafts = crafts, n = 0, incomplete = 0, estimated = 0, kinds = {} }
-  if ledger and ledger.ByRecipe and ledger.Unattributed then
-    local profit = 0
-    for _, kind in ipairs({ "commission", "sale" }) do
-      local filter = { type = kind, since = since }
-      local sum = { type = kind, profit = 0, n = 0 }
-      local function add(totals)
-        if type(totals) ~= "table" then return end
-        sum.profit, sum.n = sum.profit + count(totals.profit), sum.n + count(totals.n)
-        out.incomplete, out.estimated = out.incomplete + count(totals.incomplete), out.estimated + count(totals.estimated)
-      end
-      add(ledger:Unattributed(filter))
-      for _, totals in pairs(ledger:ByRecipe(filter) or {}) do add(totals) end
-      if sum.n > 0 then
-        out.kinds[#out.kinds + 1] = sum
-        out.n, profit = out.n + sum.n, profit + sum.profit
+  local out = profit_kinds(ledger, { since = since })
+  out.crafts = crafts
+  return out
+end
+
+-- The current expansion, from the generated data: the highest expansionID in ProfessionLines and its skill lines.
+-- -> { id, name, lines = { [skillLineID] = true } } or nil without that data. The name is what the client told the
+-- Scanner for one of those lines (a profession record's expansionName); without one it is the known name of the ID
+-- (Midnight is 11) or the generic "This expansion".
+local EXPANSION_NAMES = { [11] = L["Midnight"] }
+function Tab.CurrentExpansion()
+  local GD = ns.GameData
+  local lines = GD and type(GD.Get) == "function" and GD.Get("ProfessionLines") or nil
+  if type(lines) ~= "table" then return nil end
+  local id
+  for _, info in pairs(lines) do
+    if type(info) == "table" and type(info.expansionID) == "number" and (id == nil or info.expansionID > id) then
+      id = info.expansionID
+    end
+  end
+  if id == nil then return nil end
+  local set, ids = {}, {}
+  for skillLine, info in pairs(lines) do
+    if type(skillLine) == "number" and type(info) == "table" and info.expansionID == id then
+      set[skillLine] = true
+      ids[#ids + 1] = skillLine
+    end
+  end
+  table.sort(ids)
+  local name
+  local scanner = module("Scanner")
+  if scanner and scanner.GetCharacters and scanner.GetCharacter then
+    for _, charKey in ipairs(scanner:GetCharacters() or {}) do
+      local record = scanner:GetCharacter(charKey)
+      local professions = type(record) == "table" and record.professions
+      if type(professions) == "table" then
+        for _, skillLine in ipairs(ids) do
+          local p = professions[skillLine]
+          if not name and type(p) == "table" and not p.dropped and type(p.expansionName) == "string"
+            and p.expansionName ~= "" then
+            name = p.expansionName
+          end
+        end
       end
     end
-    if out.n > 0 then out.profit = profit end
   end
+  return { id = id, name = name or EXPANSION_NAMES[id] or L["This expansion"], lines = set }
+end
+
+-- The recipes of the expansion's skill lines as a function: the generated RecipeSources of those lines plus the
+-- recipes any scanned character knows on them.
+local function expansion_recipes(expansion)
+  local known = {}
+  local sources = ns.GameData and ns.GameData.Get("RecipeSources")
+  local by = type(sources) == "table" and sources.bySkillLine
+  if type(by) == "table" then
+    for skillLine in pairs(expansion.lines) do
+      if type(by[skillLine]) == "table" then
+        for recipeID in pairs(by[skillLine]) do known[recipeID] = true end
+      end
+    end
+  end
+  local scanner = module("Scanner")
+  if scanner and scanner.GetCharacters and scanner.GetCharacter then
+    for _, charKey in ipairs(scanner:GetCharacters() or {}) do
+      local record = scanner:GetCharacter(charKey)
+      local professions = type(record) == "table" and record.professions
+      if type(professions) == "table" then
+        for skillLine in pairs(expansion.lines) do
+          local p = professions[skillLine]
+          if type(p) == "table" and not p.dropped and type(p.recipes) == "table" then
+            for recipeID in pairs(p.recipes) do known[recipeID] = true end
+          end
+        end
+      end
+    end
+  end
+  return function(recipeID) return known[recipeID] == true end
+end
+
+-- The crafting profit this expansion, for every character: the Ledger's own rule (profit_kinds) over the sales and
+-- commissions whose recipe belongs to the expansion's skill lines. An entry with no recipe cannot be placed in an
+-- expansion and is left out. -> a SessionSummary-shaped table (no `crafts`) plus `keep` (the recipe test, for
+-- ExpansionByCharacter) and `expansion`; nil without expansion data.
+function Tab.ExpansionSummary(ledger, expansion)
+  expansion = expansion or Tab.CurrentExpansion()
+  if not expansion then return nil end
+  local keep = expansion_recipes(expansion)
+  local out = profit_kinds(ledger, {}, keep)
+  out.keep, out.expansion = keep, expansion
   return out
+end
+
+-- The same profit per character (best first, then by name): { { charKey, profit, n, incomplete, estimated, kinds } }.
+function Tab.ExpansionByCharacter(ledger, summary)
+  if not (summary and summary.keep and ledger and ledger.Query) then return {} end
+  local seen, keys = {}, {}
+  for _, entry in ipairs(ledger:Query({}) or {}) do
+    if counts_as_profit(entry) and entry.recipeID ~= nil and type(entry.charKey) == "string"
+      and not seen[entry.charKey] and summary.keep(entry.recipeID) then
+      seen[entry.charKey] = true
+      keys[#keys + 1] = entry.charKey
+    end
+  end
+  local rows = {}
+  for _, charKey in ipairs(keys) do
+    local row = profit_kinds(ledger, { charKey = charKey }, summary.keep)
+    if row.n > 0 then
+      row.charKey = charKey
+      rows[#rows + 1] = row
+    end
+  end
+  table.sort(rows, function(a, b)
+    if a.profit ~= b.profit then return a.profit > b.profit end
+    return a.charKey < b.charKey
+  end)
+  return rows
+end
+
+-- The tooltip lines that say a profit is partial or estimated (the Ledger's own wording): "Partial: %d ..." and why,
+-- then "Estimate: %d ..."; { text, color } lines, none for a complete profit.
+function Tab.PartialLines(summary)
+  local lines = {}
+  if type(summary) ~= "table" then return lines end
+  if count(summary.incomplete) > 0 then
+    lines[#lines + 1] = line((L["Partial: %d with missing or partial cost"]):format(summary.incomplete), GOLD)
+    lines[#lines + 1] = line(PARTIAL_DETAIL, GOLD)
+  end
+  if count(summary.estimated) > 0 then
+    lines[#lines + 1] = line((L["Estimate: %d with an estimated craft cost"]):format(summary.estimated), GREY)
+  end
+  return lines
+end
+
+-- Whether a summary's profit is shown with "~": some entry had a missing, partial or estimated cost.
+function Tab.IsApproximate(summary)
+  return type(summary) == "table" and (count(summary.incomplete) > 0 or count(summary.estimated) > 0)
 end
 
 -- The list item for the session line, or nil: { kind = "session", text, lines (the tooltip), crafts, n } from a

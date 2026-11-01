@@ -23,7 +23,7 @@ local tabs = {}            -- registered tabs in registration order: { id, def, 
 local tabsById = {}        -- [id] = entry in tabs
 local seq = 0
 local frame, rail, content
-local headerStrings = {}   -- { character, gold, prices } font strings
+local headerStrings = {}   -- { character, gold (the centre text: pocket, session, expansion), prices } font strings
 local buttons = {}         -- tab rail buttons, reused across relayouts
 local containers = {}      -- [id] = lazily created tab container frame
 local failed = {}        -- [id] = true for tabs whose build failed
@@ -152,6 +152,69 @@ end
 -- Header
 ---------------------------------------------------------------------------
 
+local GOLD_TOOLTIP_SOURCE = "MainWindow:goldTooltip"
+local HEADER_KEY, HEADER_DELAY = "mainwindow.header", 0.5
+local HEADER_PAD, HEADER_GAP = 12, 8   -- the strip's side padding in the frame; the room kept beside the centre text
+local WHITE, GREY = { 1, 1, 1 }, { 0.62, 0.62, 0.62 }
+
+local expansionDirty = true   -- the expansion profit is read again after a Ledger change and when the window shows
+local expansionCache          -- { summary } | { none = true }
+local lastParts               -- the parts the header last showed: { pocket, session, expansion }
+local goldHit                 -- the mouse area over the centre text (its tooltip)
+
+local function is_number(v)
+  return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge
+end
+
+local function ledger_tab()
+  return ns.UI and ns.UI.LedgerTab
+end
+
+-- Compact money in its largest unit ("1,234g", "-80g", "45s", "7c"): the Orders panel's cell rule (it loads after this
+-- file, so it is looked up at call time). The plain fallback only covers a build without that file.
+local function compact_money(copper)
+  local panel = ns.UI and ns.UI.OrdersPanel
+  if panel and panel.CompactMoney then return panel.CompactMoney(copper) end
+  local abs = math.floor(math.abs(copper))
+  local sign = copper < 0 and abs > 0 and "-" or ""
+  if abs >= 10000 then return ("%s%dg"):format(sign, math.floor(abs / 10000)) end
+  if abs >= 100 then return ("%s%ds"):format(sign, math.floor(abs / 100)) end
+  if abs > 0 then return ("%s%dc"):format(sign, abs) end
+  return "0g"
+end
+
+-- Signed compact money for the session part: "+412g", "-80g", "+0g".
+local function signed_money(copper)
+  local text = compact_money(copper)
+  if copper >= 0 and text:sub(1, 1) ~= "+" then text = "+" .. text end
+  return text
+end
+
+-- The crafting profit this session: the Ledger tab's own session summary (Tab.SessionSummary), nil without a session.
+local function session_summary()
+  local tab = ledger_tab()
+  local since = ns.FS:SessionStart()
+  if not (tab and tab.SessionSummary and since) then return nil end
+  return tab.SessionSummary(ns.FS:GetModule("CraftLog", true), ns.FS:GetModule("Ledger", true), since)
+end
+
+-- The crafting profit this expansion across all characters (Tab.ExpansionSummary), kept until the Ledger changes or the
+-- window shows again. -> summary | nil (no expansion data, no Ledger tab, or nothing recorded yet).
+local function expansion_summary()
+  if expansionDirty or not expansionCache then
+    expansionDirty = false
+    expansionCache = {}
+    local tab = ledger_tab()
+    if tab and tab.ExpansionSummary then
+      local ok, summary = pcall(tab.ExpansionSummary, ns.FS:GetModule("Ledger", true))
+      if ok and summary then expansionCache.summary = summary end
+    end
+  end
+  return expansionCache.summary
+end
+
+-- The header's centre text, built from separate whole keys so a part can be dropped.
+-- -> { pocket, session (nil without a baseline), expansion (nil without profit), name }.
 function MainWindow:GetHeaderText()
   local prices = ns.FS:GetModule("Prices", true)
   local priceText
@@ -165,19 +228,123 @@ function MainWindow:GetHeaderText()
       priceText = L["Prices: not scanned yet"]
     end
   end
-  return {
+  local money = GetMoney()
+  local text = {
     character = ns.FS:CharKey(),
-    gold = ns.UI.FormatMoney(GetMoney()),
+    gold = ns.UI.FormatMoney(money),
     prices = priceText,
   }
+  local baseline = ns.FS:SessionMoney()
+  if is_number(money) and is_number(baseline) then
+    text.session = (L["session %s"]):format(signed_money(money - baseline))
+  end
+  local summary = expansion_summary()
+  local tab = ledger_tab()
+  if summary and is_number(summary.profit) and tab then
+    local approximate = tab.IsApproximate and tab.IsApproximate(summary)
+    text.expansion = (L["%s %s"]):format(summary.expansion.name,
+      (approximate and "~" or "") .. compact_money(summary.profit))
+  end
+  return text
+end
+
+-- The centre text for the parts that fit: pocket, then session, then expansion, dropping the expansion first, then the
+-- session, until measure(text) <= available. The pocket always stays. measure and available are optional: without
+-- them every part is kept.
+function MainWindow.CentreText(parts, available, measure)
+  local function join(list)
+    local out = list[1]
+    for i = 2, #list do out = (L["%s · %s"]):format(out, list[i]) end
+    return out
+  end
+  local list = { parts.pocket }
+  if parts.session then list[#list + 1] = parts.session end
+  if parts.expansion then list[#list + 1] = parts.expansion end
+  if type(measure) ~= "function" or not is_number(available) then return join(list), #list end
+  local text = join(list)
+  while #list > 1 and measure(text) > available do
+    list[#list] = nil
+    text = join(list)
+  end
+  return text, #list
+end
+
+-- The tooltip over the centre text, as { { text, color } }: the full text, then what the session and the expansion
+-- part mean.
+function MainWindow:GetGoldTooltipLines()
+  local text = self:GetHeaderText()
+  local parts = { pocket = text.gold, session = text.session, expansion = text.expansion }
+  local lines = { { text = (self.CentreText(parts)), color = WHITE } }
+  local tab = ledger_tab()
+  if text.session then
+    local summary = session_summary()
+    local approximate = tab and tab.IsApproximate and tab.IsApproximate(summary)
+    if summary and is_number(summary.profit) then
+      lines[#lines + 1] = { text = (L["Crafting profit this session: %s"]):format(
+        (approximate and "~" or "") .. ns.UI.FormatMoney(summary.profit)), color = WHITE }
+      for _, extra in ipairs(tab and tab.PartialLines and tab.PartialLines(summary) or {}) do
+        lines[#lines + 1] = extra
+      end
+    else
+      lines[#lines + 1] = { text = L["No crafting profit recorded this session yet"], color = WHITE }
+    end
+    lines[#lines + 1] = { text = L["Gold change includes everything, not only crafting."], color = GREY }
+  end
+  local summary = expansion_summary()
+  if summary then
+    if is_number(summary.profit) then
+      local approximate = tab and tab.IsApproximate and tab.IsApproximate(summary)
+      lines[#lines + 1] = { text = (L["Crafting profit in %s: %s"]):format(summary.expansion.name,
+        (approximate and "~" or "") .. ns.UI.FormatMoney(summary.profit)), color = WHITE }
+      for _, row in ipairs(tab.ExpansionByCharacter and tab.ExpansionByCharacter(ns.FS:GetModule("Ledger", true),
+        summary) or {}) do
+        for _, kind in ipairs(row.kinds) do
+          local name = kind.type == "commission" and L["Order commission"] or L["Auction sale"]
+          lines[#lines + 1] = { text = (L["%s (%s): %s"]):format(row.charKey, name,
+            ns.UI.FormatMoney(kind.profit)), color = WHITE }
+        end
+      end
+      for _, extra in ipairs(tab.PartialLines and tab.PartialLines(summary) or {}) do lines[#lines + 1] = extra end
+      lines[#lines + 1] = { text = L["Counted since FabricationStation recorded it."], color = GREY }
+    else
+      lines[#lines + 1] = { text = L["No crafting profit recorded this expansion yet"], color = GREY }
+    end
+  end
+  return lines
+end
+
+-- Shows the parts that fit between the character and the prices texts. The strip is centred, so the room is the
+-- strip's width less twice the wider side text and a gap.
+local function apply_header(parts)
+  local available
+  local width = frame and frame.GetWidth and frame:GetWidth()
+  local leftW = headerStrings.character and headerStrings.character.GetStringWidth
+    and headerStrings.character:GetStringWidth()
+  local rightW = headerStrings.prices and headerStrings.prices.GetStringWidth and headerStrings.prices:GetStringWidth()
+  if is_number(width) and is_number(leftW) and is_number(rightW) then
+    available = (width - 2 * HEADER_PAD) - 2 * (math.max(leftW, rightW) + HEADER_GAP)
+  end
+  local gold = headerStrings.gold
+  local function measure(text)
+    gold:SetText(text)
+    local w = gold.GetStringWidth and gold:GetStringWidth()
+    return is_number(w) and w or 0
+  end
+  local centre = MainWindow.CentreText(parts, available, measure)
+  gold:SetText(centre)
+  if goldHit then
+    local w = gold.GetStringWidth and gold:GetStringWidth()
+    if is_number(w) then goldHit:SetSize(w + 8, 20) end
+  end
 end
 
 local function update_header()
   if not frame then return end
   local text = MainWindow:GetHeaderText()
   headerStrings.character:SetText(text.character)
-  headerStrings.gold:SetText(text.gold)
   headerStrings.prices:SetText(text.prices)
+  lastParts = { pocket = text.gold, session = text.session, expansion = text.expansion }
+  apply_header(lastParts)
 end
 
 ---------------------------------------------------------------------------
@@ -207,6 +374,7 @@ end
 local function on_shown()
   if shownHandled then return end
   shownHandled = true
+  expansionDirty = true
   update_header()
   local target = pendingTab
   pendingTab = nil
@@ -263,6 +431,31 @@ local function create_frame()
   strings.prices = header:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   strings.prices:SetPoint("RIGHT", header, "RIGHT", 0, 0)
 
+  -- The mouse area over the centre text: its tooltip has the full text and what the session and expansion parts
+  -- mean. Clicks and drags pass through to the window (the strip stays a place to drag it by).
+  local hit = CreateFrame("Frame", nil, header)
+  hit:SetPoint("CENTER", header, "CENTER", 0, 0)
+  hit:SetSize(160, 20)
+  hit:EnableMouse(true)
+  if hit.SetPropagateMouseClicks then hit:SetPropagateMouseClicks(true) end
+  hit:SetScript("OnEnter", ns.FS:Wrap(GOLD_TOOLTIP_SOURCE, function(self)
+    if type(GameTooltip) ~= "table" then return end
+    GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+    for i, l in ipairs(MainWindow:GetGoldTooltipLines()) do
+      local c = l.color or WHITE
+      if i == 1 then
+        GameTooltip:SetText(l.text, c[1], c[2], c[3])
+      else
+        GameTooltip:AddLine(l.text, c[1], c[2], c[3], true)
+      end
+    end
+    GameTooltip:Show()
+  end))
+  hit:SetScript("OnLeave", function()
+    if type(GameTooltip) == "table" then GameTooltip:Hide() end
+  end)
+  goldHit = hit
+
   local newRail = CreateFrame("Frame", nil, f)
   newRail:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -58)
   newRail:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 12, 12)
@@ -289,6 +482,10 @@ local function create_frame()
   f:HookScript("OnSizeChanged", function()
     ns.FS:Debounce("mainwindow.size", SIZE_SAVE_DELAY, saveSizeLater)
   end)
+  -- A resize changes how much of the centre text fits.
+  f:HookScript("OnSizeChanged", ns.FS:Wrap("MainWindow", function()
+    if lastParts then apply_header(lastParts) end
+  end))
   f:HookScript("OnShow", ns.FS:Wrap("MainWindow", on_shown))
   f:HookScript("OnHide", function() shownHandled = false end)
 
@@ -417,6 +614,21 @@ function MainWindow:OnEnable()
   local onChange = ns.FS:Wrap("MainWindow", update_header)
   self:RegisterMessage(ns.Msg.PRICES_CHANGED, onChange)
   self:RegisterEvent("PLAYER_MONEY", onChange)
+  -- A Ledger change makes the expansion profit stale at once; the header is redrawn once the burst has settled.
+  local redrawLater = ns.FS:Wrap("MainWindow", update_header)
+  self:RegisterMessage(ns.Msg.LEDGER_CHANGED, ns.FS:Wrap("MainWindow", function()
+    expansionDirty = true
+    ns.FS:Debounce(HEADER_KEY, HEADER_DELAY, redrawLater)
+  end))
+end
+
+function MainWindow:OnDisable()
+  ns.FS:CancelDebounce(HEADER_KEY)
+end
+
+-- Test access to the mouse area over the centre text (its tooltip scripts).
+function MainWindow:GetGoldHit()
+  return goldHit
 end
 
 -- Test and diagnostics access to the header font strings.

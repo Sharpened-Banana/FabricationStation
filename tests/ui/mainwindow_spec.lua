@@ -137,7 +137,7 @@ describe("MainWindow", function()
     assert.not_equals(before, MW:GetHeaderText().prices)
     assert.equals("Prices: 2m ago", MW:GetHeaderStrings().prices:GetText())
     _G.GetMoney = function() return 10000 end; W.fire("PLAYER_MONEY")
-    assert.equals("1g 0s 0c", MW:GetHeaderStrings().gold:GetText())
+    assert.equals("1g 0s 0c · session +1g", MW:GetHeaderStrings().gold:GetText())
   end)
 
   describe("opening a specific tab", function()
