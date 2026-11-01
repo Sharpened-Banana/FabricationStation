@@ -68,8 +68,9 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     finishes it); hiding it any other way keeps it for later, and guild sharing says when it waits for the guide.
     Its step counter sits between the navigation buttons, and a cut-off line in the scan list shows its full text in
     a tooltip.
-  - Crafting-order rows show a patron order's rewards as icons in the Commission column, and the reagents you still
-    lack in the Reagents column, or a green check when you have them all or the customer provides them.
+  - Crafting-order rows show the commission and a patron order's rewards as icons in place of the Commission
+    column's gold, and the reagents you still lack in the Reagents column, or a green check when you have them all
+    or the customer provides them.
   - Crafting-order rows have a concentration cell: the concentration the order needs, in red when you have too
     little, and a red cross when the quality it asks for cannot be reached.
   - The score cell on a crafting-order row is left blank when it would only repeat the profit beside it (no

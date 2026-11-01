@@ -7,10 +7,11 @@ local L = ns.L
 --                     hide, a strip of cells (net profit, concentration, score, risk count with a tooltip, Add to Queue;
 --                     the concentration cell is a small icon and the concentration the order needs to reach its minimum
 --                     quality, red when you have less, a red cross when it cannot be reached, empty when none is
---                     needed; the score cell is blank while it would only repeat the profit shown beside it), 20 px icons
---                     for the rewards of a patron order in Blizzard's Commission column, right of its money (which
---                     stays visible; "+N" counts the rewards that do not fit; the info tooltip of the row lists the
---                     rewards too), and a cover over Blizzard's Reagents
+--                     needed; the score cell is blank while it would only repeat the profit shown beside it), a cover over
+--                     Blizzard's Commission cell that replaces its gold with the compact commission and 20 px icons
+--                     for the rewards of a patron order ("+N" counts those that do not fit; its tooltip gives the
+--                     full commission, the rewards and what the order costs per knowledge point or Moxie; the info
+--                     tooltip of the row lists the rewards too), and a cover over Blizzard's Reagents
 --                     cell that replaces its "Some" / "None" / "All" with the reagents the crafter must supply (the
 --                     allocation minus what the customer provides) that the character is short of: 20 px icons with
 --                     the count needed in red (white when the owned count is unknown; a reagent already owned gets no
@@ -35,10 +36,9 @@ local L = ns.L
 -- (OnInitializedFrame), and again in a re-fit pass on the next frame (1a's Debounce, coalesced) after rows were
 -- initialised or item data arrived while the list is on screen, since Blizzard can write the name after our callback.
 -- The cell strip sits at the right of the item-name column and gives way to the name (H1-6): the profit cell goes
--- first, then the whole strip; our cells never cover Blizzard's item name. The reward icons are not in this column:
--- they sit in the Commission column (identified like the Reagents column, failing closed: no column, no icons), right
--- of Blizzard's money, whose end is measured read-only (else a fixed width from the column's left edge is assumed);
--- the icons that fit in the space left of the column's edge are drawn and the last visible slot becomes "+N".
+-- first, then the whole strip; our cells never cover Blizzard's item name. The rewards are not in this column:
+-- they are in the Commission cover (a column identified like the Reagents column, failing closed: no column, no cover,
+-- and Blizzard's gold shows), the icons that fit right of the amount, the last visible slot becoming "+N".
 -- The Reagents cover is replaced, not edited: Blizzard's cell and its text are never written (no SetText, SetAlpha or
 -- Hide on them). Our own frame, in our own container, is anchored over the cell (measured read-only from the row's
 -- column header, or its own cells when there is no header) with an opaque background of COVER_COLOR, so the word underneath cannot be seen. It fails closed: the cover goes only over a column
@@ -103,14 +103,12 @@ local COVER_PAD = 4
 -- and ends where the last begins. Anything else gets no cover, and Blizzard's text shows.
 local KNOWN_COLUMNS, REAGENTS_MIN, REAGENTS_MAX = 5, 80, 100
 local REAGENTS_HEADER_GLOBAL = "PROFESSIONS_COLUMN_HEADER_REAGENTS"   -- unverified name, see the in-game checklist (P5-11)
--- The reward icons sit in Blizzard's Commission (Tip) column, right of its money: identified by the header's own text
--- (the unverified global names below), else as the third of the known five columns (about 160 px, touching the
--- Reagents column). When the money's end cannot be read, it is assumed to take MONEY_WIDTH_FALLBACK px from the
--- column's left edge.
+-- The Commission (Tip) column is covered the same way and shows the commission and the reward icons: identified by the
+-- header's own text (the unverified global names below), else as the third of the known five columns (about 160 px,
+-- touching the Reagents column).
 local TIP_HEADER_GLOBALS = { "PROFESSIONS_COLUMN_HEADER_TIP", "PROFESSIONS_COLUMN_HEADER_COMMISSION" }
 local TIP_MIN, TIP_MAX = 120, 200
-local MONEY_WIDTH_FALLBACK = 100
-M.LAYOUT.MONEY_WIDTH_FALLBACK = MONEY_WIDTH_FALLBACK
+local AMOUNT_WIDTH = 44   -- the compact commission at the left of the Commission cover
 local HOVER_COLOR = { 1, 1, 1, 0.1 }   -- the cover's own highlight while its row is hovered
 -- The cover's opaque background, a dark colour close to the order list's own. (The list's background atlas cannot be
 -- read from Blizzard's region without relying on its layout, so this is the one value to adjust.)
@@ -280,6 +278,19 @@ function M.ScoreText(view)
   return text
 end
 
+-- What a patron order costs per knowledge point or Moxie it pays, as lines (none when the order pays for itself).
+function M.CostNotes(view)
+  local notes = {}
+  local cost = type(view) == "table" and type(view.costPerReward) == "table" and view.costPerReward or {}
+  if is_money(cost.knowledge) and cost.knowledge > 0 then
+    notes[#notes + 1] = (L["Pays %s per knowledge point"]):format(ns.UI.FormatMoney(cost.knowledge))
+  end
+  if is_money(cost.moxie) and cost.moxie > 0 then
+    notes[#notes + 1] = (L["Pays %s per Moxie"]):format(ns.UI.FormatMoney(cost.moxie))
+  end
+  return notes
+end
+
 -- Why a row's numbers are missing or uncertain, in full, for the risk tooltip. A recraft says only that.
 function M.Notes(view)
   local flags, notes = flags_of(view), {}
@@ -306,14 +317,7 @@ function M.Notes(view)
   if flags.estimated then notes[#notes + 1] = L["Estimate (no calibration)"] end
   if flags.unpricedReward then notes[#notes + 1] = L["Some rewards have no price"] end
   if flags.stalePrice then notes[#notes + 1] = L["Prices are old"] end
-  -- What a patron order costs per knowledge point or Moxie it pays (nothing is said when the order pays for itself).
-  local cost = type(view) == "table" and type(view.costPerReward) == "table" and view.costPerReward or {}
-  if is_money(cost.knowledge) and cost.knowledge > 0 then
-    notes[#notes + 1] = (L["Pays %s per knowledge point"]):format(ns.UI.FormatMoney(cost.knowledge))
-  end
-  if is_money(cost.moxie) and cost.moxie > 0 then
-    notes[#notes + 1] = (L["Pays %s per Moxie"]):format(ns.UI.FormatMoney(cost.moxie))
-  end
+  for _, note in ipairs(M.CostNotes(view)) do notes[#notes + 1] = note end
   return notes
 end
 
@@ -781,10 +785,28 @@ local function risk_tooltip(c)
   show_tooltip(c.risk, lines)
 end
 
--- The reward strip's tooltip: the "Rewards" lines. c.tipping ("icons" | "cover") keeps an open tooltip fresh while the
--- pointer is on the strip or the cover, and is cleared when that part hides.
-local function icons_tooltip(c)
-  show_tooltip(c.icons, icon_lines(c.iconEntries))
+-- The Commission cover's tooltip: the full commission (tip, the consortium's cut, commission), the "Rewards" lines and
+-- what the order costs per knowledge point or Moxie. c.tipping ("tip" | "cover") keeps an open tooltip fresh while the
+-- pointer is on the cover, and is cleared when that cover hides.
+local function tip_tooltip(c)
+  local view = c.view
+  local lines = {}
+  if type(view) == "table" then
+    if is_money(view.tip) then
+      lines[#lines + 1] = { text = (L["Tip: %s"]):format(ns.UI.FormatMoney(view.tip)), color = TEXT_COLORS.white }
+    end
+    if is_money(view.consortiumCut) then
+      lines[#lines + 1] = { text = (L["Consortium cut: %s"]):format(ns.UI.FormatMoney(view.consortiumCut)),
+        color = TEXT_COLORS.white }
+    end
+    if is_money(view.commission) then
+      lines[#lines + 1] = { text = (L["Commission: %s"]):format(ns.UI.FormatMoney(view.commission)),
+        color = TEXT_COLORS.white }
+    end
+  end
+  for _, line in ipairs(icon_lines(c.rewardAll or {})) do lines[#lines + 1] = line end
+  for _, note in ipairs(M.CostNotes(view)) do lines[#lines + 1] = { text = note, color = TEXT_COLORS.grey } end
+  show_tooltip(c.tipCover, lines)
 end
 
 -- The Reagents cover's tooltip: every reagent to supply (owned ones too), or why there is a check or a "?".
@@ -806,7 +828,7 @@ local function cover_tooltip(c)
 end
 
 local function refresh_tooltip(c)
-  if c.tipping == "icons" then icons_tooltip(c) elseif c.tipping == "cover" then cover_tooltip(c) end
+  if c.tipping == "tip" then tip_tooltip(c) elseif c.tipping == "cover" then cover_tooltip(c) end
 end
 
 local function hover_enter(c, which)
@@ -828,7 +850,7 @@ local function clear_tipping(c, which)
   if type(GameTooltip) ~= "table" then return end
   if type(GameTooltip.GetOwner) == "function" then
     local ok, owner = pcall(GameTooltip.GetOwner, GameTooltip)
-    if ok and owner ~= (current == "icons" and c.icons or c.cover) then return end
+    if ok and owner ~= (current == "tip" and c.tipCover or c.cover) then return end
   end
   hide_tooltip()
 end
@@ -836,6 +858,7 @@ end
 -- The cover's own hover highlight: lit while the row or the cover has the pointer (Blizzard's highlight is under it).
 local function update_hover(c)
   set_shown(c.coverHover, c.rowHover == true or c.coverHovered == true)
+  set_shown(c.tipHover, c.rowHover == true or c.tipHovered == true)
 end
 
 local function row_hover(c, on)
@@ -845,6 +868,11 @@ end
 
 local function cover_hover(c, on)
   c.coverHovered = on
+  update_hover(c)
+end
+
+local function tip_hover(c, on)
+  c.tipHovered = on
   update_hover(c)
 end
 
@@ -1015,18 +1043,51 @@ local function new_cells(row)
   c.profit:SetSize(CELL_WIDTH, STRIP_HEIGHT)
   c.profit:SetJustifyH("RIGHT")
 
-  -- The reward icon strip, a sibling of the cell strip (it has its own width and alpha): one pooled slot (texture and
-  -- count) per icon, created when first needed and reused by whatever order the recycled row shows next; "+N" in the
-  -- last visible slot when not every icon fits.
-  c.icons = CreateFrame("Frame", nil, frame)
-  c.icons:SetSize(ICON_SIZE, ICON_SIZE)
-  c.icons:SetClipsChildren(true)
-  c.icons:EnableMouse(true)
-  pass_through(c.icons)
-  c.icons:SetScript("OnEnter", function() M.Guard(ROWS, hover_enter, c, "icons") end)
-  c.icons:SetScript("OnLeave", function() M.Guard(ROWS, hover_leave, c) end)
-  c.iconBank = new_bank(c.icons)
-  c.slots, c.more = c.iconBank.slots, c.iconBank.more
+  -- The Commission cover: like the Reagents cover below, an opaque background over Blizzard's Commission cell (its
+  -- gold amount must not show) with the row's tint and hover highlight repainted on it and a dark overlay of its own
+  -- for a dimmed row. Its content frame (alpha follows the strip's) holds the compact commission and the reward icons
+  -- (the same pooled slots as the Reagents cover: created when first needed and reused by whatever order the recycled
+  -- row shows next; "+N" in its own fixed-width slot when not every icon fits).
+  c.tipCover = CreateFrame("Frame", nil, frame)
+  c.tipCover:SetClipsChildren(true)
+  c.tipCover:EnableMouse(true)
+  pass_through(c.tipCover)
+  c.tipCover:SetScript("OnEnter", function()
+    M.Guard(ROWS, function()
+      tip_hover(c, true)
+      hover_enter(c, "tip")
+    end)
+  end)
+  c.tipCover:SetScript("OnLeave", function()
+    M.Guard(ROWS, function()
+      tip_hover(c, false)
+      hover_leave(c)
+    end)
+  end)
+  c.tipBg = c.tipCover:CreateTexture(nil, "BACKGROUND")
+  c.tipBg:SetAllPoints(c.tipCover)
+  c.tipBg:SetColorTexture(COVER_COLOR[1], COVER_COLOR[2], COVER_COLOR[3], COVER_COLOR[4])
+  c.tipTint = c.tipCover:CreateTexture(nil, "BORDER")
+  c.tipTint:SetAllPoints(c.tipCover)
+  c.tipTint:Hide()
+  c.tipHover = c.tipCover:CreateTexture(nil, "BORDER", nil, 1)
+  c.tipHover:SetAllPoints(c.tipCover)
+  c.tipHover:SetColorTexture(HOVER_COLOR[1], HOVER_COLOR[2], HOVER_COLOR[3], HOVER_COLOR[4])
+  c.tipHover:Hide()
+  c.tipDim = c.tipCover:CreateTexture(nil, "BORDER", nil, 2)
+  c.tipDim:SetAllPoints(c.tipCover)
+  c.tipDim:SetColorTexture(DIM[1], DIM[2], DIM[3], DIM[4])
+  c.tipDim:Hide()
+  c.tipContent = CreateFrame("Frame", nil, c.tipCover)
+  c.tipContent:SetAllPoints(c.tipCover)
+  c.tipAmount = text(c.tipContent)
+  c.tipAmount:SetSize(AMOUNT_WIDTH, STRIP_HEIGHT)
+  c.tipAmount:SetJustifyH("LEFT")
+  c.tipAmount:SetPoint("LEFT", c.tipCover, "LEFT", COVER_PAD, 0)
+  color_text(c.tipAmount, TEXT_COLORS.white)
+  c.tipBank = new_bank(c.tipContent)
+  c.tipSlots, c.tipMore = c.tipBank.slots, c.tipBank.more
+  c.tipCover:Hide()
 
   -- The Reagents cover: an opaque background over Blizzard's Reagents cell (its word must not show), the row's tint and
   -- hover highlight repainted on it (they are drawn under the cover), a dark overlay of its own for a dimmed row, and
@@ -1214,67 +1275,40 @@ end
 local function reagents_column(row) return identify_column(row, { REAGENTS_HEADER_GLOBAL }, known_reagents_span) end
 local function tip_column(row) return identify_column(row, TIP_HEADER_GLOBALS, known_tip_span) end
 
--- Where Blizzard's money ends in the Commission cell at `left`..`right` (read only): the largest right edge among the
--- cell's visible money frame, text and children that lie inside the column; left + MONEY_WIDTH_FALLBACK when none can
--- be read.
-local function money_end(row, left, right)
-  local best
-  for i = 1, 12 do
-    local cell = type(row.cells) == "table" and row.cells[i] or nil
-    local cellLeft = type(cell) == "table" and read_number(cell, "GetLeft") or nil
-    if cellLeft and math.abs(cellLeft - left) <= GAP then
-      local parts = { child(cell, "MoneyFrame"), child(cell, "Money"), child(cell, "Text") }
-      if type(cell.GetChildren) == "function" then
-        for _, part in ipairs(tables_of(select(2, pcall(cell.GetChildren, cell)))) do parts[#parts + 1] = part end
-      end
-      for _, part in pairs(parts) do
-        local shown = true
-        if type(part.IsShown) == "function" then
-          local ok, value = pcall(part.IsShown, part)
-          shown = not ok or value ~= false
-        end
-        local edge = shown and read_number(part, "GetRight") or nil
-        if edge and edge >= left and edge <= right and (best == nil or edge > best) then best = edge end
-      end
-    end
-  end
-  return best or (left + MONEY_WIDTH_FALLBACK)
-end
-
--- Draws the reward icons in the Commission column, right-aligned in the space right of Blizzard's money (which stays
--- visible: nothing is covered): the icons that fit (IconLayout; "+N" counts the rest). Nothing when the column cannot
--- be identified, there are no rewards or none fits.
-local function render_icons(c, row)
-  local left, right = tip_column(row)
-  local rowRight = read_number(row, "GetRight")
-  local layout = { shown = 0, width = 0 }
-  if left and rowRight and rowRight >= right and #c.iconEntries > 0 then
-    layout = M.IconLayout(c.iconEntries, right - PAD - (money_end(row, left, right) + GAP))
-  end
-  if not draw_bank(c.iconBank, c.iconEntries, layout, 0) then
-    c.icons:Hide()
-    clear_tipping(c, "icons")
-    return
-  end
-  c.icons:ClearAllPoints()
-  c.icons:SetPoint("RIGHT", row, "RIGHT", -(rowRight - right + PAD), 0)
-  c.icons:SetSize(layout.width, ICON_SIZE)
-  c.icons:Show()
-end
-
 -- Anchors the cover over the identified Reagents column and returns its width, or nil (nothing identified, or the row's
 -- right edge is unknown) when there is to be no cover.
-local function place_cover(c, row)
-  local left, right = reagents_column(row)
+local function place_over(cover, row, column)
+  local left, right = column(row)
   if not left then return nil end
   local rowRight = read_number(row, "GetRight")
   if not rowRight or rowRight < right then return nil end
   local offset, width = rowRight - right, right - left
-  c.cover:ClearAllPoints()
-  c.cover:SetPoint("TOPRIGHT", row, "TOPRIGHT", -offset, 0)
-  c.cover:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -offset, 0)
-  c.cover:SetWidth(width)
+  cover:ClearAllPoints()
+  cover:SetPoint("TOPRIGHT", row, "TOPRIGHT", -offset, 0)
+  cover:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -offset, 0)
+  cover:SetWidth(width)
   return width
+end
+
+local function place_cover(c, row) return place_over(c.cover, row, reagents_column) end
+
+-- Shows the Commission cover (c.tipOn: the setting is on and the row has a view of ours) over the column
+-- tip_column identifies: the compact commission ("?" while unknown) and the reward icons that fit right of it, "+N"
+-- counting the rest. No cover where the column cannot be told: Blizzard's amount shows, and the rewards are in the
+-- row's info tooltip.
+local function render_tip_cover(c, row)
+  local width = c.tipOn and place_over(c.tipCover, row, tip_column) or nil
+  if not width then
+    c.tipCover:Hide()
+    clear_tipping(c, "tip")
+    return
+  end
+  set_shown(c.tipDim, c.dimmed)
+  c.tipContent:SetAlpha(c.dimmed and 0.6 or 1)
+  c.tipAmount:SetText(c.tipAmountText or "?")
+  local x0 = COVER_PAD + AMOUNT_WIDTH + GAP
+  draw_bank(c.tipBank, c.iconEntries, M.IconLayout(c.iconEntries, width - x0 - COVER_PAD), x0)
+  c.tipCover:Show()
 end
 
 -- Shows the Reagents cover for the row's mode (c.coverMode: "reagents" | "stocked" | "provided" | "unsure" | nil), over
@@ -1298,10 +1332,10 @@ end
 
 local function hide_cells(c)
   c.frame:Hide()
-  c.icons:Hide()
+  c.tipCover:Hide()
   c.cover:Hide()
   clear_tipping(c)
-  c.rowHover, c.coverHovered = false, false
+  c.rowHover, c.coverHovered, c.tipHovered = false, false, false
   update_hover(c)
 end
 
@@ -1328,7 +1362,7 @@ function apply_fit(c, row)
   -- cell is shown beside it with the same text. Otherwise it keeps its text, the only number left once the profit gives way.
   c.score:SetText(c.fit == "all" and c.scoreText == c.profitText and "" or c.scoreText)
   set_shown(c.strip, c.fit ~= "none")
-  render_icons(c, row)
+  render_tip_cover(c, row)
   render_cover(c, row)
 end
 
@@ -1410,12 +1444,15 @@ local function show_row(row, elementData)
   c.tint, c.tintColor = model.highlight, tint
   if tint then c.tintTexture:SetColorTexture(tint[1], tint[2], tint[3], tint[4]) end
   set_shown(c.tintTexture, tint ~= nil)
-  if tint then c.coverTint:SetColorTexture(tint[1], tint[2], tint[3], tint[4]) end
+  if tint then
+    c.coverTint:SetColorTexture(tint[1], tint[2], tint[3], tint[4])
+    c.tipTint:SetColorTexture(tint[1], tint[2], tint[3], tint[4])
+  end
   set_shown(c.coverTint, tint ~= nil)
+  set_shown(c.tipTint, tint ~= nil)
   c.dimmed = model.dimmed
   set_shown(c.dimTexture, model.dimmed)
   c.strip:SetAlpha(model.dimmed and 0.6 or 1)
-  c.icons:SetAlpha(model.dimmed and 0.6 or 1)
   -- The rewards, and what the Reagents cover shows (none while the setting is off: Blizzard's column shows as usual).
   local on = O:Settings().showRowIcons ~= false
   local reagents = M.ReagentEntries(view, owned_count)
@@ -1423,6 +1460,9 @@ local function show_row(row, elementData)
   c.reagentEntries = on and reagents or {}
   c.shortEntries = M.ShortEntries(c.reagentEntries)
   c.coverMode = on and reagent_state(reagents) or nil
+  -- The Commission cover's amount and the view its tooltip reads (the setting turns this cover off as well).
+  c.tipOn, c.view = on, view
+  c.tipAmountText = M.CompactMoney(view.commission) or "?"
 
   -- The concentration cell keeps its slot; it is empty when the order needs none.
   c.concCell = M.ConcentrationCell(view, available_concentration(view))

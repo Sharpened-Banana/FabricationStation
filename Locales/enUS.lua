@@ -899,6 +899,7 @@ L["Cost: %s"] = true
 L["Could not link (%s)"] = true
 L["Fulfilled: %s"] = true
 L["Last seen: %s"] = true
+L["Consortium cut: %s"] = true   -- order row Commission cover tooltip: what the crafting consortium keeps of the tip
 L["Linked to %s"] = true
 L["Median tip: %s"] = true
 L["Order: %s"] = true   -- customer history tooltip: the order type (Public, Guild, Personal, NPC)

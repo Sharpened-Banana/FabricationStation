@@ -131,6 +131,7 @@ describe("OrdersPanel row icons", function()
     return row
   end
   local function cells_of(row) return rows():GetCells(row) end
+  local function O_view(orderID) return ns.FS:GetModule("Orders"):GetView(orderID) end
   -- The icons that show in a slot pool, in order ({ slot index, texture, count text }); the "+N" slot is not one.
   local function shown(pool)
     local out = {}
@@ -148,7 +149,7 @@ describe("OrdersPanel row icons", function()
 
   after_each(function() fake_professions_frame.reset() end)
 
-  describe("reward icons in the name column", function()
+  describe("reward icons in the Commission cover", function()
     it("shows the rewards in order with their counts: items and currencies", function()
       boot()
       local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 3), { currencyType = 3001, count = 1 },
@@ -156,136 +157,109 @@ describe("OrdersPanel row icons", function()
       show_board({ raw })
       local c = cells_of(row_for(raw))
       assert.same({ { i = 1, file = 902001, count = "3" }, { i = 2, file = 700001, count = nil },
-        { i = 3, file = 902002, count = nil } }, shown(c.slots))
-      assert.is_true(c.icons:IsShown())
+        { i = 3, file = 902002, count = nil } }, shown(c.tipSlots))
+      assert.is_true(c.tipCover:IsShown()); assert.equal(c.tipContent, select(2, c.tipSlots[1].icon:GetPoint(1)))
       assert.same({ "reward", "reward", "reward" }, { c.iconEntries[1].kind, c.iconEntries[2].kind, c.iconEntries[3].kind })
     end)
-    it("holds the rewards only: the reagents go to the Reagents cover", function()
+    it("holds the amount and the rewards only: the reagents go to the Reagents cover", function()
       boot()
       evalResult = allocation({ itemID = 1001, quantity = 3 })
       local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 2) } })
       show_board({ raw })
       local c = cells_of(row_for(raw))
-      assert.equal(1, #c.iconEntries); assert.equal(1, #shown(c.slots))
-      assert.equal(S, c.icons:GetWidth())
+      assert.equal(1, #c.iconEntries); assert.equal(1, #shown(c.tipSlots))
       assert.same({ 901001 }, files_of(c.coverSlots))
     end)
-    it("has no strip for an order without rewards", function()
+    it("shows just the amount for an order without rewards", function()
       boot()
-      evalResult = allocation({ itemID = 1001, quantity = 3 })
       local raw = order()
       show_board({ raw })
       local c = cells_of(row_for(raw))
-      assert.same({}, c.iconEntries); assert.is_false(c.icons:IsShown())
+      assert.same({}, c.iconEntries)
+      assert.same({ true, "45g", 0, false }, { c.tipCover:IsShown(), c.tipAmount:GetText(), #shown(c.tipSlots), c.tipMore:IsShown() })
     end)
     it("falls back to the question mark for a missing icon, never an error", function()
       boot()
       local raw = order({ orderType = 3, npcOrderRewards = { item_reward(9999, 1), { currencyType = 3999, count = 2 } } })
       show_board({ raw })
       assert.same({ { i = 1, file = QUESTION_MARK, count = nil }, { i = 2, file = QUESTION_MARK, count = "2" } },
-        shown(cells_of(row_for(raw)).slots))
+        shown(cells_of(row_for(raw)).tipSlots))
       assert.is_true(rows():IsEnabled())
     end)
     it("uses GetItemIcon when C_Item.GetItemIconByID is missing, and the question mark when neither answers", function()
       boot({ C_Item = { GetItemIconByID = P2.NIL }, GetItemIcon = function(id) if id == 2001 then return 555 end end })
       local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 1), item_reward(2002, 1) } })
       show_board({ raw })
-      assert.same({ 555, QUESTION_MARK }, files_of(cells_of(row_for(raw)).slots))
+      assert.same({ 555, QUESTION_MARK }, files_of(cells_of(row_for(raw)).tipSlots))
       boot({ C_Item = { GetItemIconByID = P2.NIL } })
       show_board({ raw })
-      assert.same({ QUESTION_MARK, QUESTION_MARK }, files_of(cells_of(row_for(raw)).slots))
+      assert.same({ QUESTION_MARK, QUESTION_MARK }, files_of(cells_of(row_for(raw)).tipSlots))
     end)
   end)
 
-  describe("reward icons in the Commission column", function()
-    local TIP_RIGHT, ROW_RIGHT = 705, 860
-    -- Room for the icons: from Blizzard's money (+GAP) to the column's right edge (-PAD).
-    local function money_for_room(room) return TIP_RIGHT - LY.PAD - LY.GAP - room end
-    -- A row of n rewards whose Commission money ends at `moneyRight` (nil: it cannot be read).
-    local function rewards_row(n, moneyRight, textWidth)
+  describe("the Commission cover", function()
+    local TIP_LEFT, TIP_RIGHT, ROW_RIGHT = 545, 705, 860
+    local X0 = 4 + 44 + 4   -- COVER_PAD + the amount's width + GAP: where the first icon starts
+    -- A row of n rewards (default geometry, a short name).
+    local function rewards_row(n)
       boot()
       local rewards = {}
       for i = 1, n do rewards[i] = item_reward(2000 + i, 1) end
       local raw = order({ orderType = 3, npcOrderRewards = rewards })
       show_board({ raw })
-      local g = geometry(textWidth or 10)
-      g.columns[2][3] = moneyRight
-      local row = row_for(raw, g)
-      return cells_of(row), row, g
+      local row = row_for(raw)
+      return cells_of(row), row, raw
     end
     local function state(c)
-      return { c.icons:IsShown(), #shown(c.slots), c.more:IsShown() and c.more:GetText() or nil }
+      return { #shown(c.tipSlots), c.tipMore:IsShown() and c.tipMore:GetText() or nil }
     end
+    local function points(c) return { { c.tipCover:GetPoint(1) }, { c.tipCover:GetPoint(2) }, c.tipCover:GetWidth() } end
 
-    it("shows every icon when they all fit", function()
-      local c = rewards_row(4, money_for_room(strip_width(4) + 4))
-      assert.same({ true, 4, nil }, state(c))
-      assert.equal(strip_width(4), c.icons:GetWidth())
-    end)
-    it("sits right-aligned at the column's right edge, in our own container", function()
-      local c, row = rewards_row(3, 560)
-      assert.same({ "RIGHT", row, "RIGHT", -(ROW_RIGHT - TIP_RIGHT + LY.PAD), 0 }, { c.icons:GetPoint(1) })
-      assert.equal(c.frame, c.icons:GetParent())
+    it("sits over the Commission cell, in our own container, without touching Blizzard's cell", function()
+      local c, row = rewards_row(2)
+      assert.same({ { "TOPRIGHT", row, "TOPRIGHT", -(ROW_RIGHT - TIP_RIGHT), 0 },
+        { "BOTTOMRIGHT", row, "BOTTOMRIGHT", -(ROW_RIGHT - TIP_RIGHT), 0 }, TIP_RIGHT - TIP_LEFT }, points(c))
+      assert.equal(c.frame, c.tipCover:GetParent())
+      assert.is_true(c.tipCover:IsShown()); assert.same(ns.UI.OrdersPanel.COVER_COLOR, c.tipBg.color)
+      assert.equal(1, ns.UI.OrdersPanel.COVER_COLOR[4])   -- opaque: Blizzard's gold cannot show through
       assert.same({}, form.assignedFields)
     end)
-    it("shows as many as fit and turns the last slot into +N, counting the hidden rewards", function()
-      local c = rewards_row(5, money_for_room(with_more(2) + 2))
-      assert.same({ true, 2, "+3" }, state(c))
-      assert.equal(with_more(2), c.icons:GetWidth())
-      assert.same({ "LEFT", c.icons, "LEFT", slot_x(3), 0 }, { c.more:GetPoint(1) })
-      assert.same({ true, 3, "+2" }, state((rewards_row(5, money_for_room(with_more(3) + 2)))))
+    it("shows the compact commission and then the reward icons, left-aligned", function()
+      local c = rewards_row(2)
+      assert.same({ "45g", WHITE }, { c.tipAmount:GetText(), { c.tipAmount:GetTextColor() } })
+      assert.same({ "LEFT", c.tipCover, "LEFT", 4, 0 }, { c.tipAmount:GetPoint(1) })
+      local function x(i) local _, _, _, px = c.tipSlots[i].icon:GetPoint(1); return px end
+      assert.same({ X0, X0 + slot_x(2) }, { x(1), x(2) })
+      assert.same({ 2, nil }, { #shown(c.tipSlots), c.tipMore:IsShown() and 1 or nil })
     end)
-    it("gives +N a width of its own, so it cannot run into the money", function()
-      local c = rewards_row(5, money_for_room(with_more(2) + 2))
-      assert.equal(MW, c.more:GetWidth()); assert.is_false(c.more:GetWordWrap())
-      assert.is_true(c.icons.clips)
+    it("shows +N in a slot of its own, counting the rewards that do not fit", function()
+      local c = rewards_row(9)
+      local n = fit_count((TIP_RIGHT - TIP_LEFT) - X0 - 4)
+      assert.is_true(n > 0 and n < 8)
+      assert.same({ n, "+" .. (9 - n) }, state(c))
+      assert.same({ "LEFT", c.tipContent, "LEFT", X0 + slot_x(n + 1), 0 }, { c.tipMore:GetPoint(1) })
+      assert.same({ MW, false }, { c.tipMore:GetWidth(), c.tipMore:GetWordWrap() })
+      assert.is_true(c.tipCover.clips)
     end)
-    it("shows only +N when one slot fits, and hides the icons when none does", function()
-      assert.same({ true, 0, "+5" }, state((rewards_row(5, money_for_room(MW + 4)))))
-      assert.same({ false, 0, nil }, state((rewards_row(5, money_for_room(MW - 1)))))
+    it("shows ? for an unknown commission", function()
+      boot()
+      local raw = order({ orderType = 3, tipAmount = false, npcOrderRewards = { item_reward(2001, 1) } })
+      show_board({ raw })
+      O_view(10).commission = nil
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      local c = cells_of(row_for(raw))
+      assert.equal("?", c.tipAmount:GetText())
+      assert.equal(1, #shown(c.tipSlots))
     end)
-    it("measures where the money ends, else assumes the money takes a fixed width from the column's left edge", function()
-      local measured = rewards_row(5, 560)   -- room 135: all five fit
-      assert.same({ true, 5, nil }, state(measured))
-      local fixed = rewards_row(5, nil)      -- the money's end cannot be read
-      local room = 705 - LY.PAD - (545 + LY.MONEY_WIDTH_FALLBACK + LY.GAP)
-      assert.is_true(room < strip_width(5))
-      assert.same({ true, fit_count(room), "+" .. (5 - fit_count(room)) }, state(fixed))
-    end)
-    it("follows the money when it moves, on the next re-fit", function()
-      local c, _, g = rewards_row(3, 560)
-      assert.same({ true, 3, nil }, state(c))
-      g.columns[2][3] = money_for_room(MW + 4)   -- Blizzard writes a longer amount
-      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
-      assert.same({ true, 0, "+3" }, state(c))
-      g.columns[2][3] = 560
-      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
-      assert.same({ true, 3, nil }, state(c))
-      assert.same({}, form.assignedFields)
-    end)
-    it("ignores a money frame that is hidden or outside the column", function()
-      local c, row = rewards_row(3, 560)
-      local fallback = fit_count(705 - LY.PAD - (545 + LY.MONEY_WIDTH_FALLBACK + LY.GAP))
-      local cell = form.raw(row).cells[3]
-      cell.MoneyFrame.IsShown = function() return false end
-      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
-      assert.equal(fallback, #shown(c.slots))
-      cell.MoneyFrame.IsShown = function() return true end
-      cell.MoneyFrame.GetRight = function() return 900 end   -- outside the column
-      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
-      assert.equal(fallback, #shown(c.slots))
-      cell.MoneyFrame.GetRight = function() return 560 end
-      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
-      assert.equal(3, #shown(c.slots))
-    end)
-    it("draws no icons where the Commission column cannot be identified, and never uses the name column", function()
+    it("has no cover where the Commission column cannot be identified, and the rewards stay in the info tooltip", function()
       boot()
       set_headers({ { 400, 560 }, { 560, 710 }, { 710, 860 } })   -- a four-column layout
       local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 2) } })
       show_board({ raw })
       local c = cells_of(row_for(raw))
-      assert.is_false(c.icons:IsShown()); assert.equal(1, #c.iconEntries)
-      assert.same({}, shown(c.slots))
+      assert.is_false(c.tipCover:IsShown()); assert.equal(1, #c.iconEntries)
+      c.risk:GetScript("OnEnter")(c.risk)
+      assert.equal("Rewards", tooltip.lines[#tooltip.lines - 1])
     end)
     it("finds the column by its header text, in any layout", function()
       boot()
@@ -294,32 +268,91 @@ describe("OrdersPanel row icons", function()
       local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 2) } })
       show_board({ raw })
       local g = geometry(10)
-      g.columns = { { 400, 520 }, { 520, 640, 530 }, { 640, 860 } }
+      g.columns = { { 400, 520 }, { 520, 640 }, { 640, 860 } }
       local row = row_for(raw, g)
       local c = cells_of(row)
-      assert.is_true(c.icons:IsShown())
-      assert.same({ "RIGHT", row, "RIGHT", -(860 - 640 + LY.PAD), 0 }, { c.icons:GetPoint(1) })
+      assert.is_true(c.tipCover:IsShown())
+      assert.same({ "TOPRIGHT", row, "TOPRIGHT", -(860 - 640), 0 }, { c.tipCover:GetPoint(1) })
       _G.PROFESSIONS_COLUMN_HEADER_TIP = nil
     end)
-    it("draws no icons on a row that is not laid out", function()
+    it("has no cover on a row that is not laid out", function()
       boot()
       local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 2) } })
       show_board({ raw })
-      assert.is_false(cells_of(row_for(raw, false)).icons:IsShown())
+      assert.is_false(cells_of(row_for(raw, false)).tipCover:IsShown())
+    end)
+    it("re-measures on the next re-fit and goes when the layout is no longer known", function()
+      local c, row = rewards_row(2)
+      assert.is_true(c.tipCover:IsShown())
+      set_headers({ { 400, 560 }, { 560, 710 }, { 710, 860 } })
+      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
+      assert.is_false(c.tipCover:IsShown())
+      set_headers(COLUMNS)
+      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
+      assert.same({ true, TIP_RIGHT - TIP_LEFT }, { c.tipCover:IsShown(), c.tipCover:GetWidth() })
+      assert.is_true(row ~= nil)
     end)
     it("does not change what the name column fits: the cells keep their tier whether or not there are rewards", function()
       boot()
       local plain = order({ orderID = 10 })
       local rich = order({ orderID = 11, orderType = 3, npcOrderRewards = { item_reward(2001, 2), item_reward(2002, 1) } })
       show_board({ plain, rich })
-      -- a name long enough to lose the profit cell (the module's own layout decides how long)
       local long = 268 - LY.CORE_WIDTH + 1 - 8
       local a, b = cells_of(row_for(plain, geometry(long))), cells_of(row_for(rich, geometry(long)))
       assert.same({ a.fit, a.strip:IsShown() }, { b.fit, b.strip:IsShown() })
-      -- the rewards stay visible however long the name is
-      local longest = 268 - LY.CORE_WIDTH + 40
-      local c = cells_of(row_for(rich, geometry(longest)))
-      assert.same({ "none", false, true }, { c.fit, c.strip:IsShown(), c.icons:IsShown() })
+      local c = cells_of(row_for(rich, geometry(268 - LY.CORE_WIDTH + 40)))
+      assert.same({ "none", false, true }, { c.fit, c.strip:IsShown(), c.tipCover:IsShown() })
+    end)
+
+    describe("tooltip", function()
+      local function lines_of(c)
+        c.tipCover:GetScript("OnEnter")(c.tipCover)
+        local out = tooltip.lines
+        c.tipCover:GetScript("OnLeave")(c.tipCover)
+        return out
+      end
+      it("gives the full commission, then the Rewards lines", function()
+        boot()
+        cached[2001] = "Sword"
+        local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 3), { currencyType = 3001, count = 1 } } })
+        show_board({ raw })
+        local c = cells_of(row_for(raw))
+        local money = ns.UI.FormatMoney
+        assert.same({ "Tip: " .. money(500000), "Consortium cut: " .. money(50000), "Commission: " .. money(450000),
+          "Rewards", "|T902001:14|t |Hitem:2001|h[Sword]|h x3", "|T700001:14|t Resonance Crystals x1" }, lines_of(c))
+        assert.is_false(tooltip.shown)
+      end)
+      it("ends with what a patron order costs per knowledge point or Moxie", function()
+        boot()
+        local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 1) } })
+        show_board({ raw })
+        local view = O_view(10)
+        view.costPerReward = { knowledge = 120000, moxie = 30000 }
+        ns.FS:SendMessage("FS_ORDERS_CHANGED")
+        local c = cells_of(row_for(raw))
+        local lines = lines_of(c)
+        assert.equal("Pays " .. ns.UI.FormatMoney(120000) .. " per knowledge point", lines[#lines - 1])
+        assert.equal("Pays " .. ns.UI.FormatMoney(30000) .. " per Moxie", lines[#lines])
+      end)
+      it("leaves out what is unknown, and has no Rewards lines for an order without rewards", function()
+        boot()
+        local raw = order()
+        show_board({ raw })
+        local view = O_view(10)
+        view.commission, view.consortiumCut = nil, nil
+        ns.FS:SendMessage("FS_ORDERS_CHANGED")
+        local c = cells_of(row_for(raw))
+        assert.same({ "Tip: " .. ns.UI.FormatMoney(500000) }, lines_of(c))
+      end)
+      it("turns off only OrdersRowAddons when it fails", function()
+        boot()
+        local raw = order()
+        show_board({ raw })
+        local c = cells_of(row_for(raw))
+        _G.GameTooltip = { SetOwner = function() error("boom") end, Hide = function() end }
+        c.tipCover:GetScript("OnEnter")(c.tipCover)
+        assert.is_false(rows():IsEnabled()); assert.is_true(ns.FS:GetModule("OrdersSidePanel"):IsEnabled())
+      end)
     end)
   end)
 
@@ -566,7 +599,7 @@ describe("OrdersPanel row icons", function()
       W.advance(1)
       form.acquireOrderRow(row, form.orderElement(raw), false)
       local c = cells_of(row)
-      assert.is_false(c.frame:IsShown()); assert.is_false(c.cover:IsShown()); assert.is_false(c.icons:IsShown())
+      assert.is_false(c.frame:IsShown()); assert.is_false(c.cover:IsShown()); assert.is_false(c.tipCover:IsShown())
       ns.FS:SetModuleEnabled("Orders", true)
       local bucket = form.newOrderRow()
       form.acquireOrderRow(bucket, form.orderElement({ spellID = 4444, numAvailable = 3 }, "bucketed"))
@@ -745,19 +778,6 @@ describe("OrdersPanel row icons", function()
   end)
 
   describe("tooltips", function()
-    it("shows the Rewards lines over the reward strip", function()
-      boot()
-      cached[2001] = "Sword"
-      evalResult = allocation({ itemID = 1001, quantity = 3 })
-      local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 3), { currencyType = 3001, count = 1 } } })
-      show_board({ raw })
-      local c = cells_of(row_for(raw))
-      c.icons:GetScript("OnEnter")(c.icons)
-      assert.same({ "Rewards", "|T902001:14|t |Hitem:2001|h[Sword]|h x3", "|T700001:14|t Resonance Crystals x1" }, tooltip.lines)
-      assert.is_true(tooltip.shown); assert.equal(c.icons, tooltip.owner)
-      c.icons:GetScript("OnLeave")(c.icons)
-      assert.is_false(tooltip.shown)
-    end)
     it("lists the rewards in the row's info tooltip too, which an order with rewards always has", function()
       boot()
       cached[2001] = "Sword"
@@ -771,13 +791,13 @@ describe("OrdersPanel row icons", function()
       -- also with the icons off, and where the column could not be identified
       ns.FS:GetModule("Orders"):Settings().showRowIcons = false
       ns.FS:SendMessage("FS_ORDERS_CHANGED")
-      assert.is_false(c.icons:IsShown())
+      assert.is_false(c.tipCover:IsShown())
       c.risk:GetScript("OnEnter")(c.risk)
       assert.equal("Rewards", tail(3)[1])
       ns.FS:GetModule("Orders"):Settings().showRowIcons = true
       set_headers({ { 400, 560 }, { 560, 710 }, { 710, 860 } })
       ns.FS:SendMessage("FS_ORDERS_CHANGED")
-      assert.is_false(c.icons:IsShown())
+      assert.is_false(c.tipCover:IsShown())
       c.risk:GetScript("OnEnter")(c.risk)
       assert.equal("Rewards", tail(3)[1])
     end)
@@ -858,19 +878,18 @@ describe("OrdersPanel row icons", function()
       W.advance(0)
       assert.same({}, tooltip.lines)   -- not hovering: the tooltip is left alone
     end)
-    it("stops following the pointer when the strip or the cover hides", function()
+    it("stops following the pointer when a cover hides", function()
       boot()
       evalResult = allocation({ itemID = 1001, quantity = 3 })
       local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 1) } })
       show_board({ raw })
-      local g = geometry(10)
-      local c = cells_of(row_for(raw, g))
-      c.icons:GetScript("OnEnter")(c.icons)
+      local c = cells_of(row_for(raw))
+      c.tipCover:GetScript("OnEnter")(c.tipCover)
       assert.truthy(c.tipping)
-      g.columns[2][3] = 705 - LY.PAD - LY.GAP - (S - 1)   -- Blizzard's money takes the room: the icons hide
+      set_headers({ { 400, 560 }, { 560, 710 }, { 710, 860 } })   -- the layout is no longer known: both covers go
       W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
-      assert.is_false(c.icons:IsShown()); assert.falsy(c.tipping)
-      g.columns[2][3] = 560
+      assert.is_false(c.tipCover:IsShown()); assert.falsy(c.tipping)
+      set_headers(COLUMNS)
       W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
       c.cover:GetScript("OnEnter")(c.cover)
       assert.truthy(c.tipping)
@@ -879,7 +898,7 @@ describe("OrdersPanel row icons", function()
       assert.falsy(c.tipping)
       ns.FS:GetModule("Orders"):Settings().showRowIcons = true
       ns.FS:SendMessage("FS_ORDERS_CHANGED")
-      c.icons:GetScript("OnEnter")(c.icons)
+      c.tipCover:GetScript("OnEnter")(c.tipCover)
       assert.truthy(c.tipping)
       form.ordersPage:ShowBuckets(0, false)
       assert.falsy(c.tipping)
@@ -939,14 +958,14 @@ describe("OrdersPanel row icons", function()
       local raw = rewards_order()
       show_board({ raw })
       local c = cells_of(row_for(raw))
-      assert.same({ true, true }, { c.icons:IsShown(), c.cover:IsShown() })
+      assert.same({ true, true }, { c.tipCover:IsShown(), c.cover:IsShown() })
       options().set(nil, false)
       assert.is_false(ns.FS:GetModule("Orders"):Settings().showRowIcons)
-      assert.same({ false, false }, { c.icons:IsShown(), c.cover:IsShown() })
+      assert.same({ false, false }, { c.tipCover:IsShown(), c.cover:IsShown() })
       assert.same({ {}, {}, nil }, { c.iconEntries, c.reagentEntries, c.coverMode })
       assert.is_true(c.strip:IsShown())   -- the cells stay
       options().set(nil, true)
-      assert.same({ true, true }, { c.icons:IsShown(), c.cover:IsShown() })
+      assert.same({ true, true }, { c.tipCover:IsShown(), c.cover:IsShown() })
     end)
     it("keeps a new row's cover off while it is off", function()
       boot()
@@ -954,7 +973,7 @@ describe("OrdersPanel row icons", function()
       ns.FS:GetModule("Orders"):Settings().showRowIcons = false
       show_board({ raw })
       local c = cells_of(row_for(raw))
-      assert.same({ false, false }, { c.icons:IsShown(), c.cover:IsShown() })
+      assert.same({ false, false }, { c.tipCover:IsShown(), c.cover:IsShown() })
       assert.is_true(c.frame:IsShown())
     end)
     it("is not written while the saved data is from a newer version", function()
@@ -1022,22 +1041,23 @@ describe("OrdersPanel row icons", function()
   end)
 
   describe("dimming and recycling", function()
-    it("gives the reward strip the strip's alpha 0.6 and the cover's icons the same strength over a dark overlay", function()
+    it("gives both covers' content the strip's strength 0.6 over a dark overlay, and keeps the covers opaque", function()
       boot()
       evalResult = allocation({ itemID = 1001, quantity = 3 })
       local raw = order({ expirationTime = 5100, orderType = 3, npcOrderRewards = { item_reward(2001, 1) } })
       local row = row_for(raw)
       show_board({ raw })
       local c = cells_of(row)
-      assert.same({ 1, 1, 1, 1, false }, { c.strip:GetAlpha(), c.icons:GetAlpha(), c.cover:GetAlpha(), c.coverContent:GetAlpha(),
-        c.coverDim:IsShown() })
+      assert.same({ 1, 1, 1, 1, 1, false, false }, { c.strip:GetAlpha(), c.tipCover:GetAlpha(), c.tipContent:GetAlpha(),
+        c.cover:GetAlpha(), c.coverContent:GetAlpha(), c.coverDim:IsShown(), c.tipDim:IsShown() })
       ns.FS:GetModule("Orders"):Settings().filters.hideRisks.expiringSoon = true
       ns.FS:SendMessage("FS_ORDERS_CHANGED")
       assert.is_true(c.dimmed)
       -- the cover itself stays opaque (Blizzard's word must not show through); its icons are at 60% like the strip's
-      assert.same({ 0.6, 0.6, 1, 0.6, true }, { c.strip:GetAlpha(), c.icons:GetAlpha(), c.cover:GetAlpha(),
-        c.coverContent:GetAlpha(), c.coverDim:IsShown() })
+      assert.same({ 0.6, 1, 0.6, 1, 0.6, true, true }, { c.strip:GetAlpha(), c.tipCover:GetAlpha(), c.tipContent:GetAlpha(),
+        c.cover:GetAlpha(), c.coverContent:GetAlpha(), c.coverDim:IsShown(), c.tipDim:IsShown() })
       assert.same({ 0, 0, 0 }, { c.coverDim.color[1], c.coverDim.color[2], c.coverDim.color[3] })
+      assert.same({ 0, 0, 0 }, { c.tipDim.color[1], c.tipDim.color[2], c.tipDim.color[3] })
     end)
     it("shows a recycled row's new order's icons only", function()
       boot()
@@ -1048,20 +1068,21 @@ describe("OrdersPanel row icons", function()
       local row = form.newOrderRow(geometry(10))
       form.acquireOrderRow(row, form.orderElement(first), true)
       local c = cells_of(row)
-      assert.same({ 2, 1 }, { #shown(c.slots), #shown(c.coverSlots) })
+      assert.same({ 2, 1 }, { #shown(c.tipSlots), #shown(c.coverSlots) })
       form.releaseOrderRow(row)
-      assert.same({ false, false, false }, { c.frame:IsShown(), c.cover:IsShown(), c.icons:IsShown() })
+      assert.same({ false, false, false }, { c.frame:IsShown(), c.cover:IsShown(), c.tipCover:IsShown() })
       form.acquireOrderRow(row, form.orderElement(second), false)
-      assert.same({ { i = 1, file = 700001, count = "4" } }, shown(c.slots))
+      assert.same({ { i = 1, file = 700001, count = "4" } }, shown(c.tipSlots))
+      assert.equal("45g", c.tipAmount:GetText())
       assert.same({ { i = 1, file = 901001, count = "3" } }, shown(c.coverSlots))
-      assert.is_false(c.more:IsShown())
+      assert.is_false(c.tipMore:IsShown())
       -- a count shown for the last order is gone when the next one needs none
       local third = order({ orderID = 12, orderType = 3, npcOrderRewards = { item_reward(2002, 1) } })
       evalResult = allocation()
       show_board({ first, second, third })
       form.releaseOrderRow(row)
       form.acquireOrderRow(row, form.orderElement(third), false)
-      assert.same({ { i = 1, file = 902002, count = nil } }, shown(c.slots))
+      assert.same({ { i = 1, file = 902002, count = nil } }, shown(c.tipSlots))
       assert.same({ "provided", 0 }, { c.coverMode, #shown(c.coverSlots) })
       assert.same({}, form.assignedFields)
     end)
@@ -1073,12 +1094,12 @@ describe("OrdersPanel row icons", function()
       show_board({ first, second })
       local row = row_for(first)
       local c = cells_of(row)
-      local one, two, cover3 = c.slots[1].icon, c.slots[2].icon, c.coverSlots[3].icon
+      local one, two, cover3 = c.tipSlots[1].icon, c.tipSlots[2].icon, c.coverSlots[3].icon
       form.releaseOrderRow(row)
       evalResult = slots_needed(1)
       show_board({ first, second })
       form.acquireOrderRow(row, form.orderElement(second), false)
-      assert.same({ true, true, 2, 3 }, { c.slots[1].icon == one, c.slots[2].icon == two, #c.slots, #c.coverSlots })
+      assert.same({ true, true, 2, 3 }, { c.tipSlots[1].icon == one, c.tipSlots[2].icon == two, #c.tipSlots, #c.coverSlots })
       assert.same({ true, false, false }, { one:IsShown(), two:IsShown(), cover3:IsShown() })
     end)
   end)
@@ -1118,6 +1139,27 @@ describe("OrdersPanel row icons", function()
       form.raw(row):GetScript("OnLeave")(row)
       assert.is_false(c.coverHover:IsShown())
     end)
+    it("paints the tint and lights the Commission cover the same way", function()
+      local _, c = setup()
+      local C = ns.FS:GetModule("Customers")
+      assert.is_false(c.tipTint:IsShown())
+      C:SetTag("Bob-Silvermoon", "VIP", true)
+      assert.same({ true, VIP }, { c.tipTint:IsShown(), c.tipTint.color })
+      C:SetTag("Bob-Silvermoon", "VIP", false); C:SetTag("Bob-Silvermoon", "blocked", true)
+      assert.same({ true, BLOCKED }, { c.tipTint:IsShown(), c.tipTint.color })
+      C:SetTag("Bob-Silvermoon", "blocked", false)
+      assert.is_false(c.tipTint:IsShown())
+      local row = c.hoverRow
+      form.raw(row):GetScript("OnEnter")(row)
+      assert.same({ true, true }, { c.coverHover:IsShown(), c.tipHover:IsShown() })
+      form.raw(row):GetScript("OnLeave")(row)
+      assert.same({ false, false }, { c.coverHover:IsShown(), c.tipHover:IsShown() })
+      c.tipCover:GetScript("OnEnter")(c.tipCover)   -- the pointer on this cover lights it, not the other one
+      form.raw(row):GetScript("OnLeave")(row)
+      assert.same({ false, true }, { c.coverHover:IsShown(), c.tipHover:IsShown() })
+      c.tipCover:GetScript("OnLeave")(c.tipCover)
+      assert.is_false(c.tipHover:IsShown())
+    end)
     it("lights the cover while the pointer is on it, even when the row reports leaving", function()
       local _, c = setup()
       local row = c.hoverRow
@@ -1153,7 +1195,7 @@ describe("OrdersPanel row icons", function()
     it("runs the strip's and the cover's leave handlers through the guard", function()
       local _, c = setup()
       _G.GameTooltip = { SetOwner = function() end, GetOwner = function() end, Hide = function() error("boom") end }
-      c.icons:GetScript("OnLeave")(c.icons)
+      c.tipCover:GetScript("OnLeave")(c.tipCover)
       assert.is_false(rows():IsEnabled())
       assert.is_true(ns.FS:GetModule("OrdersSidePanel"):IsEnabled())
     end)
@@ -1262,27 +1304,22 @@ describe("OrdersPanel row icons", function()
           _G.PROFESSIONS_COLUMN_HEADER_REAGENTS, _G.PROFESSIONS_COLUMN_HEADER_TIP = "Reagents", "Commission"
           for _, header in ipairs(headers) do header.GetText = stub(mode) end
         end },
-      { name = "a cell's GetChildren", arm = function(mode, row)
-          for _, cell in pairs(form.raw(row).cells) do
-            if type(cell) == "table" then cell.GetChildren = stub(mode) end
-          end
-        end },
     }
 
     local function observed(c)
       local counts = {}
-      for _, pool in ipairs({ c.slots, c.coverSlots }) do
+      for _, pool in ipairs({ c.tipSlots, c.coverSlots }) do
         for _, slot in ipairs(pool) do counts[#counts + 1] = slot.count:IsShown() and slot.count:GetText() or false end
       end
       local point, _, relPoint, x, y = c.cover:GetPoint(1)   -- not the frame: the two runs have their own
       local lines = {}
-      for _, region in ipairs({ c.icons, c.cover }) do
+      for _, region in ipairs({ c.tipCover, c.cover }) do
         region:GetScript("OnEnter")(region)
         lines[#lines + 1] = tooltip.lines
         region:GetScript("OnLeave")(region)
       end
-      return { files_of(c.slots), files_of(c.coverSlots), counts, c.cover:IsShown(), { point, relPoint, x, y },
-        c.icons:IsShown(), c.concIcon:GetTexture(), c.concText:GetText(), lines }
+      return { files_of(c.tipSlots), files_of(c.coverSlots), counts, c.cover:IsShown(), { point, relPoint, x, y },
+        c.tipCover:IsShown(), c.concIcon:GetTexture(), c.concText:GetText(), lines }
     end
 
     it("reads a raising game call as no answer", function()

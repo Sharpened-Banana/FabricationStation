@@ -995,9 +995,10 @@ the guide opens again (it is still due). Then step through the guide with Next t
 `/dump FabricationStationDB.global.onboarding` shows `skipped = false`, and it does not return after `/reload`.
 
 P5-10. **Reward icons and the Reagents cover on the order rows.** Open a profession's Crafting Orders list (Patron tab,
-then Public or Personal). Patron orders show their rewards as 20 px icons in the Commission column, to the right of Blizzard's
-commission money, right-aligned (item or currency icon, a count bottom-right when above 1; "+N" counts the rewards that
-do not fit), and the row's "i" cell lists the rewards in its tooltip too (so they are never lost). In the Reagents column (the 90 px one before Expiration) the
+then Public or Personal). The Commission column's gold is gone, covered by a dark panel with the compact commission ("86g", or "?" while
+unknown) and, right of it, a patron order's rewards as 20 px icons (item or currency icon, a count bottom-right when
+above 1; "+N" counts the rewards that do not fit); the row's "i" cell lists the rewards in its tooltip too (so they
+are never lost). In the Reagents column (the 90 px one before Expiration) the
 word Blizzard writes there ("Some", "None", "All") is gone, covered by a dark panel with the reagents you must supply as
 icons, only for a reagent you are short of (the count still needed in red; white when the game cannot tell your
 count; a reagent you already own enough of has no icon). A green check means the customer provides every reagent, or you
@@ -1071,16 +1072,12 @@ drops within a moment (CURRENCY_DISPLAY_UPDATE); leave the page open for a few m
 (the once-a-minute refresh). It follows the profession whose orders are shown (switch professions), and it disappears with
 the page. Settings > Modules > OrdersSidePanel turns it off with the side panel; the row-icons setting does not.
 
-P5-16. **The reward icons and Blizzard's commission money.** The Commission column is found by its header text
-(`PROFESSIONS_COLUMN_HEADER_TIP` or `PROFESSIONS_COLUMN_HEADER_COMMISSION`: unverified names; `/dump` both, and if both
-are nil the five-column layout decides) or as the third of the five known columns (about 160 px). Expected: the icons
-never touch or cover Blizzard's gold amount, whatever its length, and they end 6 px inside the column's right edge. The
-addon takes the end of the money from the cell's `MoneyFrame`, `Money`, `Text` or visible children (the largest right
-edge inside the column); if the icons overlap the money or sit too far right, `/dump` the row's third cell
-(`ProfessionsFrame.OrdersPage.BrowseFrame.OrderList.ScrollBox` frames, `.cells[3]:GetChildren()`) and note which child
-holds the amount. If the money's end cannot be read the addon assumes it takes 100 px from the column's left edge: check
-a short and a long amount. On a layout where the column cannot be identified there are no reward icons at all (the info
-tooltip still lists them).
+P5-16. **The Commission cover.** The Commission column is found by its header text (`PROFESSIONS_COLUMN_HEADER_TIP` or
+`PROFESSIONS_COLUMN_HEADER_COMMISSION`: unverified names; `/dump` both, and if both are nil the five-column layout
+decides) or as the third of the five known columns (about 160 px). Expected: Blizzard's gold amount is not visible
+under the panel, the panel matches the list background like the Reagents panel, and the icons never touch its edges.
+On a layout where the column cannot be identified there is no panel at all (Blizzard's gold shows) and the rewards are
+only in the row's info tooltip.
 
 ## Phase 6
 
@@ -1281,6 +1278,21 @@ character's crafts since this login, not only the one you are playing. A sale wh
 turn the profit into "~X"; the line's tooltip then says how many entries are partial and lists the order and auction
 parts. `/reload` and check that the line starts again at zero. Make the window as narrow as it goes (516 px): the line
 is cut off, and its tooltip shows all of it.
+
+P7-19. **Optionals against the game.** Pick a recipe with a skill-raising finishing reagent and a Multicraft optional.
+Expected: the side panel's "Best optionals" (Task 12) matches what the game shows when you put that reagent in
+(predicted quality in Blizzard's window); report the recipe when the predicted quality differs. This also checks that
+the optional reagent effect amounts in `OptionalReagents` are the units `Stats.ApplyOptionals` expects (skill points;
+ratings for Multicraft, Resourcefulness and Ingenuity).
+
+P7-19. **The Commission cover.** On the crafting-orders board (Patron tab, and a Public tab with tips): in each row the
+Commission column shows a dark panel instead of Blizzard's gold, with the compact commission at its left ("45g") and, on
+patron orders, the reward icons after it. Expected: no gold digits show through; the amount equals the tip less the
+consortium's cut; "?" when the commission is unknown. Hover the panel: "Tip: ...", "Consortium cut: ...",
+"Commission: ...", then "Rewards" and one line per reward, and a "Pays ... per knowledge point" or "per Moxie" line where
+the order has one. Tinted rows (VIP, repeat, blocked) tint the panel too, hovering a row lights it, and a dimmed row's
+panel is darker with fainter icons. Turn off Settings > Orders & Ledger > "Show reward and reagent icons on order rows":
+both panels go and Blizzard's Commission and Reagents columns show as normal.
 
 ## Not done here
 
