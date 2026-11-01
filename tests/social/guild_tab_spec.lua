@@ -91,6 +91,9 @@ describe("Guild tab, settings and diagnostics", function()
     local data = { lv = lv, pr = { { s = opts.line or 2907, k = opts.k or 50, m = 100, r = flat } } }
     dir().profiles[charKey] = { c = charKey, ts = 1, lv = lv, h = ns.Social.Protocol.HashProfile(data), owner = owner,
       verified = opts.verified ~= false, rt = opts.rt or now(), pr = ns.Social.ProfileStore.FromData(data) }
+    -- Every real write to profiles calls Guild's changed(), which bumps directoryVersion (the recipe index's staleness
+    -- check) and queues FS_GUILD_CHANGED. This helper only needs the first: the tab's own refreshes are driven by hand.
+    Guild.directoryVersion = Guild.directoryVersion + 1
   end
   local function native_members(recipeID, members, skillLineID)
     dir().native[recipeID] = { time = now(), skillLineID = skillLineID or 2907, members = members }

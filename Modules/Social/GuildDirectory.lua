@@ -18,10 +18,12 @@ local ADDON_NAME, ns = ...
 local Guild = ns.FS:GetModule("Guild")
 local Util = ns.Social.Util
 local ItemIndex = ns.Social.ItemIndex
+local RecipeIndex = ns.Social.RecipeIndex
 local ProfileStore = ns.Social.ProfileStore
 
 local TOOLTIP_NAMES = 3          -- names on the tooltip line before "+N more"
 local PANEL_ROWS = 5             -- crafter rows in the profession panel before "+N more"
+local PROFILES_PER_TICK = 20   -- stored profiles put into the recipe index per index tick
 local INDEX_TICK = 200           -- most recipes resolved per index tick (also bounded by a time budget)
 local DEFAULT_BUDGET_MS = 4    -- per index tick when Recipes' scanBudgetMs is unavailable
 local INDEX_RETRY = 300          -- seconds before a recipe that resolved to nothing is tried again (not on a rebuild)
@@ -118,26 +120,101 @@ local function crafter_before(a, b)
   return a.name < b.name
 end
 
+-- The addon row for one stored profile that lists recipeID on line lineIndex (q, qc as ProfileStore.Find reports them),
+-- or nothing: a contested character has no trustworthy copy, an own character never shows and the owner must still be
+-- in the guild.
+local function add_row(ctx, contested, charKey, profile, lineIndex, q, qc, byName, rows)
+  if contested[charKey] or own_chars(ctx)[charKey] or not owner_in_guild(ctx, profile.owner) then return end
+  local line = profile.pr[lineIndex]
+  if type(line) ~= "table" then return end
+  local row = { name = charKey, owner = profile.owner, source = "addon", verified = profile.verified == true,
+    time = profile.rt }
+  if type(line.k) == "number" then row.skill = line.k end
+  if profile.lv == "q" then
+    row.expectedQuality = quality(q)
+    row.concentrationQuality = quality(qc)
+  end
+  byName[charKey] = row
+  rows[#rows + 1] = row
+end
+
+local function readable(charKey, profile)
+  return type(charKey) == "string" and type(profile) == "table" and type(profile.pr) == "table"
+    and type(profile.owner) == "string" and type(profile.rt) == "number"
+end
+
+-- Rows from a set of profiles (dir.profiles, or the Guild tab's candidates for one recipe), each searched in full.
 local function addon_rows(ctx, dir, recipeID, byName, rows)
   if type(dir.profiles) ~= "table" then return end
   local contested = type(dir.contested) == "table" and dir.contested or {}
   for charKey, profile in pairs(dir.profiles) do
-    if type(charKey) == "string" and type(profile) == "table" and type(profile.pr) == "table"
-        and type(profile.owner) == "string" and type(profile.rt) == "number" then
+    if readable(charKey, profile) then
       local lineIndex, q, qc = ProfileStore.Find(profile, recipeID)
-      -- A contested character (two unverified claimants) has no trustworthy copy: no addon row for it.
-      if lineIndex and not contested[charKey] and not own_chars(ctx)[charKey] and owner_in_guild(ctx, profile.owner) then
-        local line = profile.pr[lineIndex]
-        local row = { name = charKey, owner = profile.owner, source = "addon", verified = profile.verified == true,
-          time = profile.rt }
-        if type(line.k) == "number" then row.skill = line.k end
-        if profile.lv == "q" then
-          row.expectedQuality = quality(q)
-          row.concentrationQuality = quality(qc)
-        end
-        byName[charKey] = row
-        rows[#rows + 1] = row
+      if lineIndex then add_row(ctx, contested, charKey, profile, lineIndex, q, qc, byName, rows) end
+    end
+  end
+end
+
+-- The recipe index (recipeID -> crafters, Modules/Social/RecipeIndex.lua) is filled by the index ticks further down.
+-- A stored profile is fresh when the index holds its entries for the same hash (HashOf == profile.h), otherwise stale.
+-- A read takes fresh profiles from the index and stale ones with ProfileStore.Find, so it is correct before any tick
+-- ran. The stale set is recomputed in one pass over the profiles only when Guild.directoryVersion or the guild key
+-- differs from the last pass (every write to the profiles calls Guild's changed, which bumps the version).
+local recipeIndex
+local staleSet = {}             -- [charKey] = true: stored profiles the index does not hold (current) yet
+local work, workPos = {}, 1     -- charKeys the ticks put into the index (stale ones with a hash), sorted
+local passVersion, passKey      -- directoryVersion and guild key of the last pass
+local forceItems = false        -- a rebuild: the recipes of the profiles go to the item queue even if tried recently
+
+local function is_fresh(charKey, profile)
+  return type(profile.h) == "string" and recipeIndex:HashOf(charKey) == profile.h
+end
+
+-- Recomputes the stale set (and the tick worklist) unless nothing changed since the last pass. A different guild key
+-- starts a new index. Index entries of a profile that is gone are removed.
+local function refresh_stale(self, dir)
+  local key, version = self.guildKey, Guild.directoryVersion
+  if recipeIndex and passKey == key and passVersion == version then return end
+  if not recipeIndex or passKey ~= key then recipeIndex = RecipeIndex.New() end
+  passKey, passVersion = key, version
+  staleSet, work, workPos = {}, {}, 1
+  local profiles = type(dir) == "table" and type(dir.profiles) == "table" and dir.profiles or {}
+  for charKey, profile in pairs(profiles) do
+    if type(charKey) == "string" and type(profile) == "table" and type(profile.pr) == "table"
+        and not is_fresh(charKey, profile) then
+      staleSet[charKey] = true
+      if type(profile.h) == "string" then work[#work + 1] = charKey end
+    end
+  end
+  table.sort(work)
+  for _, charKey in ipairs(recipeIndex:Keys()) do
+    local profile = profiles[charKey]
+    if type(profile) ~= "table" or type(profile.pr) ~= "table" then recipeIndex:Remove(charKey) end
+  end
+end
+
+-- Rows for recipeID over dir.profiles: fresh profiles from the index, stale ones searched. Skips a charKey whose
+-- stored profile is gone or no longer fresh.
+local function indexed_rows(ctx, dir, recipeID, byName, rows)
+  if type(dir.profiles) ~= "table" then return end
+  refresh_stale(ctx.self, dir)
+  local profiles = dir.profiles
+  local contested = type(dir.contested) == "table" and dir.contested or {}
+  local owners = recipeIndex:Lookup(recipeID)
+  if owners then
+    for charKey, code in pairs(owners) do
+      local profile = profiles[charKey]
+      if readable(charKey, profile) and is_fresh(charKey, profile) then
+        local lineIndex, q, qc = RecipeIndex.Decode(code)
+        add_row(ctx, contested, charKey, profile, lineIndex, q, qc, byName, rows)
       end
+    end
+  end
+  for charKey in pairs(staleSet) do
+    local profile = profiles[charKey]
+    if readable(charKey, profile) and not is_fresh(charKey, profile) then
+      local lineIndex, q, qc = ProfileStore.Find(profile, recipeID)
+      if lineIndex then add_row(ctx, contested, charKey, profile, lineIndex, q, qc, byName, rows) end
     end
   end
 end
@@ -171,7 +248,7 @@ local function crafters(self, recipeID, ctx)
   local dir = peek(self)
   if not dir then return {} end
   local rows, byName = {}, {}
-  addon_rows(ctx, dir, recipeID, byName, rows)
+  indexed_rows(ctx, dir, recipeID, byName, rows)
   native_rows(ctx, recipeID, byName, rows)
   table.sort(rows, crafter_before)
   return rows
@@ -562,7 +639,6 @@ end
 local index                -- ItemIndex over Guild.ResolveOutputs
 local queue, queued = {}, {}
 local queuePos = 1
-local indexed = {}         -- [charKey] = profile hash whose recipes were queued
 local attempted = {}       -- [recipeID] = Now() of the last try
 local tickTimer
 local lastKey
@@ -570,6 +646,12 @@ local lastKey
 function Guild:GetItemIndex()
   if not index then index = ItemIndex.New(Guild.ResolveOutputs) end
   return index
+end
+
+-- The RecipeIndex of the current guild's stored profiles (tests and diagnostics).
+function Guild:GetRecipeIndex()
+  if not recipeIndex then recipeIndex = RecipeIndex.New() end
+  return recipeIndex
 end
 
 local function enqueue(recipeID, force)
@@ -583,7 +665,7 @@ end
 local tick
 
 local function schedule()
-  if tickTimer or queuePos > #queue then return end
+  if tickTimer or (queuePos > #queue and workPos > #work) then return end
   tickTimer = C_Timer.NewTimer(0, ns.FS:Wrap(SOURCE, function() tick() end))
 end
 
@@ -593,10 +675,38 @@ local function budget_ms()
   return DEFAULT_BUDGET_MS
 end
 
--- One frame: at most INDEX_TICK recipes, and (with debugprofilestop) at most the scan budget in milliseconds, but
--- always at least one, so the queue cannot stall. Most guild recipes miss the cached schematic and cost an API call.
+-- Puts up to PROFILES_PER_TICK stale profiles into the recipe index and queues each one's recipes for the item index.
+local function index_profiles()
+  if workPos > #work then return end
+  local dir = peek(Guild)
+  refresh_stale(Guild, dir)
+  local profiles = dir and type(dir.profiles) == "table" and dir.profiles or {}
+  local last = math.min(workPos + PROFILES_PER_TICK - 1, #work)
+  while workPos <= last do
+    local charKey = work[workPos]
+    workPos = workPos + 1
+    local profile = profiles[charKey]
+    if type(profile) == "table" and type(profile.pr) == "table" then
+      if recipeIndex:Set(charKey, profile) and is_fresh(charKey, profile) then staleSet[charKey] = nil end
+      for _, line in ipairs(profile.pr) do
+        if type(line) == "table" then
+          ProfileStore.Each(line, profile.lv, function(recipeID) enqueue(recipeID, forceItems) end)
+        end
+      end
+    else
+      recipeIndex:Remove(charKey)
+      staleSet[charKey] = nil
+    end
+  end
+  if workPos > #work then forceItems = false end
+end
+
+-- One frame: first up to PROFILES_PER_TICK stale profiles into the recipe index, then at most INDEX_TICK recipes, and
+-- (with debugprofilestop) at most the scan budget in milliseconds, but always at least one, so the queue cannot stall.
+-- Most guild recipes miss the cached schematic and cost an API call.
 tick = function()
   tickTimer = nil
+  index_profiles()
   local clock = type(debugprofilestop) == "function" and debugprofilestop or nil
   local started, limit = clock and clock(), budget_ms()
   local last = math.min(queuePos + INDEX_TICK - 1, #queue)
@@ -612,64 +722,50 @@ tick = function()
   queuePos = i
   if queuePos > #queue then
     queue, queued, queuePos = {}, {}, 1
-  else
-    schedule()
   end
+  schedule()
 end
 
 local function cancel_index()
   if tickTimer then tickTimer:Cancel(); tickTimer = nil end
   queue, queued, queuePos = {}, {}, 1
+  work, workPos = {}, 1
 end
 
--- Queues the recipes of the stored profiles (those whose hash changed since the last pass, or all when force) and of
--- the native cache, sorted so a pass is deterministic.
-local function collect(self, force)
+-- Queues the recipes of the native cache, sorted so a pass is deterministic (force: even if tried recently). The
+-- profiles' recipes are queued by the ticks, as the profiles go into the recipe index.
+local function collect_native(self, force)
   local dir = peek(self)
-  if not dir then return end
-  local ids, seen = {}, {}
-  if type(dir.profiles) == "table" then
-    for charKey, profile in pairs(dir.profiles) do
-      if type(profile) == "table" and type(profile.pr) == "table" and (force or indexed[charKey] ~= profile.h) then
-        indexed[charKey] = profile.h
-        for _, line in ipairs(profile.pr) do
-          ProfileStore.Each(line, profile.lv, function(recipeID)
-            if not seen[recipeID] then
-              seen[recipeID] = true
-              ids[#ids + 1] = recipeID
-            end
-          end)
-        end
-      end
-    end
-  end
-  if type(dir.native) == "table" then
-    for recipeID in pairs(dir.native) do
-      if type(recipeID) == "number" and not seen[recipeID] then
-        seen[recipeID] = true
-        ids[#ids + 1] = recipeID
-      end
-    end
+  if not dir or type(dir.native) ~= "table" then return end
+  local ids = {}
+  for recipeID in pairs(dir.native) do
+    if type(recipeID) == "number" then ids[#ids + 1] = recipeID end
   end
   table.sort(ids)
   for _, id in ipairs(ids) do enqueue(id, force) end
 end
 
--- Indexes every recipe in the current guild's stored profiles and native cache, 200 per C_Timer tick (a login or guild
--- change must not hitch). Recipes already indexed are skipped; a restart drops what was still waiting.
+-- Indexes every recipe in the current guild's stored profiles and native cache, 20 profiles and 200 recipes per
+-- C_Timer tick (a login or guild change must not hitch). Recipes already indexed are skipped; a restart drops what was
+-- still waiting, and the recipe index starts empty (every profile is stale until a tick reaches it).
 function Guild:RebuildItemIndex()
   self:GetItemIndex()
   cancel_index()
-  indexed = {}
+  recipeIndex, passKey, passVersion = RecipeIndex.New(), nil, nil
+  staleSet, forceItems = {}, true
   lastKey = self.guildKey      -- the FS_GUILD_CHANGED that follows a login must not rebuild a second time
-  collect(self, true)
+  refresh_stale(self, peek(self))
+  if #work == 0 then forceItems = false end
+  collect_native(self, true)
   schedule()
 end
 
--- The incremental pass behind FS_GUILD_CHANGED: only profiles whose hash changed, and new native recipes.
+-- The incremental pass behind FS_GUILD_CHANGED: the profiles that changed (the stale set, recomputed), and new native
+-- recipes.
 function Guild:UpdateItemIndex()
   self:GetItemIndex()
-  collect(self, false)
+  refresh_stale(self, peek(self))
+  collect_native(self, false)
   schedule()
 end
 
@@ -707,5 +803,6 @@ end
 
 function Guild:_DirectoryDisable()
   cancel_index()
-  indexed, attempted, lastKey, ownCache = {}, {}, nil, nil
+  recipeIndex, staleSet, passKey, passVersion, forceItems = nil, {}, nil, nil, false
+  attempted, lastKey, ownCache = {}, nil, nil
 end

@@ -342,7 +342,8 @@ describe("phase 4 integration", function()
     local FORBIDDEN = { "SendChatMessage", "AddMessageEventFilter", "RemoveMessageEventFilter", "ChatFrame_AddMessageEventFilter" }
     local PHASE4_FILES = {
       "Modules/Social/Util.lua", "Modules/Social/Gate.lua", "Modules/Social/Codec.lua", "Modules/Social/Protocol.lua",
-      "Modules/Social/ProfileStore.lua", "Modules/Social/Comm.lua", "Modules/Social/ItemIndex.lua", "Modules/Social/Guild.lua",
+      "Modules/Social/ProfileStore.lua", "Modules/Social/Comm.lua", "Modules/Social/ItemIndex.lua", "Modules/Social/RecipeIndex.lua",
+      "Modules/Social/Guild.lua",
       "Modules/Social/GuildNative.lua", "Modules/Social/GuildDirectory.lua", "Modules/Social/GuildOptions.lua",
       "Modules/Social/ChatMatcher.lua", "Modules/Social/ChatScan.lua", "Modules/Onboarding.lua", "UI/Tabs/Guild.lua",
       "UI/ChatToast.lua", "UI/OnboardingWizard.lua",

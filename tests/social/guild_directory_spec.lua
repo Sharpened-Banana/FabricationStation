@@ -4,8 +4,8 @@
 -- roster and the native query are the phase-4 harness fakes (p4.guild).
 local SOCIAL_FILES = { "Modules/Social/Util.lua", "Modules/Social/Gate.lua", "Modules/Social/Codec.lua",
   "Modules/Social/Protocol.lua", "Modules/Social/ProfileStore.lua", "Modules/Social/Comm.lua",
-  "Modules/Social/ItemIndex.lua", "Modules/Social/Guild.lua", "Modules/Social/GuildNative.lua",
-  "Modules/Social/GuildDirectory.lua" }
+  "Modules/Social/ItemIndex.lua", "Modules/Social/RecipeIndex.lua", "Modules/Social/Guild.lua",
+  "Modules/Social/GuildNative.lua", "Modules/Social/GuildDirectory.lua" }
 local HOUR = 3600
 
 describe("Social.ItemIndex", function()
@@ -121,6 +121,7 @@ describe("Guild directory", function()
     local data = { lv = lv, pr = { { s = opts.line or 2907, k = opts.k or 50, m = 100, r = flat } } }
     dir().profiles[charKey] = { c = charKey, ts = 1, lv = lv, h = ns.Social.Protocol.HashProfile(data), owner = owner,
       verified = opts.verified ~= false, rt = opts.rt or now(), pr = ns.Social.ProfileStore.FromData(data) }
+    Guild:_Changed()                                                     -- every real write to profiles does
   end
   local function native_members(recipeID, members, at)
     dir().native[recipeID] = { time = at or now(), skillLineID = 2907, members = members }
@@ -194,6 +195,85 @@ describe("Guild directory", function()
   end)
 
   describe("item index", function()
+    it("reads only the index once the ticks have run", function()
+      for i = 1, 50 do store("C" .. i .. "-Realm", "Peer-Realm", { recipes = { [100 + i] = { 1, 1 } } }) end
+      store("B-Realm", "Peer-Realm", { recipes = { [100] = { 3, 5 } } })
+      Guild:RebuildItemIndex(); for _ = 1, 5 do p4.advance(0) end
+      local finds, orig = 0, ns.Social.ProfileStore.Find
+      ns.Social.ProfileStore.Find = function(...) finds = finds + 1; return orig(...) end
+      finally(function() ns.Social.ProfileStore.Find = orig end)
+      assert.are.same({ "B-Realm" }, names(Guild:GetCrafters(100)))
+      assert.are.equal(0, finds)
+    end)
+
+    it("finds a profile stored after the last tick before the next tick", function()
+      Guild:RebuildItemIndex(); for _ = 1, 3 do p4.advance(0) end
+      store("N-Realm", "Peer-Realm", { recipes = { [100] = { 2, 2 } } })     -- no tick yet
+      assert.are.same({ "N-Realm" }, names(Guild:GetCrafters(100)))
+    end)
+
+    it("drops a removed profile at once", function()
+      store("B-Realm", "Peer-Realm"); Guild:RebuildItemIndex(); for _ = 1, 3 do p4.advance(0) end
+      assert.are.same({ "B-Realm" }, names(Guild:GetCrafters(100)))
+      dir().profiles["B-Realm"] = nil; Guild:_Changed()
+      assert.are.same({}, Guild:GetCrafters(100))
+    end)
+
+    it("shows a profile whose DATA changed before the tick, not the old recipes", function()
+      store("B-Realm", "Peer-Realm", { recipes = { [100] = { 3, 5 } } })
+      Guild:RebuildItemIndex(); for _ = 1, 3 do p4.advance(0) end
+      store("B-Realm", "Peer-Realm", { recipes = { [101] = { 1, 1 } } })    -- another hash, not indexed yet
+      assert.are.same({}, Guild:GetCrafters(100))
+      assert.are.same({ "B-Realm" }, names(Guild:GetCrafters(101)))
+    end)
+
+    it("bumps directoryVersion on every change, before the debounce", function()
+      local v = Guild.directoryVersion
+      assert.is_number(v)
+      Guild:_Changed()
+      assert.are.equal(v + 1, Guild.directoryVersion)
+    end)
+
+    it("indexes at most 20 profiles per tick and starts over on a guild change", function()
+      for i = 1, 45 do store("C" .. i .. "-Realm", "Peer-Realm", { recipes = { [100 + i] = { 1, 1 } } }) end
+      Guild:RebuildItemIndex()
+      local function fresh()
+        local n = 0
+        for i = 1, 45 do
+          local k = "C" .. i .. "-Realm"
+          if Guild:GetRecipeIndex():HashOf(k) == dir().profiles[k].h then n = n + 1 end
+        end
+        return n
+      end
+      assert.are.equal(0, fresh())
+      p4.advance(0); assert.are.equal(20, fresh())
+      p4.advance(0); assert.are.equal(40, fresh())
+      p4.advance(0); assert.are.equal(45, fresh())
+      assert.are.equal(45, #Guild:GetRecipeIndex():Keys())
+      p4.guild.key = { "H", "Realm" }
+      Guild:OnGuildUpdate()
+      ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "H-Realm")
+      assert.are.same({}, Guild:GetRecipeIndex():Keys())
+    end)
+
+    it("gives a rebuild a fresh index and re-indexes every profile", function()
+      store("B-Realm", "Peer-Realm")
+      Guild:RebuildItemIndex(); p4.advance(0)
+      assert.are.equal(dir().profiles["B-Realm"].h, Guild:GetRecipeIndex():HashOf("B-Realm"))
+      Guild:RebuildItemIndex()
+      assert.is_nil(Guild:GetRecipeIndex():HashOf("B-Realm"))
+      assert.are.same({ "B-Realm" }, names(Guild:GetCrafters(100)))      -- still correct while stale
+      p4.advance(0)
+      assert.are.equal(dir().profiles["B-Realm"].h, Guild:GetRecipeIndex():HashOf("B-Realm"))
+    end)
+
+    it("drops the index when Guild is turned off", function()
+      store("B-Realm", "Peer-Realm")
+      Guild:RebuildItemIndex(); p4.advance(0)
+      ns.FS:SetModuleEnabled("Guild", false)
+      assert.are.same({}, Guild:GetRecipeIndex():Keys())
+    end)
+
     it("adds the recipes of a stored profile when its DATA arrives", function()
       local Protocol = ns.Social.Protocol
       local profile = { c = "B-Realm", ts = 5, lv = "r", pr = { { s = 2907, k = 10, m = 100, r = { 100, 101 } } } }

@@ -946,6 +946,10 @@ Expected: `schemaVersion = 2`; each entry under `guildDirectory` has `pr` with s
 `lines`; the file is clearly smaller; the Guild tab shows the same crafters as before; `/fs guild` shows no burst of
 requests after login.
 
+P5-2. **Tooltips after login in a big guild (Task 2).** In a guild with many synced guildmates, `/reload` and hover
+crafted items at once and for the next seconds. Expected: no hitch; the "Guild crafters" line appears for items
+guildmates craft, the same as later in the session.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

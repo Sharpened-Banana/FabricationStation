@@ -53,6 +53,7 @@ Modules\Social\Protocol.lua
 Modules\Social\ProfileStore.lua
 Modules\Social\Comm.lua
 Modules\Social\ItemIndex.lua
+Modules\Social\RecipeIndex.lua
 Modules\Social\Guild.lua
 Modules\Social\GuildNative.lua
 Modules\Social\GuildDirectory.lua

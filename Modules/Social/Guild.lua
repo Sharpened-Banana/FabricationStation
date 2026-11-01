@@ -57,6 +57,7 @@ Guild.PROFILE_MAX_AGE = 30 * 86400
 Guild.LOGIN_JITTER = { 5, 20 }
 Guild.REPLY_JITTER = { 1, 10 }
 Guild.CHANGED_DEBOUNCE = 1        -- FS_GUILD_CHANGED at most this often (preflight row 18)
+Guild.directoryVersion = 0        -- +1 on every change to the stored directory, at once (GuildDirectory's index reads it)
 Guild.DEFAULT_BUDGET_MS = 4       -- refresh budget per frame when Recipes' scanBudgetMs is unavailable
 Guild.YIELD_EVERY = 50            -- recipes per frame when debugprofilestop is missing
 
@@ -209,6 +210,7 @@ Guild._OwnCharSet = own_char_set
 ---------------------------------------------------------------------------
 
 local function changed(self)
+  Guild.directoryVersion = Guild.directoryVersion + 1      -- before the debounce: a read right now must see it
   ns.FS:Debounce(CHANGED_KEY, Guild.CHANGED_DEBOUNCE, ns.FS:Wrap("Guild", function()
     self:SendMessage(ns.Msg.GUILD_CHANGED, self.guildKey)
   end))
