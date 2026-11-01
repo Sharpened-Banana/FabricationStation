@@ -307,18 +307,30 @@ local function net_text(v)
   return (flags.estimated and "~" or "") .. ns.UI.FormatMoney(v.net)
 end
 
--- A row's tooltip, as { { text, color = {r, g, b} } }: the item, the customer, the full tip and net (what the
--- compact cells may cut), the risk labels (RowModel.riskText, red), why numbers are missing or uncertain
+-- Character and peer names are escaped for pipes (ns.Social.Util.EscapePipes) when that is loaded.
+local function escaped(text)
+  local util = ns.Social and ns.Social.Util
+  if util and type(util.EscapePipes) == "function" then return util.EscapePipes(tostring(text)) end
+  return tostring(text)
+end
+
+-- A row's tooltip, as { { text, color = {r, g, b} } }: the item, the order type, the customer, the board it was seen
+-- on (with its age when known), the full tip and net (what the compact cells may cut), the risk labels (RowModel.riskText, red), why numbers are missing or uncertain
 -- (OrdersPanel.Notes, grey) and the tip benchmark for the order's delivered quality.
 function Tab.TooltipLines(row, benchmark, model)
   local v = row.view or {}
   model = row_model(row, model)
   local lines = { { text = item_name(row), color = WHITE } }
+  -- Type, Customer and Character are columns a narrow window hides (Tab.Layout): the tooltip always carries them.
+  local typeLabel = TYPE_LABELS[row.type] or (row.type ~= nil and tostring(row.type) or nil)
+  if typeLabel then lines[#lines + 1] = { text = L["Type: %s"]:format(typeLabel), color = WHITE } end
   local customer = customer_text(row)
-  if customer then lines[#lines + 1] = { text = L["Customer: %s"]:format(customer), color = WHITE } end
+  if customer then lines[#lines + 1] = { text = L["Customer: %s"]:format(escaped(customer)), color = WHITE } end
   if row.character ~= nil and row.age ~= nil then
-    lines[#lines + 1] = { text = L["Seen %s ago on %s"]:format(ns.UI.FormatAge(row.age), tostring(row.character)),
+    lines[#lines + 1] = { text = L["Seen %s ago on %s"]:format(ns.UI.FormatAge(row.age), escaped(row.character)),
       color = GREY }
+  elseif row.character ~= nil then
+    lines[#lines + 1] = { text = L["Character: %s"]:format(escaped(row.character)), color = GREY }
   end
   lines[#lines + 1] = { text = L["Tip: %s"]:format(ns.UI.FormatMoney(row.tip)), color = WHITE }
   lines[#lines + 1] = { text = L["Net: %s"]:format(net_text(v)), color = WHITE }

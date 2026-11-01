@@ -869,6 +869,7 @@ L["A quarter of your tips were below %s"] = true
 L["Alts: %s"] = true
 L["Amount: %s"] = true
 L["Buyer: %s"] = true
+L["Type: %s"] = true   -- Orders tab row tooltip: the order type (Public, Guild, Personal, NPC)
 L["Character: %s"] = true
 L["Click to show %s"] = true
 L["Commission: %s"] = true

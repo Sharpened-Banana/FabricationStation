@@ -139,15 +139,51 @@ describe("Orders tab models", function()
       for i, line in ipairs(lines) do out[i] = line.text end
       return out
     end
-    assert.same({ "item:5", "Tip: --", "Net: no price", "Expiring soon", "No price", T.BenchmarkText(b, nil) },
+    assert.same({ "item:5", "Type: Public", "Tip: --", "Net: no price", "Expiring soon", "No price", T.BenchmarkText(b, nil) },
       texts(T.TooltipLines(r, b)))
     local full = row({ orderID = 2, orderType = "personal", customer = "Bob-Silvermoon", itemID = 5, minQuality = 3,
       tip = 12345678, net = 250000, risks = {}, flags = { estimated = true } })
-    assert.same({ "item:5", "Customer: Bob-Silvermoon", "Tip: " .. ns.UI.FormatMoney(12345678),
+    assert.same({ "item:5", "Type: Personal", "Customer: Bob-Silvermoon", "Tip: " .. ns.UI.FormatMoney(12345678),
       "Net: ~" .. ns.UI.FormatMoney(250000), "Estimate (no calibration)", T.BenchmarkText(nil, 3) },
       texts(T.TooltipLines(full, nil)))
     local recraft = row({ orderID = 3, orderType = "public", risks = {}, flags = { recraft = true } })
-    assert.equal("Net: " .. EM_DASH, texts(T.TooltipLines(recraft, nil))[3])
+    assert.equal("Net: " .. EM_DASH, texts(T.TooltipLines(recraft, nil))[4])
+  end)
+
+  it("names the order type in the tooltip, since a narrow window hides the Type column", function()
+    local function texts(r)
+      local out = {}
+      for i, line in ipairs(T.TooltipLines(r, nil)) do out[i] = line.text end
+      return out
+    end
+    for orderType, label in pairs({ public = "Public", guild = "Guild", personal = "Personal", npc = "NPC" }) do
+      assert.equal("Type: " .. label, texts(row({ orderID = 1, orderType = orderType, itemID = 5, risks = {} }))[2])
+    end
+    assert.equal("Tip: --", texts(row({ orderID = 1, itemID = 5, risks = {} }))[2])   -- no type known: no Type line
+  end)
+
+  it("names the character in the tooltip even when the board's age is unknown", function()
+    local function texts(r)
+      local out = {}
+      for i, line in ipairs(T.TooltipLines(r, nil)) do out[i] = line.text end
+      return out
+    end
+    local r = row({ orderID = 1, orderType = "public", itemID = 5, risks = {}, charKey = "Alt-Silvermoon" })
+    r.character, r.age = "Alt-Silvermoon", 60
+    assert.equal("Seen 1m ago on Alt-Silvermoon", texts(r)[3])
+    r.age = nil
+    assert.equal("Character: Alt-Silvermoon", texts(r)[3])
+    r.character = nil
+    assert.equal("Tip: --", texts(r)[3])
+  end)
+
+  it("escapes pipes in the character and customer of the tooltip", function()
+    P2.load(ns, { "Modules/Social/Util.lua" })
+    local r = row({ orderID = 1, orderType = "public", itemID = 5, risks = {}, customer = "Bo|b", charKey = "A|lt-Silvermoon" })
+    r.age = nil
+    local out = {}
+    for i, line in ipairs(T.TooltipLines(r, nil)) do out[i] = line.text end
+    assert.equal("Customer: Bo||b", out[3]); assert.equal("Character: A||lt-Silvermoon", out[4])
   end)
 
   it("keeps the Item column at 120 px or more: Character goes first, then Customer, then Type", function()
@@ -208,7 +244,7 @@ describe("Orders tab models", function()
       local m = T.Model(two(), times, f, 1000)
       local texts = {}
       for i, line in ipairs(T.TooltipLines(m.rows[2], nil)) do texts[i] = line.text end
-      assert.equal("Seen 1m ago on Alt-Silvermoon", texts[2])
+      assert.equal("Seen 1m ago on Alt-Silvermoon", texts[3])
     end)
   end)
 end)
@@ -530,7 +566,8 @@ describe("Orders tab frames", function()
     assert.same({ 4444, 3 }, benchmarks[#benchmarks])
     assert.is_true(tooltip.shown)
     assert.equal(T.BenchmarkText({ median = 50000, p25 = 40000, p75 = 60000, n = 4 }, 3), tooltip.lines[#tooltip.lines])
-    assert.equal("Customer: Bob-Silvermoon", tooltip.lines[2])
+    assert.equal("Type: Personal", tooltip.lines[2])
+    assert.equal("Customer: Bob-Silvermoon", tooltip.lines[3])
     r:GetScript("OnLeave")(r)
     assert.is_false(tooltip.shown)
   end)
@@ -805,7 +842,7 @@ describe("Orders tab frames", function()
       two_boards()
       local v = open()
       v.pool[1]:GetScript("OnEnter")(v.pool[1])
-      assert.equal("Seen 1m ago on Alt-Silvermoon", tooltip.lines[3])
+      assert.equal("Seen 1m ago on Alt-Silvermoon", tooltip.lines[4])
     end)
 
     it("adds another character's order to the queue for that character", function()
