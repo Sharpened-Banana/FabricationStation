@@ -1061,6 +1061,67 @@ describe("Guild tab, settings and diagnostics", function()
         assert.are.equal("C-Realm", v.selected.whisper)                  -- the same recipe stays as chosen
       end)
 
+      -- "helm" finds one recipe (the Helm, nobody crafts it) and also lists Helmsman's Axe by the crafter's name.
+      local function with_helmsman()
+        store("Helmsman-Realm", "Peer-Realm", { recipes = { [101] = { 2, 4 } } })
+        local v = open()
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)                       -- a new search text selects the only recipe
+        assert.same({ "Everforged Axe/Helmsman-Realm", "Everforged Helm/no known crafter" }, shown(v))
+        return v
+      end
+
+      it("keeps a row the player chose across a refresh while the search still finds one recipe", function()
+        local v = with_helmsman()
+        click(row_frame(v.grid, 1))                                      -- Helmsman's Axe
+        assert.are.equal(101, v.selected.recipeID)
+        refresh_now()
+        assert.are.equal(101, v.selected.recipeID)
+        assert.are.equal("Helmsman-Realm", v.selected.whisper)
+        ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "G-Realm"); p4.advance(2)
+        p4.advance(61)                                                   -- the minute tick
+        assert.are.equal(101, v.selected.recipeID)
+      end)
+
+      it("keeps the last action's feedback across a refresh", function()
+        local v = with_helmsman()
+        click(row_frame(v.grid, 1))
+        click(v.askButton)
+        assert.truthy(v.status:GetText():find("Asking", 1, true))
+        refresh_now()
+        assert.truthy(v.status:GetText():find("Asking", 1, true))
+        assert.are.equal(101, v.selected.recipeID)
+      end)
+
+      it("does not select the only found recipe when the profession filter hides it", function()
+        local v = open()
+        click(v.profButton)                                              -- Alchemy (2906); the Helm is Blacksmithing
+        assert.truthy(v.profButton:GetText():find("Alchemy", 1, true))
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(0, v.grid.shownRows)
+        assert.is_nil(v.selected)
+        assert.is_false(v.askButton:IsEnabled())
+        click(v.profButton)                                              -- Blacksmithing now lists it, but this is no new search
+        assert.are.equal(1, v.grid.shownRows)
+        assert.is_nil(v.selected)
+        v.search:Type("helm "); v.search:Type("helm"); p4.advance(0.3)   -- unchanged text after trimming
+        assert.is_nil(v.selected)
+        v.search:Type("helmet"); p4.advance(0.3)
+        v.search:Type("helm"); p4.advance(0.3)                           -- a changed text selects it
+        assert.are.equal(700, v.selected.recipeID)
+      end)
+
+      it("selects the only found recipe again for each new search text", function()
+        local v = open()
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)
+        v.search:Type("axe"); p4.advance(0.3)
+        assert.are.equal(101, v.selected.recipeID)
+        v.search:Type("everforged mace"); p4.advance(0.3)
+        assert.are.equal(100, v.selected.recipeID)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
       it("selects the newly found recipe when another one was selected", function()
         local v = open()
         click(row_frame(v.grid, 5))                                      -- Silk Bandage

@@ -14,8 +14,9 @@ local _, ns = ...
 -- the professions the directory knows ("All professions" first; as the Planner's pickers, the stubs have no dropdown)
 -- and the "Whisper" and "Ask guild" buttons. A recipe the search found that no guildmate is known to craft gets one
 -- "no known crafter" row (Guild:BuildTabRows' placeholder): it can be selected, and "Ask guild" can ask about it, but
--- there is nobody to whisper. When the search finds exactly one recipe it is selected for you (a selection sends
--- nothing; the guild is asked only by a click on "Ask guild"). A link shift-clicked in the game is inserted into the
+-- there is nobody to whisper. When a new search text finds exactly one recipe it is selected for you, unless a listed row is already selected or
+-- the profession filter hides it (never on a plain refresh; a selection sends nothing; the guild is asked only by a click
+-- on "Ask guild"). A link shift-clicked in the game is inserted into the
 -- search box while it has the keyboard focus (a hook on ChatFrameUtil.InsertLink, else ChatEdit_InsertLink). A click on
 -- a row only selects it (its recipe for "Ask guild", its crafter for "Whisper"); a double click on a row or the Whisper button opens a whisper (ChatFrameUtil.SendTell, from the click
 -- only: nothing is sent, the player types and sends). The whisper goes to the crafter, or for a copy the character has
@@ -85,6 +86,7 @@ local searchText = ""     -- the text in the box (trimmed)
 local activeSearch = ""   -- the search the rows show (searchText 0.3 s after the last keystroke)
 local skillFilter         -- the profession shown, nil = all
 local notice              -- feedback of the last action
+local autoSearch          -- the search text the only found recipe was last considered for selection under
 
 local function guild() return ns.FS:GetModule("Guild", true) end
 
@@ -482,18 +484,23 @@ local function show_empty(text)
   end
 end
 
--- The search found exactly one recipe: select it when nothing, or another recipe, is selected. A selection sends
--- nothing; only the "Ask guild" click asks the guild.
+-- The search found exactly one recipe: select it, but only once per search text (a plain refresh, a profession change
+-- or a data update never selects, and so never replaces a choice the player made), only when none of the listed rows is
+-- selected, and only when the profession filter still lists it. A selection sends nothing and leaves the feedback line
+-- alone; only the "Ask guild" click asks the guild.
 local function select_only_found(G, guildKey, entries)
+  if autoSearch == activeSearch then return end
+  autoSearch = activeSearch
   local recipe = G:FindRecipes(activeSearch).recipes[1]
-  if not recipe or (view.selected and view.selected.recipeID == recipe.recipeID) then return end
-  local skillLineID = recipe.skillLineID
+  if not recipe then return end
+  local listed, skillLineID = {}, recipe.skillLineID
   for _, entry in ipairs(entries) do
-    if entry.recipeID == recipe.recipeID then skillLineID = skillLineID or entry.skillLineID; break end
+    listed[entry.recipeID] = true
+    if entry.recipeID == recipe.recipeID then skillLineID = skillLineID or entry.skillLineID end
   end
+  if not listed[recipe.recipeID] or (view.selected and listed[view.selected.recipeID]) then return end
   view.selected = { recipeID = recipe.recipeID, skillLineID = skillLineID, recipeName = recipe.recipeName,
     guildKey = guildKey }
-  notice = nil
 end
 
 function refresh()
@@ -533,7 +540,7 @@ function refresh()
   else
     show_empty(nil)
   end
-  if meta.found == 1 then select_only_found(G, status.guildKey, entries) end
+  if meta.found == 1 then select_only_found(G, status.guildKey, entries) else autoSearch = nil end
   view.footer:SetText(Tab.FooterText(status))
   view.footerTooltip = Tab.FooterTooltip(status)
   update_status_line()
