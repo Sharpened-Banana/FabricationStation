@@ -953,6 +953,18 @@ describe("Guild tab, settings and diagnostics", function()
     end)
 
     describe("Ask guild", function()
+      it("says when the profession of the selected recipe is not known", function()
+        local Tab = ns.UI.GuildTab
+        assert.are.same({ false, "noline" }, { Tab.AskState({ enabled = true, guildKey = "G-Realm", useNative = true,
+          available = true, selected = { recipeID = 700 } }) })
+        local v = open()
+        v.selected = { recipeID = 700, recipeName = "Everforged Helm", guildKey = "G-Realm" }   -- no skillLineID
+        refresh_now()
+        assert.is_false(v.askButton:IsEnabled())
+        hover(v.askButton)
+        assert.truthy(table.concat(tooltip.lines, "\n"):find("The profession of this recipe is not known yet", 1, true))
+      end)
+
       it("is disabled until a row is selected", function()
         local v = open()
         assert.is_false(v.askButton:IsEnabled())
@@ -1148,22 +1160,38 @@ describe("Guild tab, settings and diagnostics", function()
         assert.are.equal(101, v.selected.recipeID)
       end)
 
-      it("does not select the only found recipe when the profession filter hides it", function()
+      it("selects a found recipe once the profession filter shows it", function()
         local v = open()
         click(v.profButton)                                              -- Alchemy (2906); the Helm is Blacksmithing
         assert.truthy(v.profButton:GetText():find("Alchemy", 1, true))
         v.search:Type("helm"); p4.advance(0.3)
         assert.are.equal(0, v.grid.shownRows)
-        assert.is_nil(v.selected)
+        assert.is_nil(v.selected)                                        -- hidden: the auto-select is not used up
         assert.is_false(v.askButton:IsEnabled())
-        click(v.profButton)                                              -- Blacksmithing now lists it, but this is no new search
+        click(v.profButton)                                              -- Blacksmithing lists it now
         assert.are.equal(1, v.grid.shownRows)
-        assert.is_nil(v.selected)
-        v.search:Type("helm "); v.search:Type("helm"); p4.advance(0.3)   -- unchanged text after trimming
-        assert.is_nil(v.selected)
-        v.search:Type("helmet"); p4.advance(0.3)
-        v.search:Type("helm"); p4.advance(0.3)                           -- a changed text selects it
         assert.are.equal(700, v.selected.recipeID)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("asks FindRecipes once per refresh", function()
+        local v = open()
+        local calls, orig = 0, Guild.FindRecipes
+        Guild.FindRecipes = function(...) calls = calls + 1; return orig(...) end
+        finally(function() Guild.FindRecipes = orig end)
+        v.search:Type("Everforged Helm"); p4.advance(0.3)                -- one refresh, from the search debounce
+        assert.are.equal(1, calls)
+        assert.are.equal(700, v.selected.recipeID)
+      end)
+
+      it("selects the only found recipe again after a guild change with the same text", function()
+        local v = open()
+        v.search:Type("Everforged Helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)
+        p4.guild.key = { "Other", "Realm" }; Guild:OnGuildUpdate(); p4.advance(3)
+        assert.are.equal("Other-Realm", Guild.guildKey)
+        assert.are.equal(700, v.selected.recipeID)
+        assert.are.equal("Other-Realm", v.selected.guildKey)
       end)
 
       it("selects the only found recipe again for each new search text", function()
@@ -1326,7 +1354,8 @@ describe("Guild tab, settings and diagnostics", function()
       finally(function() onboarding.HoldsSync = base end)
       local held = "Sharing with your guild waits for the setup guide. Type /fs setup to finish or skip it."
       local v = open()
-      assert.are.equal(1, (v.footer:GetText():find(held, 1, true)))
+      assert.are.equal(1, (v.footer:GetText():find("Sync: waiting for the setup guide", 1, true)))   -- the short head
+      assert.is_nil(v.footer:GetText():find(held, 1, true))
       hover(v.footerHit)
       assert.truthy(contains(tooltip.lines, held))
       assert.truthy(contains(tooltip.lines, "Sync: waiting for the setup guide"))

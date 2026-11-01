@@ -100,6 +100,7 @@ L["Synced"] = true
 L["The game's guild recipe query is not available"] = true
 L["The guild did not answer in time"] = true
 L["The guild question failed"] = true
+L["The profession of this recipe is not known yet"] = true   -- Guild tab, "Ask guild" hint: a found recipe whose profession line is unknown
 L["Too many guild questions are waiting"] = true
 L["Turned off in the Guild settings (\"Also use the game's guild recipe list\")"] = true
 L["What to share"] = true

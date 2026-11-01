@@ -90,10 +90,14 @@ describe("A guild sharing choice in Settings > Guild ends the setup guide's hold
   end)
 
   it("changes nothing while the saved data is from a newer version", function()
+    local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
     ns.FS.dbIsNewer = true
     finally(function() ns.FS.dbIsNewer = nil end)
     options.shareLevel.set(nil, "recipes")
+    p4.advance(5)
+    assert.are.same(before, ns.FS.db.global)
+    assert.are.equal(0, sent("H"))
     ns.FS.dbIsNewer = nil
-    assert.is_true(Onboarding:HoldsSync())
+    assert.is_true(Onboarding:HoldsSync())                     -- no consent was recorded either
   end)
 end)

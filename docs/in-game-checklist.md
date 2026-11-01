@@ -1098,6 +1098,12 @@ luajit -e "F = '<path>'" -e 'dofile(F) local n, d, b, db, s = 0, 0, 0, 0, {} for
 Expected: the printed percentage is well under 20 %. If it is 20 % or more, report it: item 7 (Appendix B) comes
 back.
 
+P6-3. **Guild tab footer and hints.** Fresh saved variables, then close the setup guide with Escape. Expected: the
+Guild tab footer reads "Sync: waiting for the setup guide · ..." on one line, and its tooltip and the line above the
+list give the full sentence. Search a recipe that only the game's guild list knows, with no profession known, and
+select its row. Expected: the Ask guild hint says "The profession of this recipe is not known yet". Join another
+guild, or leave and rejoin, with the same search text: the only result is selected again.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

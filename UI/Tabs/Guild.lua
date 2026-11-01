@@ -14,9 +14,9 @@ local _, ns = ...
 -- the professions the directory knows ("All professions" first; as the Planner's pickers, the stubs have no dropdown)
 -- and the "Whisper" and "Ask guild" buttons. A recipe the search found that no guildmate is known to craft gets one
 -- "no known crafter" row (Guild:BuildTabRows' placeholder): it can be selected, and "Ask guild" can ask about it, but
--- there is nobody to whisper. When a new search text finds exactly one recipe it is selected for you, unless a listed row is already selected or
--- the profession filter hides it (never on a plain refresh; a selection sends nothing; the guild is asked only by a click
--- on "Ask guild"). A link shift-clicked in the game is inserted into the
+-- there is nobody to whisper. When a new search text (or a new guild with the same text) finds exactly one recipe it is selected for you, unless a
+-- listed row is already selected; while the profession filter hides it, it is selected as soon as the filter shows it
+-- (never on a plain refresh; a selection sends nothing; the guild is asked only by a click on "Ask guild"). A link shift-clicked in the game is inserted into the
 -- search box while it has the keyboard focus (a hook on ChatFrameUtil.InsertLink, else ChatEdit_InsertLink). A click on
 -- a row only selects it (its recipe for "Ask guild", its crafter for "Whisper"); a double click on a row or the Whisper button opens a whisper (ChatFrameUtil.SendTell, from the click
 -- only: nothing is sent, the player types and sends). The whisper goes to the crafter, or for a copy the character has
@@ -86,7 +86,8 @@ local searchText = ""     -- the text in the box (trimmed)
 local activeSearch = ""   -- the search the rows show (searchText 0.3 s after the last keystroke)
 local skillFilter         -- the profession shown, nil = all
 local notice              -- feedback of the last action
-local autoSearch          -- the search text the only found recipe was last considered for selection under
+local autoSearch          -- the search text whose only found recipe was last auto-selected (nil: none yet)
+local autoGuild           -- the guild key autoSearch was set under (a changed guild starts afresh)
 
 local function guild() return ns.FS:GetModule("Guild", true) end
 
@@ -188,7 +189,7 @@ function Tab.FooterText(s)
   if s.gateLocked then
     head = L["Sync paused (instance)"]
   elseif s.sync == "held" then
-    head = G.HELD_TEXT
+    head = L["Sync: %s"]:format(G.SYNC_TEXT.held)     -- short: the full sentence is in the tooltip and on the status line
   else
     head = L["Sync: %s"]:format(G.SYNC_TEXT[s.sync] or tostring(s.sync))
   end
@@ -226,7 +227,8 @@ end
 
 -- { enabled, readOnly, guildKey, useNative, available, locked, selected } -> ok, reason|nil: whether "Ask guild" may
 -- run. reason: "off" | "readonly" (GuildNative stores no answer while the saved data is from a newer version, so the
--- tab would show nothing) | "noguild" | "native" | "unavailable" | "locked" | "select".
+-- tab would show nothing) | "noguild" | "native" | "unavailable" | "locked" | "select" | "noline" (the selected recipe's
+-- profession is not known).
 function Tab.AskState(s)
   if not s.enabled then return false, "off" end
   if s.readOnly then return false, "readonly" end
@@ -235,7 +237,7 @@ function Tab.AskState(s)
   if s.available == false then return false, "unavailable" end
   if s.locked then return false, "locked" end
   if not s.selected then return false, "select" end
-  if type(s.selected) == "table" and s.selected.skillLineID == nil then return false, "unavailable" end   -- no line to ask
+  if type(s.selected) == "table" and s.selected.skillLineID == nil then return false, "noline" end   -- no line to ask
   return true, nil
 end
 
@@ -247,6 +249,7 @@ local ASK_HINTS = {
   unavailable = L["The game's guild recipe query is not available"],
   locked = L["Sync paused (instance)"],
   select = L["Click a row first: the guild is asked about that row's recipe"],
+  noline = L["The profession of this recipe is not known yet"],
 }
 
 -- GuildNative:Query's answer -> the feedback line.
@@ -491,21 +494,24 @@ local function show_empty(text)
   end
 end
 
--- The search found exactly one recipe: select it, but only once per search text (a plain refresh, a profession change
--- or a data update never selects, and so never replaces a choice the player made), only when none of the listed rows is
--- selected, and only when the profession filter still lists it. A selection sends nothing and leaves the feedback line
--- alone; only the "Ask guild" click asks the guild.
-local function select_only_found(G, guildKey, entries)
+-- The search found exactly one recipe (recipes[1], from the same search that built the rows): select it, but only once
+-- per search text and guild (a plain refresh, a profession change that keeps it hidden, or a data update never selects
+-- over a choice the player made), only when none of the listed rows is selected, and only when the profession filter
+-- lists it: a recipe the filter hides does not use up its auto-select, it is selected when the filter shows it. A
+-- selection sends nothing and leaves the feedback line alone; only the "Ask guild" click asks the guild.
+local function select_only_found(guildKey, entries, recipes)
+  if autoGuild ~= guildKey then autoSearch = nil end
   if autoSearch == activeSearch then return end
-  autoSearch = activeSearch
-  local recipe = G:FindRecipes(activeSearch).recipes[1]
+  local recipe = recipes and recipes[1]
   if not recipe then return end
   local listed, skillLineID = {}, recipe.skillLineID
   for _, entry in ipairs(entries) do
     listed[entry.recipeID] = true
     if entry.recipeID == recipe.recipeID then skillLineID = skillLineID or entry.skillLineID end
   end
-  if not listed[recipe.recipeID] or (view.selected and listed[view.selected.recipeID]) then return end
+  if not listed[recipe.recipeID] then return end
+  autoSearch, autoGuild = activeSearch, guildKey
+  if view.selected and listed[view.selected.recipeID] then return end
   view.selected = { recipeID = recipe.recipeID, skillLineID = skillLineID, recipeName = recipe.recipeName,
     guildKey = guildKey }
 end
@@ -547,7 +553,7 @@ function refresh()
   else
     show_empty(nil)
   end
-  if meta.found == 1 then select_only_found(G, status.guildKey, entries) else autoSearch = nil end
+  if meta.found == 1 then select_only_found(status.guildKey, entries, meta.recipes) else autoSearch = nil end
   view.footer:SetText(Tab.FooterText(status))
   view.footerTooltip = Tab.FooterTooltip(status)
   update_status_line()
@@ -742,4 +748,5 @@ function GuildTab:OnDisable()
   ns.FS:CancelDebounce(REFRESH_KEY)
   ns.FS:CancelDebounce(SEARCH_KEY)
   ns.FS:CancelDebounce(TICK_KEY)
+  autoSearch, autoGuild = nil, nil
 end

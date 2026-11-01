@@ -527,8 +527,8 @@ function Guild:FindRecipes(text)
 end
 
 -- The Guild tab's rows: { { recipeID, recipeName, skillLineID, crafter = CrafterRow } } for every recipe of the
--- current guild's stored profiles and native cache, one row per crafter, and meta = { kind, found } (FindRecipes' kind
--- for filter.text and how many recipes it found). filter = { text = string|nil, skillLineID = number|nil }. Text that
+-- current guild's stored profiles and native cache, one row per crafter, and meta = { kind, found, recipes } (FindRecipes'
+-- kind for filter.text, how many recipes it found, and its list, so the tab need not search a second time). filter = { text = string|nil, skillLineID = number|nil }. Text that
 -- is a pasted recipe or item link (kind "link") keeps only the rows of the recipes it stands for; other text is a
 -- plain, case-insensitive substring of the recipe name (all its crafters) or of a crafter's name (just those crafters).
 -- A found recipe without a row (nobody is known to craft it) gets one placeholder row { recipeID, recipeName,
@@ -537,14 +537,14 @@ end
 -- the client has none). Sorted by recipe name, then recipeID, then GetCrafters' order. The crafters are exactly
 -- GetCrafters' (own characters, contested copies and members who left are out). Read-only.
 function Guild:BuildTabRows(filter)
-  local out, meta = {}, { kind = "none", found = 0 }
+  local out, meta = {}, { kind = "none", found = 0, recipes = {} }
   if not self:IsEnabled() or not self.guildKey then return out, meta end
   local dir = peek(self) or {}
   filter = type(filter) == "table" and filter or {}
   local text = type(filter.text) == "string" and trim(filter.text):lower() or ""
   local skillLineID = type(filter.skillLineID) == "number" and filter.skillLineID or nil
   local search = self:FindRecipes(filter.text)
-  meta = { kind = search.kind, found = #search.recipes }
+  meta = { kind = search.kind, found = #search.recipes, recipes = search.recipes }
   local wanted = {}
   for _, recipe in ipairs(search.recipes) do wanted[recipe.recipeID] = recipe end
   local byRecipe, lines = tab_candidates(dir)
