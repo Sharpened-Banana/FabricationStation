@@ -135,7 +135,7 @@ local function print_help(self)
   for _, name in ipairs(names) do
     local cmd = self.slashCommands[name]
     local label = name == "" and "/fs" or ("/fs " .. name)  -- locale: joined (slash command, typed as written)
-    print(label .. " - " .. (cmd.help or ""))
+    print(L["%s - %s"]:format(label, cmd.help or ""))
   end
 end
 

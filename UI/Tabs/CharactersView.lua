@@ -98,7 +98,7 @@ end
 
 local function spec_text(s)
   if type(s) ~= "table" or not finite(s.spent) or not finite(s.max) then return EM_DASH end
-  return whole(s.spent) .. "/" .. whole(s.max) .. " (+" .. (finite(s.unspent) and whole(s.unspent) or "?") .. ")"
+  return L["%s/%s (+%s)"]:format(whole(s.spent), whole(s.max), finite(s.unspent) and whole(s.unspent) or "?")
 end
 
 -- "1 · 2h 0m" (the soonest pending), "2 · ready", "2 · 1 ready" (some ready, some pending), "1 · ?" (unknown); "—"

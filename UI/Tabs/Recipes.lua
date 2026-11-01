@@ -161,7 +161,7 @@ function Tab.CellTexts(row)
     age = row.stale and color(BAD, text) or color(DIM, text)
   end
   local name = row.name
-  if row.flagsText ~= "" then name = name .. "  " .. color(WARN, "[" .. row.flagsText .. "]") end
+  if row.flagsText ~= "" then name = name .. "  " .. color(WARN, L["[%s]"]:format(row.flagsText)) end
   return {
     name = name, character = short_name(row.charKey),
     quality = row.quality ~= nil and ("Q" .. row.quality) or "--",

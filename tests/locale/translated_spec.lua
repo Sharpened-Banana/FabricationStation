@@ -260,8 +260,8 @@ describe("a non-identity ns.L (orders sentences)", function()
     ns = P2.boot({ C_DateAndTime = { GetSecondsUntilWeeklyReset = function() return 1 end } })
     P2.fake_module(ns, "MainWindow", { RegisterTab = function() end })
     P2.fake_module(ns, "Dashboard", { RegisterWidget = function() end })
+    setmetatable(ns.L, { __index = function(_, key) return "T:" .. key end })   -- before the files load: constants too
     P2.load(ns, ORDERS_FILES)
-    setmetatable(ns.L, { __index = function(_, key) return "T:" .. key end })
   end)
 
   local function every_line_translated(lines)
@@ -311,6 +311,13 @@ describe("a non-identity ns.L (orders sentences)", function()
   it("translates the recraft note of a row", function()
     local notes = ns.UI.OrdersPanel.Notes({ flags = { recraft = true } })
     assert.equal("T:Recraft \226\128\148 judge manually", notes[1])
+  end)
+
+  it("shows order and ledger types through keys", function()
+    local Tab = ns.UI.OrdersTab
+    local m = Tab.Model({ time = 900, charKey = "Me-Silvermoon", orders = { { orderID = 1, orderType = "public",
+      itemID = 5, risks = {} } } }, { hideRisks = {}, orderTypes = { public = true } }, 1000)
+    assert.equal("T:Public", Tab.CellTexts(m.rows[1]).type)
   end)
 end)
 
@@ -416,6 +423,26 @@ describe("a non-identity ns.L (customers sentences)", function()
     assert.equal("T:Click to show Alt-Silvermoon", tooltip.lines[#tooltip.lines])
   end)
 
+  it("shows order and ledger types through keys", function()
+    C:RecordOrder("Bob-Silvermoon", { orderID = 1, time = 500, itemID = 5, quality = 3, tip = 100, orderType = "public" })
+    local container = CreateFrame("Frame")
+    container:SetSize(740, 500)
+    reg.customers.build(container)
+    reg.customers.refresh(container)
+    local v = ns.FS:GetModule("CustomersTab"):GetView()
+    local row
+    for i = 1, v.list.shown do if v.list.pool[i].data.nameRealm == "Bob-Silvermoon" then row = v.list.pool[i] end end
+    row:GetScript("OnClick")(row)
+    local history = v.detail.history.pool[1]
+    history:GetScript("OnEnter")(history)
+    assert.truthy(table.concat(tooltip.lines, "\n"):find("T:Order: T:Public", 1, true), table.concat(tooltip.lines, "|"))
+  end)
+
+  it("translates the customer and its alt count as one sentence", function()
+    local cells = T.CellTexts({ nameRealm = "Bob-Silvermoon", orders = 1, tagsText = "", alts = 2 }, 1000)
+    assert.equal("T:Bob-Silvermoon (+2)", cells.name)
+  end)
+
   it("translates the status line, the group chips and the link tooltip", function()
     C:RecordOrder("Bob-Silvermoon", { orderID = 1, time = 500, itemID = 5, quality = 3, tip = 100 })
     C:RecordOrder("Cat-Silvermoon", { orderID = 2, time = 700, itemID = 5, quality = 3, tip = 10 })
@@ -483,6 +510,12 @@ describe("a non-identity ns.L (ledger sentences)", function()
       recraft = true, tip = 5, time = 0 } })
     assert.equal("T:T:Order commission (recraft)", plain(lines[3].text))
     all_translated(lines, 3)
+  end)
+
+  it("shows order and ledger types through keys", function()
+    assert.equal("T:recraft", T.CellTexts("entry", { type = "commission", amount = 1, time = 0, recraft = true }).type)
+    assert.equal("T:craft", T.CellTexts("entry", { type = "craft", amount = 1, time = 0 }).type)
+    assert.equal("T:sale", T.CellTexts("entry", { type = "sale", amount = 1, time = 0 }).type)
   end)
 
   it("translates the weekly and recipe tooltips, partial and estimated lines included", function()
@@ -565,6 +598,12 @@ describe("a non-identity ns.L (characters sentences)", function()
     Tab = ns.UI.CharactersTab
     W.advance(1)
     setmetatable(ns.L, { __index = function(_, key) return "T:" .. key end })
+  end)
+
+  it("translates the specialization points as one sentence", function()
+    local row = ns.UI.CharactersView.Row({ charKey = "Aria-Silvermoon", professions = { { skillLineID = 1, name = "Mining",
+      spec = { spent = 17, max = 63, unspent = 4 } } } }, NOW)
+    assert.equal("T:17/63 (+4)", row.profs[1].spec)
   end)
 
   it("translates the holdings tooltip lines, warband age and totals included", function()

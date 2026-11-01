@@ -40,6 +40,14 @@ describe("locale coverage", function()
       }, "\n")))
     end)
 
+    it("treats a one-line *_LABELS table as display text", function()
+      assert.are.same({ "Public", "craft" }, texts(table.concat({
+        'local TYPE_LABELS = { a = "craft", b = "Public" }',
+        'local TYPE_KEYS = { a = "craft" }',
+        'local KIND_LABELS = { a = L["craft"] }',
+      }, "\n")))
+    end)
+
     it("reports a chain of literals joined by .. as one sentence, but not a chain with a variable in it", function()
       assert.are.same({ "first half second half of the sentence", "one two three words" }, texts(table.concat({
         'local a = ("first half "',

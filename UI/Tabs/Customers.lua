@@ -345,7 +345,7 @@ end
 -- The display text of one list row's cells, by column key (now = server seconds).
 function Tab.CellTexts(row, now)
   local name = tostring(row.nameRealm)
-  if row.alts then name = name .. " (+" .. row.alts .. ")" end
+  if row.alts then name = L["%s (+%s)"]:format(name, row.alts) end
   local lastSeen = L["never"]
   if type(row.lastSeen) == "number" then lastSeen = ns.UI.FormatAge(math.max(0, now - row.lastSeen)) end
   return {
@@ -372,7 +372,7 @@ end
 
 local function history_cells(row)
   local item = item_name(row.item)
-  if row.who then item = item .. color(DIM, " (" .. row.who .. ")") end
+  if row.who then item = item .. " " .. color(DIM, L["(%s)"]:format(row.who)) end
   return {
     date = date_text(row.time, "%m-%d"),
     item = item,
@@ -579,7 +579,7 @@ local function row_tooltip(owner)
   show_lines(owner, lines)
 end
 
-local TYPE_LABELS = { public = "Public", guild = "Guild", personal = "Personal", npc = "NPC" }
+local TYPE_LABELS = { public = L["Public"], guild = L["Guild"], personal = L["Personal"], npc = L["NPC"] }
 
 local function history_tooltip(owner)
   local row = owner.data

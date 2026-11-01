@@ -50,7 +50,7 @@ local DIM, WARN, GOOD, BAD = "|cff9d9d9d", "|cffffd100", "|cff40ff40", "|cffff40
 local TONES = { good = GOOD, warn = WARN, bad = BAD }
 local WHITE, RED, GREY, GOLD = { 1, 1, 1 }, { 1, 0.25, 0.25 }, { 0.62, 0.62, 0.62 }, { 1, 0.82, 0 }
 
-local TYPE_LABELS = { public = "Public", guild = "Guild", personal = "Personal", npc = "NPC" }
+local TYPE_LABELS = { public = L["Public"], guild = L["Guild"], personal = L["Personal"], npc = L["NPC"] }
 
 -- Left to right. The flexible Item column takes the width the fixed ones leave over; the columns before it are laid
 -- out from the left edge, the ones after it from the right edge.

@@ -400,7 +400,9 @@ local function refresh_queue_summary(frame)
   lines[1] = (L["%d entries, %d crafts"]):format(model.entries, model.crafts)
   if model.totalCost ~= nil then
     local age = prices_age_text()
-    lines[2] = L["Reagent cost: %s"]:format(ns.UI.FormatMoney(model.totalCost) .. (age and color(DIM, "  (" .. age .. ")") or ""))
+    local money = ns.UI.FormatMoney(model.totalCost)
+    lines[2] = age and L["Reagent cost: %s  %s"]:format(money, color(DIM, L["(%s)"]:format(age)))
+      or L["Reagent cost: %s"]:format(money)
   else
     lines[2] = L["Reagent cost: %s"]:format(color(WARN, L["unknown (some prices missing)"]))
   end

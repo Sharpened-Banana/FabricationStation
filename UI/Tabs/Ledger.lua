@@ -56,7 +56,7 @@ local OFF_NOTICE = L["Ledger off: nothing new is recorded"]
 local OFF_DETAIL = L["Turn the Ledger on again in /fs settings > Modules."]
 local PARTIAL_DETAIL = L["Their cost is not subtracted, so the real profit may be lower than shown."]
 
-local TYPE_LABELS = { craft = "craft", sale = "sale", commission = "commission" }
+local TYPE_LABELS = { craft = L["craft"], sale = L["sale"], commission = L["commission"] }
 local TYPE_NAMES = { craft = L["Craft (cost record)"], sale = L["Auction sale"], commission = L["Order commission"] }
 
 -- Per section, left to right. The flexible column takes the width the fixed ones leave; the columns before it are
@@ -372,7 +372,7 @@ local function customer_of(entry)
 end
 
 local function type_label(entry)
-  if entry.type == "commission" and entry.recraft then return "recraft" end
+  if entry.type == "commission" and entry.recraft then return L["recraft"] end
   return TYPE_LABELS[entry.type] or tostring(entry.type or "?")
 end
 

@@ -217,7 +217,7 @@ local function row_name(itemID)
     local copper = (overrides() or {})[itemID]
     local name = C_Item.GetItemNameByID(itemID) or ("item:" .. itemID)
     local price = ns.UI and ns.UI.FormatMoney and ns.UI.FormatMoney(copper) or tostring(copper)
-    return name .. " — " .. price
+    return L["%s — %s"]:format(name, price)
   end
 end
 

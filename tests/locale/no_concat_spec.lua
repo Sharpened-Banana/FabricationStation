@@ -55,6 +55,43 @@ describe("concatenated display sentences", function()
     }, "\n")))
   end)
 
+  it("flags bracket and dash joins", function()
+    local src = { 'local a = name .. " (+" .. n .. ")"', 'local b = label .. " - " .. help',
+      'local c = x .. " \226\128\148 " .. y', 'local d = "[" .. flags .. "]"' }
+    assert.are.same(src, lines_of(table.concat(src, "\n")))
+  end)
+
+  it("leaves signs, id separators and spacing alone", function()
+    assert.are.same({}, lines_of(table.concat({ 'local a = "+" .. n', 'local k = a .. ":" .. b',
+      'local s = left .. "  " .. right', 'local r = "-" .. n', 'local t = a .. "-" .. b',
+      'local u = x .. " (" .. y .. ")"  -- locale: joined (test)' }, "\n")))
+  end)
+
+  it("flags comma lists in UI files only", function()
+    local C = dofile("tools/check_locale.lua")
+    local function hits(rel, src)
+      local dir = os.tmpname()
+      os.remove(dir)
+      os.execute("mkdir -p '" .. dir .. "/" .. rel:match("^(.*)/[^/]*$") .. "'")
+      local path = dir .. "/" .. rel
+      local f = assert(io.open(path, "w")); f:write(src); f:close()
+      local out = C.find_concatenations({ path }, nil)
+      os.execute("rm -rf '" .. dir .. "'")
+      return #out
+    end
+    local list = 'local t = table.concat(parts, L[", "])\nlocal u = table.concat(parts, ", ")\n' ..
+      'local v = table.concat(parts, L(", "))\nlocal w = table.concat(parts, DOT)\nlocal x = table.concat(parts, "|")\n'
+    assert.are.equal(3, hits("UI/Tabs/X.lua", list))
+    assert.are.equal(0, hits("Modules/X.lua", list))
+    assert.are.equal(0, hits("Core/X.lua", list))
+    assert.are.equal(0, hits("UI/Util.lua", list))
+  end)
+
+  it("flags plural choices written with ~= 1 and joins whose operand is on the next line", function()
+    local src = { 'local p = n ~= 1 and " items" or " item"', 'local q = "Income: " ..' }
+    assert.are.same(src, lines_of(table.concat({ src[1], src[2], "  money" }, "\n")))
+  end)
+
   it("honours file:* allowlist entries and ignores file:literal entries", function()
     local path = tmp_file('local a = "Income: " .. money\n')
     local C = dofile("tools/check_locale.lua")

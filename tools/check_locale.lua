@@ -6,7 +6,9 @@
 --   C.missing_keys(codePaths, enUSPath) -> sorted list of keys used in code but not defined in enUS
 --   C.unused_keys(codePaths, enUSPath)  -> sorted list of keys enUS defines that no code uses
 --   C.find_literals(paths, allowlist)   -> { {file, line, text} } user-facing string literals not routed through L
---   C.find_concatenations(paths, allowlist) -> { {file, line, text} } display sentences built with `..` or plurals
+--   C.find_concatenations(paths, allowlist) -> { {file, line, text} } display sentences built with `..` or plurals,
+--                                              brackets / dashes / signs joined with `..`, and (in UI files) comma
+--                                              lists built with table.concat instead of ns.UI.JoinList
 --   C.stale_allowlist(paths, allowlist) -> sorted list of allowlist entries that no longer match anything
 --
 -- A "use" of a key is `L["key"]` or the call form `L("key")` (GuildDirectory's `local function L(key)`).
@@ -19,6 +21,11 @@
 -- The allowlist has one entry per line, `file:literal` (that literal in that file is fine) or `file:*` (skip the
 -- whole file); blank lines and lines starting with `#` are ignored. `file` is spelled as the walked path, for
 -- example `Core/Core.lua`.
+--
+-- Known limits: lines are scanned one at a time (keys are parsed per line, a literal split over lines is seen only
+-- where a rule looks at the neighbouring line); `--[[ ]]` block comments are scanned as code; `text_constants` reads
+-- only column-0, single-line `local` assignments; and format strings that do not go through `L`
+-- (`("%s  %s"):format(a, b)`) are not seen.
 
 local M = {}
 
@@ -302,9 +309,11 @@ function M.find_literals(paths, allowlistPath)
           end
           local code = line:gsub("%-%-.*$", "")
           local opens = select(2, code:gsub("{", "")) - select(2, code:gsub("}", ""))
-          if not textDepth and opens > 0 then
-            local name = code:match("^%s*local%s+([%w_]+)%s*=%s*{") or code:match("^%s*([%w_%.]+)%s*=%s*{")
-            if name and is_text_table_name(name) then textDepth = depth + 1 end
+          local labelLine = false   -- a one-line `X_LABELS = { a = "...", ... }`: every string value is display text
+          local name = code:match("^%s*local%s+([%w_]+)%s*=%s*{") or code:match("^%s*([%w_%.]+)%s*=%s*{")
+          if name then
+            if not textDepth and opens > 0 and is_text_table_name(name) then textDepth = depth + 1 end
+            if opens == 0 and name:find("_LABELS$") and code:find("}%s*$") then labelLine = true end
           end
           local lits = line_literals(line)
           for k, lit in ipairs(lits) do
@@ -356,7 +365,7 @@ function M.find_literals(paths, allowlistPath)
             -- A capitalised word, or a status word, picked by `and` / `or` / `return`: a one-word display value.
             local picked = (before:match("%f[%w_]and%s*$") or before:match("%f[%w_]or%s*$") or before:match("%f[%w_]return%s*$"))
               and (text:find("^%u%l+$") or DISPLAY_WORDS[text])
-            local inTextTable = textDepth and (ctxKey or before:match('%[%s*"[%w_]+"%s*%]%s*=%s*$'))
+            local inTextTable = (textDepth or labelLine) and (ctxKey or before:match('%[%s*"[%w_]+"%s*%]%s*=%s*$'))
             if not concat and not direct and not skipLine and not text:find("^Interface") and not text:find("://") then
               if (words_of(text) >= 2 and text:find("%a%a+[ ]+[%a%d%(%[]"))
                   or text:find("^%u[%a ]+:$")
@@ -547,6 +556,61 @@ end
 
 local function is_id_like(text) return text:match("^[%l%d_%.:/%-]*$") ~= nil end
 
+local EM_DASH = "\226\128\148"
+
+-- A literal that only holds spaces and ( ) [ ] : - + and the em dash, and joins a sentence: " (+", ")", "[", " - ",
+-- " — ". A lone "+" / "-" sign and an id separator (":", "-") are not.
+local function is_punctuation_join(text)
+  if text == "+" or text == "-" or text == "" then return false end
+  if is_id_like(text) and not text:find(" ", 1, true) then return false end
+  local t = text:gsub(EM_DASH, "(")
+  if not t:match("^[ %(%)%[%]:%-%+]+$") then return false end
+  return t:find("[%(%)%[%]%+]") ~= nil or (t:find(" ", 1, true) ~= nil and t:find("[:%-]") ~= nil)
+end
+
+-- Is this file one of the UI files whose comma lists have to go through ns.UI.JoinList (not UI/Util.lua itself)?
+local function is_ui_list_file(file)
+  local f = "/" .. file
+  return f:find("/UI/", 1, true) ~= nil and f:find("/UI/Util%.lua$") == nil
+end
+
+-- True when the line calls table.concat(<expr>, <comma separator>) where the separator is ", ", L[", "] or L(", ").
+local function comma_list(code)
+  local init = 1
+  while true do
+    local _, e = code:find("table%.concat%(", init)
+    if not e then return false end
+    init = e + 1
+    -- the top-level arguments of the call (to the closing parenthesis, or the end of the line)
+    local args, depth, k, from, n = {}, 1, e + 1, e + 1, #code
+    while k <= n do
+      local c = code:sub(k, k)
+      if c == '"' or c == "'" then
+        local _, after = parse_string(code, k)
+        k = after or n + 1
+      else
+        if c == "(" or c == "[" or c == "{" then
+          depth = depth + 1
+        elseif c == ")" or c == "]" or c == "}" then
+          depth = depth - 1
+          if depth == 0 then break end
+        elseif c == "," and depth == 1 then
+          args[#args + 1] = code:sub(from, k - 1)
+          from = k + 1
+        end
+        k = k + 1
+      end
+    end
+    args[#args + 1] = code:sub(from, k - 1)
+    local sep = args[2] and args[2]:match("^%s*(.-)%s*$")
+    if sep then
+      local key = sep:match("^L%[%s*(.-)%s*%]$") or sep:match("^L%(%s*(.-)%s*%)$") or sep
+      local text, after = parse_string(key, 1)
+      if text == ", " and after == #key + 1 then return true end
+    end
+  end
+end
+
 -- Does any display piece on code line i look like a joined sentence? Returns true on the first reason found.
 local function joined_sentence(codes, i, texty)
   local code = codes[i]
@@ -554,6 +618,18 @@ local function joined_sentence(codes, i, texty)
   for _, lit in ipairs(line_literals(code)) do
     local text = lit[3]
     if has_words(text) and not is_id_like(text) and not text:find("^Interface[\\/]") and not text:find("://") then
+      local before, after = left_of(codes, i, lit[1]), right_of(codes, i, lit[2])
+      local joinedLeft, joinedRight = ends_with_concat(before), starts_with_concat(after)
+      if joinedLeft or joinedRight then
+        local lk = joinedLeft and left_operand(before) or "literal"
+        local rk = joinedRight and right_operand(after) or "literal"
+        if lk ~= "literal" or rk ~= "literal" then return true end
+      end
+    end
+  end
+  -- 1b. a bracket, sign or dash piece that is an operand of `..`: " (+", ")", "[", " - ", " — "
+  for _, lit in ipairs(line_literals(code)) do
+    if is_punctuation_join(lit[3]) then
       local before, after = left_of(codes, i, lit[1]), right_of(codes, i, lit[2])
       local joinedLeft, joinedRight = ends_with_concat(before), starts_with_concat(after)
       if joinedLeft or joinedRight then
@@ -601,6 +677,7 @@ function M.find_concatenations(paths, allowlistPath)
         codes[#codes + 1] = is_comment(line) and "" or code_of(line)
       end
       local texty = text_constants(codes)
+      local uiFile = is_ui_list_file(file)
       for i, line in ipairs(lines) do
         local skip = codes[i]:match("^%s*$") ~= nil or line:find(JOINED_MARK) ~= nil
         if not skip then
@@ -608,7 +685,7 @@ function M.find_concatenations(paths, allowlistPath)
             if codes[i]:find(p) then skip = true; break end
           end
         end
-        if not skip and joined_sentence(codes, i, texty) then
+        if not skip and ((uiFile and comma_list(codes[i])) or joined_sentence(codes, i, texty)) then
           hits[#hits + 1] = { file = file, line = i, text = (line:gsub("^%s+", ""):gsub("%s+$", "")) }
         end
       end

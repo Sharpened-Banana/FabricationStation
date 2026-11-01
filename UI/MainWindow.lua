@@ -402,7 +402,7 @@ local function open_tab(id)
     MainWindow:Show()
     local ids = {}
     for i, tab in ipairs(MainWindow:GetTabs()) do ids[i] = tab.id end
-    print((L["FabricationStation: no tab named %q. Tabs: %s"]):format(id, table.concat(ids, ", ")))
+    print((L["FabricationStation: no tab named %q. Tabs: %s"]):format(id, table.concat(ids, ", ")))  -- locale: joined (tab ids)
   end
 end
 
