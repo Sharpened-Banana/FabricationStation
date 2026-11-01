@@ -187,6 +187,8 @@ function Tab.FooterText(s)
   local head
   if s.gateLocked then
     head = L["Sync paused (instance)"]
+  elseif s.sync == "held" then
+    head = G.HELD_TEXT
   else
     head = L["Sync: %s"]:format(G.SYNC_TEXT[s.sync] or tostring(s.sync))
   end
@@ -213,6 +215,7 @@ function Tab.FooterTooltip(s)
   local lines = { L["Guild sync"] }
   lines[#lines + 1] = L["Guild: %s"]:format(s.guildKey and ns.Social.Util.EscapePipes(s.guildKey) or L["not in a guild"])
   lines[#lines + 1] = L["Sync: %s"]:format(G.SYNC_TEXT[s.sync] or tostring(s.sync))
+  if s.sync == "held" then lines[#lines + 1] = G.HELD_TEXT end
   if s.gateLocked then lines[#lines + 1] = L["Chat sync is locked (%s)"]:format(tostring(s.gateReason)) end
   lines[#lines + 1] = L["%d guildmates seen with the addon"]:format(s.addonMembers)
   lines[#lines + 1] = L["%d crafter profiles stored"]:format(s.profiles)
@@ -303,14 +306,18 @@ local function ask_state()
   return state
 end
 
--- The second line: the feedback of the last action, else the selected recipe, else the hint.
+-- The second line: the feedback of the last action, else the selected recipe, else that sharing waits for the setup
+-- guide, else the hint.
 local function update_status_line()
   if not view then return end
   local text, tone
+  local G = guild()
   if notice then
     text, tone = notice, WARN
   elseif view.selected then
     text = L["Selected: %s"]:format(view.selected.recipeName)
+  elseif G and G:IsEnabled() and G:SyncStatus() == "held" then
+    text, tone = G.HELD_TEXT, WARN
   else
     text = L["Click a row to select it; double-click it or click Whisper to whisper the crafter"]
   end
@@ -726,6 +733,7 @@ function GuildTab:OnEnable()
   local onChange = ns.FS:Wrap(REFRESH_SOURCE, schedule_refresh)
   self:RegisterMessage(ns.Msg.GUILD_CHANGED, onChange)
   self:RegisterMessage(ns.Msg.COMM_GATE_CHANGED, onChange)
+  self:RegisterMessage(ns.Msg.ONBOARDING_DONE, onChange)     -- the setup guide's hold on sync ended (footer text)
 end
 
 function GuildTab:OnDisable()

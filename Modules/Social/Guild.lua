@@ -350,7 +350,8 @@ function Guild:OnEnteringWorld()
   if self.guildKey and self.syncKey ~= self.guildKey then start_sync(self) end
 end
 
--- "readOnly" | "disabled" | "noCodec" | "noGuild" | "off" (sharing off) | "paused" (chat gate locked) | "ok".
+-- "readOnly" | "disabled" | "noCodec" | "noGuild" | "off" (sharing off) | "paused" (chat gate locked) | "held" (the
+-- first-run guide holds sync: nothing listing characters goes out until it is finished or skipped) | "ok".
 function Guild:SyncStatus()
   if not writable() then return "readOnly" end
   if not self:IsEnabled() then return "disabled" end
@@ -358,6 +359,7 @@ function Guild:SyncStatus()
   if not self.guildKey then return "noGuild" end
   if not self:Settings().share then return "off" end
   if self.comm and ns.Social.Gate:IsLocked() then return "paused" end
+  if sync_held() then return "held" end
   return "ok"
 end
 

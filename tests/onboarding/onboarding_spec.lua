@@ -583,6 +583,29 @@ describe("OnboardingWizard", function()
     assert.is_nil(record())
   end)
 
+  it("records a finished guide when Escape closes the last step after every choice was applied", function()
+    Wizard:Open()
+    local c = Wizard:GetControls()
+    for _ = 1, 6 do click(c.next) end                       -- Next applied the module and the social choices
+    assert.are.equal("done", step_id())
+    hide_with_ui(c.frame)                                   -- a hide with the UI still records nothing
+    assert.is_nil(record())
+    escape(c.frame)
+    assert.is_false(record().skipped); assert.is_false(Onboarding:ShouldShow())
+    assert.is_false(Onboarding:HoldsSync())
+  end)
+
+  it("records nothing when Escape closes the last step before the choices were applied this time", function()
+    Wizard:Open()
+    local c = Wizard:GetControls()
+    for _ = 1, 6 do click(c.next) end
+    escape(c.frame)                                         -- finished: the record is written
+    ns.FS.db.global.onboarding = nil                        -- due again (a newer guide)
+    Wizard:Open(); goto_step("done")                        -- this opening applied nothing yet
+    escape(c.frame)
+    assert.is_nil(record())
+  end)
+
   it("does not let a close request whose hide never came turn a later Escape into a choice", function()
     Wizard:Open()
     local b = Wizard:GetControls().frame.CloseButton

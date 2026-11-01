@@ -954,7 +954,8 @@ P5-3. **Hiding the UI does not skip the guide (Task 3).** Fresh saved variables 
 to step 3 and press Alt+Z: the guide disappears with the UI; press Alt+Z again: it is back on step 3.
 `/dump FabricationStationDB.global.onboarding` prints nil. Press Escape: it closes; `/reload`: it opens again a few
 seconds after the loading screen. Click the close button (X): `/dump` shows `skipped = true` and it does not return
-after `/reload`. On a guildmate, `/fs guild` shows that nothing was received while the guide was pending.
+after `/reload`. (Escape on the last step "All set", after stepping there with Next, finishes the guide
+instead: see P5-9.) On a guildmate, `/fs guild` shows that nothing was received while the guide was pending.
 
 P5-4. **A cinematic or loading screen while the guide is open (Task 3).** With the guide open (fresh saved variables),
 trigger a cinematic or zone through a portal. Expected: afterwards the guide is still open (or, if the client closed
@@ -984,6 +985,14 @@ older build (or any character), `/fs setup` -> "Scan your professions". Expected
 `/dump C_TradeSkillUI.GetProfessionInfoBySkillLineID(<line>).parentProfessionID` for a current-expansion line prints its
 base profession ID even before that window was opened this session. On the "Guild and chat" step with Guild turned off
 on the previous step, the "Share my recipes" label is grey.
+
+P5-9. **The guide's hold on guild sync is visible and can end without the guide (final fix wave).** Fresh saved
+variables (as P4-23), in a guild. When the guide opens, press Escape. Open `/fs` > Guild: the footer and the line above
+the list read "Sharing with your guild waits for the setup guide. Type /fs setup to finish or skip it."; `/fs guild`
+prints "sync waiting for the setup guide" and the same sentence. Now change "What to share" under Settings > Guild:
+within a few seconds the footer reads "Sync: on" and a guildmate's `/fs guild` shows your profiles arriving; `/reload`:
+the guide opens again (it is still due). Then step through the guide with Next to "All set" and press Escape:
+`/dump FabricationStationDB.global.onboarding` shows `skipped = false`, and it does not return after `/reload`.
 
 ## Not done here
 

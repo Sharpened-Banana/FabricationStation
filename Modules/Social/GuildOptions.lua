@@ -9,7 +9,8 @@ local ADDON_NAME, ns = ...
 -- nothing is saved then); the options are shown disabled in that case, as in the phase-2/3 groups. The three privacy
 -- settings (share, shareLevel, shareAlts) call Guild:OnPrivacyChanged(), which clears and rebuilds the own profiles and
 -- announces them: switching sharing off sends the empty HELLO at once (that withdraws what guildmates stored), the
--- others send a HELLO when the rebuild finished (about one second later).
+-- others send a HELLO when the rebuild finished (about one second later). Such a change is also the player's consent
+-- choice: it ends the setup guide's hold on guild sync for the session (Onboarding:ConsentGiven; the guide stays due).
 local Guild = ns.FS:GetModule("Guild")
 local Util = ns.Social.Util
 
@@ -33,6 +34,7 @@ local function read_only() return ns.FS.dbIsNewer == true end
 -- Guild:SyncStatus() -> the words shown in the footer and by /fs guild.
 Guild.SYNC_TEXT = {
   ok = L["on"],
+  held = L["waiting for the setup guide"],
   off = L["sharing off"],
   paused = L["paused"],
   readOnly = L["read-only"],
@@ -40,6 +42,9 @@ Guild.SYNC_TEXT = {
   noCodec = L["unavailable"],
   noGuild = L["no guild"],
 }
+
+-- The whole sentence shown with the "held" state (the footer, its tooltip, the tab's status line and /fs guild).
+Guild.HELD_TEXT = L["Sharing with your guild waits for the setup guide. Type /fs setup to finish or skip it."]
 
 ---------------------------------------------------------------------------
 -- Self-test
@@ -144,6 +149,7 @@ local function print_status()
   local s = Guild:Status()
   local key = s.guildKey and Util.EscapePipes(s.guildKey) or L["not in a guild"]
   say(L["guild %s, sync %s"]:format(key, Guild.SYNC_TEXT[s.sync] or tostring(s.sync)))
+  if s.sync == "held" then say(Guild.HELD_TEXT) end
   say(L["%d addon users, %d profiles, %d recipes from guild queries, %d messages queued"]:format(s.addonMembers,
     s.profiles, s.nativeCached, s.queue))
   local st = s.stats
@@ -194,8 +200,12 @@ end, L["guild sync status; 'selftest' checks the wire format"])
 -- Options group ("guild", order 70)
 ---------------------------------------------------------------------------
 
+-- After OnPrivacyChanged started the rebuild, so the HELLO the released hold sends waits for the new profiles.
 local function privacy_changed()
-  if not read_only() then Guild:OnPrivacyChanged() end
+  if read_only() then return end
+  Guild:OnPrivacyChanged()
+  local onboarding = ns.FS:GetModule("Onboarding", true)
+  if onboarding and type(onboarding.ConsentGiven) == "function" then onboarding:ConsentGiven() end
 end
 
 -- The display switches change what the tab, the tooltip and the profession window show: announce it (the tab and the

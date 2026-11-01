@@ -64,7 +64,8 @@ come out at, how much concentration it takes, what it earns, and what your other
 
 1. Log in. A short setup guide opens a few seconds after the loading screen. It covers Auctionator, scanning your
    professions, the optional modules, price settings and the social features. Skip or the close button ends the guide (run
-   `/fs setup` to open it again); hiding it any other way keeps it for your next login.
+   `/fs setup` to open it again); hiding it any other way keeps it for your next login, except on the last step, where
+   closing it in any way finishes it.
 2. Open each profession window once on each character. The scan reads a character's recipes while its profession
    window is open, so a character appears in the Characters tab and the Planner only after you have opened its
    professions. Alts are read from saved data afterwards, without logging in.
@@ -88,7 +89,8 @@ come out at, how much concentration it takes, what it earns, and what your other
 
 Guild sync is **on by default** for characters in your guild and covers the current expansion's professions only. It
 is the one feature that sends data to other players, so this is exactly what goes out. On a fresh install nothing is
-sent until you finish or skip the setup guide, whose "Guild and chat" step has these choices.
+sent until you finish or skip the setup guide, whose "Guild and chat" step has these choices, or change one of them
+under Settings > Guild. Until then the Guild tab and `/fs guild` say that sharing waits for the setup guide.
 
 **What is shared, for each character you share:**
 

@@ -314,6 +314,17 @@ describe("Guild tab, settings and diagnostics", function()
       assert.are.equal("ok", s.sync)
     end)
 
+    it("reports a held sync while the setup guide holds it, not \"ok\"", function()
+      local onboarding = ns.FS:GetModule("Onboarding")
+      local base = onboarding.HoldsSync
+      onboarding.HoldsSync = function() return true end
+      finally(function() onboarding.HoldsSync = base end)
+      assert.are.equal("held", Guild:SyncStatus())
+      assert.are.equal("held", Guild:Status().sync)
+      settings.share = false
+      assert.are.equal("off", Guild:SyncStatus())          -- sharing off sends its empty HELLO: nothing is held
+    end)
+
     it("reports the chat gate and what waits behind it", function()
       p4.restriction.lockdown = true
       Guild.comm:Send(Protocol.Hello("1.0.0", {}), "GUILD", nil, { key = "hello" })
@@ -549,6 +560,18 @@ describe("Guild tab, settings and diagnostics", function()
     it("is a registered subcommand with a help line", function()
       assert.is_truthy(ns.FS.slashCommands.guild)
       assert.are.equal("guild sync status; 'selftest' checks the wire format", ns.FS.slashCommands.guild.help)
+    end)
+
+    it("says that sharing waits for the setup guide while it holds sync", function()
+      local onboarding = ns.FS:GetModule("Onboarding")
+      local base = onboarding.HoldsSync
+      onboarding.HoldsSync = function() return true end
+      finally(function() onboarding.HoldsSync = base end)
+      ns.FS:HandleSlash("guild")
+      local text = table.concat(W.printed, "\n")
+      assert.truthy(text:find("guild G-Realm, sync waiting for the setup guide", 1, true))
+      local held = "Sharing with your guild waits for the setup guide. Type /fs setup to finish or skip it."
+      assert.truthy(text:find(held, 1, true))
     end)
 
     it("prints the status without arguments", function()
@@ -1294,6 +1317,24 @@ describe("Guild tab, settings and diagnostics", function()
       assert.truthy(v.footer:GetText():find("^Sync: sharing off"))
       hover(v.footerHit)
       assert.truthy(#tooltip.lines > 1)
+    end)
+
+    it("says in the footer, its tooltip and the status line that sharing waits for the setup guide", function()
+      local onboarding = ns.FS:GetModule("Onboarding")
+      local base = onboarding.HoldsSync
+      onboarding.HoldsSync = function() return true end
+      finally(function() onboarding.HoldsSync = base end)
+      local held = "Sharing with your guild waits for the setup guide. Type /fs setup to finish or skip it."
+      local v = open()
+      assert.are.equal(1, (v.footer:GetText():find(held, 1, true)))
+      hover(v.footerHit)
+      assert.truthy(contains(tooltip.lines, held))
+      assert.truthy(contains(tooltip.lines, "Sync: waiting for the setup guide"))
+      assert.truthy(plain(v.status:GetText()):find(held, 1, true))
+      onboarding.HoldsSync = base
+      ns.FS:SendMessage(ns.Msg.ONBOARDING_DONE); p4.advance(0.5)   -- the hold ended: the open tab refreshes
+      assert.truthy(v.footer:GetText():find("^Sync: on"))
+      assert.is_nil(plain(v.status:GetText()):find(held, 1, true))
     end)
 
     it("says when Guild is turned off, there is no guild, or nobody crafts anything", function()

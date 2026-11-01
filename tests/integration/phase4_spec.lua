@@ -125,6 +125,8 @@ describe("phase 4 integration", function()
         local args = ns.FS:GetOptionsTable().args
         assert.is_truthy(args.guild); assert.is_truthy(args.chatScan)
         assert.equal("G-Realm", ns.FS:GetModule("Guild"):GetGuildKey())
+        assert.equal("held", ns.FS:GetModule("Guild"):SyncStatus())   -- a fresh install: the open guide holds sync
+        ns.UI.OnboardingWizard:Close()                                  -- Skip
         assert.equal("ok", ns.FS:GetModule("Guild"):SyncStatus())
         for _, name in ipairs({ "setup", "guild" }) do
           assert.is_truthy(ns.FS.slashCommands[name], "/fs " .. name)

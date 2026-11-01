@@ -8,7 +8,8 @@ local ADDON_NAME, ns = ...
 -- it), only when ShouldShow() (never completed, or completed for an older VERSION), never while the saved data is
 -- from a newer version, and not in combat (it waits for PLAYER_REGEN_ENABLED). /fs setup reopens it at any time.
 -- Skip and the window's close button count as Skip (the choice is recorded, so it does not return at every login);
--- Escape, Alt+Z and any other hide record nothing: the guide stays due and returns at the next login.
+-- Escape, Alt+Z and any other hide record nothing: the guide stays due and returns at the next login. The one exception
+-- is the last step after every choice was applied: Escape or any other own hide there counts as Finish.
 --
 -- Saved data (lazily created): db.global.onboarding = { completedVersion = int|nil, time = number|nil,
 -- skipped = boolean|nil }. Nothing is written while the saved data is from a newer version.
@@ -21,7 +22,8 @@ local ADDON_NAME, ns = ...
 -- finished or skipped (no completedVersion at all). Guild then sends no HELLO listing characters and no DATA. The
 -- hold is never permanent: without a guide to offer (completed, even for an older VERSION; saved data from a newer
 -- version; Onboarding off; the guide not scheduled this session; no wizard) there is none, and Complete() and
--- OnDisable send FS_ONBOARDING_DONE so Guild starts at once.
+-- OnDisable send FS_ONBOARDING_DONE so Guild starts at once. A guild sharing setting the player changes in
+-- Settings > Guild is a consent choice too (ConsentGiven()): the hold ends for the session, the guide stays due.
 --
 -- Timers: one Debounce key ("onboarding.show"), cancelled in OnDisable.
 local Onboarding = ns.FS:NewModule("Onboarding", "AceEvent-3.0")
@@ -92,15 +94,26 @@ end
 local offerPending = false     -- the first loading screen scheduled the guide and Onboarding stayed on since
 local sessionHandled = false   -- the first PLAYER_ENTERING_WORLD of the session was handled
 local worldEntered = false     -- the first PLAYER_ENTERING_WORLD happened (seen even while Onboarding is off)
+local consented = false        -- the player changed a guild sharing setting in Settings > Guild this session
 
 -- True while guild sync must wait for the guide (see the header): Onboarding is on, the saved data is writable, the
 -- wizard exists, the guide was never finished or skipped, and it is scheduled for this session (or will be at the
--- first loading screen, which has not happened yet).
+-- first loading screen, which has not happened yet), and the player made no guild sharing choice in Settings > Guild.
 function Onboarding:HoldsSync()
-  if not self:IsEnabled() or not writable() or not wizard() then return false end
+  if consented or not self:IsEnabled() or not writable() or not wizard() then return false end
   local r = record()
   if r and type(r.completedVersion) == "number" then return false end
   return offerPending or (not sessionHandled and not worldEntered)
+end
+
+-- The player changed a guild sharing setting (share, shareLevel, shareAlts) in Settings > Guild: that is a consent
+-- choice, so the guide stops holding guild sync for the rest of the session and Guild is told at once. Nothing is
+-- recorded: the guide stays due. GuildOptions calls it after Guild:OnPrivacyChanged() started the rebuild, so the
+-- released HELLO waits for the profiles built with the new setting.
+function Onboarding:ConsentGiven()
+  local held = self:HoldsSync()
+  consented = true
+  if held then ns.FS:SendMessage(ns.Msg.ONBOARDING_DONE) end
 end
 
 -- Opens the guide when it is due. In combat it waits for the end of combat instead. -> true when it was opened.

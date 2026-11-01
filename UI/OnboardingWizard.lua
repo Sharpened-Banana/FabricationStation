@@ -10,9 +10,10 @@ local _, ns = ...
 -- a skip. Every other hide records nothing and leaves the guide pending: Escape (UISpecialFrames calls Hide()), any
 -- other direct Hide(), and the hide that comes with the parent (Alt+Z, a cinematic; OnHide then fires while the frame's
 -- own shown flag is still set, and the guide stays open). A guide that was hidden that way is still due, so it opens
--- again at the next login, and guild sync stays held until a real choice. Recording is also limited to a guide that is
--- still due (reopening a finished guide with /fs setup and closing it changes nothing). Onboarding:OnDisable closes it
--- with Close(true), which records nothing.
+-- again at the next login, and guild sync stays held until a real choice. Exception: on the last step, once Next has
+-- applied the module and the social choices since the guide was opened, Escape or any other own hide records a finished
+-- guide, as Finish. Recording is also limited to a guide that is still due (reopening a finished guide with /fs setup
+-- and closing it changes nothing). Onboarding:OnDisable closes it with Close(true), which records nothing.
 --
 -- The choices are kept in a table that starts from the live state each time the guide opens. The module choices are
 -- applied when the user leaves the modules step with Next, the social choices when they leave the social step; a Skip
@@ -67,6 +68,7 @@ local choices         -- the pending choices of the open guide
 local current = 1
 local active = false  -- the guide is open and has not been finished or skipped
 local closeRequested = false   -- Skip or the close button asked to close it: the hide that follows records a choice
+local applied = {}             -- [step id] = true: Next applied that step's choices since the guide was opened
 
 local function onboarding() return ns.FS:GetModule("Onboarding", true) end
 
@@ -667,12 +669,14 @@ function Wizard:Next()
   if not (step and module and choices) then return end
   if step.id == "modules" then
     module:ApplyModuleChoices(choices.modules)
+    applied.modules = true
   elseif step.id == "social" then
     local social = { chatScan = choices.chatScan }
     if guild_chosen() then
       social.share, social.shareLevel, social.shareAlts = choices.share, choices.shareLevel, choices.shareAlts
     end
     module:ApplySocialChoices(social)
+    applied.social = true
   end
   if current >= #list then
     self:Finish()
@@ -689,16 +693,23 @@ function Wizard:Finish()
   if view then view.frame:Hide() end
 end
 
--- The window was hidden. Only a hide that Skip or the close button asked for records a choice (see the header): a
--- guide that is still due counts as skipped, except on the last step, where every choice was applied already and
--- closing it means the same as Finish. Escape and a hide with the parent leave the guide pending.
+-- True on the last step when Next applied the module and the social choices since the guide was opened.
+local function all_applied()
+  return current >= #steps() and applied.modules == true and applied.social == true
+end
+
+-- The window was hidden. A hide that Skip or the close button asked for records a choice (see the header): a guide that
+-- is still due counts as skipped, except on the last step, where every choice was applied already and closing it means
+-- the same as Finish. Any other own hide (Escape) records a finished guide only on the last step once every choice was
+-- applied; elsewhere it, like a hide with the parent, leaves the guide pending.
 function on_hidden()
   if not active then return end
   if view and view.frame:IsShown() then return end   -- hidden with its parent (Alt+Z, a cinematic): still open
   active = false
   local requested = closeRequested
   closeRequested = false
-  if not requested then return end
+  local finished = all_applied()
+  if not requested and not finished then return end
   local module = onboarding()
   local onLast = current >= #steps()
   if module and module:ShouldShow() then module:Complete(not onLast) end
@@ -714,6 +725,7 @@ function Wizard:Open()
   choices = initial_choices()
   active = true
   closeRequested = false
+  applied = {}
   v.frame:Show()
   self:ShowStep(1)
 end
