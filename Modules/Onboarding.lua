@@ -7,7 +7,8 @@ local ADDON_NAME, ns = ...
 -- When it shows: five seconds after the FIRST PLAYER_ENTERING_WORLD of the session (later loading screens never open
 -- it), only when ShouldShow() (never completed, or completed for an older VERSION), never while the saved data is
 -- from a newer version, and not in combat (it waits for PLAYER_REGEN_ENABLED). /fs setup reopens it at any time.
--- Closing it in any way counts as Skip: the choice is recorded, so it does not return at every login.
+-- Skip and the window's close button count as Skip (the choice is recorded, so it does not return at every login);
+-- Escape, Alt+Z and any other hide record nothing: the guide stays due and returns at the next login.
 --
 -- Saved data (lazily created): db.global.onboarding = { completedVersion = int|nil, time = number|nil,
 -- skipped = boolean|nil }. Nothing is written while the saved data is from a newer version.

@@ -29,6 +29,16 @@ local function patch_frames()
     function f:Enable() enabled = true end
     function f:Disable() enabled = false end
     function f:IsEnabled() return enabled end
+    -- The template's X button: the client runs PreClick, then OnClick, which hides the frame (and so fires OnHide).
+    if select(4, ...) == "BasicFrameTemplateWithInset" then
+      local close = base("Button", nil, f, "UIPanelCloseButton")
+      close:SetScript("OnClick", function()
+        f:Hide()
+        local hide = f:GetScript("OnHide")
+        if hide then hide(f) end
+      end)
+      f.CloseButton = close
+    end
     return f
   end
 end
@@ -312,6 +322,20 @@ describe("Onboarding", function()
       assert.are.equal(1, done_messages())
     end)
 
+    it("keeps holding after an incidental hide and releases on Skip", function()
+      W.fire("PLAYER_ENTERING_WORLD", true, false); p4.advance(5)
+      assert.is_true(wizard_open())
+      local f = Wizard:GetControls().frame
+      f:Hide(); f:GetScript("OnHide")(f)                       -- Escape
+      assert.is_true(Onboarding:HoldsSync())
+      assert.are.equal(0, done_messages())
+      ns.FS:HandleSlash("setup"); assert.is_true(wizard_open())
+      local skip = Wizard:GetControls().skip
+      skip:GetScript("OnClick")(skip)
+      assert.is_false(Onboarding:HoldsSync())
+      assert.are.equal(1, done_messages())
+    end)
+
     it("stops holding when the guide is skipped", function()
       W.fire("PLAYER_ENTERING_WORLD", true, false); p4.advance(6)
       Wizard:Close()
@@ -416,6 +440,14 @@ describe("OnboardingWizard", function()
     end
   end
 
+  local function click_close(f)
+    local b = f.CloseButton
+    local pre = b:GetScript("PreClick"); if pre then pre(b) end
+    b:GetScript("OnClick")(b)
+  end
+  local function escape(f) f:Hide(); f:GetScript("OnHide")(f) end
+  local function hide_with_ui(f) f:GetScript("OnHide")(f) end    -- parent hidden: the frame's own shown flag stays true
+
   it("is a Blizzard-template frame in UISpecialFrames, hidden until opened", function()
     local c = Wizard:GetControls()
     assert.are.equal("BasicFrameTemplateWithInset", c.frame.template)
@@ -453,10 +485,35 @@ describe("OnboardingWizard", function()
     assert.is_true(record().skipped); assert.is_false(Onboarding:ShouldShow())
   end)
 
-  it("counts closing the window (the X button, Escape) as Skip", function()
-    Wizard:Open()
-    Wizard:GetControls().frame:GetScript("OnHide")(Wizard:GetControls().frame)
-    assert.is_true(record().skipped)
+  it("counts the close button as Skip", function()
+    Wizard:Open(); click_close(Wizard:GetControls().frame)
+    assert.is_true(record().skipped); assert.is_false(Onboarding:ShouldShow())
+  end)
+
+  it("keeps the guide pending when it is hidden with the UI", function()
+    Wizard:Open(); Wizard:ShowStep(3)
+    hide_with_ui(Wizard:GetControls().frame)
+    assert.is_nil(record()); assert.is_true(Wizard:IsShown()); assert.are.equal(3, Wizard:GetStep())
+    click(Wizard:GetControls().skip); assert.is_true(record().skipped)    -- a later Skip still records
+  end)
+
+  it("keeps the guide pending when Escape closes it", function()
+    Wizard:Open(); escape(Wizard:GetControls().frame)
+    assert.is_nil(record()); assert.is_false(Wizard:IsShown()); assert.is_true(Onboarding:ShouldShow())
+    ns.FS:HandleSlash("setup"); assert.is_true(Wizard:IsShown()); assert.are.equal(1, Wizard:GetStep())
+  end)
+
+  it("records nothing when the last step is hidden with the UI or by Escape", function()
+    Wizard:Open(); goto_step("done"); hide_with_ui(Wizard:GetControls().frame); escape(Wizard:GetControls().frame)
+    assert.is_nil(record())
+  end)
+
+  it("does not let an old close request turn a later Escape into a choice", function()
+    Wizard:Open(); click_close(Wizard:GetControls().frame)
+    Onboarding.VERSION = 2                                    -- the guide is due again for an upgrader
+    finally(function() Onboarding.VERSION = 1 end)
+    Wizard:Open(); escape(Wizard:GetControls().frame)
+    assert.are.equal(1, record().completedVersion)
   end)
 
   it("Finish completes as not skipped and applies nothing twice", function()
@@ -655,10 +712,10 @@ describe("OnboardingWizard", function()
     assert.are.equal(0, privacy_calls)
   end)
 
-  it("records a finished guide when the window is closed on the last step", function()
+  it("records a finished guide when the close button is used on the last step", function()
     Wizard:Open()
     goto_step("done")
-    Wizard:GetControls().frame:GetScript("OnHide")(Wizard:GetControls().frame)   -- the X button
+    click_close(Wizard:GetControls().frame)
     assert.is_false(record().skipped)
     assert.are.equal(1, record().completedVersion)
   end)

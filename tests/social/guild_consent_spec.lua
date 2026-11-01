@@ -58,6 +58,20 @@ describe("Guild sync waits for the setup guide", function()
     assert.are.equal(1, sent("H"))
   end)
 
+  it("sends nothing after Escape and sends the HELLO after a later Skip", function()
+    boot()
+    p4.advance(30)
+    local f = Wizard:GetControls().frame
+    f:Hide(); f:GetScript("OnHide")(f)                          -- Escape: no choice recorded
+    p4.advance(30)
+    assert.are.equal(0, sent("H"))
+    assert.is_true(Onboarding:HoldsSync())
+    ns.FS:HandleSlash("setup")
+    assert.is_true(Wizard:IsShown())
+    Wizard:Close()
+    assert.are.equal(1, sent("H", "GUILD"))
+  end)
+
   it("starts at once when the guide is skipped", function()
     boot()
     p4.advance(30)

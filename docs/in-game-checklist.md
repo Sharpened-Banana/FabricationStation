@@ -950,6 +950,16 @@ P5-2. **Tooltips after login in a big guild (Task 2).** In a guild with many syn
 crafted items at once and for the next seconds. Expected: no hitch; the "Guild crafters" line appears for items
 guildmates craft, the same as later in the session.
 
+P5-3. **Hiding the UI does not skip the guide (Task 3).** Fresh saved variables (as P4-23). When the guide opens, go
+to step 3 and press Alt+Z: the guide disappears with the UI; press Alt+Z again: it is back on step 3.
+`/dump FabricationStationDB.global.onboarding` prints nil. Press Escape: it closes; `/reload`: it opens again a few
+seconds after the loading screen. Click the close button (X): `/dump` shows `skipped = true` and it does not return
+after `/reload`. On a guildmate, `/fs guild` shows that nothing was received while the guide was pending.
+
+P5-4. **A cinematic or loading screen while the guide is open (Task 3).** With the guide open (fresh saved variables),
+trigger a cinematic or zone through a portal. Expected: afterwards the guide is still open (or, if the client closed
+it, it comes back at the next login), and `/dump FabricationStationDB.global.onboarding` is still nil.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

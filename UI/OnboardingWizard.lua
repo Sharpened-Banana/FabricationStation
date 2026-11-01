@@ -5,10 +5,14 @@ local _, ns = ...
 -- seven steps: welcome, Auctionator, scan, optional modules, prices, guild and chat, done. Back / Next / Skip sit
 -- along the bottom. Own frames and Blizzard templates only: no AceGUI, no dropdowns (checkboxes and a cycle button).
 --
--- Closing the window in any way (X, Escape, Skip) counts as Skip: it is recorded once, while the guide is still due
--- (reopening a finished guide with /fs setup and closing it changes nothing). Finish records a completed guide, and so
--- does closing it on the last step ("All set": every choice was already applied). Onboarding:OnDisable closes it with
--- Close(true), which records nothing.
+-- A choice is recorded only by Skip (Close()), the template's close button (X) and Finish. Closing the window on the
+-- last step with the X records a finished guide (every choice was already applied); anywhere else the X and Skip record
+-- a skip. Every other hide records nothing and leaves the guide pending: Escape (UISpecialFrames calls Hide()), any
+-- other direct Hide(), and the hide that comes with the parent (Alt+Z, a cinematic; OnHide then fires while the frame's
+-- own shown flag is still set, and the guide stays open). A guide that was hidden that way is still due, so it opens
+-- again at the next login, and guild sync stays held until a real choice. Recording is also limited to a guide that is
+-- still due (reopening a finished guide with /fs setup and closing it changes nothing). Onboarding:OnDisable closes it
+-- with Close(true), which records nothing.
 --
 -- The choices are kept in a table that starts from the live state each time the guide opens. The module choices are
 -- applied when the user leaves the modules step with Next, the social choices when they leave the social step; a Skip
@@ -52,6 +56,7 @@ local view            -- the built frame and controls, created on first use
 local choices         -- the pending choices of the open guide
 local current = 1
 local active = false  -- the guide is open and has not been finished or skipped
+local closeRequested = false   -- Skip or the close button asked to close it: the hide that follows records a choice
 
 local function onboarding() return ns.FS:GetModule("Onboarding", true) end
 
@@ -201,7 +206,7 @@ function builders.welcome(frame)
   c.body = label(frame, "GameFontHighlight", 0, 32, CONTENT_WIDTH, 70, true)
   c.body:SetText(L["FabricationStation helps you pick profitable crafts, spend concentration well and keep track of all your crafters. This short guide sets up the essentials. Everything in it can be changed later in /fs settings."])
   c.more = label(frame, "GameFontHighlight", 0, 112, CONTENT_WIDTH, 50, true)
-  c.more:SetText(L["You can close this window at any time. It does not come back by itself, and /fs setup opens it again."])
+  c.more:SetText(L["Skip or the close button ends this guide; /fs setup opens it again. If the window is hidden any other way, it comes back at your next login."])
   c.readOnly = label(frame, "GameFontHighlight", 0, 172, CONTENT_WIDTH, 50, true)
   local readOnlyText = L["The saved data is from a newer version of FabricationStation, so the choices you make in this guide will not be saved."]
   c.readOnly:SetText(ORANGE .. readOnlyText .. "|r")
@@ -476,6 +481,10 @@ local function ensure_view()
   frame:HookScript("OnDragStart", function(self) self:StartMoving() end)
   frame:HookScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
   frame:HookScript("OnHide", wrapped(function() on_hidden() end))
+  if type(frame.CloseButton) == "table" and frame.CloseButton.HookScript then
+    -- PreClick runs before the template's own OnClick hides the frame, so the hide that follows is a close request.
+    frame.CloseButton:HookScript("PreClick", wrapped(function() if active then closeRequested = true end end))
+  end
 
   local registered = false
   for _, name in ipairs(UISpecialFrames) do
@@ -559,11 +568,16 @@ function Wizard:Finish()
   if view then view.frame:Hide() end
 end
 
--- The window was hidden (by Close, the X button or Escape): a guide that is still due counts as skipped, except on the
--- last step, where every choice was applied already and closing it means the same as Finish.
+-- The window was hidden. Only a hide that Skip or the close button asked for records a choice (see the header): a
+-- guide that is still due counts as skipped, except on the last step, where every choice was applied already and
+-- closing it means the same as Finish. Escape and a hide with the parent leave the guide pending.
 function on_hidden()
   if not active then return end
+  if view and view.frame:IsShown() then return end   -- hidden with its parent (Alt+Z, a cinematic): still open
   active = false
+  local requested = closeRequested
+  closeRequested = false
+  if not requested then return end
   local module = onboarding()
   local onLast = current >= #steps()
   if module and module:ShouldShow() then module:Complete(not onLast) end
@@ -578,13 +592,18 @@ function Wizard:Open()
   end
   choices = initial_choices()
   active = true
+  closeRequested = false
   v.frame:Show()
   self:ShowStep(1)
 end
 
 -- Hides the window; that counts as Skip while the guide is due. silent = true hides it without recording anything.
 function Wizard:Close(silent)
-  if silent then active = false end
+  if silent then
+    active = false
+  elseif active then
+    closeRequested = true
+  end
   if view then
     view.frame:Hide()
     on_hidden()   -- OnHide runs it in the client; this covers a frame whose hide script did not fire
