@@ -67,7 +67,8 @@
 --                         { left, width, itemRight, textLeft, textWidth, columns? }:
 --                         row:GetLeft/GetRight/GetWidth and row.cells[1] (the item-name cell) with GetLeft/GetRight
 --                         and .Text:GetLeft/GetStringWidth; columns = { {left, right}, ... } adds the cells after
---                         the item name (row.cells[2..]) with GetLeft/GetRight
+--                         the item name (row.cells[2..]) with GetLeft/GetRight (and, with a third number, a
+--                         MoneyFrame whose GetRight is that number)
 --   acquireOrderRow(row, elementData, new?, fill?)  the ScrollBox shows the row for elementData, in Blizzard's order
 --                         (ScrollBoxListView): OnAcquiredFrame callbacks fn(owner, row, elementData, new); then the
 --                         initializer, played by fill(row, elementData) (e.g. change the geometry's textWidth as
@@ -402,7 +403,11 @@ local function fake_professions_frame(opts)
       local text = { GetLeft = function() return g.textLeft end, GetStringWidth = function() return g.textWidth end }
       local cells = { { GetLeft = function() return g.left end, GetRight = function() return g.itemRight end, Text = text } }
       for i, column in ipairs(g.columns or {}) do   -- the cells after the item name: { left, right } each
-        cells[i + 1] = { GetLeft = function() return column[1] end, GetRight = function() return column[2] end }
+        local cell = { GetLeft = function() return column[1] end, GetRight = function() return column[2] end }
+        if column[3] then   -- the money's right edge, for a cell with a money frame
+          cell.MoneyFrame = { GetRight = function() return column[3] end, IsShown = function() return true end }
+        end
+        cells[i + 1] = cell
       end
       rawset(target, "cells", cells)
     end

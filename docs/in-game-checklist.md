@@ -995,8 +995,9 @@ the guide opens again (it is still due). Then step through the guide with Next t
 `/dump FabricationStationDB.global.onboarding` shows `skipped = false`, and it does not return after `/reload`.
 
 P5-10. **Reward icons and the Reagents cover on the order rows.** Open a profession's Crafting Orders list (Patron tab,
-then Public or Personal). Patron orders show their rewards as 20 px icons in the item-name column, left of the row's cells
-(item or currency icon, a count bottom-right when above 1). In the Reagents column (the 90 px one before Expiration) the
+then Public or Personal). Patron orders show their rewards as 20 px icons in the Commission column, to the right of Blizzard's
+commission money, right-aligned (item or currency icon, a count bottom-right when above 1; "+N" counts the rewards that
+do not fit), and the row's "i" cell lists the rewards in its tooltip too (so they are never lost). In the Reagents column (the 90 px one before Expiration) the
 word Blizzard writes there ("Some", "None", "All") is gone, covered by a dark panel with the reagents you must supply as
 icons, only for a reagent you are short of (the count still needed in red; white when the game cannot tell your
 count; a reagent you already own enough of has no icon). A green check means the customer provides every reagent, or you
@@ -1028,9 +1029,8 @@ headers' `:GetText()`), else the known five columns (name, Customer, Tip, Reagen
 touching it), read from those header children sorted by their left edge, else from the row's own `row.cells`. On any
 other layout, or while the headers are not laid out yet (the panel then appears on the next frame), there is NO panel and Blizzard's "Some" / "None" / "All" shows: if you see no panel at all, that is why,
 so report the header children's GetLeft/GetRight/GetText. With more reagents than fit, the last slot
-reads "+N" and stays inside the panel. In the item-name column, a long name keeps the reward icons clear of it: fewer
-icons are drawn and the last slot reads "+N" (N counts the hidden icons too); when the cells are hidden for lack of room,
-the reward icons are hidden too (the Reagents panel stays). Dimmed rows (orders your filters hide) show both faded like
+reads "+N" and stays inside the panel. A long item name no longer
+takes room from the reward icons (they are in another column); it only costs the profit cell, then the strip. Dimmed rows (orders your filters hide) show both faded like
 the cells.
 
 P5-12. **The tooltips and the mouse.** Hover the reward icons: a "Rewards" header with "<icon> <name> x<count>" lines.
@@ -1070,6 +1070,17 @@ relPoint, x, y) in UI/OrdersPanel.lua and note where it should sit. Hover it: "C
 drops within a moment (CURRENCY_DISPLAY_UPDATE); leave the page open for a few minutes and the number rises by itself
 (the once-a-minute refresh). It follows the profession whose orders are shown (switch professions), and it disappears with
 the page. Settings > Modules > OrdersSidePanel turns it off with the side panel; the row-icons setting does not.
+
+P5-16. **The reward icons and Blizzard's commission money.** The Commission column is found by its header text
+(`PROFESSIONS_COLUMN_HEADER_TIP` or `PROFESSIONS_COLUMN_HEADER_COMMISSION`: unverified names; `/dump` both, and if both
+are nil the five-column layout decides) or as the third of the five known columns (about 160 px). Expected: the icons
+never touch or cover Blizzard's gold amount, whatever its length, and they end 6 px inside the column's right edge. The
+addon takes the end of the money from the cell's `MoneyFrame`, `Money`, `Text` or visible children (the largest right
+edge inside the column); if the icons overlap the money or sit too far right, `/dump` the row's third cell
+(`ProfessionsFrame.OrdersPage.BrowseFrame.OrderList.ScrollBox` frames, `.cells[3]:GetChildren()`) and note which child
+holds the amount. If the money's end cannot be read the addon assumes it takes 100 px from the column's left edge: check
+a short and a long amount. On a layout where the column cannot be identified there are no reward icons at all (the info
+tooltip still lists them).
 
 ## Not done here
 

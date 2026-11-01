@@ -8,10 +8,10 @@ local RED, WHITE = { 1, 0.25, 0.25 }, { 1, 1, 1 }
 -- Reagents 90, Expiration 65. (Blizzard's own widths are 160 / 160 / 90 / 60; these differ, so a spec can tell what
 -- was measured from the fixed layout.)
 local NAME_COLUMN = { 100, 400 }
-local COLUMNS = { { 400, 545 }, { 545, 705 }, { 705, 795 }, { 795, 860 } }
+local COLUMNS = { { 400, 545 }, { 545, 705, 560 }, { 705, 795 }, { 795, 860 } }   -- Tip: Blizzard's money ends at 560
 local function copy_columns(columns)
   local out = {}
-  for i, c in ipairs(columns) do out[i] = { c[1], c[2] } end
+  for i, c in ipairs(columns) do out[i] = { c[1], c[2], c[3] } end
   return out
 end
 
@@ -32,19 +32,8 @@ describe("OrdersPanel row icons", function()
     while with_more(n + 1) <= room do n = n + 1 end
     return n
   end
-  -- The strip's measures come from the module (LAYOUT, read at boot). The reward icons end GAP px left of the visible
-  -- cells and start GAP px right of the name, which ends at 22 + w; the strip's right edge is 294 from the row's left:
-  -- room = 294 - 2 * GAP - 22 - visible - w. Name widths that leave a given room for the icons:
+  -- The layout's measures come from the module (LAYOUT, read at boot).
   local LY
-  local function visible_cells(withProfit, withWarn)
-    return LY.CORE_WIDTH + (withProfit and LY.PROFIT_SLOT or 0) + (withWarn and LY.WARN_SLOT or 0)
-  end
-  local function width_for_room(room, withWarn) return 294 - 2 * LY.GAP - 22 - visible_cells(true, withWarn) - room end
-  local function width_for_room_without_profit(room) return 294 - 2 * LY.GAP - 22 - visible_cells(false) - room end
-  -- Where the icon strip's right edge sits: reserve (460 or 470) + PAD + the visible cells + GAP from the row's right.
-  local function icons_offset(reserve, withProfit, withWarn)
-    return -(reserve + LY.PAD + visible_cells(withProfit, withWarn) + LY.GAP)
-  end
 
   -- The list's column headers (read-only for the addon): the name column and `columns`, handed out in a scrambled
   -- creation order. texts[i] = the text of the i-th column (nil: the header has no text).
@@ -129,8 +118,7 @@ describe("OrdersPanel row icons", function()
     form.ordersPage:ShowOrders(0, false)
   end
   -- Row geometry as in orders_panel_spec: the row spans 100..860, the strip's right edge is 294 from the row's left,
-  -- the name ends at 22 + textWidth. With the whole strip (132 wide) the reward icons end 4 px left of it: room =
-  -- 132 - textWidth. The other columns are COLUMNS.
+  -- the name ends at 22 + textWidth. The other columns are COLUMNS.
   local function geometry(textWidth)
     return { left = 100, width = 760, itemRight = 400, textLeft = 122, textWidth = textWidth,
       columns = copy_columns(COLUMNS) }
@@ -209,94 +197,129 @@ describe("OrdersPanel row icons", function()
     end)
   end)
 
-  describe("fitting the reward icons beside the item name", function()
-    -- Five rewards (a name width and, optionally, another number of them).
-    local function five(textWidth, n)
+  describe("reward icons in the Commission column", function()
+    local TIP_RIGHT, ROW_RIGHT = 705, 860
+    -- Room for the icons: from Blizzard's money (+GAP) to the column's right edge (-PAD).
+    local function money_for_room(room) return TIP_RIGHT - LY.PAD - LY.GAP - room end
+    -- A row of n rewards whose Commission money ends at `moneyRight` (nil: it cannot be read).
+    local function rewards_row(n, moneyRight, textWidth)
       boot()
       local rewards = {}
-      for i = 1, n or 5 do rewards[i] = item_reward(2000 + i, 1) end
+      for i = 1, n do rewards[i] = item_reward(2000 + i, 1) end
       local raw = order({ orderType = 3, npcOrderRewards = rewards })
       show_board({ raw })
-      local row = row_for(raw, geometry(textWidth))
-      return cells_of(row), row
+      local g = geometry(textWidth or 10)
+      g.columns[2][3] = moneyRight
+      local row = row_for(raw, g)
+      return cells_of(row), row, g
     end
     local function state(c)
-      return { c.fit, c.icons:IsShown(), #shown(c.slots), c.more:IsShown() and c.more:GetText() or nil }
+      return { c.icons:IsShown(), #shown(c.slots), c.more:IsShown() and c.more:GetText() or nil }
     end
 
     it("shows every icon when they all fit", function()
-      local c = five(width_for_room(strip_width(4) + 4), 4)
-      assert.same({ "all", true, 4, nil }, state(c))
+      local c = rewards_row(4, money_for_room(strip_width(4) + 4))
+      assert.same({ true, 4, nil }, state(c))
       assert.equal(strip_width(4), c.icons:GetWidth())
     end)
-    it("shows as many as fit and turns the last slot into +N", function()
-      local c = five(width_for_room(with_more(2) + 2))   -- 2 icons and a "+3"
-      assert.same({ "all", true, 2, "+3" }, state(c))
+    it("sits right-aligned at the column's right edge, in our own container", function()
+      local c, row = rewards_row(3, 560)
+      assert.same({ "RIGHT", row, "RIGHT", -(ROW_RIGHT - TIP_RIGHT + LY.PAD), 0 }, { c.icons:GetPoint(1) })
+      assert.equal(c.frame, c.icons:GetParent())
+      assert.same({}, form.assignedFields)
+    end)
+    it("shows as many as fit and turns the last slot into +N, counting the hidden rewards", function()
+      local c = rewards_row(5, money_for_room(with_more(2) + 2))
+      assert.same({ true, 2, "+3" }, state(c))
       assert.equal(with_more(2), c.icons:GetWidth())
       assert.same({ "LEFT", c.icons, "LEFT", slot_x(3), 0 }, { c.more:GetPoint(1) })
-      assert.same({ "all", true, 3, "+2" }, state(five(width_for_room(with_more(3) + 2))))   -- 3 icons and "+2"
+      assert.same({ true, 3, "+2" }, state((rewards_row(5, money_for_room(with_more(3) + 2)))))
     end)
-    it("gives +N a width of its own, so it cannot run into the cells", function()
-      local c = five(width_for_room(with_more(2) + 2))
+    it("gives +N a width of its own, so it cannot run into the money", function()
+      local c = rewards_row(5, money_for_room(with_more(2) + 2))
       assert.equal(MW, c.more:GetWidth()); assert.is_false(c.more:GetWordWrap())
       assert.is_true(c.icons.clips)
     end)
     it("shows only +N when one slot fits, and hides the icons when none does", function()
-      -- no profit cell (the name is long): room for the "+N" slot alone
-      assert.same({ "noProfit", true, 0, "+5" }, state(five(width_for_room_without_profit(MW + 4))))
-      -- room one pixel short of a "+N" slot: nothing
-      assert.same({ "all", false, 0, nil }, state(five(width_for_room(MW - 1))))
-      assert.same({ "noProfit", false, 0, nil }, state(five(width_for_room_without_profit(MW - 1))))
+      assert.same({ true, 0, "+5" }, state((rewards_row(5, money_for_room(MW + 4)))))
+      assert.same({ false, 0, nil }, state((rewards_row(5, money_for_room(MW - 1)))))
     end)
-    it("hides the icons with the main strip", function()
-      local c = five(200)
-      assert.same({ "none", false, 0, nil }, state(c))
-      assert.is_true(c.frame:IsShown())   -- the row tint and dimming stay
+    it("measures where the money ends, else assumes the money takes a fixed width from the column's left edge", function()
+      local measured = rewards_row(5, 560)   -- room 135: all five fit
+      assert.same({ true, 5, nil }, state(measured))
+      local fixed = rewards_row(5, nil)      -- the money's end cannot be read
+      local room = 705 - LY.PAD - (545 + LY.MONEY_WIDTH_FALLBACK + LY.GAP)
+      assert.is_true(room < strip_width(5))
+      assert.same({ true, fit_count(room), "+" .. (5 - fit_count(room)) }, state(fixed))
     end)
-    it("sits left of the visible cells and moves with the profit cell", function()
-      local c, row = five(width_for_room(60))
-      assert.same({ "RIGHT", row, "RIGHT", icons_offset(460, true), 0 }, { c.icons:GetPoint(1) })
-      local c2, row2 = five(width_for_room_without_profit(MW + 4))   -- without the profit cell
-      assert.same({ "RIGHT", row2, "RIGHT", icons_offset(460, false), 0 }, { c2.icons:GetPoint(1) })
+    it("follows the money when it moves, on the next re-fit", function()
+      local c, _, g = rewards_row(3, 560)
+      assert.same({ true, 3, nil }, state(c))
+      g.columns[2][3] = money_for_room(MW + 4)   -- Blizzard writes a longer amount
+      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
+      assert.same({ true, 0, "+3" }, state(c))
+      g.columns[2][3] = 560
+      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
+      assert.same({ true, 3, nil }, state(c))
+      assert.same({}, form.assignedFields)
     end)
-    it("leaves room for the blocked warning icon too", function()
+    it("ignores a money frame that is hidden or outside the column", function()
+      local c, row = rewards_row(3, 560)
+      local fallback = fit_count(705 - LY.PAD - (545 + LY.MONEY_WIDTH_FALLBACK + LY.GAP))
+      local cell = form.raw(row).cells[3]
+      cell.MoneyFrame.IsShown = function() return false end
+      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
+      assert.equal(fallback, #shown(c.slots))
+      cell.MoneyFrame.IsShown = function() return true end
+      cell.MoneyFrame.GetRight = function() return 900 end   -- outside the column
+      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
+      assert.equal(fallback, #shown(c.slots))
+      cell.MoneyFrame.GetRight = function() return 560 end
+      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
+      assert.equal(3, #shown(c.slots))
+    end)
+    it("draws no icons where the Commission column cannot be identified, and never uses the name column", function()
       boot()
-      ns.FS:GetModule("Customers"):SetTag("Bob-Silvermoon", "blocked", true)
-      local raw = order({ orderType = 2, npcOrderRewards = { item_reward(2001, 1) } })
+      set_headers({ { 400, 560 }, { 560, 710 }, { 710, 860 } })   -- a four-column layout
+      local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 2) } })
       show_board({ raw })
-      local row = row_for(raw, geometry(10))
-      local c = cells_of(row)
-      assert.is_true(c.warnShown)
-      assert.same({ "RIGHT", row, "RIGHT", icons_offset(460, true, true), 0 }, { c.icons:GetPoint(1) })
+      local c = cells_of(row_for(raw))
+      assert.is_false(c.icons:IsShown()); assert.equal(1, #c.iconEntries)
+      assert.same({}, shown(c.slots))
     end)
-    it("shows everything on a row that cannot be measured", function()
+    it("finds the column by its header text, in any layout", function()
       boot()
-      local rewards = {}
-      for i = 1, 7 do rewards[i] = item_reward(2000 + i, 1) end
-      local raw = order({ orderType = 3, npcOrderRewards = rewards })
-      show_board({ raw })
-      local row = row_for(raw, false)
-      local c = cells_of(row)
-      assert.same({ "all", true, 7, nil }, state(c))
-      assert.same({ "RIGHT", row, "RIGHT", icons_offset(470, true), 0 }, { c.icons:GetPoint(1) })
-    end)
-    it("re-fits the icons with the strip when Blizzard writes the name after our callback", function()
-      boot()
-      local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 1), item_reward(2002, 1), item_reward(2003, 1) } })
+      _G.PROFESSIONS_COLUMN_HEADER_TIP = "Commission"
+      set_headers({ { 400, 520 }, { 520, 640 }, { 640, 860 } }, { "Item", "Customer", "Commission", "Reagents" })
+      local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 2) } })
       show_board({ raw })
       local g = geometry(10)
-      local row = form.newOrderRow(g)
-      form.acquireOrderRow(row, form.orderElement(raw), true)
+      g.columns = { { 400, 520 }, { 520, 640, 530 }, { 640, 860 } }
+      local row = row_for(raw, g)
       local c = cells_of(row)
-      assert.same({ 3, false }, { #shown(c.slots), c.more:IsShown() })   -- 3 icons fit beside the short name
-      g.textWidth = width_for_room(MW + 4)   -- room for the "+N" slot alone: only "+3"
-      W.advance(0)
-      assert.same({ 0, true, "+3" }, { #shown(c.slots), c.more:IsShown(), c.more:GetText() })
-      g.textWidth = 10
-      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true)
-      W.advance(0)
-      assert.same({ 3, false }, { #shown(c.slots), c.more:IsShown() })
-      assert.same({}, form.assignedFields)
+      assert.is_true(c.icons:IsShown())
+      assert.same({ "RIGHT", row, "RIGHT", -(860 - 640 + LY.PAD), 0 }, { c.icons:GetPoint(1) })
+      _G.PROFESSIONS_COLUMN_HEADER_TIP = nil
+    end)
+    it("draws no icons on a row that is not laid out", function()
+      boot()
+      local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 2) } })
+      show_board({ raw })
+      assert.is_false(cells_of(row_for(raw, false)).icons:IsShown())
+    end)
+    it("does not change what the name column fits: the cells keep their tier whether or not there are rewards", function()
+      boot()
+      local plain = order({ orderID = 10 })
+      local rich = order({ orderID = 11, orderType = 3, npcOrderRewards = { item_reward(2001, 2), item_reward(2002, 1) } })
+      show_board({ plain, rich })
+      -- a name long enough to lose the profit cell (the module's own layout decides how long)
+      local long = 268 - LY.CORE_WIDTH + 1 - 8
+      local a, b = cells_of(row_for(plain, geometry(long))), cells_of(row_for(rich, geometry(long)))
+      assert.same({ a.fit, a.strip:IsShown() }, { b.fit, b.strip:IsShown() })
+      -- the rewards stay visible however long the name is
+      local longest = 268 - LY.CORE_WIDTH + 40
+      local c = cells_of(row_for(rich, geometry(longest)))
+      assert.same({ "none", false, true }, { c.fit, c.strip:IsShown(), c.icons:IsShown() })
     end)
   end)
 
@@ -735,6 +758,50 @@ describe("OrdersPanel row icons", function()
       c.icons:GetScript("OnLeave")(c.icons)
       assert.is_false(tooltip.shown)
     end)
+    it("lists the rewards in the row's info tooltip too, which an order with rewards always has", function()
+      boot()
+      cached[2001] = "Sword"
+      local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 3), { currencyType = 3001, count = 1 } } })
+      show_board({ raw })
+      local c = cells_of(row_for(raw))
+      assert.same({ true, "i" }, { c.risk:IsShown(), c.riskCount:GetText() })
+      local function tail(n) return { unpack(tooltip.lines, #tooltip.lines - n + 1) } end
+      c.risk:GetScript("OnEnter")(c.risk)
+      assert.same({ "Rewards", "|T902001:14|t |Hitem:2001|h[Sword]|h x3", "|T700001:14|t Resonance Crystals x1" }, tail(3))
+      -- also with the icons off, and where the column could not be identified
+      ns.FS:GetModule("Orders"):Settings().showRowIcons = false
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.is_false(c.icons:IsShown())
+      c.risk:GetScript("OnEnter")(c.risk)
+      assert.equal("Rewards", tail(3)[1])
+      ns.FS:GetModule("Orders"):Settings().showRowIcons = true
+      set_headers({ { 400, 560 }, { 560, 710 }, { 710, 860 } })
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.is_false(c.icons:IsShown())
+      c.risk:GetScript("OnEnter")(c.risk)
+      assert.equal("Rewards", tail(3)[1])
+    end)
+    it("keeps the risk lines first and the rewards after them", function()
+      boot()
+      local raw = order({ orderType = 3, expirationTime = 5100, npcOrderRewards = { item_reward(2001, 1) } })
+      show_board({ raw })
+      local c = cells_of(row_for(raw))
+      c.risk:GetScript("OnEnter")(c.risk)
+      local position = {}
+      for i, line in ipairs(tooltip.lines) do position[line] = i end
+      assert.equal(1, position["Expiring soon"])
+      assert.is_true(position["Rewards"] > position["Expiring soon"])
+    end)
+    it("has no Rewards lines on the Reagents cover", function()
+      boot()
+      evalResult = allocation({ itemID = 1001, quantity = 3 })
+      local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 3) } })
+      show_board({ raw })
+      local c = cells_of(row_for(raw))
+      c.cover:GetScript("OnEnter")(c.cover)
+      assert.equal("Reagents to supply", tooltip.lines[1])
+      assert.equal(2, #tooltip.lines)
+    end)
     it("shows the reagents to supply over the Reagents cover, with what you have", function()
       boot()
       cached[1001], cached[1002] = "Ore", "Silk"
@@ -800,11 +867,11 @@ describe("OrdersPanel row icons", function()
       local c = cells_of(row_for(raw, g))
       c.icons:GetScript("OnEnter")(c.icons)
       assert.truthy(c.tipping)
-      g.textWidth = 200   -- the name takes the room: the strip hides
-      W.advance(0)
+      g.columns[2][3] = 705 - LY.PAD - LY.GAP - (S - 1)   -- Blizzard's money takes the room: the icons hide
+      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
       assert.is_false(c.icons:IsShown()); assert.falsy(c.tipping)
-      g.textWidth = 50
-      W.advance(0)
+      g.columns[2][3] = 560
+      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
       c.cover:GetScript("OnEnter")(c.cover)
       assert.truthy(c.tipping)
       ns.FS:GetModule("Orders"):Settings().showRowIcons = false

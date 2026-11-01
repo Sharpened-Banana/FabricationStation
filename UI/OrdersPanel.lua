@@ -7,8 +7,10 @@ local L = ns.L
 --                     hide, a strip of cells (net profit, concentration, score, risk count with a tooltip, Add to Queue;
 --                     the concentration cell is a small icon and the concentration the order needs to reach its minimum
 --                     quality, red when you have less, a red cross when it cannot be reached, empty when none is
---                     needed; the score cell is blank while it would only repeat the profit shown beside it), left of it a
---                     strip of 20 px icons for the rewards of a patron order, and a cover over Blizzard's Reagents
+--                     needed; the score cell is blank while it would only repeat the profit shown beside it), 20 px icons
+--                     for the rewards of a patron order in Blizzard's Commission column, right of its money (which
+--                     stays visible; "+N" counts the rewards that do not fit; the info tooltip of the row lists the
+--                     rewards too), and a cover over Blizzard's Reagents
 --                     cell that replaces its "Some" / "None" / "All" with the reagents the crafter must supply (the
 --                     allocation minus what the customer provides) that the character is short of: 20 px icons with
 --                     the count needed in red (white when the owned count is unknown; a reagent already owned gets no
@@ -33,9 +35,10 @@ local L = ns.L
 -- (OnInitializedFrame), and again in a re-fit pass on the next frame (1a's Debounce, coalesced) after rows were
 -- initialised or item data arrived while the list is on screen, since Blizzard can write the name after our callback.
 -- The cell strip sits at the right of the item-name column and gives way to the name (H1-6): the profit cell goes
--- first, then the whole strip; our cells never cover Blizzard's item name. The icon strip sits just left of the
--- visible cells and gives way to the name the same way, in the same fit pass: it shows as many icons as fit between
--- the end of the name and the cells (the last visible slot becomes "+N"), and it is hidden with the cell strip.
+-- first, then the whole strip; our cells never cover Blizzard's item name. The reward icons are not in this column:
+-- they sit in the Commission column (identified like the Reagents column, failing closed: no column, no icons), right
+-- of Blizzard's money, whose end is measured read-only (else a fixed width from the column's left edge is assumed);
+-- the icons that fit in the space left of the column's edge are drawn and the last visible slot becomes "+N".
 -- The Reagents cover is replaced, not edited: Blizzard's cell and its text are never written (no SetText, SetAlpha or
 -- Hide on them). Our own frame, in our own container, is anchored over the cell (measured read-only from the row's
 -- column header, or its own cells when there is no header) with an opaque background of COVER_COLOR, so the word underneath cannot be seen. It fails closed: the cover goes only over a column
@@ -100,6 +103,14 @@ local COVER_PAD = 4
 -- and ends where the last begins. Anything else gets no cover, and Blizzard's text shows.
 local KNOWN_COLUMNS, REAGENTS_MIN, REAGENTS_MAX = 5, 80, 100
 local REAGENTS_HEADER_GLOBAL = "PROFESSIONS_COLUMN_HEADER_REAGENTS"   -- unverified name, see the in-game checklist (P5-11)
+-- The reward icons sit in Blizzard's Commission (Tip) column, right of its money: identified by the header's own text
+-- (the unverified global names below), else as the third of the known five columns (about 160 px, touching the
+-- Reagents column). When the money's end cannot be read, it is assumed to take MONEY_WIDTH_FALLBACK px from the
+-- column's left edge.
+local TIP_HEADER_GLOBALS = { "PROFESSIONS_COLUMN_HEADER_TIP", "PROFESSIONS_COLUMN_HEADER_COMMISSION" }
+local TIP_MIN, TIP_MAX = 120, 200
+local MONEY_WIDTH_FALLBACK = 100
+M.LAYOUT.MONEY_WIDTH_FALLBACK = MONEY_WIDTH_FALLBACK
 local HOVER_COLOR = { 1, 1, 1, 0.1 }   -- the cover's own highlight while its row is hovered
 -- The cover's opaque background, a dark colour close to the order list's own. (The list's background atlas cannot be
 -- read from Blizzard's region without relying on its layout, so this is the one value to adjust.)
@@ -655,7 +666,7 @@ local function currency_label(currencyID)
   return ("currency:%d"):format(currencyID)
 end
 
--- The tooltip over the icon strip, the full list whatever the strip had room for: a "Rewards" header with "<icon>
+-- The tooltip over the reward icons, the full list whatever the strip had room for: a "Rewards" header with "<icon>
 -- <name> x<count>" lines, then a "Reagents to supply" header with "<name>: need N, have M" lines (red while M < N;
 -- "need N" when M is unknown).
 local function icon_lines(entries)
@@ -728,6 +739,8 @@ local function risk_tooltip(c)
   local labels = c.model and c.model.riskText or ""
   for label in labels:gmatch("[^\n]+") do lines[#lines + 1] = { text = label, color = TEXT_COLORS.red } end
   for _, note in ipairs(c.notes or {}) do lines[#lines + 1] = { text = note, color = TEXT_COLORS.grey } end
+  -- The rewards are always listed here too (whatever the setting, and whether or not the icons found room).
+  for _, line in ipairs(icon_lines(c.rewardAll or {})) do lines[#lines + 1] = line end
   show_tooltip(c.risk, lines)
 end
 
@@ -1029,9 +1042,8 @@ end
 -- makes it give way to Blizzard's item name (hotfix H1-6 rule: our cells never cover the name). With room for
 -- everything: "all"; else without the profit cell (score, risk and the warning icon stay): "noProfit"; else no strip
 -- at all: "none" (the side panel and the Orders tab still carry the numbers). A row that cannot be measured keeps
--- everything. Also returns the space reserved right of the item-name column and the pixels left for the icon strip
--- between the end of the name (+GAP) and the visible cells (-GAP), nil when the row cannot be measured. Only getters are
--- called on Blizzard's row, its item-name cell and that cell's Text.
+-- everything. Also returns the space reserved right of the item-name column. Only getters are called on Blizzard's
+-- row, its item-name cell and that cell's Text.
 local function fit(c, row, warn)
   local itemCell = type(row.cells) == "table" and child(row.cells, 1) or nil
   local reserve = FIXED_COLUMNS
@@ -1043,31 +1055,14 @@ local function fit(c, row, warn)
   local nameText = child(itemCell, "Text")
   local rowLeft, rowWidth = read_number(row, "GetLeft"), read_number(row, "GetWidth")
   local textLeft, textWidth = read_number(nameText, "GetLeft"), read_number(nameText, "GetStringWidth")
-  if not (rowLeft and rowWidth and textLeft and textWidth) then return "all", reserve, nil end
+  if not (rowLeft and rowWidth and textLeft and textWidth) then return "all", reserve end
   local nameEnd = textLeft + textWidth - rowLeft         -- from the row's left edge
   local stripRight = rowWidth - reserve - PAD
   local core = CORE_WIDTH + (warn and WARN_SLOT or 0)
   local function fits(width) return nameEnd + GAP <= stripRight - width end
-  local function room_for(width) return stripRight - width - GAP - (nameEnd + GAP) end
-  if fits(core + PROFIT_SLOT) then return "all", reserve, room_for(core + PROFIT_SLOT) end
-  if fits(core) then return "noProfit", reserve, room_for(core) end
-  return "none", reserve, nil
-end
-
--- Draws the reward strip: the icons that fit in `room` pixels (see IconLayout; nil = unlimited) to the left of
--- `visible` pixels of cells that end `reserve + PAD` from the row's right edge; nothing when the cell strip is
--- hidden, there are no rewards or none fits.
-local function render_icons(c, row, reserve, room, visible)
-  local layout = c.fit ~= "none" and M.IconLayout(c.iconEntries, room) or { shown = 0, width = 0 }
-  if not draw_bank(c.iconBank, c.iconEntries, layout, 0) then
-    c.icons:Hide()
-    clear_tipping(c, "icons")
-    return
-  end
-  c.icons:ClearAllPoints()
-  c.icons:SetPoint("RIGHT", row, "RIGHT", -(reserve + PAD + visible + GAP), 0)
-  c.icons:SetSize(layout.width, ICON_SIZE)
-  c.icons:Show()
+  if fits(core + PROFIT_SLOT) then return "all", reserve end
+  if fits(core) then return "noProfit", reserve end
+  return "none", reserve
 end
 
 -- Whether left..right look like a real column span (a cell that was not laid out reads 0 or reversed).
@@ -1125,22 +1120,36 @@ local function header_text(header)
   return ok and type(value) == "string" and value or nil
 end
 
--- Which column is Reagents, read-only, or nil when it cannot be told (then there is no cover and Blizzard's text
--- shows). In order: the header whose text is Blizzard's Reagents header string; the known five-column layout read from
--- the headers (sorted by their left edge); with no headers to read, the same from the row's own cells. Returns
--- left, right (screen coordinates). There is no assumed layout to fall back on: while a header or cell cannot be read
--- (not laid out yet) nothing is identified, and a later re-fit pass tries again.
-local function reagents_column(row)
+-- The known layout's third column, the Commission (Tip): about 160 px, touching the Reagents column, in a layout whose
+-- Reagents and last columns are the known ones.
+local function known_tip_span(spans)
+  if not known_reagents_span(spans) then return nil end
+  local tip, reagents = spans[3], spans[KNOWN_COLUMNS - 1]
+  local width = tip.right - tip.left
+  if width >= TIP_MIN and width <= TIP_MAX and math.abs(reagents.left - tip.right) <= GAP then
+    return tip.left, tip.right
+  end
+  return nil
+end
+
+-- Which column is the wanted one, read-only, or nil when it cannot be told (then there is nothing drawn over or in it).
+-- In order: the header whose text is one of Blizzard's header strings (`globals`: names of global strings); the known
+-- five-column layout read from the headers (sorted by their left edge) by `known`; with no headers to read, the same
+-- from the row's own cells. Returns left, right (screen coordinates). There is no assumed layout to fall back on: while
+-- a header or cell cannot be read (not laid out yet) nothing is identified, and a later re-fit pass tries again.
+local function identify_column(row, globals, known)
   local headers = header_frames()
   if #headers > 0 then
     local spans, unreadable = column_spans(headers)
-    local want = rawget(_G, REAGENTS_HEADER_GLOBAL)
-    if type(want) == "string" and want ~= "" then
-      for _, span in ipairs(spans) do
-        if plausible_span(span.left, span.right) and header_text(span.frame) == want then return span.left, span.right end
+    for _, name in ipairs(globals) do
+      local want = rawget(_G, name)
+      if type(want) == "string" and want ~= "" then
+        for _, span in ipairs(spans) do
+          if plausible_span(span.left, span.right) and header_text(span.frame) == want then return span.left, span.right end
+        end
       end
     end
-    if unreadable == 0 then return known_reagents_span(spans) end
+    if unreadable == 0 then return known(spans) end
     return nil
   end
   local cellList = {}
@@ -1150,8 +1159,59 @@ local function reagents_column(row)
     end
   end
   local spans, unreadable = column_spans(cellList)
-  if unreadable == 0 then return known_reagents_span(spans) end
+  if unreadable == 0 then return known(spans) end
   return nil
+end
+
+local function reagents_column(row) return identify_column(row, { REAGENTS_HEADER_GLOBAL }, known_reagents_span) end
+local function tip_column(row) return identify_column(row, TIP_HEADER_GLOBALS, known_tip_span) end
+
+-- Where Blizzard's money ends in the Commission cell at `left`..`right` (read only): the largest right edge among the
+-- cell's visible money frame, text and children that lie inside the column; left + MONEY_WIDTH_FALLBACK when none can
+-- be read.
+local function money_end(row, left, right)
+  local best
+  for i = 1, 12 do
+    local cell = type(row.cells) == "table" and row.cells[i] or nil
+    local cellLeft = type(cell) == "table" and read_number(cell, "GetLeft") or nil
+    if cellLeft and math.abs(cellLeft - left) <= GAP then
+      local parts = { child(cell, "MoneyFrame"), child(cell, "Money"), child(cell, "Text") }
+      if type(cell.GetChildren) == "function" then
+        for _, part in ipairs(tables_of(select(2, pcall(cell.GetChildren, cell)))) do parts[#parts + 1] = part end
+      end
+      for _, part in pairs(parts) do
+        local shown = true
+        if type(part.IsShown) == "function" then
+          local ok, value = pcall(part.IsShown, part)
+          shown = not ok or value ~= false
+        end
+        local edge = shown and read_number(part, "GetRight") or nil
+        if edge and edge >= left and edge <= right and (best == nil or edge > best) then best = edge end
+      end
+    end
+  end
+  return best or (left + MONEY_WIDTH_FALLBACK)
+end
+
+-- Draws the reward icons in the Commission column, right-aligned in the space right of Blizzard's money (which stays
+-- visible: nothing is covered): the icons that fit (IconLayout; "+N" counts the rest). Nothing when the column cannot
+-- be identified, there are no rewards or none fits.
+local function render_icons(c, row)
+  local left, right = tip_column(row)
+  local rowRight = read_number(row, "GetRight")
+  local layout = { shown = 0, width = 0 }
+  if left and rowRight and rowRight >= right and #c.iconEntries > 0 then
+    layout = M.IconLayout(c.iconEntries, right - PAD - (money_end(row, left, right) + GAP))
+  end
+  if not draw_bank(c.iconBank, c.iconEntries, layout, 0) then
+    c.icons:Hide()
+    clear_tipping(c, "icons")
+    return
+  end
+  c.icons:ClearAllPoints()
+  c.icons:SetPoint("RIGHT", row, "RIGHT", -(rowRight - right + PAD), 0)
+  c.icons:SetSize(layout.width, ICON_SIZE)
+  c.icons:Show()
 end
 
 -- Anchors the cover over the identified Reagents column and returns its width, or nil (nothing identified, or the row's
@@ -1208,8 +1268,7 @@ end
 
 -- Fits a row's strip to Blizzard's item name as it is now (see fit) and shows the parts that have room.
 function apply_fit(c, row)
-  local reserve, room
-  c.fit, reserve, room = fit(c, row, c.blocked)
+  c.fit = fit(c, row, c.blocked)
   c.warnShown = c.blocked == true and c.fit ~= "none"
   set_shown(c.warn, c.warnShown)
   c.conc:ClearAllPoints()
@@ -1221,8 +1280,7 @@ function apply_fit(c, row)
   -- cell is shown beside it with the same text. Otherwise it keeps its text, the only number left once the profit gives way.
   c.score:SetText(c.fit == "all" and c.scoreText == c.profitText and "" or c.scoreText)
   set_shown(c.strip, c.fit ~= "none")
-  local core = CORE_WIDTH + (c.warnShown and WARN_SLOT or 0)
-  render_icons(c, row, reserve, room, c.fit == "all" and core + PROFIT_SLOT or core)
+  render_icons(c, row)
   render_cover(c, row)
 end
 
@@ -1337,7 +1395,8 @@ local function show_row(row, elementData)
   color_text(c.profit, sign_color(view.net))
   c.score:SetText(c.scoreText)   -- (apply_fit blanks it when it would only repeat the profit shown beside it)
   color_text(c.score, sign_color(view.score))
-  if model.riskCount > 0 or #c.notes > 0 then
+  c.rewardAll = M.RewardEntries(view)
+  if model.riskCount > 0 or #c.notes > 0 or #c.rewardAll > 0 then
     c.riskCount:SetText(model.riskCount > 0 and tostring(model.riskCount) or "i")
     color_text(c.riskCount, model.riskCount > 0 and TEXT_COLORS.red or TEXT_COLORS.grey)
     c.risk:Show()
