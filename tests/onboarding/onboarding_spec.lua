@@ -40,6 +40,9 @@ local function patch_frames()
       function fs:SetHeight(h) height = h end
       function fs:GetHeight() return height end
       function fs:GetStringWidth() return #plain(self:GetText()) * CHAR_W end
+      local fontObject
+      function fs:SetFontObject(o) fontObject = o end
+      function fs:GetFontObject() return fontObject end
       function fs:GetStringHeight()
         if measureNothing then return 0 end
         local chars = #plain(self:GetText())
@@ -263,6 +266,30 @@ describe("Onboarding", function()
       local alt = find(Onboarding:ScanStatus(), "charKey", "Alt-Realm")
       assert.are.equal("Client Alchemy", find(alt.professions, "skillLineID", 2906).name)
       assert.are.equal("Profession 2907", find(alt.professions, "skillLineID", 2907).name)
+    end)
+
+    -- The record has no parent and Knowledge has no base for it, but it is still a current line (snapshot rule).
+    local function orphan_line()
+      ns.GameData.Define("Knowledge", nil, { variants = {} })   -- no Knowledge base for the line either
+      local p = ns.FS.db.global.characters["Me-Realm"].professions[2907]
+      p.parentSkillLineID, p.concentration = nil, {}           -- still a current line (snapshot rule), but no parent
+    end
+
+    it("does not list a base profession twice when a current line has no parent and no Knowledge base", function()
+      orphan_line()
+      _G.C_TradeSkillUI.GetProfessionInfoBySkillLineID = function(id)
+        return id == 2907 and { parentProfessionID = 164 } or nil
+      end
+      local me = find(Onboarding:ScanStatus(), "charKey", "Me-Realm")
+      assert.is_nil(find(me.professions, "skillLineID", 164))
+    end)
+
+    it("falls back to the profession name when the client does not know the parent", function()
+      orphan_line()
+      _G.C_TradeSkillUI.GetProfessionInfoBySkillLineID = function() return nil end
+      local me = find(Onboarding:ScanStatus(), "charKey", "Me-Realm")
+      assert.is_nil(find(me.professions, "skillLineID", 164))      -- "Midnight Blacksmithing" contains "Blacksmithing"
+      assert.is_truthy(find(me.professions, "skillLineID", 171))   -- Alchemy has no line at all: still asked for
     end)
 
     it("copes with a client that has no profession functions", function()
@@ -728,6 +755,19 @@ describe("OnboardingWizard", function()
     click(Wizard:GetControls().moduleChecks.Guild)
     goto_step("social")
     assert.is_false(Wizard:GetControls().steps.social.guildOff:IsShown())
+  end)
+
+  it("greys the share checkbox label while the Guild feature is turned off", function()
+    Wizard:Open()
+    goto_step("modules")
+    click(Wizard:GetControls().moduleChecks.Guild)
+    goto_step("social")
+    assert.are.equal("GameFontDisable", Wizard:GetControls().shareCheck.text:GetFontObject())
+    assert.are_not.equal("GameFontDisable", Wizard:GetControls().chatScanCheck.text:GetFontObject())
+    goto_step("modules")
+    click(Wizard:GetControls().moduleChecks.Guild)
+    goto_step("social")
+    assert.are.equal("GameFontNormal", Wizard:GetControls().shareCheck.text:GetFontObject())
   end)
 
   it("writes nothing while the saved data is from a newer version and says so on the last step", function()

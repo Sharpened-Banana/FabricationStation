@@ -96,6 +96,17 @@ describe("Social.Util", function()
       assert.are.same({ 2907 }, lines)
     end)
 
+    it("lists every snapshot line when there is no Knowledge data", function()
+      ns.GameData = { Get = function() return nil end }
+      local lines = Util.CurrentLines(rec({
+        [2906] = { recipes = {}, concentration = { value = 1 } },    -- snapshot: concentration
+        [2907] = { recipes = {}, spec = {} },                        -- snapshot: spec
+        [2800] = { recipes = { [1] = true } },                       -- plain line, no snapshot
+        [2905] = { recipes = {}, concentration = {}, dropped = true }, -- dropped: never counts
+      }))
+      assert.are.same({ 2906, 2907 }, lines)
+    end)
+
     it("caps the list and answers an empty list for a missing record", function()
       local profs = {}
       for i = 1, 9 do profs[3000 + i] = { concentration = {} } end

@@ -977,6 +977,12 @@ Customers, Ledger, Characters and Planner tabs (all four Planner sections, the s
 schedule row's Queue button), a recipe tooltip, the profession panel and `/fs guild`. Expected: every text reads exactly
 as before (no doubled spaces, no missing colon or bracket, no `%s` or `%d` shown).
 
+P5-8. **No duplicate profession in the guide's scan step (Task 13).** On a character whose profession was scanned by an
+older build (or any character), `/fs setup` -> "Scan your professions". Expected: each profession is listed once;
+`/dump C_TradeSkillUI.GetProfessionInfoBySkillLineID(<line>).parentProfessionID` for a current-expansion line prints its
+base profession ID even before that window was opened this session. On the "Guild and chat" step with Guild turned off
+on the previous step, the "Share my recipes" label is grey.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

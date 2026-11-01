@@ -151,11 +151,18 @@ local function knowledge_variants()
 end
 
 -- The base profession (skill line, e.g. 164 Blacksmithing) of a profession record: its parentSkillLineID, else the
--- base of its Knowledge.variants entry.
+-- base of its Knowledge.variants entry, else the client's own parentProfessionID for that line (a positive number; it
+-- answers for a window never opened this session).
 local function base_of(line, p, variants)
   if type(p.parentSkillLineID) == "number" then return p.parentSkillLineID end
   local v = variants and variants[line]
   if type(v) == "table" and type(v.base) == "number" then return v.base end
+  local api = type(C_TradeSkillUI) == "table" and C_TradeSkillUI.GetProfessionInfoBySkillLineID
+  if type(api) == "function" then
+    local ok, info = pcall(api, line)
+    local parent = ok and type(info) == "table" and info.parentProfessionID
+    if type(parent) == "number" and parent > 0 then return parent end
+  end
 end
 
 -- The main professions and cooking the current character knows now: { { id = baseSkillLine, name } }. Feature-tested
@@ -189,6 +196,17 @@ local function profession_name(skillLineID, p)
   return client_name(skillLineID) or L["Profession %d"]:format(skillLineID)
 end
 
+-- True when the (client-language) profession name is contained, case-insensitively, in one of the lower-cased line
+-- names. Both come from the same client, so this holds in every language.
+local function name_in_any(name, lower_names)
+  if type(name) ~= "string" or name == "" then return false end
+  name = name:lower()
+  for _, line_name in ipairs(lower_names) do
+    if line_name:find(name, 1, true) then return true end
+  end
+  return false
+end
+
 local function lower_name(entry) return (entry.name or ""):lower() end
 
 local function by_name_then_id(a, b)
@@ -203,7 +221,8 @@ end
 --     records with a concentration or spec snapshot; dropped records never count). scanned = the record has recipes;
 --     needsOpen = it is the current character's and not scanned (only the current character can open a window).
 --   * For the current character a base profession it knows (GetProfessions) without any current-expansion line is
---     listed as well, as needsOpen: the Scanner creates a record only from an open profession window, so a profession
+--     listed as well (a line counts for its base by parentSkillLineID, Knowledge.variants, the client's
+--     parentProfessionID, and last by the base's name being part of the line's name), as needsOpen: the Scanner creates a record only from an open profession window, so a profession
 --     the character never opened has no record at all.
 --   * time = when the newest profession record of the character was scanned (nil when none was).
 function Onboarding:ScanStatus()
@@ -221,18 +240,22 @@ function Onboarding:ScanStatus()
     local c = scanner:GetCharacter(key)
     local entry = { charKey = key, isCurrent = key == current, professions = {} }
     local profs = type(c) == "table" and type(c.professions) == "table" and c.professions or {}
-    local covered = {}
+    local covered, unparented = {}, {}
     for _, line in ipairs(Util and Util.CurrentLines(c) or {}) do
       local p = profs[line]
       local scanned = type(p.recipes) == "table" and next(p.recipes) ~= nil
       entry.professions[#entry.professions + 1] = { skillLineID = line, name = profession_name(line, p),
         scanned = scanned, needsOpen = entry.isCurrent and not scanned }
       local base = base_of(line, p, variants)
-      if base then covered[base] = true end
+      if base then
+        covered[base] = true
+      else
+        unparented[#unparented + 1] = entry.professions[#entry.professions].name:lower()
+      end
     end
     if entry.isCurrent then
       for _, base in ipairs(known_base_professions()) do
-        if not covered[base.id] then
+        if not covered[base.id] and not name_in_any(base.name, unparented) then
           entry.professions[#entry.professions + 1] = { skillLineID = base.id,
             name = profession_name(base.id, { name = base.name }), scanned = false, needsOpen = true }
         end

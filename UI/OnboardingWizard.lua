@@ -199,6 +199,12 @@ local function button(parent, text, minWidth, onClick, maxWidth)
   return b
 end
 
+-- Enables or disables a checkbox made by check() and greys its label to match.
+local function set_check_enabled(b, on)
+  if on then b:Enable() else b:Disable() end
+  b.text:SetFontObject(on and "GameFontNormal" or "GameFontDisable")
+end
+
 -- A checkbox with its label to the right; the whole label is clickable. toggle() flips the pending choice and returns
 -- the new value (the box shows our value, not the client's own toggle, so the two never disagree).
 local function check(parent, x, y, text, width, toggle)
@@ -499,9 +505,9 @@ function refreshers.social(c)
   set_button_text(c.altsButton, alts_button_text())
   c.chatScanCheck:SetChecked(choices.chatScan and true or false)
   if on then
-    c.shareCheck:Enable(); c.levelButton:Enable(); c.altsButton:Enable(); c.guildOff:Hide()
+    set_check_enabled(c.shareCheck, true); c.levelButton:Enable(); c.altsButton:Enable(); c.guildOff:Hide()
   else
-    c.shareCheck:Disable(); c.levelButton:Disable(); c.altsButton:Disable(); c.guildOff:Show()
+    set_check_enabled(c.shareCheck, false); c.levelButton:Disable(); c.altsButton:Disable(); c.guildOff:Show()
   end
 end
 
