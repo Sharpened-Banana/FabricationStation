@@ -16,7 +16,11 @@ local L = ns.L
 --                     or "?" when they are not known (a recraft, no result). Both have tooltips, the cover's listing
 --                     every reagent (setting Orders.showRowIcons turns them off).
 --   OrdersSidePanel   a panel docked at ProfessionsFrame's right edge while the order list is shown: risk filters,
---                     public claims remaining, the best claimable order and the Claim Best Order button.
+--                     public claims remaining, the best claimable order and the Claim Best Order button; and, above the
+--                     order list's top-left corner, the character's concentration for the profession shown (icon and
+--                     current / max, the game's own quantity while readable, else the snapshot projected to now; a
+--                     tooltip with the time to full), refreshed on show, on a profession change, on
+--                     CURRENCY_DISPLAY_UPDATE (debounced) and once a minute, only while the page is shown.
 --   OrderViewWarning  a line above the order detail view for a blocked or VIP customer.
 --
 -- No taint (design rules 2 and 7): every frame here is our own. The cells live in our own container (a child of the
@@ -481,16 +485,13 @@ end
 
 -- A fixed stand-in for the concentration icon, used while the profession's concentration currency cannot be asked.
 local CONCENTRATION_ICON = "Interface\\Icons\\Spell_Holy_PowerInfusion"
-local concentrationIcons = {}   -- [recipeID] = texture, per session
+local concentrationIcons = {}   -- [skillLineID] = texture, per session
 
--- The icon of the recipe's profession's concentration currency (C_TradeSkillUI.GetConcentrationCurrencyID(skillLine)
--- then C_CurrencyInfo.GetCurrencyInfo(id).iconFileID), else the fixed one. Never raises.
-local function concentration_icon(recipeID)
-  if concentrationIcons[recipeID] then return concentrationIcons[recipeID] end
+-- The icon of a profession's concentration currency (C_TradeSkillUI.GetConcentrationCurrencyID(skillLine) then
+-- C_CurrencyInfo.GetCurrencyInfo(id).iconFileID), else the fixed one. Never raises.
+local function concentration_icon_for_line(line)
+  if line and concentrationIcons[line] then return concentrationIcons[line] end
   local icon
-  local scanner = ns.FS:GetModule("Scanner", true)
-  local ok, schematic = pcall(function() return scanner and scanner:GetSchematic(recipeID) end)
-  local line = ok and type(schematic) == "table" and schematic.skillLineID or nil
   local trade, currencies = C_TradeSkillUI, C_CurrencyInfo
   if line and type(trade) == "table" and type(trade.GetConcentrationCurrencyID) == "function"
     and type(currencies) == "table" and type(currencies.GetCurrencyInfo) == "function" then
@@ -499,8 +500,15 @@ local function concentration_icon(recipeID)
     if okID and type(id) == "number" and id ~= 0 then okInfo, info = pcall(currencies.GetCurrencyInfo, id) end
     if okInfo and type(info) == "table" and type(info.iconFileID) == "number" then icon = info.iconFileID end
   end
-  if icon then concentrationIcons[recipeID] = icon end   -- only the currency's own answer is kept
+  if icon then concentrationIcons[line] = icon end   -- only the currency's own answer is kept
   return icon or CONCENTRATION_ICON
+end
+
+-- The same for a recipe (its schematic's skill line).
+local function concentration_icon(recipeID)
+  local scanner = ns.FS:GetModule("Scanner", true)
+  local ok, schematic = pcall(function() return scanner and scanner:GetSchematic(recipeID) end)
+  return concentration_icon_for_line(ok and type(schematic) == "table" and schematic.skillLineID or nil)
 end
 
 -- How many of itemID the logged-in character owns (bags, bank, reagent bank and the warband bank: the game's own
@@ -1521,8 +1529,151 @@ local function best_item_text(itemID)
   return cached_link(itemID) or tostring(itemID)
 end
 
+---------------------------------------------------------------------------
+-- The concentration display (OrdersSidePanel): your concentration, above the order list
+---------------------------------------------------------------------------
+
+-- Where the display sits: just above the top-left corner of the order list (BrowseFrame), clear of the search box.
+-- Adjust here if it overlaps Blizzard's UI in game (in-game checklist).
+M.CONC_ANCHOR = { point = "BOTTOMLEFT", relPoint = "TOPLEFT", x = 8, y = 2 }
+local CONC_ICON_SHOWN, CONC_REFRESH_SECONDS, CONC_DEBOUNCE_SECONDS = 16, 60, 0.2
+local CONC_KEY = "ordersSidePanel.concentration"
+local concDisplay      -- { frame, icon, text, state } once built
+local concTicker       -- the once-a-minute timer, while the page is shown
+local concListening = false
+
+local function finite_number(v) return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge end
+
+-- The character's concentration for the profession whose orders are shown: { value, max|nil, secondsToFull|nil,
+-- full, line } or nil when nothing is known. The game's own quantity of the profession's concentration currency is
+-- used while it can be read (the window is open), else the Scanner snapshot projected to now. The regeneration rate
+-- comes from the same source (per cycle, cycle length); the time to full is PlanCalc's estimate, and nil when the
+-- rate is unknown.
+function M.ConcentrationState()
+  local trade = C_TradeSkillUI
+  local okInfo, profession = pcall(function() return trade.GetChildProfessionInfo() end)
+  local line = okInfo and type(profession) == "table" and profession.professionID or nil
+  if line == nil then return nil end
+  local now = ns.FS:Now()
+  local value, max, perCycle, cycleSeconds
+  local okID, id = pcall(function() return trade.GetConcentrationCurrencyID(line) end)
+  if okID and type(id) == "number" and id ~= 0 and type(C_CurrencyInfo) == "table" then
+    local okCur, info = pcall(C_CurrencyInfo.GetCurrencyInfo, id)
+    if okCur and type(info) == "table" and finite_number(info.quantity) then
+      value = info.quantity
+      max = finite_number(info.maxQuantity) and info.maxQuantity > 0 and info.maxQuantity or nil
+      perCycle = info.rechargingAmountPerCycle
+      cycleSeconds = finite_number(info.rechargingCycleDurationMS) and info.rechargingCycleDurationMS / 1000 or nil
+    end
+  end
+  if value == nil then
+    local scanner = ns.FS:GetModule("Scanner", true)
+    local ok, projected, projectedMax = pcall(function() return scanner:ProjectConcentration(ns.FS:CharKey(), line, now) end)
+    if ok and finite_number(projected) then
+      value = projected
+      max = finite_number(projectedMax) and projectedMax > 0 and projectedMax or nil
+      local okRec, record = pcall(function() return scanner:GetProfession(ns.FS:CharKey(), line) end)
+      local c = okRec and type(record) == "table" and type(record.concentration) == "table" and record.concentration or {}
+      perCycle, cycleSeconds = c.perCycle, c.cycleSeconds
+    end
+  end
+  if value == nil then return nil end
+  local state = { value = value, max = max, line = line, full = max ~= nil and value >= max }
+  if state.full then
+    state.secondsToFull = 0
+  elseif max and finite_number(perCycle) and perCycle > 0 and finite_number(cycleSeconds) and cycleSeconds > 0
+    and ns.PlanCalc and ns.PlanCalc.TimeToFull then
+    state.secondsToFull = ns.PlanCalc.TimeToFull(function(t)
+      return math.min(max, value + math.floor((t - now) / cycleSeconds) * perCycle), max
+    end, now)
+  end
+  return state
+end
+
+local function conc_display_tooltip()
+  local state = concDisplay and concDisplay.state
+  if not state then return end
+  local lines = {}
+  if state.max then
+    lines[1] = { text = L["Concentration: %d / %d"]:format(state.value, state.max), color = TEXT_COLORS.white }
+  else
+    lines[1] = { text = L["Concentration: %d"]:format(state.value), color = TEXT_COLORS.white }
+  end
+  if state.full then
+    lines[#lines + 1] = { text = L["Already full"], color = TEXT_COLORS.green }
+  elseif state.secondsToFull then
+    local view = ns.UI.CharactersView
+    if view and view.FormatDuration then
+      lines[#lines + 1] = { text = L["Full in %s"]:format(view.FormatDuration(state.secondsToFull)), color = TEXT_COLORS.grey }
+    end
+  end
+  show_tooltip(concDisplay.frame, lines)
+end
+
+-- Redraws the display from the current state; hidden while nothing is known.
+local function refresh_conc()
+  if not concDisplay then return end
+  local state = M.ConcentrationState()
+  concDisplay.state = state
+  if not state then
+    concDisplay.frame:Hide()
+    return
+  end
+  concDisplay.icon:SetTexture(concentration_icon_for_line(state.line))
+  concDisplay.text:SetText(state.max and L["%d / %d"]:format(state.value, state.max) or tostring(state.value))
+  concDisplay.frame:Show()
+end
+
+local function build_conc(browse)
+  if concDisplay then return end
+  local frame = CreateFrame("Frame", nil, browse)
+  local A = M.CONC_ANCHOR
+  frame:SetPoint(A.point, browse, A.relPoint, A.x, A.y)
+  frame:SetSize(120, CONC_ICON_SHOWN)
+  frame:EnableMouse(true)
+  frame:Hide()
+  local icon = frame:CreateTexture(nil, "ARTWORK")
+  icon:SetSize(CONC_ICON_SHOWN, CONC_ICON_SHOWN)
+  icon:SetPoint("LEFT", frame, "LEFT", 0, 0)
+  local label = text(frame, "GameFontHighlight")
+  label:SetPoint("LEFT", icon, "RIGHT", 4, 0)
+  label:SetJustifyH("LEFT")
+  frame:SetScript("OnEnter", function() M.Guard(SIDE, conc_display_tooltip) end)
+  frame:SetScript("OnLeave", function() M.Guard(SIDE, hide_tooltip) end)
+  concDisplay = { frame = frame, icon = icon, text = label }
+end
+
+-- Starts what keeps the display fresh while the page is shown: CURRENCY_DISPLAY_UPDATE (debounced) and a minute timer
+-- (the regeneration estimate moves with time); stops both when hidden or the module turns off.
+local function start_conc()
+  if not concListening then
+    concListening = true
+    SidePanel:RegisterEvent("CURRENCY_DISPLAY_UPDATE", function()
+      M.Guard(SIDE, function() ns.FS:Debounce(CONC_KEY, CONC_DEBOUNCE_SECONDS, ns.FS:Wrap(SIDE, refresh_conc)) end)
+    end)
+  end
+  if not concTicker then
+    concTicker = C_Timer.NewTicker(CONC_REFRESH_SECONDS, function() M.Guard(SIDE, refresh_conc) end)
+  end
+  refresh_conc()
+end
+
+local function stop_conc()
+  if concListening then
+    concListening = false
+    SidePanel:UnregisterEvent("CURRENCY_DISPLAY_UPDATE")
+  end
+  ns.FS:CancelDebounce(CONC_KEY)
+  if concTicker then
+    concTicker:Cancel()
+    concTicker = nil
+  end
+  if concDisplay then concDisplay.frame:Hide() end
+end
+
 function refresh_side()
   if not (side and side.frame:IsShown()) then return end
+  refresh_conc()   -- (the profession shown may have changed)
   local f = filters()
   for _, check in ipairs(side.checks) do check.button:SetChecked(f ~= nil and check.get(f) or false) end
 
@@ -1647,11 +1798,13 @@ end
 local function show_side()
   if not side then return end
   side.frame:Show()
+  start_conc()
   refresh_side()
 end
 
 local function hide_side()
   stop_waiting()
+  stop_conc()
   if side then side.frame:Hide() end
 end
 
@@ -1668,6 +1821,7 @@ local function attach_side(self)
       return hook_target_missing(self, SIDE, "ProfessionsFrame.OrdersPage.BrowseFrame")
     end
     if not side then build_side() end
+    build_conc(browse)
     browse:HookScript("OnShow", function() M.Guard(SIDE, show_side) end)
     browse:HookScript("OnHide", function() M.Guard(SIDE, hide_side) end)
     sideAttached = true
@@ -1686,6 +1840,7 @@ end
 
 -- Test and diagnostics access: the built widgets (nil before the first attach).
 function SidePanel:GetView() return side end
+function SidePanel:GetConcDisplay() return concDisplay end
 
 function SidePanel:OnEnable()
   self:RegisterEvent("ADDON_LOADED", function(_, name)

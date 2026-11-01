@@ -844,6 +844,200 @@ describe("OrdersPanel on the crafting orders page", function()
     end)
   end)
 
+  describe("concentration display (OrdersSidePanel)", function()
+    local data, display
+    local DEBOUNCE = 1   -- seconds: more than the debounce, less than the minute
+
+    local function setup()
+      boot()
+      P2.load(ns, { "Modules/PlanCalc.lua", "UI/Tabs/ViewUtil.lua", "UI/Tabs/CharactersView.lua" })   -- TimeToFull, FormatDuration
+      C_TradeSkillUI.GetChildProfessionInfo = function() return { profession = 7, professionID = 2900 } end
+      data = { value = 123, max = 250, per = 10, cycle = 3600 }
+      local scanner = ns.FS:GetModule("Scanner")
+      scanner.ProjectConcentration = function() return data.value, data.max end
+      scanner.GetProfession = function()
+        if data.value == nil then return nil end
+        return { concentration = { value = data.value, max = data.max, perCycle = data.per, cycleSeconds = data.cycle, time = W.now } }
+      end
+      display = side():GetConcDisplay()
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      return display
+    end
+    local function lines_of()
+      display.frame:GetScript("OnEnter")(display.frame)
+      local out = tooltip.lines
+      display.frame:GetScript("OnLeave")(display.frame)
+      return out
+    end
+    local function listening() return side():IsEventRegistered("CURRENCY_DISPLAY_UPDATE") end
+
+    it("is our own frame anchored to the top left of the order list, read only", function()
+      setup()
+      local A = ns.UI.OrdersPanel.CONC_ANCHOR
+      assert.same({ A.point, form.browseFrame, A.relPoint, A.x, A.y }, { display.frame:GetPoint(1) })
+      assert.equal(form.browseFrame, display.frame:GetParent())
+      assert.same({}, form.assignedFields)
+    end)
+    it("shows the concentration icon and current / max of the profession whose orders are shown", function()
+      setup()
+      assert.is_true(display.frame:IsShown())
+      assert.equal("123 / 250", display.text:GetText())
+      assert.is_truthy(display.icon:GetTexture())
+    end)
+    it("shows only the current value while the maximum is unknown", function()
+      setup()
+      data.max = nil
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.equal("123", display.text:GetText())
+    end)
+    it("is hidden while everything is unknown", function()
+      setup()
+      data.value, data.max = nil, nil
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.is_false(display.frame:IsShown())
+      data.value, data.max = 5, 250
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.same({ true, "5 / 250" }, { display.frame:IsShown(), display.text:GetText() })
+    end)
+    it("prefers the live currency quantity while the profession is open, with the same icon lookup as the rows", function()
+      setup()
+      C_TradeSkillUI.GetConcentrationCurrencyID = function(line) return line == 2900 and 3333 or 0 end
+      _G.C_CurrencyInfo = { GetCurrencyInfo = function(id)
+        if id == 3333 then return { quantity = 200, maxQuantity = 260, iconFileID = 654321 } end
+      end }
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.same({ "200 / 260", 654321 }, { display.text:GetText(), display.icon:GetTexture() })
+    end)
+    it("follows the profession shown", function()
+      setup()
+      local seen
+      ns.FS:GetModule("Scanner").ProjectConcentration = function(_, _, line) seen = line; return data.value, data.max end
+      C_TradeSkillUI.GetChildProfessionInfo = function() return { profession = 8, professionID = 2871 } end
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.equal(2871, seen)
+    end)
+
+    describe("tooltip", function()
+      it("lists current / max and the time until it is full", function()
+        setup()
+        local lines = lines_of()
+        assert.equal("Concentration: 123 / 250", lines[1])
+        -- 127 points at 10 per hour: 13 hours (the estimate is never early, within a minute)
+        assert.truthy(lines[2]:find("^Full in 13h"))
+        assert.equal(2, #lines)
+        assert.is_false(tooltip.shown)
+      end)
+      it("says Already full when it is", function()
+        setup()
+        data.value = 250
+        ns.FS:SendMessage("FS_ORDERS_CHANGED")
+        assert.same({ "Concentration: 250 / 250", "Already full" }, lines_of())
+      end)
+      it("leaves out the time while the regeneration is unknown, and the maximum while it is unknown", function()
+        setup()
+        data.per = nil
+        ns.FS:SendMessage("FS_ORDERS_CHANGED")
+        assert.same({ "Concentration: 123 / 250" }, lines_of())
+        data.max = nil
+        ns.FS:SendMessage("FS_ORDERS_CHANGED")
+        assert.same({ "Concentration: 123" }, lines_of())
+      end)
+      it("turns off only OrdersSidePanel when the tooltip fails", function()
+        setup()
+        _G.GameTooltip = { SetOwner = function() error("boom") end, Hide = function() end }
+        display.frame:GetScript("OnEnter")(display.frame)
+        assert.is_false(side():IsEnabled()); assert.is_true(rows():IsEnabled())
+      end)
+    end)
+
+    describe("refresh", function()
+      it("redraws when the orders page shows", function()
+        setup()
+        form.hideBrowse()
+        assert.is_false(display.frame:IsShown())
+        data.value = 130
+        form.showBrowse()
+        assert.same({ true, "130 / 250" }, { display.frame:IsShown(), display.text:GetText() })
+      end)
+      it("redraws on CURRENCY_DISPLAY_UPDATE, debounced, and only while the page is shown", function()
+        setup()
+        assert.is_true(listening())
+        data.value = 140
+        W.fire("CURRENCY_DISPLAY_UPDATE"); W.fire("CURRENCY_DISPLAY_UPDATE")
+        assert.equal("123 / 250", display.text:GetText())   -- not at once
+        W.advance(DEBOUNCE)
+        assert.equal("140 / 250", display.text:GetText())
+        form.hideBrowse()
+        assert.is_false(listening())
+        data.value = 150
+        W.fire("CURRENCY_DISPLAY_UPDATE"); W.advance(DEBOUNCE)
+        assert.equal("140 / 250", display.text:GetText())   -- untouched while hidden
+        form.showBrowse()
+        assert.is_true(listening())
+        assert.equal("150 / 250", display.text:GetText())
+      end)
+      it("drops a pending redraw when the page hides", function()
+        setup()
+        data.value = 160
+        W.fire("CURRENCY_DISPLAY_UPDATE")
+        form.hideBrowse()
+        W.advance(DEBOUNCE)
+        assert.equal("123 / 250", display.text:GetText())
+      end)
+      it("moves the estimate once a minute while shown, with a timer that stops on hide and on disable", function()
+        setup()
+        data.value = 133
+        W.advance(59)
+        assert.equal("123 / 250", display.text:GetText())
+        W.advance(1)
+        assert.equal("133 / 250", display.text:GetText())
+        data.value = 143
+        W.advance(60)
+        assert.equal("143 / 250", display.text:GetText())
+        form.hideBrowse()
+        data.value = 153
+        W.advance(180)
+        assert.equal("143 / 250", display.text:GetText())   -- no timer left
+        form.showBrowse()
+        assert.equal("153 / 250", display.text:GetText())
+        data.value = 163
+        W.advance(60)
+        assert.equal("163 / 250", display.text:GetText())
+        ns.FS:SetModuleEnabled("OrdersSidePanel", false)
+        data.value = 173
+        W.advance(180)
+        assert.equal("163 / 250", display.text:GetText())
+        assert.is_false(listening())
+      end)
+      it("starts one timer, not one per show", function()
+        setup()
+        form.hideBrowse(); form.showBrowse(); form.hideBrowse(); form.showBrowse()
+        local calls = 0
+        local scanner = ns.FS:GetModule("Scanner")
+        scanner.ProjectConcentration = function() calls = calls + 1; return data.value, data.max end
+        W.advance(60)
+        assert.equal(1, calls)
+      end)
+    end)
+
+    describe("module toggle", function()
+      it("goes with OrdersSidePanel: off hides it, on shows it again", function()
+        setup()
+        ns.FS:SetModuleEnabled("OrdersSidePanel", false)
+        assert.is_false(display.frame:IsShown())
+        ns.FS:SetModuleEnabled("OrdersSidePanel", true)
+        assert.same({ true, "123 / 250" }, { display.frame:IsShown(), display.text:GetText() })
+        assert.is_true(listening())
+      end)
+      it("is not affected by the row icons setting", function()
+        setup()
+        ns.FS:GetModule("Orders"):Settings().showRowIcons = false
+        ns.FS:SendMessage("FS_ORDERS_CHANGED")
+        assert.same({ true, "123 / 250" }, { display.frame:IsShown(), display.text:GetText() })
+      end)
+    end)
+  end)
+
   describe("order view warning (OrderViewWarning)", function()
     it("warns about a blocked customer in red and a VIP in gold", function()
       boot()

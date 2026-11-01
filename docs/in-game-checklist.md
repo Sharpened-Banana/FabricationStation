@@ -1061,6 +1061,16 @@ instead, one of those is missing: `/dump C_TradeSkillUI.GetConcentrationCurrency
 "You have M" matches the profession's concentration shown in the crafting window. With a long item name the profit cell
 goes first; the concentration cell stays with the score, risk and + cells. Dimmed rows show it faded like the cells.
 
+P5-15. **Your concentration above the order list.** On the Crafting Orders page, just above the top-left corner of the
+order list (above the search and filter row) there is a small display: the profession's concentration icon and
+"current / max" (just the number while the maximum is unknown; nothing when the character's concentration is unknown).
+Expected: it does not cover Blizzard's search box or the profession tabs; if it does, change `CONC_ANCHOR` (point,
+relPoint, x, y) in UI/OrdersPanel.lua and note where it should sit. Hover it: "Concentration: N / M", then "Full in 13h
+0m" (or "Already full"); the time is an estimate from the regeneration rate. Spend concentration on a craft: the number
+drops within a moment (CURRENCY_DISPLAY_UPDATE); leave the page open for a few minutes and the number rises by itself
+(the once-a-minute refresh). It follows the profession whose orders are shown (switch professions), and it disappears with
+the page. Settings > Modules > OrdersSidePanel turns it off with the side panel; the row-icons setting does not.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

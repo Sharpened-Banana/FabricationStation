@@ -27,8 +27,8 @@ come out at, how much concentration it takes, what it earns, and what your other
 - Scores the crafting orders on the board and values NPC patron rewards. It adds profit, concentration needed, score and risk cells to the
   board's rows, small icons for a patron order's rewards, the reagents you still lack in place of the Reagents column's
   word (a green check when you have them all or the customer provides them; Settings > Orders & Ledger turns the
-  icons off), a side panel with risk filters and a Claim Best Order button (it claims only when you click), and a
-  warning line for blocked or VIP customers. It plays a sound and shows a toast when a personal order arrives.
+  icons off), a side panel with risk filters and a Claim Best Order button (it claims only when you click), your
+  concentration above the order list, and a warning line for blocked or VIP customers. It plays a sound and shows a toast when a personal order arrives.
 - A Customers tab (notes, tags, alt links, CSV export) built from the orders you fulfil, and a Ledger tab for income,
   costs and profit.
 
