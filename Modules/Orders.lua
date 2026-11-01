@@ -25,6 +25,7 @@ Orders.SETTINGS_DEFAULTS = {
   moxieNamePattern = "Moxie",
   rewardOverrides = {},
   claimMinScore = 0,
+  showRowIcons = true,   -- reward and reagent icons on the order rows (UI/OrdersPanel.lua)
   claimBlockingRisks = {
     noMatsLowTip = true, unreachableQuality = true, noConcentration = true, expiringSoon = true, blockedCustomer = true,
   },

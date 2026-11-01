@@ -6,7 +6,8 @@ local L = ns.L
 --   Order scoring          Orders:Settings(): money in gold (stored as integer copper), the expiring-soon window in
 --                          minutes, the Claim Best minimum score and one toggle per claim-blocking risk.
 --   Crafting-orders window shortcuts to 1a's module switches for OrdersRowAddons, OrdersSidePanel and
---                          OrderViewWarning (ns.FS:SetModuleEnabled; the same switches Settings > Modules shows).
+--                          OrderViewWarning (ns.FS:SetModuleEnabled; the same switches Settings > Modules shows), and
+--                          the Orders:Settings() toggle for the reward and reagent icons on the order rows.
 --   Alerts                 OrderAlert:Settings(): sound and toast on a personal order, which sound, toast seconds.
 --   Ledger                 Ledger:Settings(): benchmark sample minimum and how many days of entries to keep.
 --
@@ -196,6 +197,12 @@ local function module_toggle(order, moduleName, name, desc)
   }
 end
 
+-- The row-icons toggle redraws the rows on screen: the row cells refresh on FS_ORDERS_CHANGED.
+local function rows_changed()
+  local orders = module_of("Orders")
+  if orders and orders.SendMessage then orders:SendMessage(ns.Msg.ORDERS_CHANGED) end
+end
+
 local function panel_group()
   return {
     type = "group", order = 2, name = L["Crafting-orders window"],
@@ -208,6 +215,10 @@ local function panel_group()
         L["Module OrdersSidePanel: risk filters, claims remaining, the best claimable order and its button."]),
       orderViewWarning = module_toggle(3, "OrderViewWarning", L["Warning for blocked and VIP customers"],
         L["Module OrderViewWarning: a line above the order details when the customer is blocked or a VIP."]),
+      rowIcons = toggle({ module = "Orders", key = "showRowIcons", order = 4,
+        name = L["Show reward and reagent icons on order rows"],
+        desc = L["Small icons left of the row cells: the rewards of a patron order, then the reagents you must supply (red when you have too few)."],
+        after = rows_changed }),
     },
   }
 end

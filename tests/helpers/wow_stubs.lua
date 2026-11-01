@@ -246,7 +246,43 @@ local function install(overrides)
     function fs:GetWordWrap() return wordWrap end
     function fs:SetMaxLines(n) maxLines = n end
     function fs:GetMaxLines() return maxLines end
+    local color
+    function fs:SetTextColor(r, g, b, a) color = { r, g, b, a } end
+    function fs:GetTextColor()
+      if color then return unpack(color, 1, 4) end
+    end
     return fs
+  end
+
+  -- Textures record their file, show state (shown unless hidden, as in the client), size and anchors.
+  local function make_texture(parent)
+    local t = new_object()
+    local file, shown, points, w, h = nil, true, {}, 0, 0
+    function t:SetTexture(f) file = f end
+    function t:GetTexture() return file end
+    function t:Show() shown = true end
+    function t:Hide() shown = false end
+    function t:IsShown() return shown end
+    function t:SetSize(width, height) w, h = width, height end
+    function t:GetSize() return w, h end
+    function t:SetPoint(point, a, b, c, d)
+      local rel, relPoint, x, y = parent, point
+      if type(a) == "number" then
+        x, y = a, b or 0
+      else
+        if a ~= nil then rel = a end
+        relPoint = b or point
+        x, y = c or 0, d or 0
+      end
+      points[#points + 1] = { point, rel, relPoint, x, y }
+    end
+    function t:GetPoint(i)
+      local p = points[i or 1]
+      if p then return unpack(p, 1, 5) end
+    end
+    function t:GetNumPoints() return #points end
+    function t:ClearAllPoints() points = {} end
+    return t
   end
 
   local function CreateFrame(frameType, name, parent, template)
@@ -290,8 +326,11 @@ local function install(overrides)
     function f:SetParent(p) par = p end
     function f:GetParent() return par end
     function f:GetName() return name end
+    local alpha = 1
+    function f:SetAlpha(a) alpha = a end
+    function f:GetAlpha() return alpha end
     function f:CreateFontString() return make_fontstring(f) end
-    function f:CreateTexture() return new_object() end
+    function f:CreateTexture() return make_texture(f) end
     if name then
       framesByName[name] = true
       _G[name] = f
