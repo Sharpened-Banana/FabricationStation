@@ -213,6 +213,122 @@ describe("Orders options", function()
     assert.equal(0, pruned)
   end)
 
+  describe("reward limits and unknown rewards", function()
+    local function scoring() return g.args.scoring.args end
+    local function unknown() return scoring().unknownRewards end
+
+    it("stores a limit in copper, and no limit for an empty input", function()
+      local limit = scoring().knowledgeLimit
+      assert.equal("input", limit.type); assert.equal("", limit.get())
+      limit.set(nil, "50")
+      assert.equal(500000, orders():Settings().rewardCostLimits.knowledge); assert.equal("50", limit.get())
+      limit.set(nil, "1g 50s")
+      assert.equal(15000, orders():Settings().rewardCostLimits.knowledge)
+      scoring().moxieLimit.set(nil, "2.5")
+      assert.equal(25000, orders():Settings().rewardCostLimits.moxie)
+      limit.set(nil, "")
+      assert.is_nil(orders():Settings().rewardCostLimits.knowledge)
+      assert.equal(25000, orders():Settings().rewardCostLimits.moxie); assert.equal("", limit.get())
+    end)
+    it("keeps the limit when the input is not money", function()
+      local limit = scoring().knowledgeLimit
+      limit.set(nil, "50"); limit.set(nil, "lots"); limit.set(nil, "-5")
+      assert.equal(500000, orders():Settings().rewardCostLimits.knowledge)
+    end)
+    it("rescores once after a limit changes", function()
+      local calls = 0
+      local real = orders().Rescore
+      orders().Rescore = function(self) calls = calls + 1; return real(self) end
+      scoring().knowledgeLimit.set(nil, "50"); scoring().moxieLimit.set(nil, "1")
+      assert.equal(0, calls); W.advance(0.5); assert.equal(1, calls)
+    end)
+
+    local function seen(counts)
+      ns.FS.db.global.ordersUnknownRewards = {}
+      for key, count in pairs(counts) do ns.FS.db.global.ordersUnknownRewards[key] = { count = count, lastSeen = 1 } end
+      ns.UI.OrdersOptions.RefreshUnknown()
+    end
+
+    it("lists the unknown rewards, most seen first, at most 20, named from the game", function()
+      local counts = {}
+      for i = 1, 25 do counts["item:" .. i] = i end
+      counts["currency:900"] = 30
+      counts["item:50"] = 30
+      _G.C_Item.GetItemNameByID = function(id) return id == 25 and "Odd Trinket" or nil end
+      _G.C_CurrencyInfo.GetCurrencyInfo = function(id) return id == 900 and { name = "Odd Coin" } or nil end
+      seen(counts)
+      local args = unknown().args
+      local n = 0
+      for _ in pairs(args) do n = n + 1 end
+      assert.equal(20, n)
+      local ordered = {}
+      for key, opt in pairs(args) do ordered[#ordered + 1] = { key = key, order = opt.order } end
+      table.sort(ordered, function(a, b) return a.order < b.order end)
+      assert.same({ "currency:900", "item:50", "item:25", "item:24" },
+        { ordered[1].key, ordered[2].key, ordered[3].key, ordered[4].key })
+      assert.equal("Odd Coin", args["currency:900"].name()); assert.equal("Odd Trinket", args["item:25"].name())
+      assert.equal("item:24", args["item:24"].name())
+      assert.equal("seen on 25 orders", args["item:25"].desc)
+      assert.is_nil(args["item:1"])
+    end)
+    it("sets and clears a reward override from the unknown rewards group", function()
+      seen({ ["item:88888"] = 3 })
+      local opt = unknown().args["item:88888"]
+      assert.equal("", opt.get())
+      opt.set(nil, "5")
+      assert.equal(50000, orders():Settings().rewardOverrides["item:88888"]); assert.equal("5", opt.get())
+      opt.set(nil, "")
+      assert.is_nil(orders():Settings().rewardOverrides["item:88888"]); assert.equal("", opt.get())
+      opt.set(nil, "5"); opt.set(nil, "junk")
+      assert.equal(50000, orders():Settings().rewardOverrides["item:88888"])
+    end)
+    it("scores an order again after an override is set", function()
+      seen({ ["item:88888"] = 3 })
+      local calls = 0
+      local real = orders().Rescore
+      orders().Rescore = function(self) calls = calls + 1; return real(self) end
+      unknown().args["item:88888"].set(nil, "5")
+      W.advance(0.5); assert.equal(1, calls)
+    end)
+    it("has a description and an empty list before any reward was seen", function()
+      ns.FS.db.global.ordersUnknownRewards = nil
+      ns.UI.OrdersOptions.RefreshUnknown()
+      assert.same({}, unknown().args)
+      assert.equal("Unknown rewards", unknown().name)
+      assert.equal("Rewards FabricationStation could not value. Give one a value and orders with it are scored.",
+        unknown().desc)
+    end)
+    it("shows the new list when an order changes", function()
+      seen({})
+      ns.FS.db.global.ordersUnknownRewards["item:77"] = { count = 1 }
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.is_truthy(unknown().args["item:77"])
+    end)
+
+    describe("while the saved data is from a newer version", function()
+      before_each(function()
+        seen({ ["item:88888"] = 3 })
+        ns.FS.db.global.settings.orders = nil
+        ns.FS.dbIsNewer = true
+      end)
+      after_each(function() ns.FS.dbIsNewer = nil end)
+
+      it("disables the limits and the override inputs", function()
+        assert.is_true(scoring().knowledgeLimit.disabled()); assert.is_true(scoring().moxieLimit.disabled())
+        assert.is_true(unknown().args["item:88888"].disabled())
+        ns.FS.dbIsNewer = nil
+        assert.is_false(scoring().knowledgeLimit.disabled()); assert.is_false(unknown().args["item:88888"].disabled())
+      end)
+      it("leaves db.global untouched when they are set", function()
+        local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+        scoring().knowledgeLimit.set(nil, "50"); scoring().moxieLimit.set(nil, "5")
+        unknown().args["item:88888"].set(nil, "5")
+        assert.same(before, ns.FS.db.global)
+        assert.is_nil(ns.FS.db.global.settings.orders)
+      end)
+    end)
+  end)
+
   describe("while the saved data is from a newer version", function()
     before_each(function()
       ns.FS.db.global.settings.orders = nil
@@ -254,7 +370,7 @@ describe("Orders options", function()
       -- The row-icons toggle (panel.rowIcons) is the one editable option outside those groups. The group's other
       -- options are module toggles, which turn modules on and off, so only this one is called.
       g.args.panel.args.rowIcons.set(nil, not g.args.panel.args.rowIcons.get()); set = set + 1
-      assert.equal(17, set)   -- scoring: 3 gold + minutes + claim score + 5 risk toggles; alerts: 2 toggles, sound,
+      assert.equal(18, set)   -- scoring: 3 gold + minutes + claim score + 6 risk toggles; alerts: 2 toggles, sound,
                               -- toast seconds; ledger: 2 ranges; panel: the row-icons toggle
       local settings = ns.FS.db.global.settings
       assert.is_nil(settings.orders); assert.is_nil(settings.ledger); assert.is_nil(settings.alerts)

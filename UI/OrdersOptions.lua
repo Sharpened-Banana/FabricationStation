@@ -4,7 +4,9 @@ local L = ns.L
 -- OrdersOptions: the "Orders & Ledger" settings group (Settings tab and Blizzard's AddOns panel, through 1a's
 -- RegisterOptions). Four subgroups:
 --   Order scoring          Orders:Settings(): money in gold (stored as integer copper), the expiring-soon window in
---                          minutes, the Claim Best minimum score and one toggle per claim-blocking risk.
+--                          minutes, the Claim Best minimum score and one toggle per claim-blocking risk; the most
+--                          you pay per knowledge point and per Moxie (empty = no limit); and a group "Unknown
+--                          rewards" with one gold input per reward Orders could not value (rewardOverrides).
 --   Crafting-orders window shortcuts to 1a's module switches for OrdersRowAddons, OrdersSidePanel and
 --                          OrderViewWarning (ns.FS:SetModuleEnabled; the same switches Settings > Modules shows), and
 --                          the Orders:Settings() toggle for the reward and reagent icons on the order rows.
@@ -132,6 +134,118 @@ local function gold(order, key, name, desc, limits)
   })
 end
 
+-- Copper -> the text a money input shows: whole gold as "50", else "1g 50s" (ns.UI.ParseMoney reads both back).
+local function money_text(copper)
+  if type(copper) ~= "number" then return "" end
+  if copper % COPPER_PER_GOLD == 0 then return tostring(copper / COPPER_PER_GOLD) end
+  return ns.UI.FormatMoney(copper)
+end
+
+-- A text input over a copper amount kept by store(settings, copper|nil). `name` is a string or a function. Empty clears it; text that is not money
+-- (or is negative) is ignored. `current(settings)` gives the stored copper. after() runs once a change was stored.
+local function money_input(spec)
+  return {
+    type = "input", order = spec.order, name = spec.name, desc = spec.desc, width = "full",
+    disabled = disabled_for("Orders"),
+    get = function()
+      local s = settings_of("Orders")
+      return s and money_text(spec.current(s)) or ""
+    end,
+    set = function(_, text)
+      local s = settings_of("Orders")
+      if not s then return end
+      local copper
+      if type(text) == "string" and text:match("^%s*$") then
+        copper = nil
+      else
+        copper = ns.UI.ParseMoney(text)
+        if copper == nil then return end
+      end
+      spec.store(s, copper)
+      if spec.after then spec.after() end
+    end,
+  }
+end
+
+local function reward_limit(order, kind, name, desc)
+  return money_input({
+    order = order, name = name, desc = desc, after = rescore,
+    current = function(s) return type(s.rewardCostLimits) == "table" and s.rewardCostLimits[kind] or nil end,
+    store = function(s, copper)
+      if type(s.rewardCostLimits) ~= "table" then s.rewardCostLimits = {} end
+      s.rewardCostLimits[kind] = copper
+    end,
+  })
+end
+
+local MAX_UNKNOWN = 20   -- unknown rewards listed (the most often seen first)
+
+-- "item:<id>" / "currency:<id>" -> its name from the client, else the key itself. Asked when the option is drawn
+-- (the name option is a function), so a name that was not cached yet shows once it is.
+local function reward_name(key)
+  local kind, id = tostring(key):match("^(%a+):(%d+)$")
+  id = tonumber(id)
+  local name
+  if kind == "item" and id and C_Item and C_Item.GetItemNameByID then
+    local ok, result = pcall(C_Item.GetItemNameByID, id)
+    name = ok and result or nil
+  elseif kind == "currency" and id and C_CurrencyInfo and C_CurrencyInfo.GetCurrencyInfo then
+    local ok, info = pcall(C_CurrencyInfo.GetCurrencyInfo, id)
+    name = ok and type(info) == "table" and info.name or nil
+  end
+  if type(name) == "string" and name ~= "" then return name end
+  return tostring(key)
+end
+
+-- The inputs of the unknown rewards group: one per key of db.global.ordersUnknownRewards (at most MAX_UNKNOWN, the
+-- most seen first, then by key), each setting rewardOverrides[key] in gold per unit.
+local function unknown_args()
+  local g = ns.FS.db and ns.FS.db.global
+  local seen = g and type(g.ordersUnknownRewards) == "table" and g.ordersUnknownRewards or {}
+  local list = {}
+  for key, info in pairs(seen) do
+    list[#list + 1] = { key = key, count = type(info) == "table" and tonumber(info.count) or 0 }
+  end
+  table.sort(list, function(a, b)
+    if a.count ~= b.count then return a.count > b.count end
+    return tostring(a.key) < tostring(b.key)
+  end)
+  local args = {}
+  for i = 1, math.min(#list, MAX_UNKNOWN) do
+    local key = list[i].key
+    args[key] = money_input({
+      order = i, name = function() return reward_name(key) end, desc = (L["seen on %d orders"]):format(list[i].count),
+      after = rescore,
+      current = function(s) return type(s.rewardOverrides) == "table" and s.rewardOverrides[key] or nil end,
+      store = function(s, copper)
+        if type(s.rewardOverrides) ~= "table" then s.rewardOverrides = {} end
+        s.rewardOverrides[key] = copper
+      end,
+    })
+  end
+  return args
+end
+
+local lastGroup, lastUnknown   -- the group Build() returned last and its unknown rewards subgroup
+
+-- Lists the unknown rewards again (the group's args are fixed tables, so it replaces them) and asks the options
+-- dialog to redraw. Runs when the orders change and whenever a test asks.
+function M.RefreshUnknown()
+  if not lastUnknown then return end
+  lastUnknown.args = unknown_args()
+  if lastGroup then ns.FS:RegisterOptions("orders", lastGroup) end
+end
+
+local function unknown_group()
+  lastUnknown = {
+    type = "group", order = 30, name = L["Unknown rewards"], inline = true,
+    disabled = disabled_for("Orders"),
+    desc = L["Rewards FabricationStation could not value. Give one a value and orders with it are scored."],
+    args = unknown_args(),
+  }
+  return lastUnknown
+end
+
 -- claimBlockingRisks keys in Orders.RISKS order, then any other key, sorted.
 local function risk_keys(orders)
   local defaults = orders.SETTINGS_DEFAULTS and orders.SETTINGS_DEFAULTS.claimBlockingRisks or {}
@@ -156,6 +270,10 @@ local function scoring_group()
       L["What a knowledge point from a patron order reward is worth to you."], { softMax = 5000, bigStep = 10 }),
     moxieValue = gold(3, "moxieValue", L["Value of one Moxie (gold)"],
       L["What one Moxie from a patron order reward is worth to you."], { softMax = 100, bigStep = 0.5 }),
+    knowledgeLimit = reward_limit(3.1, "knowledge", L["Most you pay per knowledge point (gold)"],
+      L["The most an order may cost you for each knowledge point it pays (reagents and concentration beyond the tip). Leave empty for no limit. An order over it is flagged \"Reward costs too much\"."]),
+    moxieLimit = reward_limit(3.2, "moxie", L["Most you pay per Moxie (gold)"],
+      L["The most an order may cost you for each Moxie it pays (reagents and concentration beyond the tip). Leave empty for no limit. An order over it is flagged \"Reward costs too much\"."]),
     expiringSoonSeconds = range({
       module = "Orders", key = "expiringSoonSeconds", order = 4, scale = SECONDS_PER_MINUTE,
       name = L["Expiring soon (minutes)"], desc = L["An order with less time left than this is flagged \"Expiring soon\"."],
@@ -165,6 +283,9 @@ local function scoring_group()
       L["Claim Best Order only picks an order whose score is above this."],
       { min = -100000, softMin = -1000, softMax = 5000, bigStep = 10 }),
     claimHeader = { type = "header", order = 10, name = L["Claim Best skips orders with"] },
+    unknownNote = { type = "description", order = 29,
+      name = L["Rewards FabricationStation could not value. Give one a value and orders with it are scored."] },
+    unknownRewards = unknown_group(),
   }
   local orders = module_of("Orders")
   if orders then
@@ -292,7 +413,7 @@ end
 
 -- The AceConfig group. Getters and setters look modules up when they run, so a test can replace them.
 function M.Build()
-  return {
+  lastGroup = {
     type = "group", name = L["Orders & Ledger"], order = 40,
     args = {
       scoring = scoring_group(),
@@ -301,6 +422,11 @@ function M.Build()
       ledger = ledger_group(),
     },
   }
+  return lastGroup
 end
 
 ns.FS:RegisterOptions("orders", M.Build())
+
+-- The unknown rewards list follows the orders: Orders counts a new unknown reward while it scores a board.
+LibStub("AceEvent-3.0"):Embed(M)
+M:RegisterMessage(ns.Msg.ORDERS_CHANGED, ns.FS:Wrap("OrdersOptions:unknown", function() M.RefreshUnknown() end))

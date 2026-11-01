@@ -97,6 +97,13 @@ describe("OrdersPanel", function()
         P.Notes({ net = 5, flags = { noPrice = true, estimated = true, unpricedReward = true, stalePrice = true } }))
       assert.same({}, P.Notes({ net = 5 }))
     end)
+    it("notes what a patron order pays per knowledge point and per Moxie", function()
+      local money = ns.UI.FormatMoney
+      assert.same({ "Pays " .. money(300000) .. " per knowledge point", "Pays " .. money(5000) .. " per Moxie" },
+        P.Notes({ net = 5, costPerReward = { knowledge = 300000, moxie = 5000 } }))
+      assert.same({}, P.Notes({ net = 5, costPerReward = { knowledge = 0 } }))
+      assert.same({}, P.Notes({ net = 5, costPerReward = {} }))
+    end)
     it("builds the queue entry for an order", function()
       local view = { orderID = 10, recipeID = 4444, minQuality = 3, charKey = "Me-Silvermoon", usedConcentration = true,
         input = { provided = { [1001] = 2 } }, flags = {} }
@@ -715,7 +722,7 @@ describe("OrdersPanel on the crafting orders page", function()
       local labels = {}
       for _, cb in ipairs(v.checks) do labels[#labels + 1] = cb.label:GetText() end
       assert.same({ "No mats, low tip", "Can't reach min quality", "Not enough concentration", "Expiring soon",
-        "Blocked customer", "Hide unscored" }, labels)
+        "Blocked customer", "Reward costs too much", "Hide unscored" }, labels)
       assert.same({}, form.assignedFields)
     end)
     it("binds the checkboxes to the filters and refreshes the rows", function()
@@ -729,7 +736,7 @@ describe("OrdersPanel on the crafting orders page", function()
       rawset(cb.button, "GetChecked", function() return false end)
       cb.button:GetScript("OnClick")(cb.button)
       assert.is_nil(O:Settings().filters.hideRisks.expiringSoon)
-      local unscored = v.checks[6]
+      local unscored = v.checks[7]
       rawset(unscored.button, "GetChecked", function() return true end)
       unscored.button:GetScript("OnClick")(unscored.button)
       assert.is_true(O:Settings().filters.hideUnscored)

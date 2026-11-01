@@ -60,8 +60,9 @@ describe("Orders scoring", function()
   -- Additions beyond the brief's tests (carries and edge cases).
 
   it("exposes the risk ids and labels in order", function()
-    assert.same({"noMatsLowTip","unreachableQuality","noConcentration","expiringSoon","blockedCustomer"}, O.RISKS)
+    assert.same({"noMatsLowTip","unreachableQuality","noConcentration","expiringSoon","blockedCustomer","rewardTooCostly"}, O.RISKS)
     assert.equal("Can't reach min quality", O.RISK_LABELS.unreachableQuality)
+    assert.equal("Reward costs too much", O.RISK_LABELS.rewardTooCostly)
     for _, id in ipairs(O.RISKS) do assert.is_string(O.RISK_LABELS[id]) end
   end)
 
@@ -160,6 +161,101 @@ describe("Orders scoring", function()
     assert.is_true(v.flags.unpricedReward); assert.is_nil(v.rewards[2].value)
     O:ScoreInput(input({orderType="npc", customer=P2.NIL, rewards={ {itemID=88888, count=1} }}), ctx())
     assert.equal(1, ns.FS.db.global.ordersUnknownRewards["item:88888"].count)   -- counted once per order
+  end)
+
+  describe("patron reward pricing", function()
+    local function score(rewards, o)
+      return O:ScoreInput(input(P2.merge({ orderType = "npc", customer = P2.NIL, tipAmount = 0, consortiumCut = 0,
+        rewards = rewards }, o)), ctx())
+    end
+    local function has_risk(v, risk)
+      for _, r in ipairs(v.risks) do if r == risk then return true end end
+      return false
+    end
+
+    it("values a Midnight knowledge currency reward at knowledgePointValue", function()
+      local v = score({ { currencyID = 3151, count = 2 } })
+      assert.equals(1000000, v.rewardsValue); assert.equals(2, v.rewards[1].units)
+      assert.equals("knowledge", v.rewards[1].kind)
+    end)
+    it("counts the points of a knowledge item, and one unit per Moxie", function()
+      ns.GameData.Define("OrderRewards", 70688, { items = { [99001] = { kind = "knowledge", points = 5 } },
+        currencies = { [3256] = { kind = "moxie" } } })
+      local v = score({ { itemID = 99001, count = 2 }, { currencyID = 3256, count = 3 }, { itemID = 100, count = 4 } })
+      assert.equals(10, v.rewards[1].units); assert.equals(3, v.rewards[2].units); assert.is_nil(v.rewards[3].units)
+      assert.same({ knowledge = 20000, moxie = 66666 }, v.costPerReward)   -- 200000 reagents over 10 points / 3 Moxie
+    end)
+    it("counts a Moxie matched by name as units too", function()
+      _G.C_CurrencyInfo = { GetCurrencyInfo = function() return { name = "Artisan's Moxie" } end }
+      local v = score({ { currencyID = 4000, count = 6 } })
+      assert.equals("moxie", v.rewards[1].kind); assert.equals(6, v.rewards[1].units)
+    end)
+    it("flags rewardTooCostly when the order costs more per knowledge point than the limit", function()
+      O:Settings().rewardCostLimits.knowledge = 200000
+      ev.plain.reagentCost = 300000
+      local v = score({ { currencyID = 3151, count = 1 } })
+      assert.equals(300000, v.costPerReward.knowledge); assert.truthy(has_risk(v, "rewardTooCostly"))
+    end)
+    it("divides the cost by the units, rounding down", function()
+      ev.plain.reagentCost = 100000
+      O:Settings().rewardCostLimits.knowledge = 33333
+      local v = score({ { currencyID = 3151, count = 3 } })
+      assert.equals(33333, v.costPerReward.knowledge); assert.is_false(has_risk(v, "rewardTooCostly"))
+      O:Settings().rewardCostLimits.knowledge = 33332
+      assert.is_true(has_risk(score({ { currencyID = 3151, count = 3 } }), "rewardTooCostly"))
+    end)
+    it("adds the concentration charge to the cost", function()
+      ev.plain.expectedQuality = 1
+      ev.conc.reagentCost = 100000
+      local v = score({ { currencyID = 3151, count = 1 } }, { minQuality = 4 })
+      assert.is_true(v.usedConcentration); assert.equals(50000, v.concentrationCharge)
+      assert.equals(150000, v.costPerReward.knowledge)   -- 100000 reagents + 50 x 1000 concentration
+    end)
+    it("costs nothing per reward when the order pays for itself", function()
+      local v = score({ { currencyID = 3151, count = 1 } }, { tipAmount = 500000 })
+      assert.equals(0, v.costPerReward.knowledge)
+      O:Settings().rewardCostLimits.knowledge = 0
+      assert.is_false(has_risk(score({ { currencyID = 3151, count = 1 } }, { tipAmount = 500000 }), "rewardTooCostly"))
+    end)
+    it("leaves the cost per reward unknown when the reagent cost is unknown", function()
+      ev.plain.reagentCost = nil
+      O:Settings().rewardCostLimits.knowledge = 0
+      local v = score({ { currencyID = 3151, count = 1 } })
+      assert.is_nil(v.costPerReward.knowledge); assert.is_false(has_risk(v, "rewardTooCostly"))
+    end)
+    it("has an empty cost per reward when no reward has units", function()
+      assert.same({}, score({}).costPerReward)
+      assert.same({}, score({ { itemID = 100, count = 1 } }).costPerReward)
+    end)
+    it("sets no risk without a limit", function()
+      ev.plain.reagentCost = 900000
+      local v = score({ { currencyID = 3151, count = 1 } })
+      assert.equals(900000, v.costPerReward.knowledge); assert.is_false(has_risk(v, "rewardTooCostly"))
+    end)
+    it("limits each kind on its own", function()
+      ev.plain.reagentCost = 300000
+      O:Settings().rewardCostLimits.moxie = 1
+      local v = score({ { currencyID = 3151, count = 1 }, { currencyID = 3256, count = 10 } })
+      assert.same({ knowledge = 300000, moxie = 30000 }, v.costPerReward)
+      assert.is_true(has_risk(v, "rewardTooCostly"))
+      O:Settings().rewardCostLimits.moxie = 30000
+      assert.is_false(has_risk(score({ { currencyID = 3151, count = 1 }, { currencyID = 3256, count = 10 } }), "rewardTooCostly"))
+    end)
+    it("ignores a limit that is not a number or is negative", function()
+      ev.plain.reagentCost = 300000
+      O:Settings().rewardCostLimits.knowledge = "x"
+      assert.is_false(has_risk(score({ { currencyID = 3151, count = 1 } }), "rewardTooCostly"))
+      O:Settings().rewardCostLimits.knowledge = -5
+      assert.is_false(has_risk(score({ { currencyID = 3151, count = 1 } }), "rewardTooCostly"))
+    end)
+    it("counts a reward override in the score of an unknown currency", function()
+      local v = score({ { currencyID = 4001, count = 2 } })
+      assert.is_true(v.flags.unpricedReward); assert.equals(-200000, v.score)   -- a lower bound
+      O:Settings().rewardOverrides["currency:4001"] = 100000
+      v = score({ { currencyID = 4001, count = 2 } })
+      assert.is_false(v.flags.unpricedReward); assert.equals(200000, v.rewardsValue)
+      assert.equals(0, v.score)   -- tip 0 + rewards 200000 - reagents 200000
+    end)
   end)
 
   it("never gives an NPC order customer risks, and checks blocking once per order", function()

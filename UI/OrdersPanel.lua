@@ -289,6 +289,14 @@ function M.Notes(view)
   if flags.estimated then notes[#notes + 1] = L["Estimate (no calibration)"] end
   if flags.unpricedReward then notes[#notes + 1] = L["Some rewards have no price"] end
   if flags.stalePrice then notes[#notes + 1] = L["Prices are old"] end
+  -- What a patron order costs per knowledge point or Moxie it pays (nothing is said when the order pays for itself).
+  local cost = type(view) == "table" and type(view.costPerReward) == "table" and view.costPerReward or {}
+  if is_money(cost.knowledge) and cost.knowledge > 0 then
+    notes[#notes + 1] = (L["Pays %s per knowledge point"]):format(ns.UI.FormatMoney(cost.knowledge))
+  end
+  if is_money(cost.moxie) and cost.moxie > 0 then
+    notes[#notes + 1] = (L["Pays %s per Moxie"]):format(ns.UI.FormatMoney(cost.moxie))
+  end
   return notes
 end
 

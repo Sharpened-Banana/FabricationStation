@@ -206,6 +206,24 @@ describe("Orders board", function()
       O:OnBoardShown(0, { P2.raw_order({orderType=0}) })
       assert.same({nil, "none"}, {O:ClaimBest()}); assert.same({}, claimCalls)
     end)
+    it("does not claim a rewardTooCostly order by default", function()
+      O:Settings().rewardCostLimits.knowledge = 1000
+      assert.is_true(O:Settings().claimBlockingRisks.rewardTooCostly)
+      -- reagents cost 200000 against a tip of 0: 200000 per knowledge point
+      board = { P2.raw_order({ orderID = 20, tipAmount = 0, consortiumCut = 0, orderType = 3,
+        npcOrderRewards = { { currencyType = 3151, count = 1 } } }) }
+      O:OnBoardShown(3, board)
+      assert.same({ "rewardTooCostly" }, O:GetView(20).risks)
+      assert.same({ nil, "none" }, { O:ClaimBest() }); assert.same({}, claimCalls)
+      O:Settings().claimBlockingRisks.rewardTooCostly = false
+      assert.equal(20, O:ClaimBest().orderID)   -- the setting is read when claiming
+    end)
+    it("adds the rewardTooCostly default to settings saved before it existed", function()
+      ns.FS.db.global.settings.orders = { claimBlockingRisks = { expiringSoon = false } }
+      local s = O:Settings()
+      assert.is_true(s.claimBlockingRisks.rewardTooCostly); assert.is_false(s.claimBlockingRisks.expiringSoon)
+      assert.same({}, s.rewardCostLimits)
+    end)
     it("does nothing while Orders is off", function()
       O:OnBoardShown(2, { P2.raw_order() })
       O:Disable()

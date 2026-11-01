@@ -1144,6 +1144,15 @@ board on a second character and run
 `/run local n=0 for _ in pairs(FabricationStationDB.global.orderBoards) do n=n+1 end print(n)`. Expected: it prints
 2.
 
+P7-2. **Patron reward IDs.** On each crafting character's patron tab, run
+`/dump C_CraftingOrders.GetCrafterOrders()[n].npcOrderRewards` for a few orders. Expected: a knowledge reward is
+either currency 3150 to 3160 (then there is nothing to add) or an item; report every item with its knowledge points,
+for `items` in `Data/OrderRewards.lua`.
+
+P7-3. **Cost per knowledge point.** In Settings > Orders & Ledger set "Most you pay per knowledge point (gold)" to 50.
+Expected: a patron order whose reagents cost more than its tip plus 50g per point shows "Reward costs too much" in its
+risks, Claim Best Order skips it, and the row tooltip says "Pays ...g per knowledge point".
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

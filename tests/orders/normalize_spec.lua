@@ -174,10 +174,11 @@ describe("Orders before InitDB", function()
 end)
 
 describe("Data/OrderRewards.lua", function()
-  it("defines an empty OrderRewards table and is listed after GameData_Manual", function()
+  it("defines the OrderRewards table (no items yet) and is listed after GameData_Manual", function()
     local ns = P2.boot()
     P2.load(ns, {"Data/OrderRewards.lua"})
-    assert.same({ items = {}, currencies = {} }, ns.GameData.Get("OrderRewards"))
+    local data = ns.GameData.Get("OrderRewards")
+    assert.same({}, data.items); assert.same({ kind = "knowledge", points = 1 }, data.currencies[3150])
     local files = read_toc("FabricationStation.toc").files
     local pos = {}
     for n, f in ipairs(files) do pos[f] = n end

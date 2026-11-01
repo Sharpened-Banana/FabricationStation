@@ -24,10 +24,12 @@ Orders.SETTINGS_DEFAULTS = {
   moxieValue = 20000,
   moxieNamePattern = "Moxie",
   rewardOverrides = {},
+  rewardCostLimits = {},   -- { knowledge = copper?, moxie = copper? }: the most an order may cost per reward unit (absent = no limit)
   claimMinScore = 0,
   showRowIcons = true,   -- reward and reagent icons on the order rows (UI/OrdersPanel.lua)
   claimBlockingRisks = {
     noMatsLowTip = true, unreachableQuality = true, noConcentration = true, expiringSoon = true, blockedCustomer = true,
+    rewardTooCostly = true,
   },
   filters = {
     hideRisks = {},
@@ -272,8 +274,9 @@ end
 
 -- rewards = { {itemID?, currencyID?, count} }, orderID|nil (the order they belong to; it keeps
 -- ordersUnknownRewards counting each order once) -> total copper of the rewards that have a value,
--- valued = { {itemID?, currencyID?, count, value = copper|nil, kind} } (same order), unpriced = true when any
--- reward has no value. The total never counts an unvalued reward as 0 silently: check `unpriced`.
+-- valued = { {itemID?, currencyID?, count, value = copper|nil, kind, units = n|nil} } (same order; units is the
+-- knowledge points (count x the entry's points) or Moxie the reward gives, nil for any other kind), unpriced = true
+-- when any reward has no value. The total never counts an unvalued reward as 0 silently: check `unpriced`.
 function Orders:ValueRewards(rewards, orderID)
   local total, valued, unpriced = 0, {}, false
   if type(rewards) ~= "table" then return total, valued, unpriced end
@@ -284,7 +287,15 @@ function Orders:ValueRewards(rewards, orderID)
       local key = reward_key(reward)
       local unit, kind = unit_value(reward, key, settings)
       local value = unit and math.floor(unit * count + 0.5) or nil
-      valued[#valued + 1] = { itemID = reward.itemID, currencyID = reward.currencyID, count = count, value = value, kind = kind }
+      local units
+      if kind == "knowledge" then
+        local entry = reward_entry(reward)
+        units = count * number_or(entry and entry.points, 1)
+      elseif kind == "moxie" then
+        units = count
+      end
+      valued[#valued + 1] = { itemID = reward.itemID, currencyID = reward.currencyID, count = count, value = value,
+        kind = kind, units = units }
       if value then
         total = total + value
       else
@@ -300,13 +311,15 @@ end
 -- Scoring
 ---------------------------------------------------------------------------
 
-Orders.RISKS = { "noMatsLowTip", "unreachableQuality", "noConcentration", "expiringSoon", "blockedCustomer" }
+Orders.RISKS = { "noMatsLowTip", "unreachableQuality", "noConcentration", "expiringSoon", "blockedCustomer",
+  "rewardTooCostly" }
 Orders.RISK_LABELS = {
   noMatsLowTip = L["No mats, low tip"],
   unreachableQuality = L["Can't reach min quality"],
   noConcentration = L["Not enough concentration"],
   expiringSoon = L["Expiring soon"],
   blockedCustomer = L["Blocked customer"],
+  rewardTooCostly = L["Reward costs too much"],
 }
 
 local function skill_line_of(recipeID)
@@ -411,6 +424,9 @@ end
 --   commission = tip - consortium cut; net = commission + priced rewards - reagent cost (flags.unpricedReward: some
 --   reward has no value, so net is a lower bound); score = net - expected concentration x the profession's best
 --   gold per concentration, when concentration is needed to reach minQuality (an unreachable target is not charged).
+--   costPerReward[kind] (kind "knowledge" | "moxie", only for rewards with units) = what the order costs per unit:
+--   0 when commission - reagent cost - concentration charge covers it, nil when that is unknown. Above
+--   settings.rewardCostLimits[kind] it raises the "rewardTooCostly" risk.
 --   A recraft (input.isRecraft) is not a fresh craft, so Recipes is not asked: flags.recraft and flags.estimated,
 --   result/net/score nil, and no quality or concentration risk.
 function Orders:ScoreInput(input, ctx)
@@ -484,6 +500,27 @@ function Orders:ScoreInput(input, ctx)
   end
   if blocked(input, ctx) then risks[#risks + 1] = "blockedCustomer" end
 
+  -- What the order costs per knowledge point or Moxie it pays: nothing when the commission covers the reagents and
+  -- the concentration, unknown when the commission or the reagent cost is.
+  local costPerReward, tooCostly = {}, false
+  local base = (commission ~= nil and type(reagentCost) == "number")
+    and commission - reagentCost - (charge or 0) or nil
+  local units = {}
+  for _, reward in ipairs(rewards) do
+    if type(reward.units) == "number" and reward.units > 0 then
+      units[reward.kind] = (units[reward.kind] or 0) + reward.units
+    end
+  end
+  local limits = type(settings.rewardCostLimits) == "table" and settings.rewardCostLimits or {}
+  for kind, amount in pairs(units) do
+    local cost
+    if base ~= nil then cost = base >= 0 and 0 or math.floor(-base / amount) end
+    costPerReward[kind] = cost
+    local limit = limits[kind]
+    if cost ~= nil and type(limit) == "number" and limit >= 0 and cost > limit then tooCostly = true end
+  end
+  if tooCostly then risks[#risks + 1] = "rewardTooCostly" end
+
   return {
     orderID = input.orderID,
     orderType = input.orderType,
@@ -501,6 +538,7 @@ function Orders:ScoreInput(input, ctx)
     usedConcentration = usedConc,
     concentrationCost = concCost,
     concentrationCharge = charge,
+    costPerReward = costPerReward,
     net = net,
     goldPerConcentration = (concCost > 0 and net ~= nil) and math.floor(net / concCost) or nil,
     score = score,
