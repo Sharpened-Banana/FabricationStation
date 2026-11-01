@@ -44,7 +44,8 @@ end
 -- refreshes (MainWindow:RefreshTab calls by tab id), p4. opts.settle (default true) fires the first loading screen and
 -- runs the login work to completion (the 5 s setup guide, the login refresh and the jittered HELLO); with
 -- settle == false the first PLAYER_ENTERING_WORLD is fired and nothing has run yet. opts.before_load(W, p4) runs after
--- the stubs are installed and before the addon loads.
+-- the stubs are installed and before the addon loads. opts.guideDone marks the setup guide finished before the first
+-- loading screen, so Guild's consent hold does not apply and the login HELLO really goes out.
 local function world(opts)
   opts = opts or {}
   _G.FabricationStationDB = nil
@@ -55,6 +56,9 @@ local function world(opts)
   local ns = load_addon({})
   local spy = spy_debounces(ns)
   W.boot()
+  if opts.guideDone then
+    ns.FS.db.global.onboarding = { completedVersion = ns.FS:GetModule("Onboarding").VERSION, time = 0, skipped = false }
+  end
   W.fire("PLAYER_ENTERING_WORLD", true, false)
   if opts.settle ~= false then
     for _ = 1, 40 do W.advance(1) end
@@ -173,17 +177,24 @@ describe("phase 4 integration", function()
     end)
 
     it("FS_RECIPES_CHANGED x50 does no more Guild work than one message", function()
-      local W1, ns1, spy1 = world()
+      local W1, ns1, spy1, _, p41 = world({ guideDone = true })
       spy1.reset()
+      local before1 = #p41.comm.sent
       ns1.FS:GetModule("Guild"):SendMessage("FS_RECIPES_CHANGED")
       settle(W1, 130)
+      local sentOne = #p41.comm.sent - before1
 
-      local W, ns, spy, _, p4 = world()
+      local W, ns, spy, _, p4 = world({ guideDone = true })
+      assert.is_false(ns.FS:GetModule("Onboarding"):HoldsSync())
       spy.reset()
       local before = #p4.comm.sent
       storm(W, ns, "FS_RECIPES_CHANGED")
       assert.same(spy1.fired, spy.fired)
-      assert.is_true(#p4.comm.sent - before <= 4, "sent " .. (#p4.comm.sent - before) .. " comm messages")
+      local sent = #p4.comm.sent - before
+      -- Unheld: the login HELLO went out, so the send path is live (the recipes did not change, so a storm, like one
+      -- message, rebuilds "ifChanged" and sends nothing more).
+      assert.is_true(before1 >= 1 and before >= 1, "the login HELLO did not go out")
+      assert.equal(sentOne, sent)
       assert_clean(ns, W)
     end)
 
