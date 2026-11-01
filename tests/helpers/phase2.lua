@@ -48,7 +48,11 @@ P2.GLOBALS = {
   date = os.date,
 }
 
-local booted = setmetatable({}, { __mode = "k" })  -- [ns] = { W = handle, done = bool }
+-- The per-ns boot state { W = handle, done = bool } hangs off ns itself, under a private key. It used to live in a
+-- weak-keyed table, but W (and its closures) reference ns, and Lua 5.1 / LuaJIT weak tables are not ephemerons: a
+-- value that refers back to its key keeps the key alive. Every world a spec built was then never collected (about
+-- 5 MB each, several GB over the suite, which killed the CI runner). On ns the cycle is plain garbage.
+local BOOT = {}
 
 -- Fresh world: stubs (GLOBALS + overrides), clock at 1000, Core + data + UI/Util.lua loaded. Does not boot.
 function P2.boot(stubOverrides)
@@ -57,7 +61,7 @@ function P2.boot(stubOverrides)
   W.now = 1000
   local ns = load_addon({}, "Data/GameData_Manual.lua")
   load_files(ns, { "UI/Util.lua" })
-  booted[ns] = { W = W, done = false }
+  rawset(ns, BOOT, { W = W, done = false })
   return ns, W
 end
 
@@ -72,7 +76,7 @@ end
 -- module's OnInitialize/OnEnable. Modules created after that first call are not initialized.
 function P2.load(ns, paths)
   load_files(ns, paths)
-  local state = booted[ns]
+  local state = rawget(ns, BOOT)
   if not state then error("P2.load: ns did not come from P2.boot", 2) end
   if not state.done then
     state.done = true
