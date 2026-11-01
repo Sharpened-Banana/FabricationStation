@@ -25,7 +25,11 @@ local function refs_of(text)
   for _, name in ipairs({ "ClaimOrder", "ClaimBest" }) do
     local refs, open = click_only.references_in(text, name)
     depth = math.max(depth, open)
-    for _, r in ipairs(refs) do out[#out + 1] = { name = r.name, line = r.line, fn = tag(r), call = r.call, order = #out } end
+    for _, r in ipairs(refs) do
+      if not r.definition then   -- (a name in its own definition is not a reference in these cases)
+        out[#out + 1] = { name = r.name, line = r.line, fn = tag(r), call = r.call, order = #out }
+      end
+    end
   end
   table.sort(out, function(a, b) if a.line ~= b.line then return a.line < b.line end return a.order < b.order end)
   for _, r in ipairs(out) do r.order = nil end
@@ -100,12 +104,14 @@ local ClaimBestOrder, x = 1, "call ClaimOrder now"
   end)
 
   it("references Orders:ClaimBest only as a call directly inside UI/OrdersPanel.lua OnClick handlers", function()
-    local ok, message = click_only.referenced_only_from_onclick("ClaimBest", { "UI/OrdersPanel.lua" })
+    local ok, message = click_only.referenced_only_from_onclick("ClaimBest", { "UI/OrdersPanel.lua" },
+      { definedIn = "Modules/Orders.lua" })
     assert.is_true(ok, message)
   end)
 
   it("has exactly one :ClaimBest( caller, in UI/OrdersPanel.lua", function()
-    local _, _, calls = click_only.referenced_only_from_onclick("ClaimBest", { "UI/OrdersPanel.lua" })
+    local _, _, calls = click_only.referenced_only_from_onclick("ClaimBest", { "UI/OrdersPanel.lua" },
+      { definedIn = "Modules/Orders.lua" })
     assert.equal(1, #calls, "expected exactly one :ClaimBest( call, got: " .. table.concat(calls, ", "))
     assert.truthy(calls[1]:find("^UI/OrdersPanel%.lua:"))
   end)

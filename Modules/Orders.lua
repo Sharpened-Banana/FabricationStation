@@ -662,9 +662,15 @@ local live = {}            -- [orderID] = OrderView (current board)
 local pending = {}         -- [orderID] = { fulfilled = FulfilledOrder without time/charKey, at = Now() }
 local claimInFlight        -- { orderID, at } while a ClaimOrder waits for its response
 local requestInFlight      -- the token of a RequestCrafterOrders (Refresh) that waits for its callback
-local lastOrderType = {}   -- [profession] = the order type enum of the last board shown for it
 local boardFromRequest     -- true while a Refresh callback runs OnBoardShown
 local refreshFresh         -- new matching orders the last board show found, when a Refresh caused it (else nil)
+local REQUEST_KEY = "orders.request"
+
+-- Forgets the Refresh request in flight, so its answer is dropped when it arrives.
+local function invalidate_request()
+  requestInFlight = nil
+  ns.FS:CancelDebounce(REQUEST_KEY)
+end
 local sessionBoards        -- orderBoards while the saved data is read-only
 local sessionState         -- ordersState while the saved data is read-only
 
@@ -773,6 +779,8 @@ local function expired(view, now)
   return type(view.expiresAt) == "number" and view.expiresAt < now
 end
 
+local SEEN_KEEP = 86400   -- seconds a seen order id is kept when the order has no expiry
+
 local function by_order_id(a, b)
   return number_or(a.orderID, 0) < number_or(b.orderID, 0)
 end
@@ -800,10 +808,14 @@ end
 -- of that order type and profession (default: the open one) on the current character's board, which records the
 -- time and the scope ("<type>:<profession>"); the live set keeps only that profession's views and replaces those of
 -- that type. One scoring context for the whole board, one ScoreInput per order. Other characters' boards are left
--- alone, except that expired views are dropped from every board. Orders the character's board did not hold before
--- (and that the filters do not hide) are new: when the scope was seen before, FS_ORDERS_NEW(charKey, count, typeName)
--- is sent (the first board of a scope is a baseline: no message).
-function Orders:OnBoardShown(orderTypeEnum, orders, profession)
+-- alone, except that expired views are dropped from every board.
+-- New orders: the board keeps, per scope, a set of every orderID it has shown (board.seen[scope][orderID] = the time
+-- the id can be forgotten, the order's expiry; created lazily, pruned with expiry). An order is new when its id is
+-- in neither that set nor the board it replaces, and the filters do not hide it. When the scope was seen before,
+-- the first page (offset 0, the default) found new orders: FS_ORDERS_NEW(charKey, count, typeName). Later pages
+-- (offset > 0, Blizzard loading more rows while scrolling) only add to the set, and the first board of a scope is a
+-- baseline: no message.
+function Orders:OnBoardShown(orderTypeEnum, orders, profession, offset)
   if profession == nil then profession = current_profession() end
   local typeName = self.ORDER_TYPES[orderTypeEnum]
   local charKey = ns.FS:CharKey()
@@ -813,7 +825,9 @@ function Orders:OnBoardShown(orderTypeEnum, orders, profession)
   local seenScope = board.scopes[scopeKey] ~= nil
   local known = {}
   for id in pairs(board.orders) do known[id] = true end
-  if orderTypeEnum ~= nil and profession ~= nil then lastOrderType[profession] = orderTypeEnum end
+  if type(board.seen) ~= "table" then board.seen = {} end
+  if type(board.seen[scopeKey]) ~= "table" then board.seen[scopeKey] = {} end
+  local seenIds = board.seen[scopeKey]
   for id, view in pairs(live) do
     if view.profession ~= profession or view.orderType == typeName then live[id] = nil end
   end
@@ -821,6 +835,7 @@ function Orders:OnBoardShown(orderTypeEnum, orders, profession)
     if type(view) ~= "table" or in_scope(view, typeName, profession) then board.orders[id] = nil end
   end
   local ctx = self:BuildContext(charKey)
+  local now = ns.FS:Now()
   local fresh, counted = 0, {}
   for _, info in ipairs(type(orders) == "table" and orders or {}) do
     local input = self:Normalize(info)
@@ -829,13 +844,22 @@ function Orders:OnBoardShown(orderTypeEnum, orders, profession)
       local view = score(self, input, ctx)
       live[input.orderID] = view
       board.orders[input.orderID] = stored_copy(view)
-      if not known[input.orderID] and not counted[input.orderID] and not self:IsHidden(view) then
+      if not known[input.orderID] and seenIds[input.orderID] == nil and not counted[input.orderID]
+        and not self:IsHidden(view) then
         counted[input.orderID] = true
         fresh = fresh + 1
       end
+      seenIds[input.orderID] = number_or(view.expiresAt, now + SEEN_KEEP)
     end
   end
-  local now = ns.FS:Now()
+  for _, ids in pairs(board.seen) do
+    if type(ids) == "table" then
+      for id, forgetAt in pairs(ids) do
+        if type(forgetAt) ~= "number" or forgetAt < now then ids[id] = nil end
+      end
+    end
+  end
+  if (offset or 0) ~= 0 then fresh = 0 end
   for _, other in pairs(boards_root(true)) do
     if type(other) == "table" and type(other.orders) == "table" then
       for id, view in pairs(other.orders) do
@@ -851,16 +875,14 @@ function Orders:OnBoardShown(orderTypeEnum, orders, profession)
 end
 
 -- The public bucket list is shown (no flat public orders on screen): drops the live public views so Claim Best
--- Order cannot spend a public claim on an order that is not shown. The saved board keeps them.
+-- Order cannot spend a public claim on an order that is not shown. The saved board keeps them. Always announces the
+-- change: Blizzard's own request has just ended, which the side panel's Refresh button (busy while it is in flight)
+-- needs to hear about.
 function Orders:OnBucketsShown()
-  local changed = false
   for id, view in pairs(live) do
-    if view.orderType == "public" then
-      live[id] = nil
-      changed = true
-    end
+    if view.orderType == "public" then live[id] = nil end
   end
-  if changed then self:SendMessage(ns.Msg.ORDERS_CHANGED) end
+  self:SendMessage(ns.Msg.ORDERS_CHANGED)
 end
 
 -- A board's unexpired stored views, by orderID.
@@ -970,6 +992,7 @@ end
 function Orders:ClearLive()
   live = {}
   refreshFresh = nil
+  invalidate_request()
   self:SendMessage(ns.Msg.ORDERS_CHANGED)
 end
 
@@ -1132,7 +1155,6 @@ end
 -- Refresh (click only)
 ---------------------------------------------------------------------------
 
-local REQUEST_KEY = "orders.request"
 local REQUEST_TIMEOUT = 10   -- seconds a Refresh may wait for its callback
 
 local requestMissing   -- RequestBoard found C_CraftingOrders.RequestCrafterOrders missing (it is the only place that names it)
@@ -1145,8 +1167,28 @@ local function request_api_present()
     and type(containers.CreateCallback) == "function" and not requestMissing
 end
 
+-- ProfessionsFrame.OrdersPage, read only (nil while the Professions frame is not there).
+local function orders_page()
+  local frame = ProfessionsFrame
+  local page = type(frame) == "table" and frame.OrdersPage or nil
+  return type(page) == "table" and page or nil
+end
+
+-- The order type the page shows now (its own `orderType`, the field Blizzard's RequestOrders and OrderRequestCallback
+-- read), or nil when the page cannot be read.
+local function page_order_type()
+  local page = orders_page()
+  local t = page and page.orderType
+  return type(t) == "number" and t or nil
+end
+
+local function profession_open()
+  local scanner = ns.FS:GetModule("Scanner", true)
+  return scanner ~= nil and scanner.IsProfessionOpen ~= nil and scanner:IsProfessionOpen() and true or false
+end
+
 -- Ends the request `token` stands for (a late answer of an older request ends nothing). -> true when it was current.
-local function end_request(self, token)
+local function end_request(token)
   if requestInFlight ~= token then return false end
   requestInFlight = nil
   ns.FS:CancelDebounce(REQUEST_KEY)
@@ -1155,14 +1197,18 @@ end
 
 -- Whether a Refresh could run now, without running it (the panel reads this to show or disable its button):
 -- "ready", or "unavailable" (Orders off, C_FunctionContainers.CreateCallback missing, or RequestBoard has found
--- C_CraftingOrders.RequestCrafterOrders missing: only RequestBoard names that call, so the first click finds out), "noProfession" (no profession open) or "busy" (a request waits for its callback).
+-- C_CraftingOrders.RequestCrafterOrders missing: only RequestBoard names that call, so the first click finds out),
+-- "noProfession" (no profession open, or the orders page cannot be read) or "busy" (our request waits for its
+-- callback, or Blizzard's own request does: the page's requestCallback, a read-only look at its field). A request
+-- made for another profession than the open one is forgotten here.
 function Orders:GetRequestState()
   if not self:IsEnabled() or not request_api_present() then return "unavailable" end
-  local scanner = ns.FS:GetModule("Scanner", true)
-  if not (scanner and scanner.IsProfessionOpen and scanner:IsProfessionOpen()) or current_profession() == nil then
-    return "noProfession"
-  end
+  local profession = current_profession()
+  if not profession_open() or profession == nil or page_order_type() == nil then return "noProfession" end
+  if requestInFlight ~= nil and requestInFlight.profession ~= profession then invalidate_request() end
   if requestInFlight ~= nil then return "busy" end
+  local page = orders_page()
+  if page and page.requestCallback ~= nil then return "busy" end
   return "ready"
 end
 
@@ -1173,8 +1219,8 @@ function Orders:GetRefreshFresh() return refreshFresh end
 -- Asks the server for the open profession's crafter orders with FabricationStation's own request and scores the
 -- answer as a board (OnBoardShown): the Refresh button of the side panel. C_CraftingOrders.RequestCrafterOrders is
 -- called only here, and RequestBoard only from that button's OnClick (tests/orders/refresh_click_only_spec.lua
--- enforces both): nothing refreshes by itself, and there is no timer refresh. The request carries the order type of
--- the last board shown for the profession (public when none), the fields of Blizzard's own
+-- enforces both): nothing refreshes by itself, and there is no timer refresh. The request carries the order type
+-- the orders page shows now (read from the page, as Blizzard's RequestOrders does), the fields of Blizzard's own
 -- ProfessionsCraftingOrderPageMixin:RequestOrders (a flat search by recipe, selectedSkillLineAbility, is not asked
 -- for) and neutral sorts. One request at a time: busy until its callback, or REQUEST_TIMEOUT seconds.
 -- -> true, or false and "noProfession" | "unavailable" | "busy".
@@ -1183,27 +1229,30 @@ function Orders:RequestBoard()
   if type(api) == "table" then requestMissing = type(api.RequestCrafterOrders) ~= "function" end
   local state = self:GetRequestState()
   if state ~= "ready" then return false, state end
-  local profession = current_profession()
-  local token = {}
+  local profession, orderType = current_profession(), page_order_type()
+  local token = { profession = profession }
   requestInFlight = token
   -- The panel greys its button while busy, so it hears (ORDERS_CHANGED) when the wait ends without a board.
   ns.FS:Debounce(REQUEST_KEY, REQUEST_TIMEOUT, ns.FS:Wrap("Orders", function()
-    if end_request(self, token) then self:SendMessage(ns.Msg.ORDERS_CHANGED) end
+    if end_request(token) then self:SendMessage(ns.Msg.ORDERS_CHANGED) end
   end))
-  local function on_response(result, orderType, displayBuckets)
-    local current = end_request(self, token)
+  -- An answer counts only while its request is the current one (not timed out, closed, switched away from or
+  -- replaced) and the page still shows the tab it was asked for, as Blizzard's own callback checks.
+  local function on_response(result, answeredType, displayBuckets)
+    if not end_request(token) then return end
     if not self:IsEnabled() then return end
-    if result == ok_result() and not displayBuckets then
+    local still_here = profession_open() and current_profession() == profession and answeredType == page_order_type()
+    if still_here and result == ok_result() and not displayBuckets then
       boardFromRequest = true
-      local ok, err = pcall(self.OnBoardShown, self, orderType, C_CraftingOrders.GetCrafterOrders(), profession)
+      local ok, err = pcall(self.OnBoardShown, self, answeredType, C_CraftingOrders.GetCrafterOrders(), profession, 0)
       boardFromRequest = false
       if not ok then error(err, 0) end
-    elseif current then
+    else
       self:SendMessage(ns.Msg.ORDERS_CHANGED)
     end
   end
   C_CraftingOrders.RequestCrafterOrders({
-    orderType = lastOrderType[profession] or 0,
+    orderType = orderType,
     searchFavorites = false,
     initialNonPublicSearch = false,
     forCrafter = true,
@@ -1354,9 +1403,9 @@ function Orders:InstallBoardHook()
     end
     return false
   end
-  hooksecurefunc(page, "ShowOrders", ns.FS:Wrap("Orders", function(shownPage)
+  hooksecurefunc(page, "ShowOrders", ns.FS:Wrap("Orders", function(shownPage, offset)
     if not self:IsEnabled() then return end
-    self:OnBoardShown(shownPage.orderType, C_CraftingOrders.GetCrafterOrders(), current_profession())
+    self:OnBoardShown(shownPage.orderType, C_CraftingOrders.GetCrafterOrders(), current_profession(), offset)
   end))
   if type(page.ShowBuckets) == "function" then
     hooksecurefunc(page, "ShowBuckets", ns.FS:Wrap("Orders", function()
@@ -1420,8 +1469,7 @@ function Orders:OnDisable()
   live = {}
   pending = {}
   claimInFlight = nil
-  requestInFlight = nil
+  invalidate_request()
   refreshFresh = nil
-  ns.FS:CancelDebounce(REQUEST_KEY)
   self:SendMessage(ns.Msg.ORDERS_CHANGED)
 end

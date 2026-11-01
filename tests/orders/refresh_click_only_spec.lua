@@ -16,7 +16,8 @@ describe("click-only board refresh", function()
   end)
 
   it("references RequestBoard only from an OnClick handler in UI/OrdersPanel.lua", function()
-    local ok, message, calls = click_only.referenced_only_from_onclick("RequestBoard", { "UI/OrdersPanel.lua" })
+    local ok, message, calls = click_only.referenced_only_from_onclick("RequestBoard", { "UI/OrdersPanel.lua" },
+      { definedIn = "Modules/Orders.lua" })
     assert.is_true(ok, message)
     assert.equal(1, #calls, "expected exactly one :RequestBoard( call, got: " .. table.concat(calls, ", "))
     assert.truthy(calls[1]:find("^UI/OrdersPanel%.lua:"))

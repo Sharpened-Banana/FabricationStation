@@ -33,7 +33,7 @@ describe("ReadyAlerts", function()
     ns.FS:SendMessage("FS_PERSONAL_ORDER_ARRIVED", "Tailoring", 1, 1)
     assert.same({}, W.printed); assert.equal(0, W.flashes); assert.same({}, played)
     local group = ns.FS:GetOptionsTable().args.readyAlerts
-    assert.equal(65, group.order); assert.equal("Alerts", group.name)
+    assert.equal(65, group.order); assert.equal("Ready alerts", group.name)
   end)
 
   it("repairs wrong types and clamps the Moxie threshold to 0..10000", function()
@@ -65,6 +65,7 @@ describe("ReadyAlerts", function()
     end)
 
     it("alerts again only after the pool dropped below full", function()
+      RA:Check(NOW)   -- the session's baseline: Bren is below full
       bren().value = 1000
       RA:Check(NOW); assert.equal(1, #W.printed)
       bren().value, bren().time = 300, NOW   -- crafted: below full
@@ -77,6 +78,7 @@ describe("ReadyAlerts", function()
       local toasts = {}
       ns.FS:GetModule("OrderAlert").ShowToast = function(_, text) toasts[#toasts + 1] = text end
       RA:Settings().chat, RA:Settings().sound = false, false
+      RA:Check(NOW)
       bren().value = 1000
       RA:Check(NOW)
       assert.same({}, W.printed); assert.same({}, played)
@@ -89,6 +91,7 @@ describe("ReadyAlerts", function()
 
     it("does not look at hidden characters", function()
       ns.FS:GetModule("Alts"):SetHidden("Bren-Silvermoon", true)
+      RA:Check(NOW)
       bren().value = 1000
       assert.same({}, RA:Check(NOW))
     end)
@@ -146,6 +149,49 @@ describe("ReadyAlerts", function()
       RA:Settings().cooldownReady = true
       RA:Check(NOW + 5)
       assert.same({}, W.printed)
+    end)
+  end)
+
+  describe("after a /reload or when switched on", function()
+    it("announces nothing that was already true: full -> spent -> full gives one alert", function()
+      RA:Settings().concentrationFull = true
+      RA:Settings().moxieThreshold = 100
+      W.fire("PLAYER_ENTERING_WORLD", false, true)   -- /reload: no login check; Bren is full and Aria's Moxie is 120
+      ns.FS:SendMessage("FS_ALTS_CHANGED", "Aria-Silvermoon")
+      W.advance(30)
+      assert.same({}, W.printed); assert.same({}, played)
+      RA:Check(NOW); assert.same({}, W.printed)
+      bren().value, bren().time = 100, NOW             -- spent
+      aria().moxie.value = 50
+      RA:Check(NOW); assert.same({}, W.printed)
+      bren().value = 1000                              -- full again
+      RA:Check(NOW)
+      assert.same({ prefixed("Bren-Silvermoon Herbalism: concentration is full") }, W.printed)
+      aria().moxie.value = 130
+      RA:Check(NOW)
+      assert.same({ prefixed("Bren-Silvermoon Herbalism: concentration is full"),
+        prefixed("Aria-Silvermoon Blacksmithing: Moxie is 130") }, W.printed)
+    end)
+
+    it("does not announce what was already true when an alert is switched on", function()
+      RA:Check(NOW)                                    -- everything off: Bren is full, nothing is said
+      RA:Settings().concentrationFull = true
+      RA:Check(NOW + 5)
+      assert.same({}, W.printed)
+    end)
+
+    it("runs no login check when the module is switched off and on mid-session", function()
+      W.fire("PLAYER_ENTERING_WORLD", true, false); W.advance(12)   -- the session's login check ran
+      ns.FS:SetModuleEnabled("ReadyAlerts", false); ns.FS:SetModuleEnabled("ReadyAlerts", true)
+      RA:Settings().concentrationFull = true
+      W.printed = {}
+      local logins = 0
+      local check = RA.Check
+      RA.Check = function(self, now, atLogin) if atLogin then logins = logins + 1 end return check(self, now, atLogin) end
+      W.fire("PLAYER_ENTERING_WORLD", false, false)    -- a later loading screen
+      W.advance(30)
+      assert.equal(0, logins)
+      assert.same({}, W.printed)                       -- and the first check after switching on is the baseline
     end)
   end)
 
@@ -221,6 +267,15 @@ describe("ReadyAlerts", function()
       RA:Settings().newOrdersSound = true
       ns.FS:SendMessage("FS_ORDERS_NEW", "Aria-Silvermoon", 2, "public")
       assert.same({ 8959 }, played); assert.equal(0, W.flashes)
+    end)
+
+    it("plays no sound for new orders with only the flash on", function()
+      RA:Settings().newOrdersFlash = true       -- sound (for alerts) is on by default
+      ns.FS:SendMessage("FS_ORDERS_NEW", "Aria-Silvermoon", 2, "public")
+      assert.equal(1, W.flashes); assert.same({}, played)
+      RA:Settings().newOrdersSound = true
+      ns.FS:SendMessage("FS_ORDERS_NEW", "Aria-Silvermoon", 2, "public")
+      assert.same({ 8959 }, played)
     end)
 
     it("does not flash without FlashClientIcon", function()

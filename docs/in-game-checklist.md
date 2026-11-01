@@ -1176,10 +1176,14 @@ buckets (the request is not a flat search), which FabricationStation leaves alon
 `live` branch at implementation time: the same fields, plus `selectedSkillLineAbility`, which is nil for a request
 that is not a flat search, and the sorts, which Blizzard takes from the page's own sort state while the plan sends
 `sortType = 0` for both.)
+Also: press Refresh while Blizzard's spinner is showing (right after Search or a tab switch): Refresh stays greyed until
+the list is there. And after a Refresh on a list longer than one page, scroll to the bottom: rows must neither repeat
+nor go missing, the spinner must clear, and no "new matching orders" line may appear for orders you had already seen.
 
 P7-8. **Ready alerts.** In Settings > Alerts turn on concentration, Moxie (threshold just above your amount) and
 cooldown alerts. Expected: one chat line (and a toast with OrderAlert on) when concentration fills during play, when
-Moxie reaches the threshold, and when a cooldown comes off; none repeat until the state resets. At login, 12 s after
+Moxie reaches the threshold, and when a cooldown comes off; none repeat until the state resets, and a /reload with a
+full pool or Moxie above the threshold says nothing. At login, 12 s after
 the loading screen, the concentration and Moxie states already true are announced once (concentration only when the
 Planner's own chat warning is off).
 

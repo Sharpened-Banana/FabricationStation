@@ -21,7 +21,8 @@ local L = ns.L
 -- cooldown that comes off alerts, and one that is ready while the alert is off is never announced later).
 --
 -- Timing: the first PLAYER_ENTERING_WORLD that is not a /reload schedules the login check 12 s later (Scanner's login
--- data is in by then); it alerts the concentration and Moxie states already true, at most 5 lines and then "+N more",
+-- data is in by then; a /reload, or a module switched on later, has no login check: its first check only records what
+-- is true as the baseline, so nothing is announced twice); it alerts the concentration and Moxie states already true, at most 5 lines and then "+N more",
 -- and skips concentration while the Planner is on with capWarnChat (the Planner announces those). No other check
 -- runs before it. After every check one Debounce key times the next one for the soonest pool that fills or cooldown
 -- that comes off (5 s to 6 h); data and alt changes ask for a check 1 s later. All timers are Debounce keys,
@@ -101,8 +102,8 @@ end
 
 local function prefixed(text) return L["FabricationStation: %s"]:format(text) end
 
--- Delivers `lines` (plain texts) as one alert: a chat line each (`extra` more are summed in a last "+N more" line), one
--- sound when wanted and one toast naming the first line.
+-- Delivers `lines` (plain texts) as one alert: a chat line each (after opts.maxLines, one "+N more" line), one sound
+-- (when `sound` is on, or as opts.sound says when it is given) and one toast naming the first line.
 local function deliver(lines, opts)
   opts = opts or {}
   if #lines == 0 then return end
@@ -112,7 +113,9 @@ local function deliver(lines, opts)
     for i = 1, shown do print(prefixed(lines[i])) end
     if shown < #lines then print(prefixed(L["+%d more"]:format(#lines - shown))) end
   end
-  if s.sound or opts.sound then play_sound() end
+  local wantSound = s.sound
+  if opts.sound ~= nil then wantSound = opts.sound end   -- new orders: only newOrdersSound decides
+  if wantSound then play_sound() end
   local text = lines[1]
   if #lines > 1 then text = L["%s +%d more"]:format(text, #lines - 1) end
   toast(text)
@@ -125,6 +128,7 @@ end
 local seen = {}           -- [key] = true: alerted (or, for a cooldown, noticed) this session while the state holds
 local initialised = false -- the first check of the session has run
 local loginPending = false -- the login check is scheduled and has not run: no other check runs before it
+local loginHandled = false -- the session's first loading screen has been seen (a module switched on later has none)
 
 local function alts()
   local A = ns.FS:GetModule("Alts", true)
@@ -169,9 +173,10 @@ local function cooldown_ready(cd, now)
   return is_finite(cd.readyAt) and cd.readyAt <= now
 end
 
--- The current states: { conc = {key=,text=,...}, moxie = {...}, cd = {...}, soonest = seconds|nil }. Concentration and
--- Moxie are listed only when their alert is on; cooldowns always (so what is ready now is remembered), with
--- `enabled` saying whether they alert.
+-- The current states: { conc = {key=,text=,...}, moxie = {...}, cd = {...}, soonest = seconds|nil }. Every state that
+-- is true now is listed whether or not its alert is on (Moxie: while its threshold is above 0), so Check can remember
+-- what was already true when the session started or the alert was switched on, and announce only what becomes true
+-- later; `soonest` counts only the alerts that are on.
 local function collect(now, s)
   local out = { conc = {}, moxie = {}, cd = {} }
   local soonest
@@ -179,13 +184,13 @@ local function collect(now, s)
     if is_finite(seconds) and (soonest == nil or seconds < soonest) then soonest = seconds end
   end
   local A = alts()
-  if s.concentrationFull and A then
+  if A then
     for _, pool in ipairs(A:GetPools(now)) do
       if is_finite(pool.value) and is_finite(pool.max) then
         if pool.value >= pool.max then
           out.conc[#out.conc + 1] = { key = "conc:" .. pool.charKey .. ":" .. pool.skillLineID,
             text = L["%s %s: concentration is full"]:format(pool.charKey, A:ProfessionName(pool.skillLineID)) }
-        elseif is_finite(pool.fullAt) then
+        elseif s.concentrationFull and is_finite(pool.fullAt) then
           soon(pool.fullAt - now)
         end
       end
@@ -244,20 +249,23 @@ function ReadyAlerts:Check(now, login)
   local first = not initialised
   initialised = true
 
+  -- The first check of a session that is not the login check (a /reload, or the module switched on) only takes the
+  -- current states as its baseline: nothing that was already true is announced again.
+  local silent = first and not login
   local active, lines = {}, {}
   local skipConc = login and planner_announces()
   for _, st in ipairs(states.conc) do
     active[st.key] = true
     if not seen[st.key] then
       seen[st.key] = true
-      if not skipConc then lines[#lines + 1] = st.text end
+      if s.concentrationFull and not silent and not skipConc then lines[#lines + 1] = st.text end
     end
   end
   for _, st in ipairs(states.moxie) do
     active[st.key] = true
     if not seen[st.key] then
       seen[st.key] = true
-      lines[#lines + 1] = st.text
+      if not silent then lines[#lines + 1] = st.text end
     end
   end
   for _, st in ipairs(states.cd) do
@@ -287,7 +295,7 @@ local function on_orders_new(_, _, count)
   if type(count) ~= "number" or count < 1 then return end
   local text = (count == 1 and L["%d new order matches your filters"] or L["%d new orders match your filters"])
     :format(count)
-  deliver({ text }, { sound = s.newOrdersSound })
+  deliver({ text }, { sound = s.newOrdersSound })   -- the flash alone plays no sound
   if s.newOrdersFlash then flash() end
 end
 
@@ -310,15 +318,18 @@ end
 
 function ReadyAlerts:OnEnable()
   local function wrap(fn) return ns.FS:Wrap(MODULE, fn) end
-  self:RegisterEvent("PLAYER_ENTERING_WORLD", wrap(function(_, _, isReloadingUi)
-    self:UnregisterEvent("PLAYER_ENTERING_WORLD")
-    if isReloadingUi then return end
-    loginPending = true
-    ns.FS:Debounce(LOGIN_KEY, LOGIN_DELAY, wrap(function()
-      loginPending = false
-      self:Check(nil, true)
+  if not loginHandled then
+    self:RegisterEvent("PLAYER_ENTERING_WORLD", wrap(function(_, _, isReloadingUi)
+      self:UnregisterEvent("PLAYER_ENTERING_WORLD")
+      loginHandled = true
+      if isReloadingUi then return end
+      loginPending = true
+      ns.FS:Debounce(LOGIN_KEY, LOGIN_DELAY, wrap(function()
+        loginPending = false
+        self:Check(nil, true)
+      end))
     end))
-  end))
+  end
   self:RegisterMessage(ns.Msg.ORDERS_NEW, wrap(on_orders_new))
   self:RegisterMessage(ns.Msg.PERSONAL_ORDER_ARRIVED, wrap(on_personal_order))
   self:RegisterMessage(ns.Msg.ALTS_CHANGED, wrap(request_check))
@@ -352,7 +363,7 @@ end
 -- version); the options are shown disabled then.
 function ReadyAlerts.BuildOptions()
   return {
-    type = "group", name = L["Alerts"], order = 65,
+    type = "group", name = L["Ready alerts"], order = 65,
     args = {
       concentrationFull = toggle("concentrationFull", 1, L["Alert when concentration is full"]),
       moxieThreshold = {

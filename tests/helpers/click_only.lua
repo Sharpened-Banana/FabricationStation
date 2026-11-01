@@ -7,8 +7,11 @@
 -- "Referenced" covers calls, passing the function on (pcall(C_CraftingOrders.ClaimOrder, ...),
 -- Wrap(name, Orders.ClaimBest)), aliases (local claim = C_CraftingOrders.ClaimOrder) and string keys
 -- (C_CraftingOrders["ClaimOrder"]). Identifiers match as exact tokens (OnClaimOrderResponse is another name); string
--- contents match as substrings. Comments (-- and --[[ ]]) do not count. The name in its own definition
--- (`function Orders:ClaimBest(`, `local function shop_selected(`) is not a reference.
+-- contents match as substrings. Comments (-- and --[[ ]]) do not count. A definition of the name
+-- (`function Orders:ClaimBest(`, `function C_CraftingOrders.ClaimOrder(`, `local function shop_selected(`) is a
+-- reference with `definition = true`: the rules treat it like any other, so it passes only where the rule allows it
+-- (the owning function's own header in `only_inside`, the `definedIn` file in `referenced_only_from_onclick`), and a
+-- redefinition of a protected API elsewhere fails.
 local M = {}
 
 M.DIRS = "Core Data Math Modules UI"
@@ -89,8 +92,8 @@ end
 
 -- Walks the tokens, tracking blocks (function/do/if/repeat ... end/until) and parentheses. Returns every reference
 -- to `name` (a name token equal to it, or a string token containing it) as
---   { name, line, call, fn }
--- where call is true for `:name(` and fn is the innermost enclosing function as { header, onClick, first, last }
+--   { name, line, pos, call, definition, fn }
+-- where call is true for `:name(`, definition for `function ... name(`, pos for the text position, and fn is the innermost enclosing function as { header, onClick, first, last }
 -- (nil outside any function): header is the source text from `function` to the closing parenthesis of its
 -- parameters ("function Orders:ClaimBest()"), onClick is true for the first function inside the argument list of
 -- SetScript("OnClick", ...), first/last are the text positions of the function's `function` and closing `end`.
@@ -143,10 +146,9 @@ function M.references_in(text, name)
       stack[#stack] = nil
     end
     if (t.kind == "name" and t.text == name) or (t.kind == "string" and t.text:find(name, 1, true)) then
-      if not (t.kind == "name" and is_definition(k)) then
-        refs[#refs + 1] = { name = name, line = t.line, fn = innermost(),
-          call = t.kind == "name" and is(k - 1, "punct", ":") and is(k + 1, "punct", "(") }
-      end
+      local definition = t.kind == "name" and is_definition(k)
+      refs[#refs + 1] = { name = name, line = t.line, pos = t.pos, fn = innermost(), definition = definition or nil,
+        call = not definition and t.kind == "name" and is(k - 1, "punct", ":") and is(k + 1, "punct", "(") }
     end
   end
   return refs, #stack, funcs
@@ -173,12 +175,21 @@ function M.body_of(path, header)
   end
 end
 
+-- first, last: the text positions of the (first) function in `path` whose header starts with `header`; nil when none.
+function M.span_of(path, header)
+  local _, _, funcs = M.references_in(M.read(path), "\0")
+  for _, fn in ipairs(funcs) do
+    if header_matches(fn, header) and fn.last then return fn.first, fn.last end
+  end
+end
+
 -- Every reference to `token` in every Lua file (or only `files`) is inside the function whose header starts with
--- `header` in `path`, directly (never in a closure nested in it, which could run later). -> ok, message, hits where
+-- `header` in `path`, directly (never in a closure nested in it, which could run later). A definition of the token
+-- passes only as that function's own header. opts.files limits the scan to some files. -> ok, message, hits where
 -- hits is the list of "path:line" references found. Fails when there are none (the rule would be vacuous).
-function M.only_inside(token, path, header, files)
+function M.only_inside(token, path, header, opts)
   local hits, bad = {}, {}
-  for _, file in ipairs(files or M.lua_files()) do
+  for _, file in ipairs(opts and opts.files or M.lua_files()) do
     local refs, depth = M.references(file, token)
     if depth ~= 0 then bad[#bad + 1] = file .. ": unbalanced blocks (scanner out of step)" end
     for _, r in ipairs(refs) do
@@ -194,20 +205,29 @@ end
 
 -- Every reference to `name` in every Lua file (or only `files`) is a `:name(` call directly inside a
 -- SetScript("OnClick", function ... end) handler in one of `allowedPaths`: never in a closure nested in the handler
--- (a timer or a pcall(function() ... end) would run it outside the click) and never passed on as a value.
+-- (a timer or a pcall(function() ... end) would run it outside the click) and never passed on as a value. The name
+-- may be defined only in opts.definedIn (a path). opts.files limits the scan to some files.
 -- -> ok, message, calls where calls is the list of "path:line" of the calls. Fails when there are none.
-function M.referenced_only_from_onclick(name, allowedPaths, files)
+function M.referenced_only_from_onclick(name, allowedPaths, opts)
+  opts = opts or {}
   local allowed = {}
   for _, p in ipairs(allowedPaths) do allowed[p] = true end
   local calls, bad = {}, {}
-  for _, file in ipairs(files or M.lua_files()) do
+  for _, file in ipairs(opts.files or M.lua_files()) do
     local refs, depth = M.references(file, name)
     if depth ~= 0 then bad[#bad + 1] = file .. ": unbalanced blocks (scanner out of step)" end
     for _, r in ipairs(refs) do
       if r.call then calls[#calls + 1] = file .. ":" .. r.line end
-      if not (allowed[file] and r.fn and r.fn.onClick and r.call) then
-        bad[#bad + 1] = file .. ":" .. r.line .. " references " .. name
-          .. " other than as a :" .. name .. "( call directly in an OnClick handler"
+      local fine
+      if r.definition then
+        fine = file == opts.definedIn
+      else
+        fine = allowed[file] and r.fn and r.fn.onClick and r.call
+      end
+      if not fine then
+        bad[#bad + 1] = r.definition and (file .. ":" .. r.line .. " defines " .. name .. " outside " .. tostring(opts.definedIn))
+          or (file .. ":" .. r.line .. " references " .. name
+          .. " other than as a :" .. name .. "( call directly in an OnClick handler")
       end
     end
   end

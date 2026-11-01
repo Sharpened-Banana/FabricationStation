@@ -1054,3 +1054,4 @@ L["Play a sound on new orders"] = true
 L["Flash the taskbar on a personal order"] = true
 L["Show alerts in chat"] = true
 L["Play a sound with alerts"] = true
+L["Ready alerts"] = true   -- options tab for ReadyAlerts (the Orders & Ledger options have their own "Alerts" section)

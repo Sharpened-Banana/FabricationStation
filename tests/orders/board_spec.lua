@@ -64,6 +64,61 @@ describe("Orders board", function()
         P2.raw_order({ orderID = 4, orderType = 0 }) })
       assert.same({ { "Me-Silvermoon", 1, "public" } }, sent("FS_ORDERS_NEW"))   -- order 2 was stored while hidden
     end)
+    local function ids(first, last, orderType)
+      local list = {}
+      for id = first, last do list[#list + 1] = P2.raw_order({ orderID = id, orderType = orderType or 0 }) end
+      return list
+    end
+    it("sends nothing when the next page of a list loads", function()
+      O:OnBoardShown(0, ids(1, 4))              -- stored: 1..4
+      O:OnBoardShown(0, ids(1, 2), nil, 0)      -- Search shows the first page (the others leave the board)
+      O:OnBoardShown(0, ids(1, 4), nil, 2)      -- scrolling loads the next page: the cumulative list
+      assert.same({}, sent("FS_ORDERS_NEW"))
+      O:OnBoardShown(0, ids(1, 4))              -- and Search again: nothing was new either
+      assert.same({}, sent("FS_ORDERS_NEW"))
+    end)
+    it("adds the orders of a later page to the seen set without announcing them", function()
+      O:OnBoardShown(0, ids(1, 2))
+      O:OnBoardShown(0, ids(1, 4), nil, 2)      -- 3 and 4 are on page 2: seen, not announced
+      assert.same({}, sent("FS_ORDERS_NEW"))
+      O:OnBoardShown(0, ids(1, 2))
+      O:OnBoardShown(0, ids(1, 4), nil, 2)
+      O:OnBoardShown(0, ids(1, 5))              -- only 5 was never seen
+      assert.same({ { "Me-Silvermoon", 1, "public" } }, sent("FS_ORDERS_NEW"))
+    end)
+    it("sends nothing for a one-page Refresh of known orders and one for a genuinely new order", function()
+      O:OnBoardShown(0, ids(1, 4))
+      O:OnBoardShown(0, ids(1, 2))              -- Search shows page 1
+      O:OnBoardShown(0, ids(1, 2), nil, 0)      -- a Refresh answer: one page of known orders
+      assert.same({}, sent("FS_ORDERS_NEW"))
+      O:OnBoardShown(0, ids(1, 3), nil, 0)      -- order 3 is known from before: still nothing
+      assert.same({}, sent("FS_ORDERS_NEW"))
+      O:OnBoardShown(0, ids(1, 2), nil, 0)
+      local fresh = ids(1, 2); fresh[3] = P2.raw_order({ orderID = 9, orderType = 0 })
+      O:OnBoardShown(0, fresh, nil, 0)
+      assert.same({ { "Me-Silvermoon", 1, "public" } }, sent("FS_ORDERS_NEW"))
+    end)
+    it("keeps the seen set per scope, prunes it with expiry and creates it lazily", function()
+      assert.is_nil(ns.FS.db.global.orderBoards)
+      O:OnBoardShown(0, ids(1, 2))
+      local seen = ns.FS.db.global.orderBoards["Me-Silvermoon"].seen
+      assert.is_number(seen["public:7"][1]); assert.is_number(seen["public:7"][2])
+      seen["public:7"][99] = 0                  -- expired long ago
+      seen["guild:7"] = { [98] = 0, [97] = 10 ^ 12 }
+      O:OnBoardShown(0, ids(1, 2))
+      assert.is_nil(seen["public:7"][99]); assert.is_nil(seen["guild:7"][98]); assert.is_number(seen["guild:7"][97])
+    end)
+    it("repairs a damaged seen field and writes nothing while the saved data is from a newer version", function()
+      O:OnBoardShown(0, ids(1, 2))
+      ns.FS.db.global.orderBoards["Me-Silvermoon"].seen = "damaged"
+      O:OnBoardShown(0, ids(1, 3))
+      assert.is_table(ns.FS.db.global.orderBoards["Me-Silvermoon"].seen)
+      assert.same({ { "Me-Silvermoon", 1, "public" } }, sent("FS_ORDERS_NEW"))
+      ns.FS.dbIsNewer = true
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      O:OnBoardShown(0, ids(1, 5))
+      assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+    end)
     it("counts an order id once and ignores another character's board", function()
       O:OnBoardShown(0, {})
       ns.FS.CharKey = function() return "Alt-Silvermoon" end
@@ -75,11 +130,17 @@ describe("Orders board", function()
     end)
   end)
   describe("RequestBoard", function()
-    local open
+    local open, page, profession
     before_each(function()
-      open = true
+      open, profession = true, 7
+      page = { orderType = 2 }   -- the orders page: the tab it shows, and Blizzard's own request while one is in flight
+      _G.ProfessionsFrame = { OrdersPage = page }
       ns.FS:GetModule("Scanner").IsProfessionOpen = function() return open end
+      C_TradeSkillUI.GetChildProfessionInfo = function() return { profession = profession } end
     end)
+    after_each(function() _G.ProfessionsFrame = nil end)
+    local function answer(i, result, orderType, buckets) W.orderRequests[i].callback(result, orderType, buckets) end
+
     it("refuses without a profession open, without the API and with a request in flight", function()
       open = false
       assert.same({ false, "noProfession" }, { O:RequestBoard() })
@@ -98,7 +159,6 @@ describe("Orders board", function()
       assert.equal(1, #W.orderRequests)
     end)
     it("sends the request fields and scores the board the callback reports", function()
-      O:OnBoardShown(2, {})   -- the last board shown for profession 7 was the personal one
       assert.is_true(O:RequestBoard())
       local r = W.orderRequests[1]
       assert.same({ orderType = 2, searchFavorites = false, initialNonPublicSearch = false, forCrafter = true,
@@ -109,33 +169,99 @@ describe("Orders board", function()
           secondarySort = r.secondarySort })
       assert.is_function(r.callback)
       board = { P2.raw_order({ orderID = 31 }) }
-      r.callback(0, 2, false)
+      answer(1, 0, 2, false)
       assert.equal(31, O:GetView(31).orderID)
       assert.equal(31, O:GetLiveViews()[1].orderID)
       assert.same({ true }, { O:RequestBoard() })   -- the callback ended the request
     end)
-    it("asks for the public board when none was shown, and ignores bucket and failed answers", function()
+    it("asks for the tab the page shows, not the type of the last board", function()
+      O:OnBoardShown(2, {})      -- a personal board was shown last ...
+      page.orderType = 0         -- ... but the page is on the public tab now
       assert.is_true(O:RequestBoard())
       assert.equal(0, W.orderRequests[1].orderType)
+    end)
+    it("cannot ask while the orders page cannot be read", function()
+      _G.ProfessionsFrame = nil
+      assert.same({ false, "noProfession" }, { O:RequestBoard() })
+      _G.ProfessionsFrame = { OrdersPage = {} }
+      assert.same({ false, "noProfession" }, { O:RequestBoard() })
+      assert.equal(0, #W.orderRequests)
+    end)
+    it("ignores bucket and failed answers", function()
+      page.orderType = 0
+      assert.is_true(O:RequestBoard())
       board = { P2.raw_order({ orderID = 32, orderType = 0 }) }
-      W.orderRequests[1].callback(0, 0, true)   -- the public bucket list: nothing flat to score
+      answer(1, 0, 0, true)   -- the public bucket list: nothing flat to score
       assert.is_nil(O:GetView(32))
       assert.is_true(O:RequestBoard())
-      W.orderRequests[2].callback(5, 0, false)   -- a failed result
+      answer(2, 5, 0, false)  -- a failed result
       assert.is_nil(O:GetView(32))
     end)
-    it("is ready again after 10 s without an answer, and a late answer of the old request ends nothing", function()
+    it("announces a bucket list shown, so the panel hears that Blizzard's request ended", function()
+      local n = #W.messages
+      O:OnBucketsShown()
+      assert.equal("FS_ORDERS_CHANGED", W.messages[n + 1][1])
+    end)
+    it("is busy while Blizzard's own request is in flight", function()
+      page.requestCallback = {}
+      assert.equal("busy", O:GetRequestState())
+      assert.same({ false, "busy" }, { O:RequestBoard() })
+      assert.equal(0, #W.orderRequests)
+      page.requestCallback = nil
+      assert.equal("ready", O:GetRequestState())
+    end)
+    it("drops an answer for another tab than the page shows now", function()
+      assert.is_true(O:RequestBoard())               -- asked on the personal tab (2)
+      page.orderType = 0                             -- the player switched to the public tab
+      board = { P2.raw_order({ orderID = 41, orderType = 2 }) }
+      answer(1, 0, 2, false)
+      assert.is_nil(O:GetView(41)); assert.same({}, O:GetLiveViews())
+      assert.equal("ready", O:GetRequestState())     -- the wait still ended
+    end)
+    it("drops a late answer after the timeout", function()
       assert.is_true(O:RequestBoard())
       W.advance(9); assert.same({ false, "busy" }, { O:RequestBoard() })
-      W.advance(2); assert.is_true(O:RequestBoard())
-      W.orderRequests[1].callback(5, 0, false)   -- the first request answers late
-      assert.same({ false, "busy" }, { O:RequestBoard() })
+      W.advance(2); assert.equal("ready", O:GetRequestState())
+      board = { P2.raw_order({ orderID = 42 }) }
+      answer(1, 0, 2, false)
+      assert.is_nil(O:GetView(42))
+    end)
+    it("drops an answer for a request a newer one replaced", function()
+      assert.is_true(O:RequestBoard())
+      W.advance(11)
+      assert.is_true(O:RequestBoard())
+      board = { P2.raw_order({ orderID = 43 }) }
+      answer(1, 0, 2, false)                          -- the first request answers late
+      assert.is_nil(O:GetView(43))
+      assert.equal("busy", O:GetRequestState())       -- and the second one is still waited for
+      answer(2, 0, 2, false)
+      assert.equal(43, O:GetView(43).orderID)
+    end)
+    it("drops an answer after the frame closed", function()
+      assert.is_true(O:RequestBoard())
+      O:ClearLive()
+      assert.equal("ready", O:GetRequestState())
+      board = { P2.raw_order({ orderID = 44 }) }
+      answer(1, 0, 2, false)
+      assert.is_nil(O:GetView(44))
+    end)
+    it("drops an answer after a switch to another profession, and is not busy there", function()
+      O:OnBoardShown(2, { P2.raw_order({ orderID = 45 }) })   -- profession 7's live board
+      assert.is_true(O:RequestBoard())
+      profession = 8
+      assert.equal("ready", O:GetRequestState())              -- the request was for profession 7
+      board = { P2.raw_order({ orderID = 46 }) }
+      answer(1, 0, 2, false)
+      assert.is_nil(O:GetView(46))
+      profession = 7
+      assert.equal(45, O:GetLiveViews()[1].orderID)           -- nothing was dropped from the open board
     end)
     it("reports new orders found by a Refresh until the next board show", function()
+      page.orderType = 0
       O:OnBoardShown(0, { P2.raw_order({ orderID = 1, orderType = 0 }) })
       assert.is_true(O:RequestBoard())
       board = { P2.raw_order({ orderID = 1, orderType = 0 }), P2.raw_order({ orderID = 2, orderType = 0 }) }
-      W.orderRequests[1].callback(0, 0, false)
+      answer(1, 0, 0, false)
       assert.equal(1, O:GetRefreshFresh())
       O:OnBoardShown(0, board)   -- Blizzard's own Search
       assert.is_nil(O:GetRefreshFresh())
