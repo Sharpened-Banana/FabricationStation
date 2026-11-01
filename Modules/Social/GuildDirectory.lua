@@ -146,18 +146,6 @@ local function readable(charKey, profile)
     and type(profile.owner) == "string" and type(profile.rt) == "number"
 end
 
--- Rows from a set of profiles (dir.profiles, or the Guild tab's candidates for one recipe), each searched in full.
-local function addon_rows(ctx, dir, recipeID, byName, rows)
-  if type(dir.profiles) ~= "table" then return end
-  local contested = type(dir.contested) == "table" and dir.contested or {}
-  for charKey, profile in pairs(dir.profiles) do
-    if readable(charKey, profile) then
-      local lineIndex, q, qc = ProfileStore.Find(profile, recipeID)
-      if lineIndex then add_row(ctx, contested, charKey, profile, lineIndex, q, qc, byName, rows) end
-    end
-  end
-end
-
 -- The recipe index (recipeID -> crafters, Modules/Social/RecipeIndex.lua) is filled by the index ticks further down.
 -- A stored profile is fresh when the index holds its entries for the same hash (HashOf == profile.h), otherwise stale.
 -- A read takes fresh profiles from the index and stale ones with ProfileStore.Find, so it is correct before any tick
@@ -282,8 +270,10 @@ end
 -- Guild tab model and diagnostics
 ---------------------------------------------------------------------------
 
--- Every recipe in the stored profiles and the native cache: byRecipe[recipeID] = { [charKey] = profile } (the profiles
--- that list it; empty for a native-only recipe) and lines[recipeID] = { [skillLineID] = true }.
+-- Every recipe in the stored profiles and the native cache, from one walk over the profiles with ProfileStore.Each:
+-- byRecipe[recipeID] = { [charKey] = code } (the profiles that list it, each with RecipeIndex.Code of the first line
+-- that lists it and its q, qc, as ProfileStore.Find would answer; empty for a native-only recipe) and
+-- lines[recipeID] = { [skillLineID] = true }.
 local function tab_candidates(dir)
   local byRecipe, lines = {}, {}
   local function note(recipeID, skillLineID)
@@ -293,11 +283,12 @@ local function tab_candidates(dir)
   if type(dir.profiles) == "table" then
     for charKey, profile in pairs(dir.profiles) do
       if type(charKey) == "string" and type(profile) == "table" and type(profile.pr) == "table" then
-        for _, line in ipairs(profile.pr) do
+        for lineIndex, line in ipairs(profile.pr) do
           if type(line) == "table" then
-            ProfileStore.Each(line, profile.lv, function(recipeID)
+            ProfileStore.Each(line, profile.lv, function(recipeID, q, qc)
               note(recipeID, line.s)
-              byRecipe[recipeID][charKey] = profile
+              local owners = byRecipe[recipeID]
+              if not owners[charKey] then owners[charKey] = RecipeIndex.Code(lineIndex, q, qc) end
             end)
           end
         end
@@ -312,10 +303,17 @@ local function tab_candidates(dir)
   return byRecipe, lines
 end
 
--- GetCrafters' rows for one recipe of tab_candidates (only the profiles that list it are scanned).
-local function tab_crafters(ctx, contested, profiles, recipeID)
+-- GetCrafters' rows for one recipe of tab_candidates: owners = its byRecipe entry, profiles = dir.profiles (no profile
+-- is searched again).
+local function tab_crafters(ctx, contested, profiles, owners, recipeID)
   local rows, byName = {}, {}
-  addon_rows(ctx, { profiles = profiles, contested = contested }, recipeID, byName, rows)
+  for charKey, code in pairs(owners) do
+    local profile = profiles[charKey]
+    if readable(charKey, profile) then
+      local lineIndex, q, qc = RecipeIndex.Decode(code)
+      add_row(ctx, contested, charKey, profile, lineIndex, q, qc, byName, rows)
+    end
+  end
   native_rows(ctx, recipeID, byName, rows)
   table.sort(rows, crafter_before)
   return rows
@@ -561,10 +559,11 @@ function Guild:BuildTabRows(filter)
   end)
   local ctx = context(self)
   local contested = type(dir.contested) == "table" and dir.contested or {}
+  local profiles = type(dir.profiles) == "table" and dir.profiles or {}
   local hasRow = {}
   for _, recipe in ipairs(recipes) do
     local recipeMatches = search.kind == "link" or text == "" or recipe.name:lower():find(text, 1, true) ~= nil
-    local rows = tab_crafters(ctx, contested, byRecipe[recipe.id], recipe.id)
+    local rows = tab_crafters(ctx, contested, profiles, byRecipe[recipe.id], recipe.id)
     local line = skillLineID or lowest(lines[recipe.id])
     for _, crafter in ipairs(rows) do
       if recipeMatches or crafter.name:lower():find(text, 1, true) then
@@ -603,9 +602,10 @@ function Guild:TabSkillLines()
   local byRecipe, lines = tab_candidates(dir)
   local ctx = context(self)
   local contested = type(dir.contested) == "table" and dir.contested or {}
+  local profiles = type(dir.profiles) == "table" and dir.profiles or {}
   local seen = {}
-  for recipeID, profiles in pairs(byRecipe) do
-    if next(lines[recipeID]) ~= nil and #tab_crafters(ctx, contested, profiles, recipeID) > 0 then
+  for recipeID, owners in pairs(byRecipe) do
+    if next(lines[recipeID]) ~= nil and #tab_crafters(ctx, contested, profiles, owners, recipeID) > 0 then
       for id in pairs(lines[recipeID]) do
         if not seen[id] then seen[id] = true; out[#out + 1] = id end
       end

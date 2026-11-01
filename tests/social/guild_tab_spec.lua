@@ -244,6 +244,38 @@ describe("Guild tab, settings and diagnostics", function()
       assert.are.same({}, Guild:BuildTabRows({}))
     end)
 
+    it("builds the tab model from one walk over the profiles, without searching a profile per recipe", function()
+      local PS = ns.Social.ProfileStore
+      local base, finds = PS.Find, 0
+      PS.Find = function(...) finds = finds + 1; return base(...) end
+      finally(function() PS.Find = base end)
+      Guild:BuildTabRows({})
+      Guild:BuildTabRows({ text = "mace" })
+      Guild:BuildTabRows({ skillLineID = 2907 })
+      Guild:TabSkillLines()
+      assert.are.equal(0, finds)
+    end)
+
+    it("gives every recipe the same crafter rows as GetCrafters, the first line that lists it included", function()
+      -- Two lines that both list 100: the first one (by skill line) gives the skill and the quality, as Find does.
+      local data = { lv = "q", pr = { { s = 2907, k = 50, m = 100, r = { 100, 1, 2, 101, 2, 2 } },
+        { s = 2910, k = 70, m = 100, r = { 100, 4, 4, 102, 3, 3 } } } }
+      dir().profiles["J-Realm"] = { c = "J-Realm", ts = 1, lv = "q", h = Protocol.HashProfile(data),
+        owner = "Peer-Realm", verified = true, rt = now(), pr = ns.Social.ProfileStore.FromData(data) }
+      Guild.directoryVersion = Guild.directoryVersion + 1
+      local byRecipe = {}
+      for _, r in ipairs(Guild:BuildTabRows({})) do
+        byRecipe[r.recipeID] = byRecipe[r.recipeID] or {}
+        table.insert(byRecipe[r.recipeID], r.crafter)
+      end
+      for _, id in ipairs({ 100, 101, 102, 200, 300 }) do
+        assert.are.same(Guild:GetCrafters(id), byRecipe[id], tostring(id))
+      end
+      local j
+      for _, c in ipairs(byRecipe[100]) do if c.name == "J-Realm" then j = c end end
+      assert.are.same({ 50, 1, 2 }, { j.skill, j.expectedQuality, j.concentrationQuality })
+    end)
+
     it("lists the profession lines of the stored profiles and the native cache", function()
       assert.are.same({ 2906, 2907 }, Guild:TabSkillLines())
       native_members(777, { NATIVE_D }, 2910)
