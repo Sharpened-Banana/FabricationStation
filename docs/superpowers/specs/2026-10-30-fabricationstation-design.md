@@ -243,6 +243,32 @@ Out of scope for phase 5: the guild privacy defaults (`share = true`, `shareAlts
 anything that needs the game client to verify (it becomes `P5-` lines in `docs/in-game-checklist.md`); releasing,
 tagging or pushing; Classic; everything in §10.
 
+## 9b. Phase 6 — polish and guild recipe dedup
+
+The minors that phase 5 and the order-row work after it deferred, and one storage question. Nothing here adds a
+feature area. Priority order:
+
+1. **Polish.**
+   - Guild directory and Guild tab: the search catalogue follows new guild data and newly learned recipes, an
+     auto-selection survives a guild change, and a recipe whose profession is not known says so.
+   - Setup guide: the step counter never sits under a button, the social headings grey out with their buttons, and a
+     scan row that is cut off shows its full text on hover.
+   - Order rows: every hover handler runs inside error isolation, a game call that fails on a row reads as "unknown",
+     and the settings text describes the icons where they are now.
+   - Localization: the checker also catches bracket and dash joins and one-line label tables. Duration letters,
+     order and ledger types and the last joined labels become keys. Plural keys take `%d`. Ambiguous keys get
+     translator context, and every area has a translated-locale test.
+   - Docs: the CHANGELOG lists phase 5 and the order-row additions, and the README and CHANGELOG keep to 120 columns.
+2. **Guild recipe-list dedup** (store a profession line's packed recipe string once per guild instead of once per
+   character). It is built only if it saves at least about 20 % of the stored guild data on realistic data. The
+   phase 6 plan measured 0–2 % for a realistic guild with the default quality sharing. It reached 39–77 % only when
+   most characters know every recipe of a line with the same expected qualities. So it is not built in phase 6. A P6
+   check counts the identical lines in a real SavedVariables file, and that count decides whether it comes back.
+
+Out of scope for phase 6: the guild privacy defaults; the `Protocol.VERSION` and the wire format (unchanged); anything
+that needs the game client to verify (it becomes `P6-` lines in `docs/in-game-checklist.md`); releasing, tagging or
+pushing; the spec items listed as not built in the phase 6 plan's appendix, unless trivial; everything in §10.
+
 ## 10. Out of scope
 
 - Classic clients.
