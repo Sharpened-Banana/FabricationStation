@@ -444,6 +444,7 @@ describe("OnboardingWizard", function()
     local b = f.CloseButton
     local pre = b:GetScript("PreClick"); if pre then pre(b) end
     b:GetScript("OnClick")(b)
+    local post = b:GetScript("PostClick"); if post then post(b) end
   end
   local function escape(f) f:Hide(); f:GetScript("OnHide")(f) end
   local function hide_with_ui(f) f:GetScript("OnHide")(f) end    -- parent hidden: the frame's own shown flag stays true
@@ -508,12 +509,39 @@ describe("OnboardingWizard", function()
     assert.is_nil(record())
   end)
 
-  it("does not let an old close request turn a later Escape into a choice", function()
+  it("does not let a close request whose hide never came turn a later Escape into a choice", function()
+    Wizard:Open()
+    local b = Wizard:GetControls().frame.CloseButton
+    b:GetScript("PreClick")(b); b:GetScript("PostClick")(b)   -- the click ran, but the frame was not hidden
+    escape(Wizard:GetControls().frame)
+    assert.is_nil(record())
+  end)
+
+  it("works without a template close button: Escape still keeps the guide pending", function()
+    local base = _G.CreateFrame
+    _G.CreateFrame = function(...)
+      local f = base(...)
+      rawset(f, "CloseButton", nil)                             -- the fake answers a stub for unknown fields
+      return f
+    end
+    finally(function() _G.CreateFrame = base end)
+    Wizard:Open()
+    assert.is_true(Wizard:IsShown())
+    escape(Wizard:GetControls().frame)
+    assert.is_nil(record()); assert.is_true(Onboarding:ShouldShow())
+    Wizard:Open(); click(Wizard:GetControls().skip)
+    assert.is_true(record().skipped)
+  end)
+
+  it("writes nothing through any close path while the saved data is from a newer version", function()
+    ns.FS.dbIsNewer = true
+    finally(function() ns.FS.dbIsNewer = nil end)
     Wizard:Open(); click_close(Wizard:GetControls().frame)
-    Onboarding.VERSION = 2                                    -- the guide is due again for an upgrader
-    finally(function() Onboarding.VERSION = 1 end)
-    Wizard:Open(); escape(Wizard:GetControls().frame)
-    assert.are.equal(1, record().completedVersion)
+    assert.is_nil(record()); assert.is_false(Wizard:IsShown())
+    Wizard:Open(); click(Wizard:GetControls().skip)
+    assert.is_nil(record())
+    Wizard:Open(); goto_step("done"); click(Wizard:GetControls().next)
+    assert.is_nil(record())
   end)
 
   it("Finish completes as not skipped and applies nothing twice", function()

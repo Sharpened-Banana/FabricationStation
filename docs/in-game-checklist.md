@@ -880,9 +880,9 @@ setup" window opens in the middle of the screen. It must have a title in the tit
 `SetTitle`, else `TitleText`, else `TitleContainer.TitleText`; report if the bar is empty), a Skip button at the bottom
 left, Back / Next at the bottom right and "Step n of 7" at the bottom centre, none overlapping the inset's border or each
 other. Step through all seven steps: no text may run outside its box or over the next control (welcome, Auctionator,
-scan, optional features, prices, guild and chat, done). Escape and the X button must close it and count as Skip: it does
-not come back at the next `/reload`. Then `/fs setup` reopens it, and closing that reopened guide again does not
-change anything. The window must be draggable and must not hide behind the profession window.
+scan, optional features, prices, guild and chat, done). Skip and the X button must close it and count as Skip: it does
+not come back at the next `/reload`. (Escape and hiding the UI record nothing and keep the guide pending: see P5-3.)
+Then `/fs setup` reopens it, and closing that reopened guide again does not change anything. The window must be draggable and must not hide behind the profession window.
 
 P4-24. **Setup guide, Auctionator step (Task 12).** Run the guide three times: with Auctionator not installed
 (rename its folder), installed but disabled in the AddOns list, and enabled. Each must show its own status line and text

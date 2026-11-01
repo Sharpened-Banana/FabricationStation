@@ -484,6 +484,8 @@ local function ensure_view()
   if type(frame.CloseButton) == "table" and frame.CloseButton.HookScript then
     -- PreClick runs before the template's own OnClick hides the frame, so the hide that follows is a close request.
     frame.CloseButton:HookScript("PreClick", wrapped(function() if active then closeRequested = true end end))
+    -- PostClick runs after the hide: a request whose hide never came (a failed OnClick) must not outlive the click.
+    frame.CloseButton:HookScript("PostClick", wrapped(function() closeRequested = false end))
   end
 
   local registered = false
