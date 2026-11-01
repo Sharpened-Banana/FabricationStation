@@ -415,7 +415,6 @@ function refreshers.scan(c)
       -- Over the row: a line that was cut shows its full text in a tooltip.
       hit = CreateFrame("Frame", nil, c.child)
       hit:SetAllPoints(fs)
-      hit:EnableMouse(true)
       hit:SetScript("OnEnter", ns.FS:Wrap(TOOLTIP_SOURCE, function(self)
         if not (GameTooltip and self.text) then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -439,12 +438,15 @@ function refreshers.scan(c)
     fs:SetText(ROW_COLOR[row.kind] .. row.text .. "|r")
     fs:Show()
     hit.text = is_cut(fs) and row.text or nil
+    -- Only a cut row takes the mouse: a row that fits has no tooltip, and must not lie over a button below the list.
+    hit:EnableMouse(hit.text ~= nil)
     hit:Show()
   end
   for i = #rows + 1, #c.rows do
     c.rows[i]:Hide()
     c.rowHits[i]:Hide()
     c.rowHits[i].text = nil
+    c.rowHits[i]:EnableMouse(false)
   end
   c.rowCount = #rows
   c.child:SetHeight(math.max(ROW_HEIGHT, #rows * ROW_HEIGHT))

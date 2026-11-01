@@ -67,6 +67,9 @@ local function patch_frames()
     function f:Enable() enabled = true end
     function f:Disable() enabled = false end
     function f:IsEnabled() return enabled end
+    local mouse = false
+    function f:EnableMouse(v) mouse = v and true or false end
+    function f:IsMouseEnabled() return mouse end
     -- The template's X button: the client runs PreClick, then OnClick, which hides the frame (and so fires OnHide).
     if select(4, ...) == "BasicFrameTemplateWithInset" then
       local close = base("Button", nil, f, "UIPanelCloseButton")
@@ -889,6 +892,27 @@ describe("OnboardingWizard", function()
       fitting:GetScript("OnEnter")(fitting)
       assert.is_false(tooltip.visible)
       assert.are.same({}, tooltip.shown)
+    end)
+
+    it("lets only a cut row's hover frame take the mouse, so rows that fit never cover a button", function()
+      long_locale(3)
+      scan_chars()
+      Wizard:Open(); goto_step("scan")
+      local scan = Wizard:GetControls().steps.scan
+      local cut, short = 0, 0
+      for i = 1, scan.rowCount do
+        local hit = scan.rowHits[i]
+        assert.are.equal(hit.text ~= nil, hit:IsMouseEnabled(), "row " .. i)
+        if hit.text then cut = cut + 1 else short = short + 1 end
+      end
+      assert.is_true(cut > 0 and short > 0)
+      -- a row that stops being cut gives the mouse back
+      local fs = scan.rows[1]
+      fs.GetStringWidth = function() return 1 end
+      fs.GetUnboundedStringWidth = function() return 1 end
+      goto_step("scan")
+      assert.is_nil(scan.rowHits[1].text)
+      assert.is_false(scan.rowHits[1]:IsMouseEnabled())
     end)
 
     -- Rows the client reports as cut: a one-line, fixed-width font string answers GetStringWidth bounded by its width.

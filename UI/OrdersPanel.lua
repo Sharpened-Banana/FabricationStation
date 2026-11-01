@@ -913,8 +913,8 @@ local function new_cells(row)
   c.dimTexture:SetAllPoints(frame)
   c.dimTexture:SetColorTexture(DIM[1], DIM[2], DIM[3], DIM[4])
 
-  -- The strip, right to left: [profit] [warning] [conc] [score] [risk] [+]. Positions are fixed offsets from its right edge;
-  -- only profit moves (left of the warning icon when that shows).
+  -- The strip, left to right: [profit] [conc] [warning] [score] [risk] [+]. Positions are fixed offsets from its right
+  -- edge; conc and profit move left by the warning icon's slot when it shows.
   local strip = CreateFrame("Frame", nil, frame)
   strip:SetSize(STRIP_WIDTH, STRIP_HEIGHT)
   c.strip = strip

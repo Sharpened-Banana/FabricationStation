@@ -1109,6 +1109,8 @@ P6-4. **Setup guide footer and scan list.** `/fs setup`. Expected:
 - On "Guild and chat" with Guild turned off on the previous step, both small headings are grey.
 - On "Scan your professions", hovering a row that ends in "..." shows its full text, and the mouse wheel still scrolls
   the list while the pointer is over a row.
+- With more characters than fit in the list, "Check again", Back, Next and Skip still click (rows scrolled out of view
+  must not cover them).
 - `/run local b = CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate"); b:SetText("x"); print(type(b:GetFontString().GetUnboundedStringWidth))`
   prints `function` (if not, the buttons use the older width call; note it).
 

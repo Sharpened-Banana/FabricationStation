@@ -221,6 +221,25 @@ describe("Dashboard", function()
       assert.truthy(lines[2]:find(ns.UI.FormatMoney(3600), 1, true))
       assert.truthy(lines[3]:find("1 ", 1, true)); assert.truthy(lines[3]:find("missing", 1, true))
     end)
+    -- The one English change of the locale conversion: the age sits in "(...)" after two spaces, colour codes outside.
+    describe("queue summary reagent cost line", function()
+      local function plain_line2()
+        local Q = ns.FS:GetModule("Queue")
+        world.fakeEvaluate(9001, { allocation = { { slotIndex = 1, itemID = 1001, quantity = 2 } }, reagentCost = 900,
+          expectedYield = 1, profit = 5000, flags = {} })
+        Q:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm" })
+        local line = texts(refreshed().queueSummary)[2]
+        return (line:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+      end
+      it("appends the price age in brackets after two spaces", function()
+        ns.FS:GetModule("Prices").GetLastUpdate = function() return ns.FS:Now() - 7200 end
+        assert.equals("Reagent cost: " .. ns.UI.FormatMoney(2700) .. "  (prices 2h old)", plain_line2())
+      end)
+      it("is the cost alone when no price update is known", function()
+        ns.FS:GetModule("Prices").GetLastUpdate = function() return nil end
+        assert.equals("Reagent cost: " .. ns.UI.FormatMoney(2700), plain_line2())
+      end)
+    end)
     it("queue summary says the cost is unknown when any cost is", function()
       local Q = ns.FS:GetModule("Queue")
       world.fakeEvaluate(9001, { allocation = {}, reagentCost = nil, expectedYield = 1, flags = {} })

@@ -164,7 +164,7 @@ function Tab.CellTexts(row)
   if row.flagsText ~= "" then name = name .. "  " .. color(WARN, L["[%s]"]:format(row.flagsText)) end
   return {
     name = name, character = short_name(row.charKey),
-    quality = row.quality ~= nil and L["Q%d"]:format(row.quality) or "--",
+    quality = type(row.quality) == "number" and L["Q%d"]:format(math.floor(row.quality)) or "--",
     cost = money(row.cost), sale = money(row.sale), profit = profit,
     gpc = row.gpc ~= nil and ns.UI.FormatMoney(row.gpc) or color(DIM, "--"),
     age = age,

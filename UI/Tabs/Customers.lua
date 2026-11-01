@@ -365,7 +365,7 @@ local function history_cells(row)
   return {
     date = date_text(row.time, "%m-%d"),
     item = item,
-    quality = type(row.quality) == "number" and L["Q%d"]:format(row.quality) or "--",
+    quality = type(row.quality) == "number" and L["Q%d"]:format(math.floor(row.quality)) or "--",
     tip = money_text(row.tip, true),
   }
 end
