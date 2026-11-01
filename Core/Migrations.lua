@@ -34,7 +34,8 @@ function Migrations.Run(global)
   for version = from + 1, latest do
     local fn = registry[version]
     local ok, err
-    if fn then ok, err = pcall(fn, global) else ok, err = false, "missing migration " .. version end  -- locale: joined (error code logged, never shown)
+    if fn then ok, err = pcall(fn, global)
+    else ok, err = false, "missing migration " .. version end  -- locale: joined (error code logged, never shown)
     if not ok then return false, from, current, tostring(err) end
     current = version
     global.schemaVersion = version

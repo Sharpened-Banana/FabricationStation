@@ -37,11 +37,16 @@ describe("public docs and release metadata", function()
     end
   end)
 
-  it("keeps CHANGELOG lines within 120 columns", function()
-    local n = 0
-    for line in (read("CHANGELOG.md") .. "\n"):gmatch("(.-)\n") do
-      n = n + 1
-      assert.is_true(#line <= 120, ("CHANGELOG.md line %d is %d columns"):format(n, #line))
+  -- Width counts characters, not bytes (UTF-8 continuation bytes are skipped). docs/in-game-checklist.md is exempt:
+  -- its long lines are /dump commands and paths that must stay copyable.
+  it("keeps CHANGELOG and README lines within 120 characters", function()
+    for _, file in ipairs({ "CHANGELOG.md", "README.md" }) do
+      local n = 0
+      for line in (read(file) .. "\n"):gmatch("(.-)\n") do
+        n = n + 1
+        local width = select(2, line:gsub("[^\128-\191]", ""))
+        assert.is_true(width <= 120, ("%s line %d is %d characters"):format(file, n, width))
+      end
     end
   end)
 

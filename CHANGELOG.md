@@ -59,3 +59,19 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
   - A first-run setup guide (`/fs setup` reopens it).
   - A localization framework (AceLocale). English is the only language so far.
   - README, MIT licence, third-party notices and GitHub issue forms.
+- Phase 5 and 6, hardening and polish:
+  - The Guild tab search finds any recipe by name or shift-clicked item link, lists recipes nobody is known to craft,
+    and can ask the game's guild list about them with a click.
+  - At most 300 guildmates' characters are kept per guild; the one seen least recently is dropped and fetched again
+    at its owner's next login.
+  - The setup guide is recorded only by Skip, the close button or Finish; hiding it any other way keeps it for later,
+    and guild sharing says when it waits for the guide. Its step counter sits between the navigation buttons, and a
+    cut-off line in the scan list shows its full text in a tooltip.
+  - Crafting-order rows show a patron order's rewards as icons in the Commission column, and the reagents you still
+    lack in the Reagents column, or a green check when you have them all or the customer provides them.
+  - Crafting-order rows have a concentration cell: the concentration the order needs, in red when you have too
+    little, and a red cross when the quality it asks for cannot be reached.
+  - The second price on a crafting-order row is shown only when concentration changes it.
+  - Your concentration is shown at the top left of the crafting-orders window, on a black backdrop.
+  - A setting turns the icons on the order rows off (Settings > Orders & Ledger).
+  - Display text is built from whole-sentence keys for translators.

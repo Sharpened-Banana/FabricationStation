@@ -24,11 +24,12 @@ come out at, how much concentration it takes, what it earns, and what your other
 
 **Crafting orders**
 
-- Scores the crafting orders on the board and values NPC patron rewards. It adds profit, concentration needed, score and risk cells to the
-  board's rows, a patron order's rewards as icons in the Commission column (and in the row's info tooltip), the reagents you still lack in place of the Reagents column's
-  word (a green check when you have them all or the customer provides them; Settings > Orders & Ledger turns the
-  icons off), a side panel with risk filters and a Claim Best Order button (it claims only when you click), your
-  concentration above the order list, and a warning line for blocked or VIP customers. It plays a sound and shows a toast when a personal order arrives.
+- Scores the crafting orders on the board and values NPC patron rewards. It adds profit, concentration needed, score
+  and risk cells to the board's rows, a patron order's rewards as icons in the Commission column (and in the row's
+  info tooltip), the reagents you still lack in place of the Reagents column's word (a green check when you have them
+  all or the customer provides them; Settings > Orders & Ledger turns the icons off), a side panel with risk filters
+  and a Claim Best Order button (it claims only when you click), your concentration above the order list, and a
+  warning line for blocked or VIP customers. It plays a sound and shows a toast when a personal order arrives.
 - A Customers tab (notes, tags, alt links, CSV export) built from the orders you fulfil, and a Ledger tab for income,
   costs and profit.
 
@@ -65,9 +66,9 @@ come out at, how much concentration it takes, what it earns, and what your other
 ## First run
 
 1. Log in. A short setup guide opens a few seconds after the loading screen. It covers Auctionator, scanning your
-   professions, the optional modules, price settings and the social features. Skip or the close button ends the guide (run
-   `/fs setup` to open it again); hiding it any other way keeps it for your next login, except on the last step, where
-   closing it in any way finishes it.
+   professions, the optional modules, price settings and the social features. Skip or the close button ends the guide
+   (run `/fs setup` to open it again); hiding it any other way keeps it for your next login, except on the last step,
+   where closing it in any way finishes it.
 2. Open each profession window once on each character. The scan reads a character's recipes while its profession
    window is open, so a character appears in the Characters tab and the Planner only after you have opened its
    professions. Alts are read from saved data afterwards, without logging in.
@@ -79,13 +80,17 @@ come out at, how much concentration it takes, what it earns, and what your other
 |---|---|
 | `/fs`, `/fabstation` | Open or close the main window. Both names take the same sub-commands. |
 | `/fs show` | Open the main window. |
-| `/fs settings` | Open the Settings tab (General, Prices, Crafting, Orders & Ledger, Characters, Planner, Guild, Chat requests, Modules, Diagnostics). |
-| `/fs tab <id>` | Open a tab by id: `dashboard`, `recipes`, `queue`, `orders`, `customers`, `ledger`, `characters`, `planner`, `guild`, `settings`. |
+| `/fs settings` | Open the Settings tab (its sections are listed below the table). |
+| `/fs tab <id>` | Open a tab by id (the ids are listed below the table). |
 | `/fs setup` | Reopen the setup guide. |
 | `/fs guild` | Print the guild sync status. |
 | `/fs guild selftest` | Build your own profile and check that it fits the wire format. Sends nothing. |
-| `/fs capture` | Save the recipe selected in the profession window as a capture, for a [math mismatch report](#reporting-bugs). |
+| `/fs capture` | Save the selected recipe as a capture, for a [math mismatch report](#reporting-bugs). |
 | `/fs help` | List the commands. |
+
+Tab ids: `dashboard`, `recipes`, `queue`, `orders`, `customers`, `ledger`, `characters`, `planner`, `guild`,
+`settings`. Settings sections: General, Prices, Crafting, Orders & Ledger, Characters, Planner, Guild, Chat requests,
+Modules, Diagnostics.
 
 ## Guild sync and privacy
 
@@ -135,8 +140,8 @@ one list from one sender. Choose "Only the character I am playing" if you do not
 
 **The Guild tab:** it lists who in your guild can craft what. Type a recipe name (three letters or more) or a
 crafter's name into the search box, or shift-click an item or a recipe into it while the box is selected, to find a
-recipe. A recipe no guildmate is known to craft gets a "no known crafter" row; select it and click "Ask guild" to ask the
-game who in your guild knows it. Nothing is asked until you click.
+recipe. A recipe no guildmate is known to craft gets a "no known crafter" row; select it and click "Ask guild" to
+ask the game who in your guild knows it. Nothing is asked until you click.
 
 **How to opt out:**
 

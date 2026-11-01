@@ -2,30 +2,30 @@ local _, ns = ...
 
 -- Guild tab: who in the guild can craft what, from the stored guild directory (Guild:BuildTabRows) and the cached
 -- answers of the game's own guild recipe query. One row per recipe and crafter: Recipe, Crafter, Q and Conc Q (expected
--- quality without and with concentration; "—" when unknown, never 0), Source ("Addon": the guildmate's own data,
--- "Guild query": the game's guild recipe list, which has no quality) and Synced (age of the data). A copy of a profile
--- that its character did not publish itself reads "<char> (via <owner>)"; a native crafter known to be offline is dim.
--- Peer text always goes through Util.EscapePipes (Guild.CrafterLabel). Every value a narrow window hides is in the row
+-- quality without and with concentration; "—" when unknown, never 0), Source ("Addon": the guildmate's own data, "Guild
+-- query": the game's guild recipe list, which has no quality) and Synced (age of the data). A copy of a profile that
+-- its character did not publish itself reads "<char> (via <owner>)"; a native crafter known to be offline is dim. Peer
+-- text always goes through Util.EscapePipes (Guild.CrafterLabel). Every value a narrow window hides is in the row
 -- tooltip.
 --
 -- Bar: a search box (a recipe name, a crafter name, or a recipe or item link shift-clicked or pasted into it; 0.3 s
 -- after the last keystroke; a name of three letters or more also finds recipes nobody here is known to craft), a
--- profession button that cycles through
--- the professions the directory knows ("All professions" first; as the Planner's pickers, the stubs have no dropdown)
--- and the "Whisper" and "Ask guild" buttons. A recipe the search found that no guildmate is known to craft gets one
--- "no known crafter" row (Guild:BuildTabRows' placeholder): it can be selected, and "Ask guild" can ask about it, but
--- there is nobody to whisper. When a new search text (or a new guild with the same text) finds exactly one recipe it is selected for you, unless a
--- listed row is already selected; while the profession filter hides it, it is selected as soon as the filter shows it
--- (never on a plain refresh; a selection sends nothing; the guild is asked only by a click on "Ask guild"). A link shift-clicked in the game is inserted into the
--- search box while it has the keyboard focus (a hook on ChatFrameUtil.InsertLink, else ChatEdit_InsertLink). A click on
--- a row only selects it (its recipe for "Ask guild", its crafter for "Whisper"); a double click on a row or the Whisper button opens a whisper (ChatFrameUtil.SendTell, from the click
--- only: nothing is sent, the player types and sends). The whisper goes to the crafter, or for a copy the character has
--- not confirmed ("<char> (via <owner>)") to the owner who shared it, who is the one known to be online. "Ask guild"
--- calls GuildNative:Query for the selected recipe, so it checks settings.guild.useNative itself (the profession
--- panel's "Ask guild" is the other caller; Guild's tooltip and panel lines only read the cache). It is disabled
--- without a selected row, while the chat gate is locked ("Sync paused (instance)"), when the setting is off, outside a
--- guild and while Guild is off. The answer is cached by GuildNative and announced through FS_GUILD_CHANGED, which
--- refreshes the tab.
+-- profession button that cycles through the professions the directory knows ("All professions" first; as the Planner's
+-- pickers, the stubs have no dropdown) and the "Whisper" and "Ask guild" buttons. A recipe the search found that no
+-- guildmate is known to craft gets one "no known crafter" row (Guild:BuildTabRows' placeholder): it can be selected,
+-- and "Ask guild" can ask about it, but there is nobody to whisper. When a new search text (or a new guild with the
+-- same text) finds exactly one recipe it is selected for you, unless a listed row is already selected; while the
+-- profession filter hides it, it is selected as soon as the filter shows it (never on a plain refresh; a selection
+-- sends nothing; the guild is asked only by a click on "Ask guild"). A link shift-clicked in the game is inserted into
+-- the search box while it has the keyboard focus (a hook on ChatFrameUtil.InsertLink, else ChatEdit_InsertLink). A
+-- click on a row only selects it (its recipe for "Ask guild", its crafter for "Whisper"); a double click on a row or
+-- the Whisper button opens a whisper (ChatFrameUtil.SendTell, from the click only: nothing is sent, the player types
+-- and sends). The whisper goes to the crafter, or for a copy the character has not confirmed ("<char> (via <owner>)")
+-- to the owner who shared it, who is the one known to be online. "Ask guild" calls GuildNative:Query for the selected
+-- recipe, so it checks settings.guild.useNative itself (the profession panel's "Ask guild" is the other caller; Guild's
+-- tooltip and panel lines only read the cache). It is disabled without a selected row, while the chat gate is locked
+-- ("Sync paused (instance)"), when the setting is off, outside a guild and while Guild is off. The answer is cached by
+-- GuildNative and announced through FS_GUILD_CHANGED, which refreshes the tab.
 --
 -- Second line: the last action's feedback or the selected recipe. Footer: the sync summary (Guild:Status), leading with
 -- "Sync:" or "Sync paused (instance)", with every number in its tooltip. While Guild is off the tab says so instead of
@@ -189,7 +189,8 @@ function Tab.FooterText(s)
   if s.gateLocked then
     head = L["Sync paused (instance)"]
   elseif s.sync == "held" then
-    head = L["Sync: %s"]:format(G.SYNC_TEXT.held)     -- short: the full sentence is in the tooltip and on the status line
+    -- short: the full sentence is in the tooltip and on the status line
+    head = L["Sync: %s"]:format(G.SYNC_TEXT.held)
   else
     head = L["Sync: %s"]:format(G.SYNC_TEXT[s.sync] or tostring(s.sync))
   end
@@ -214,7 +215,8 @@ end
 function Tab.FooterTooltip(s)
   local G = guild()
   local lines = { L["Guild sync"] }
-  lines[#lines + 1] = L["Guild: %s"]:format(s.guildKey and ns.Social.Util.EscapePipes(s.guildKey) or L["not in a guild"])
+  lines[#lines + 1] = L["Guild: %s"]:format(
+    s.guildKey and ns.Social.Util.EscapePipes(s.guildKey) or L["not in a guild"])
   lines[#lines + 1] = L["Sync: %s"]:format(G.SYNC_TEXT[s.sync] or tostring(s.sync))
   if s.sync == "held" then lines[#lines + 1] = G.HELD_TEXT end
   if s.gateLocked then lines[#lines + 1] = L["Chat sync is locked (%s)"]:format(tostring(s.gateReason)) end
@@ -227,8 +229,8 @@ end
 
 -- { enabled, readOnly, guildKey, useNative, available, locked, selected } -> ok, reason|nil: whether "Ask guild" may
 -- run. reason: "off" | "readonly" (GuildNative stores no answer while the saved data is from a newer version, so the
--- tab would show nothing) | "noguild" | "native" | "unavailable" | "locked" | "select" | "noline" (the selected recipe's
--- profession is not known).
+-- tab would show nothing) | "noguild" | "native" | "unavailable" | "locked" | "select" | "noline" (the selected
+-- recipe's profession is not known).
 function Tab.AskState(s)
   if not s.enabled then return false, "off" end
   if s.readOnly then return false, "readonly" end
@@ -435,7 +437,11 @@ local function show_lines(owner, lines)
   if type(GameTooltip) ~= "table" or type(lines) ~= "table" or #lines == 0 then return end
   GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
   for i, line in ipairs(lines) do
-    if i == 1 then GameTooltip:SetText(tostring(line), 1, 1, 1) else GameTooltip:AddLine(tostring(line), 0.9, 0.9, 0.9, true) end
+    if i == 1 then
+      GameTooltip:SetText(tostring(line), 1, 1, 1)
+    else
+      GameTooltip:AddLine(tostring(line), 0.9, 0.9, 0.9, true)
+    end
   end
   GameTooltip:Show()
 end
@@ -567,8 +573,9 @@ end
 -- Build
 ---------------------------------------------------------------------------
 
--- A link the player shift-clicked in the game, inserted into the search box while it has the keyboard focus. Runs after
--- Blizzard's own function (hooksecurefunc), so it never replaces what the chat box or another window does with the link.
+-- A link the player shift-clicked in the game, inserted into the search box while it has the keyboard focus. Runs
+-- after Blizzard's own function (hooksecurefunc), so it never replaces what the chat box or another window does with
+-- the link.
 local function on_insert(link)
   if not view or not live() or type(link) ~= "string" then return end
   local search = view.search
@@ -614,7 +621,8 @@ local function build_bar(container, created)
   prof:SetScript("OnClick", ns.FS:Wrap(SOURCE, cycle_profession))
   prof:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
     show_lines(self, { L["Profession"],
-      L["Click for the next profession (%d with guild crafters), then all again"]:format(view and view.profCount or 0) })
+      L["Click for the next profession (%d with guild crafters), then all again"]:format(
+        view and view.profCount or 0) })
   end))
   prof:SetScript("OnLeave", hide_tooltip)
   created.profButton = prof
