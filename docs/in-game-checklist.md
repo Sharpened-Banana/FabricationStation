@@ -967,6 +967,11 @@ one "no known crafter" row that is selected. Type the name of a current-expansio
 a "no known crafter" row appears; click "Ask guild": "Asking the guild..." then "Guild answered: N can craft this".
 Nothing is asked before the click.
 
+P5-6. **Setup guide layout (Task 5).** `/fs setup` and step through every page. Expected: no text is cut off or
+overlaps a button, the window keeps its usual height in English, and the two buttons on "Guild and chat" show the value
+under a small heading ("What to share" / "Which characters to share"). If any text box is too short or the window is
+taller than before, the client measured 0 for a hidden font string: note which step.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

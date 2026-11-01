@@ -209,8 +209,6 @@ L["Turn off what you will not use. Each one can be switched back on in /fs setti
 L["Type /fs to open FabricationStation. /fs setup reopens this guide."] = true
 L["Watch all your crafters: concentration, cooldowns and moxie."] = true
 L["Welcome"] = true
-L["What to share: %s"] = true
-L["Which characters to share: %s"] = true
 L["Sharing several characters lets guildmates see that they belong to the same player."] = true
 L["The saved data is from a newer version of FabricationStation, so the choices you make in this guide will not be saved."] = true
 L["Skip or the close button ends this guide; /fs setup opens it again. If the window is hidden any other way, it comes back at your next login."] = true

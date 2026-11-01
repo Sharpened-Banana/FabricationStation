@@ -19,8 +19,14 @@ local _, ns = ...
 -- applies nothing. The Auctionator and scan steps read their status each time they are shown, and a "Check again"
 -- button reads it again.
 --
--- Layout: every heading and label is one line (no word wrap) in a fixed width; the explanations wrap deliberately in
--- fixed boxes sized for their text. The scan list is a plain ScrollFrame of pooled one-line rows.
+-- Layout: headings, checkbox labels and the scan rows are one line in a fixed width; every explanation wraps. A step
+-- builder lists its regions in order in c.layout = { { region, kind = "wrap"|"line"|"button"|"check"|"scroll", gap, x } }
+-- instead of fixed y offsets, and layout_step() (run by ShowStep after the refresher) stacks the shown ones from the
+-- top: a wrapped box is as tall as its measured text (never under its English height, which is also the fallback when
+-- the client measures 0), a button is as wide as its text needs (never under its English width), and the window grows
+-- (up to the screen) when the longest step needs it, so a longer translation does not clip. With the English text
+-- every step keeps the usual 440 px. The scan list is a plain ScrollFrame of pooled one-line rows that takes the rest
+-- of the content area.
 local Wizard = {}
 ns.UI = ns.UI or {}
 ns.UI.OnboardingWizard = Wizard
@@ -36,7 +42,11 @@ local PAD = 16
 local CONTENT_WIDTH = Wizard.WIDTH - 2 * PAD          -- 468
 local BUTTON_HEIGHT = 22
 local ROW_HEIGHT = 16
-local MODULE_ROW = 46
+local BUTTON_PAD = 24         -- a button's width is its text width plus this
+local SCROLL_MIN = 100        -- the least height the scan list needs; it takes whatever the window has beyond that
+local SCROLL_FOOT = 32        -- below the scan list: the "Check again" button
+local NAV_MAX_WIDTH = 120        -- Back, Next and Skip stay clear of the step counter between them
+local FRAME_CHROME = 76       -- the window's height beyond its content: 36 above it, 40 below
 local GOLD, GREEN, ORANGE, GRAY = "|cffffd100", "|cff40ff40", "|cffffa000", "|cff909090"
 
 -- The modules the "modules" step lists, in display order, with their label and description. Guild's sharing details
@@ -146,7 +156,8 @@ end
 
 local function wrapped(fn) return ns.FS:Wrap(SOURCE, fn) end
 
--- A text line at (x, y) below the top left of parent. wrap = a fixed box that wraps; otherwise one line, cut at width.
+-- A text line at (x, y) below the top left of parent (where layout_step() moves it). wrap = a box that wraps; its
+-- height is the minimum and layout_step() makes it taller when the text needs it. Otherwise one line, cut at width.
 local function label(parent, template, x, y, width, height, wrap)
   local fs = parent:CreateFontString(nil, "OVERLAY", template)
   fs:SetPoint("TOPLEFT", parent, "TOPLEFT", x, -y)
@@ -172,10 +183,18 @@ local function attach_tooltip(frame, title, body)
   end))
 end
 
-local function button(parent, text, width, onClick)
-  local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-  b:SetSize(width, BUTTON_HEIGHT)
+-- A button's text, and its width fitted to it: today's width is the minimum, maxWidth the limit.
+local function set_button_text(b, text)
   b:SetText(text)
+  local textWidth = tonumber(b.GetTextWidth and b:GetTextWidth()) or 0
+  b:SetWidth(math.min(b.maxWidth, math.max(b.minWidth, textWidth + BUTTON_PAD)))
+end
+
+local function button(parent, text, minWidth, onClick, maxWidth)
+  local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  b.minWidth, b.maxWidth = minWidth, math.max(minWidth, maxWidth or CONTENT_WIDTH)
+  b:SetSize(minWidth, BUTTON_HEIGHT)
+  set_button_text(b, text)
   b:SetScript("OnClick", wrapped(onClick))
   return b
 end
@@ -191,6 +210,44 @@ local function check(parent, x, y, text, width, toggle)
   b.text:SetText(text)
   b:SetScript("OnClick", wrapped(function(self) self:SetChecked(toggle() and true or false) end))
   return b
+end
+
+---------------------------------------------------------------------------
+-- Layout: stacks a step's shown regions from the top, each as tall as its text needs
+---------------------------------------------------------------------------
+
+-- The measured height of a wrapped font string, 0 when the client cannot measure it (a hidden frame may answer 0 or nil).
+local function measured_height(fs)
+  local height = fs.GetStringHeight and fs:GetStringHeight()
+  return type(height) == "number" and height or 0
+end
+
+-- Anchors every shown region of c.layout TOPLEFT at (x, -y) of the step's frame, from y = 0 down, and returns the bottom
+-- y. kinds: "wrap" (height = the measured text, at least item.min), "line" (item.height), "button" (item.height),
+-- "check" (item.height; its label follows it), "scroll" (the scan list: stretched to the bottom edge, item.min counted).
+local function layout_step(c)
+  local y = 0
+  for _, item in ipairs(c.layout or {}) do
+    local region, kind = item.region, item.kind
+    if region:IsShown() then
+      local x = item.x or 0
+      local height = item.height or 0
+      region:ClearAllPoints()
+      region:SetPoint("TOPLEFT", c.frame, "TOPLEFT", x, -y)
+      if kind == "wrap" then
+        height = math.max(item.min or 0, math.ceil(measured_height(region)))
+        region:SetHeight(height)
+      elseif kind == "check" then
+        region.text:ClearAllPoints()
+        region.text:SetPoint("TOPLEFT", c.frame, "TOPLEFT", x + 28, -(y + 5))
+      elseif kind == "scroll" then
+        region:SetPoint("BOTTOMRIGHT", c.frame, "BOTTOMRIGHT", 0, SCROLL_FOOT)
+        height = (item.min or 0) + SCROLL_FOOT
+      end
+      y = y + height + (item.gap or 0)
+    end
+  end
+  return y
 end
 
 ---------------------------------------------------------------------------
@@ -210,6 +267,12 @@ function builders.welcome(frame)
   c.readOnly = label(frame, "GameFontHighlight", 0, 172, CONTENT_WIDTH, 50, true)
   local readOnlyText = L["The saved data is from a newer version of FabricationStation, so the choices you make in this guide will not be saved."]
   c.readOnly:SetText(ORANGE .. readOnlyText .. "|r")
+  c.layout = {
+    { region = c.heading, kind = "line", height = 22, gap = 10 },
+    { region = c.body, kind = "wrap", min = 70, gap = 10 },
+    { region = c.more, kind = "wrap", min = 50, gap = 10 },
+    { region = c.readOnly, kind = "wrap", min = 50 },
+  }
   return c
 end
 
@@ -235,10 +298,16 @@ local AUCTIONATOR_TONE = { missing = ORANGE, disabled = ORANGE, noapi = ORANGE, 
 
 function builders.auctionator(frame)
   local c = { heading = heading(frame) }
-  c.status = label(frame, "GameFontNormal", 0, 32, CONTENT_WIDTH, 16, false)
+  c.status = label(frame, "GameFontNormal", 0, 32, CONTENT_WIDTH, 16, true)
   c.body = label(frame, "GameFontHighlight", 0, 58, CONTENT_WIDTH, 90, true)
   c.again = button(frame, L["Check again"], 110, function() Wizard:ShowStep(current) end)
   c.again:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -160)
+  c.layout = {
+    { region = c.heading, kind = "line", height = 22, gap = 10 },
+    { region = c.status, kind = "wrap", min = 16, gap = 10 },
+    { region = c.body, kind = "wrap", min = 90, gap = 12 },
+    { region = c.again, kind = "button", height = BUTTON_HEIGHT },
+  }
   return c
 end
 
@@ -269,6 +338,11 @@ function builders.scan(frame)
   end))
   c.again = button(frame, L["Check again"], 110, function() Wizard:ShowStep(current) end)
   c.again:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 0, 0)
+  c.layout = {
+    { region = c.heading, kind = "line", height = 22, gap = 6 },
+    { region = c.body, kind = "wrap", min = 46, gap = 6 },
+    { region = c.scroll, kind = "scroll", min = SCROLL_MIN },
+  }
   return c
 end
 
@@ -302,16 +376,21 @@ function builders.modules(frame)
   local c = { heading = heading(frame), checks = {} }
   c.body = label(frame, "GameFontHighlight", 0, 28, CONTENT_WIDTH, 32, true)
   c.body:SetText(L["Turn off what you will not use. Each one can be switched back on in /fs settings."])
-  for i, row in ipairs(module_rows()) do
-    local y = 64 + (i - 1) * MODULE_ROW
-    local b = check(frame, 0, y, row.label, CONTENT_WIDTH - 32, function()
+  c.layout = {
+    { region = c.heading, kind = "line", height = 22, gap = 6 },
+    { region = c.body, kind = "wrap", min = 32, gap = 4 },
+  }
+  for _, row in ipairs(module_rows()) do
+    local b = check(frame, 0, 0, row.label, CONTENT_WIDTH - 32, function()
       choices.modules[row.name] = not choices.modules[row.name]
       return choices.modules[row.name]
     end)
-    local description = label(frame, "GameFontHighlightSmall", 28, y + 22, CONTENT_WIDTH - 32, 24, true)
-    description:SetMaxLines(2)
+    local description = label(frame, "GameFontHighlightSmall", 28, 22, CONTENT_WIDTH - 32, 24, true)
     description:SetText(row.text)
     c.checks[row.name] = b
+    -- The description starts 2 px inside the 24 px box, as it always did.
+    c.layout[#c.layout + 1] = { region = b, kind = "check", height = 24, gap = -2 }
+    c.layout[#c.layout + 1] = { region = description, kind = "wrap", min = 24, x = 28 }
   end
   return c
 end
@@ -331,12 +410,18 @@ function builders.prices(frame)
   c.openButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -112)
   c.note = label(frame, "GameFontHighlightSmall", 0, 144, CONTENT_WIDTH, 40, true)
   c.note:SetText(L["The settings open in the main window. This guide stays open; move it aside if it is in the way."])
+  c.layout = {
+    { region = c.heading, kind = "line", height = 22, gap = 10 },
+    { region = c.body, kind = "wrap", min = 70, gap = 10 },
+    { region = c.openButton, kind = "button", height = BUTTON_HEIGHT, gap = 10 },
+    { region = c.note, kind = "wrap", min = 40 },
+  }
   return c
 end
 
+-- The cycle buttons show only their value; the question is a small heading above each.
 local function level_button_text()
-  local level = choices and choices.shareLevel == "recipes" and L["Recipes only"] or L["Recipes and expected quality"]
-  return L["What to share: %s"]:format(level)
+  return choices and choices.shareLevel == "recipes" and L["Recipes only"] or L["Recipes and expected quality"]
 end
 
 -- GuildOptions' shareAlts values, in its order, with its labels.
@@ -348,7 +433,7 @@ local function alts_label(value)
 end
 
 local function alts_button_text()
-  return L["Which characters to share: %s"]:format(alts_label(choices and choices.shareAlts))
+  return alts_label(choices and choices.shareAlts)
 end
 
 local function next_alts(value)
@@ -362,40 +447,56 @@ function builders.social(frame)
   local c = { heading = heading(frame) }
   c.body = label(frame, "GameFontHighlight", 0, 28, CONTENT_WIDTH, 48, true)
   c.body:SetText(L["Guild sharing lets guildmates who run FabricationStation see which recipes your characters can craft. Only recipes, skill levels and expected quality are shared, never gold, items or prices."])
-  c.shareCheck = check(frame, 0, 84, L["Share my recipes with my guild"], CONTENT_WIDTH - 32, function()
+  c.shareCheck = check(frame, 0, 0, L["Share my recipes with my guild"], CONTENT_WIDTH - 32, function()
     choices.share = not choices.share
     return choices.share
   end)
+  c.levelLabel = label(frame, "GameFontNormalSmall", 28, 0, CONTENT_WIDTH - 28, 14, true)
+  c.levelLabel:SetText(L["What to share"])
   c.levelButton = button(frame, "", 300, function(self)
     choices.shareLevel = choices.shareLevel == "quality" and "recipes" or "quality"
-    self:SetText(level_button_text())
-  end)
-  c.levelButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 28, -114)
+    set_button_text(self, level_button_text())
+  end, CONTENT_WIDTH - 28)
+  c.levelButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 28, 0)
   attach_tooltip(c.levelButton, L["What to share"],
     L["Expected quality is what your character would craft with and without concentration."])
+  c.altsLabel = label(frame, "GameFontNormalSmall", 28, 0, CONTENT_WIDTH - 28, 14, true)
+  c.altsLabel:SetText(L["Which characters to share"])
   c.altsButton = button(frame, "", 430, function(self)
     choices.shareAlts = next_alts(choices.shareAlts)
-    self:SetText(alts_button_text())
-  end)
-  c.altsButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 28, -140)
+    set_button_text(self, alts_button_text())
+  end, CONTENT_WIDTH - 28)
+  c.altsButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 28, 0)
   attach_tooltip(c.altsButton, L["Which characters to share"],
     L["Sharing several characters lets guildmates see that they belong to the same player."])
-  c.guildOff = label(frame, "GameFontDisableSmall", 28, 168, CONTENT_WIDTH - 28, 14, false)
+  c.guildOff = label(frame, "GameFontDisableSmall", 28, 0, CONTENT_WIDTH - 28, 14, true)
   c.guildOff:SetText(L["Guild sharing is off because the Guild feature is turned off on the previous step."])
   c.chatBody = label(frame, "GameFontHighlight", 0, 194, CONTENT_WIDTH, 62, true)
   c.chatBody:SetText(L["Chat scanning watches Trade, Services and guild chat for someone asking for something you can craft, and shows a small toast. It never sends a message for you: you click Whisper yourself."])
-  c.chatScanCheck = check(frame, 0, 262, L["Scan chat for crafting requests"], CONTENT_WIDTH - 32, function()
+  c.chatScanCheck = check(frame, 0, 0, L["Scan chat for crafting requests"], CONTENT_WIDTH - 32, function()
     choices.chatScan = not choices.chatScan
     return choices.chatScan
   end)
+  c.layout = {
+    { region = c.heading, kind = "line", height = 22, gap = 6 },
+    { region = c.body, kind = "wrap", min = 48, gap = 8 },
+    { region = c.shareCheck, kind = "check", height = 24, gap = 6 },
+    { region = c.levelLabel, kind = "wrap", min = 14, x = 28, gap = 2 },
+    { region = c.levelButton, kind = "button", height = BUTTON_HEIGHT, x = 28, gap = 4 },
+    { region = c.altsLabel, kind = "wrap", min = 14, x = 28, gap = 2 },
+    { region = c.altsButton, kind = "button", height = BUTTON_HEIGHT, x = 28, gap = 6 },
+    { region = c.guildOff, kind = "wrap", min = 14, x = 28, gap = 12 },
+    { region = c.chatBody, kind = "wrap", min = 62, gap = 6 },
+    { region = c.chatScanCheck, kind = "check", height = 24 },
+  }
   return c
 end
 
 function refreshers.social(c)
   local on = guild_chosen()
   c.shareCheck:SetChecked(choices.share and true or false)
-  c.levelButton:SetText(level_button_text())
-  c.altsButton:SetText(alts_button_text())
+  set_button_text(c.levelButton, level_button_text())
+  set_button_text(c.altsButton, alts_button_text())
   c.chatScanCheck:SetChecked(choices.chatScan and true or false)
   if on then
     c.shareCheck:Enable(); c.levelButton:Enable(); c.altsButton:Enable(); c.guildOff:Hide()
@@ -410,6 +511,11 @@ function builders.done(frame)
   c.body:SetText(L["Type /fs to open FabricationStation. /fs setup reopens this guide."])
   c.note = label(frame, "GameFontHighlight", 0, 90, CONTENT_WIDTH, 50, true)
   c.note:SetText(L["The saved data is from a newer version of FabricationStation, so your choices were not saved."])
+  c.layout = {
+    { region = c.heading, kind = "line", height = 22, gap = 10 },
+    { region = c.body, kind = "wrap", min = 50, gap = 8 },
+    { region = c.note, kind = "wrap", min = 50 },
+  }
   return c
 end
 
@@ -451,13 +557,13 @@ local function ensure_view()
   content:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -PAD, 40)
 
   local v = { frame = frame, content = content, steps = {} }
-  v.skip = button(frame, L["Skip"], 80, function() Wizard:Close() end)
+  v.skip = button(frame, L["Skip"], 80, function() Wizard:Close() end, NAV_MAX_WIDTH)
   v.skip:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", PAD - 2, 10)
-  v.next = button(frame, L["Next"], 90, function() Wizard:Next() end)
+  v.next = button(frame, L["Next"], 90, function() Wizard:Next() end, NAV_MAX_WIDTH)
   v.next:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -(PAD - 2), 10)
-  v.back = button(frame, L["Back"], 80, function() Wizard:Back() end)
+  v.back = button(frame, L["Back"], 80, function() Wizard:Back() end, NAV_MAX_WIDTH)
   v.back:SetPoint("RIGHT", v.next, "LEFT", -6, 0)
-  v.stepLabel = label(frame, "GameFontDisableSmall", 0, 0, 120, 14, false)
+  v.stepLabel = label(frame, "GameFontDisableSmall", 0, 0, 160, 14, false)
   v.stepLabel:ClearAllPoints()
   v.stepLabel:SetPoint("BOTTOM", frame, "BOTTOM", 0, 15)
   v.stepLabel:SetJustifyH("CENTER")
@@ -525,13 +631,17 @@ function Wizard:ShowStep(index)
   local c = v.steps[step.id]
   if c.heading then c.heading:SetText(GOLD .. step.title .. "|r") end
   if refreshers[step.id] then refreshers[step.id](c) end
+  local bottom = layout_step(c)
+  local screen = UIParent and UIParent.GetHeight and UIParent:GetHeight()
+  if type(screen) ~= "number" or screen <= 0 then screen = 768 end
+  v.frame:SetHeight(math.min(screen - 40, math.max(Wizard.HEIGHT, bottom + FRAME_CHROME)))
   v.stepLabel:SetText(L["Step %d of %d"]:format(index, #list))
   if index > 1 then v.back:Show() else v.back:Hide() end
   if index == #list then
-    v.next:SetText(L["Finish"])
+    set_button_text(v.next, L["Finish"])
     v.skip:Hide()
   else
-    v.next:SetText(L["Next"])
+    set_button_text(v.next, L["Next"])
     v.skip:Show()
   end
 end

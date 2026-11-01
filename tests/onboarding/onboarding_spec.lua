@@ -16,12 +16,40 @@ local function map(list, key)
   return out
 end
 
--- The shared frame fake keeps no text, check state or enabled state for buttons; the wizard's controls get them here.
+-- Text measuring of the fake client: CHAR_W per character and LINE_H per line, on the text without colour codes.
+-- measureNothing = true makes every font string measure 0, as a client may for a font string on a hidden frame.
+local CHAR_W, LINE_H = 6, 14
+local measureNothing = false
+local function plain(text)
+  return (tostring(text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+
+-- The shared frame fake keeps no text, check state or enabled state for buttons, and no measurements; the wizard's
+-- controls get them here.
 local function patch_frames()
+  measureNothing = false
   local base = _G.CreateFrame
   _G.CreateFrame = function(...)
     local f = base(...)
     local text, checked, enabled = nil, false, true
+    function f:GetTextWidth() return measureNothing and 0 or #plain(text) * CHAR_W end
+    local makeFontString = f.CreateFontString
+    f.CreateFontString = function(owner, ...)
+      local fs = makeFontString(owner, ...)
+      local height
+      function fs:SetHeight(h) height = h end
+      function fs:GetHeight() return height end
+      function fs:GetStringWidth() return #plain(self:GetText()) * CHAR_W end
+      function fs:GetStringHeight()
+        if measureNothing then return 0 end
+        local chars = #plain(self:GetText())
+        local lines = 1
+        if self:GetWordWrap() then lines = math.max(1, math.ceil(chars * CHAR_W / (self:GetWidth() or 1))) end
+        if self:GetMaxLines() > 0 then lines = math.min(lines, self:GetMaxLines()) end
+        return LINE_H * lines
+      end
+      return fs
+    end
     function f:SetText(t) text = t end
     function f:GetText() return text end
     function f:SetChecked(v) checked = v and true or false end
@@ -591,11 +619,11 @@ describe("OnboardingWizard", function()
     click(c.moduleChecks.Orders); assert.is_false(c.moduleChecks.Orders:GetChecked())
     click(c.moduleChecks.Orders); assert.is_true(c.moduleChecks.Orders:GetChecked())
     goto_step("social")
-    assert.are.equal("What to share: Recipes and expected quality", c.levelButton:GetText())
+    assert.are.equal("Recipes and expected quality", c.levelButton:GetText())
     click(c.levelButton)
-    assert.are.equal("What to share: Recipes only", c.levelButton:GetText())
+    assert.are.equal("Recipes only", c.levelButton:GetText())
     click(c.levelButton)
-    assert.are.equal("What to share: Recipes and expected quality", c.levelButton:GetText())
+    assert.are.equal("Recipes and expected quality", c.levelButton:GetText())
     assert.is_true(c.shareCheck:IsEnabled())
     goto_step("modules"); click(c.moduleChecks.Guild); goto_step("social")
     assert.is_false(c.shareCheck:IsEnabled()); assert.is_false(c.levelButton:IsEnabled())
@@ -720,11 +748,11 @@ describe("OnboardingWizard", function()
     Wizard:Open()
     goto_step("social")
     local c = Wizard:GetControls()
-    assert.are.equal("Which characters to share: My characters in this guild", c.altsButton:GetText())
+    assert.are.equal("My characters in this guild", c.altsButton:GetText())
     click(c.altsButton)
-    assert.are.equal("Which characters to share: All my characters", c.altsButton:GetText())
+    assert.are.equal("All my characters", c.altsButton:GetText())
     click(c.altsButton)
-    assert.are.equal("Which characters to share: Only the character I am playing", c.altsButton:GetText())
+    assert.are.equal("Only the character I am playing", c.altsButton:GetText())
     assert.are.equal("guild", guild_settings.shareAlts)        -- not applied yet
     click(c.next)
     assert.are.equal("current", guild_settings.shareAlts)
@@ -764,5 +792,156 @@ describe("OnboardingWizard", function()
     Wizard:Open()
     for i = 1, 7 do Wizard:ShowStep(i) end
     assert.same({}, ns.FS.db.global.diagnostics.errors)
+  end)
+
+  describe("layout from the measured text", function()
+    -- Every key reads as its English text plus about half again as many "w" letters (a German-length translation).
+    local function long_locale(factor)
+      for key in pairs(ns.L) do rawset(ns.L, key, nil) end   -- keys read before this call are cached as English
+      setmetatable(ns.L, { __index = function(_, key) return key .. " " .. ("w"):rep(math.ceil(#key * (factor or 1) / 2)) end })
+    end
+    local function top(region) return -select(5, region:GetPoint(1)) end
+    local function height_of(item)
+      return item.kind == "button" and select(2, item.region:GetSize()) or item.region:GetHeight()
+    end
+
+    it("fits every step under a long locale", function()
+      long_locale()                                   -- before the frame is built
+      Wizard:Open()
+      local c = Wizard:GetControls()
+      for i, step in ipairs(Onboarding:GetSteps()) do
+        Wizard:ShowStep(i)
+        local _, frameHeight = c.frame:GetSize()
+        assert.is_true(#c.steps[step.id].layout > 0, step.id)
+        for _, item in ipairs(c.steps[step.id].layout) do
+          local r = item.region
+          if r:IsShown() then
+            local height = height_of(item)
+            if item.kind == "wrap" then assert.is_true(r:GetHeight() >= r:GetStringHeight(), step.id) end
+            if item.kind == "line" then assert.is_true(r:GetStringWidth() <= r:GetWidth(), step.id) end
+            if item.kind == "button" then assert.is_true(r:GetTextWidth() + 16 <= (r:GetSize()), step.id) end
+            if item.kind == "check" then assert.is_true(r.text:GetStringWidth() <= r.text:GetWidth(), step.id) end
+            if item.kind ~= "scroll" then assert.is_true(top(r) + height <= frameHeight - 76, step.id) end
+          end
+        end
+      end
+    end)
+
+    it("stacks the shown regions without overlap, in the builder's order", function()
+      long_locale()
+      Wizard:Open()
+      local c = Wizard:GetControls()
+      for i, step in ipairs(Onboarding:GetSteps()) do
+        Wizard:ShowStep(i)
+        local previous
+        for _, item in ipairs(c.steps[step.id].layout) do
+          if item.region:IsShown() and item.kind ~= "scroll" then
+            if previous then
+              -- a module's description starts 2 px under its box's top edge by design (the box is 24 px, the text 22)
+              assert.is_true(top(item.region) >= top(previous.region) + height_of(previous) - 2, step.id)
+            end
+            previous = item
+          end
+        end
+      end
+    end)
+
+    it("keeps the English layout at 440 px", function()
+      Wizard:Open()
+      for i = 1, #Onboarding:GetSteps() do
+        Wizard:ShowStep(i)
+        assert.are.equal(440, select(2, Wizard:GetControls().frame:GetSize()))
+      end
+    end)
+
+    it("keeps the English positions of the text and buttons", function()
+      Wizard:Open()
+      local c = Wizard:GetControls()
+      local function tops(id)
+        local out = {}
+        for _, item in ipairs(c.steps[id].layout) do
+          if item.region:IsShown() then out[#out + 1] = top(item.region) end
+        end
+        return out
+      end
+      Wizard:ShowStep(1); assert.are.same({ 0, 32, 112 }, tops("welcome"))
+      ns.FS.dbIsNewer = true; Wizard:ShowStep(1); assert.are.same({ 0, 32, 112, 172 }, tops("welcome"))
+      ns.FS.dbIsNewer = nil
+      goto_step("auctionator"); assert.are.same({ 0, 32, 58, 160 }, tops("auctionator"))
+      goto_step("scan"); assert.are.same({ 0, 28, 80 }, tops("scan"))
+      goto_step("modules")
+      assert.are.same({ 0, 28, 64, 86, 110, 132, 156, 178, 202, 224, 248, 270, 294, 316 }, tops("modules"))
+      goto_step("prices"); assert.are.same({ 0, 32, 112, 144 }, tops("prices"))
+      goto_step("done"); assert.are.same({ 0, 32 }, tops("done"))
+      ns.FS.dbIsNewer = true; goto_step("done"); assert.are.same({ 0, 32, 90 }, tops("done"))
+      ns.FS.dbIsNewer = nil
+    end)
+
+    it("shows only the value on the two cycle buttons, each under its heading", function()
+      Wizard:Open()
+      goto_step("social")
+      local c = Wizard:GetControls()
+      local social = c.steps.social
+      assert.are.equal("What to share", social.levelLabel:GetText())
+      assert.are.equal("Which characters to share", social.altsLabel:GetText())
+      assert.is_true(top(social.levelLabel) + 14 <= top(c.levelButton))
+      assert.is_true(top(c.levelButton) + 22 <= top(social.altsLabel))
+      assert.is_true(top(social.altsLabel) + 14 <= top(c.altsButton))
+    end)
+
+    it("sizes a button from its text, never under its English width", function()
+      Wizard:Open()
+      goto_step("social")
+      local c = Wizard:GetControls()
+      assert.are.equal(430, (c.altsButton:GetSize()))       -- short text: today's width is the floor
+      assert.are.equal(300, (c.levelButton:GetSize()))
+      goto_step("auctionator")
+      assert.are.equal(110, (Wizard:GetControls().steps.auctionator.again:GetSize()))
+    end)
+
+    it("grows a button to its text under a long locale and re-fits it when the text changes", function()
+      long_locale(3)
+      Wizard:Open()
+      goto_step("social")
+      local c = Wizard:GetControls()
+      local text = "My characters in this guild " .. ("w"):rep(math.ceil(#"My characters in this guild" * 3 / 2))
+      assert.are.equal(text, c.altsButton:GetText())
+      assert.are.equal(#text * CHAR_W + 24, (c.altsButton:GetSize()))   -- grown to fit its text
+      click(c.altsButton)                                                -- the next, shorter value re-fits it
+      assert.are.equal(math.max(430, c.altsButton:GetTextWidth() + 24), (c.altsButton:GetSize()))
+      goto_step("auctionator")
+      local again = Wizard:GetControls().steps.auctionator.again
+      assert.are.equal(again:GetTextWidth() + 24, (again:GetSize()))
+      assert.is_true((again:GetSize()) > 110)
+    end)
+
+    it("grows the window when a step needs more room, up to the screen", function()
+      long_locale(8)
+      Wizard:Open()
+      goto_step("modules")
+      local c = Wizard:GetControls()
+      local _, grown = c.frame:GetSize()
+      assert.is_true(grown > 440)
+      assert.is_true(grown <= 768 - 40)
+      _G.UIParent:SetSize(1024, 500)
+      goto_step("modules")
+      assert.are.equal(460, select(2, c.frame:GetSize()))
+      goto_step("done")
+      assert.are.equal(440, select(2, c.frame:GetSize()))   -- a short step goes back to the usual height
+    end)
+
+    it("falls back to the English box heights when the client measures nothing", function()
+      measureNothing = true
+      Wizard:Open()
+      local c = Wizard:GetControls()
+      for i = 1, #Onboarding:GetSteps() do
+        Wizard:ShowStep(i)
+        assert.are.equal(440, select(2, c.frame:GetSize()))
+      end
+      goto_step("welcome")
+      assert.are.equal(70, c.steps.welcome.body:GetHeight())
+      goto_step("modules")
+      assert.are.equal(24, c.steps.modules.layout[4].region:GetHeight())
+    end)
   end)
 end)
