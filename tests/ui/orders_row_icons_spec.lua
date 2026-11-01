@@ -960,10 +960,11 @@ describe("OrdersPanel row icons", function()
     it("is not written while the saved data is from a newer version", function()
       boot()
       ns.FS.dbIsNewer = true
+      local snapshot = ns.Util.DeepCopy(ns.FS.db.global, 30)
       assert.is_true(options().disabled())
       options().set(nil, false)
-      local saved = ns.FS.db.global.settings.orders
-      assert.is_true(saved == nil or saved.showRowIcons ~= false)
+      assert.are.same(snapshot, ns.Util.DeepCopy(ns.FS.db.global, 30))
+      assert.is_false(ns.FS:GetModule("Orders"):Settings().showRowIcons)   -- the session-only copy took it
     end)
     it("is filled in as true when the saved value is missing or not a boolean", function()
       boot()
@@ -1163,6 +1164,160 @@ describe("OrdersPanel row icons", function()
       form.raw(row):GetScript("OnEnter")(row)
       assert.is_false(rows():IsEnabled())
       assert.is_true(ns.FS:GetModule("OrdersSidePanel"):IsEnabled())
+    end)
+  end)
+
+  describe("leave handlers and raising game calls", function()
+    local function failing_tooltip()
+      _G.GameTooltip = { SetOwner = function() end, GetOwner = function() end, SetText = function() end,
+        AddLine = function() end, Show = function() end, Hide = function() error("boom") end }
+    end
+    local function plain_cells()
+      boot()
+      local raw = order()
+      show_board({ raw })
+      return cells_of(row_for(raw))
+    end
+
+    it("runs the Add button's leave handler through the guard", function()
+      local c = plain_cells()
+      failing_tooltip()
+      c.add:GetScript("OnLeave")(c.add)
+      assert.is_false(rows():IsEnabled())
+      assert.is_true(ns.FS:GetModule("OrdersSidePanel"):IsEnabled())
+      assert.equal(1, #ns.FS.db.global.diagnostics.errors)
+    end)
+    it("runs the risk cell's leave handler through the guard", function()
+      local c = plain_cells()
+      failing_tooltip()
+      c.risk:GetScript("OnLeave")(c.risk)
+      assert.is_false(rows():IsEnabled())
+      assert.equal(1, #ns.FS.db.global.diagnostics.errors)
+    end)
+    it("hides the tooltip on leave when nothing fails", function()
+      local c = plain_cells()
+      tooltip.shown = true
+      c.add:GetScript("OnLeave")(c.add)
+      assert.is_false(tooltip.shown)
+      tooltip.shown = true
+      c.risk:GetScript("OnLeave")(c.risk)
+      assert.is_false(tooltip.shown)
+      assert.is_true(rows():IsEnabled())
+    end)
+
+    -- A raising game call reads as no answer: for every pcall'd call the row's state when it raises equals its state
+    -- when it returns nothing. mode "nil" | "raise"; hits counts how often the call was made, so a case cannot pass
+    -- because the code never asked. arm(mode, row) runs once the row is shown and its concentration view is set;
+    -- case.after (optional) runs once the call stops raising.
+    local hits
+    local function stub(mode, nilResult)
+      return function()
+        hits = hits + 1
+        if mode == "raise" then error("boom") end
+        return nilResult
+      end
+    end
+    local function scanner() return ns.FS:GetModule("Scanner") end
+    local function refresh()
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      W.fire("GET_ITEM_INFO_RECEIVED", 1001, true); W.advance(0)
+    end
+    local RAISING = {
+      { name = "C_Item.GetItemIconByID", arm = function(mode) C_Item.GetItemIconByID = stub(mode) end },
+      { name = "GetItemIcon", arm = function(mode)
+          C_Item.GetItemIconByID = nil; _G.GetItemIcon = stub(mode)
+        end },
+      { name = "C_CurrencyInfo.GetCurrencyInfo", arm = function(mode)
+          C_TradeSkillUI.GetConcentrationCurrencyID = function() return 3333 end
+          C_CurrencyInfo.GetCurrencyInfo = stub(mode)
+        end,
+        after = function()
+          C_CurrencyInfo.GetCurrencyInfo = function(id) if id == 3333 then return { iconFileID = 654321 } end end
+        end, icon = 654321 },
+      { name = "C_TradeSkillUI.GetConcentrationCurrencyID", arm = function(mode)
+          C_TradeSkillUI.GetConcentrationCurrencyID = stub(mode, 0)
+        end,
+        after = function()
+          C_TradeSkillUI.GetConcentrationCurrencyID = function() return 3333 end
+          C_CurrencyInfo.GetCurrencyInfo = function(id) if id == 3333 then return { iconFileID = 654321 } end end
+        end, icon = 654321 },
+      { name = "Scanner:GetSchematic", arm = function(mode) scanner().GetSchematic = stub(mode) end },
+      { name = "Orders:BuildContext", arm = function(mode)
+          ns.FS:GetModule("Orders").BuildContext = stub(mode)
+        end },
+      { name = "SetPropagateMouseClicks and SetPropagateMouseMotion", pre = function(mode)
+          local create = _G.CreateFrame
+          _G.CreateFrame = function(...)
+            local frame = create(...)
+            frame.SetPropagateMouseClicks = stub(mode)
+            frame.SetPropagateMouseMotion = stub(mode)
+            return frame
+          end
+        end },
+      { name = "the header container's GetChildren", arm = function(mode)
+          form.raw(form.orderList).HeaderContainer.GetChildren = stub(mode)
+        end },
+      { name = "a header's GetText", arm = function(mode)
+          -- the text is only read when the game names the header strings
+          _G.PROFESSIONS_COLUMN_HEADER_REAGENTS, _G.PROFESSIONS_COLUMN_HEADER_TIP = "Reagents", "Commission"
+          for _, header in ipairs(headers) do header.GetText = stub(mode) end
+        end },
+      { name = "a cell's GetChildren", arm = function(mode, row)
+          for _, cell in pairs(form.raw(row).cells) do
+            if type(cell) == "table" then cell.GetChildren = stub(mode) end
+          end
+        end },
+    }
+
+    local function observed(c)
+      local counts = {}
+      for _, pool in ipairs({ c.slots, c.coverSlots }) do
+        for _, slot in ipairs(pool) do counts[#counts + 1] = slot.count:IsShown() and slot.count:GetText() or false end
+      end
+      local point, _, relPoint, x, y = c.cover:GetPoint(1)   -- not the frame: the two runs have their own
+      local lines = {}
+      for _, region in ipairs({ c.icons, c.cover }) do
+        region:GetScript("OnEnter")(region)
+        lines[#lines + 1] = tooltip.lines
+        region:GetScript("OnLeave")(region)
+      end
+      return { files_of(c.slots), files_of(c.coverSlots), counts, c.cover:IsShown(), { point, relPoint, x, y },
+        c.icons:IsShown(), c.concIcon:GetTexture(), c.concText:GetText(), lines }
+    end
+
+    it("reads a raising game call as no answer", function()
+      for _, case in ipairs(RAISING) do
+        local states = {}
+        for _, mode in ipairs({ "nil", "raise" }) do
+          boot()
+          hits = 0
+          if case.pre then case.pre(mode) end
+          evalResult = allocation({ itemID = 1001, quantity = 3 }, { itemID = 1002, quantity = 1 })
+          local raw = order({ orderType = 3, npcOrderRewards = { item_reward(2001, 3), { currencyType = 3001, count = 2 } } })
+          show_board({ raw })
+          local row = row_for(raw)
+          local view = ns.FS:GetModule("Orders"):GetView(10)
+          view.usedConcentration, view.concentrationCost = true, 120
+          if case.arm then case.arm(mode, row) end
+          refresh()
+          states[mode] = observed(cells_of(row))
+          if mode == "raise" then
+            assert.is_true(hits > 0, case.name .. " was never called")
+            assert.same({}, ns.FS.db.global.diagnostics.errors, case.name)
+            assert.is_true(rows():IsEnabled(), case.name)
+          end
+          if case.after and mode == "raise" then
+            case.after()
+            refresh()
+            -- nothing was cached from the failed answers: the currency's own icon shows once it answers
+            assert.equal(case.icon, cells_of(row).concIcon:GetTexture(), case.name)
+          end
+          _G.GetItemIcon, _G.PROFESSIONS_COLUMN_HEADER_REAGENTS, _G.PROFESSIONS_COLUMN_HEADER_TIP = nil, nil, nil
+        end
+        assert.are.same(states["nil"], states["raise"], case.name)
+        -- the state compared is a real one: two reward icons, two reagent icons, the concentration cell filled in
+        assert.same({ 2, 2, "120" }, { #states["nil"][1], #states["nil"][2], states["nil"][8] }, case.name)
+      end
     end)
   end)
 

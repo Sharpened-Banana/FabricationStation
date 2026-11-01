@@ -196,6 +196,19 @@ describe("Dashboard widgets (phase 3)", function()
     assert.is_false(tooltip.shown)
   end)
 
+  it("logs a failing leave handler under the widget's source instead of raising", function()
+    local ns, env = setup()
+    local _, frame = built(env)
+    _G.GameTooltip = { SetOwner = function() end, SetText = function() end, AddLine = function() end,
+      Show = function() end, Hide = function() error("boom") end }
+    assert.has_no.errors(function() frame:GetScript("OnLeave")(frame) end)
+    local errors = ns.FS.db.global.diagnostics.errors
+    assert.equal(1, #errors)
+    assert.equal("Dashboard:altsKnowledge", errors[1].source)
+    assert.is_true(errors[1].source:find("^Dashboard:") ~= nil)
+    assert.is_true(ns.FS:GetModule("AltsWidgets"):IsEnabled())   -- a log-only source, not a module
+  end)
+
   it("refreshes the dashboard once after a burst of FS_ALTS_CHANGED, and stops when turned off", function()
     local ns, _, W, calls = setup()
     local A = ns.FS:GetModule("Alts")

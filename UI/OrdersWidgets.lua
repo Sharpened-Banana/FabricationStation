@@ -236,7 +236,7 @@ local function builder(id, title)
     frame.widgetTitle = title
     frame:EnableMouse(true)
     frame:HookScript("OnEnter", ns.FS:Wrap("Dashboard:" .. id, show_tooltip))  -- locale: joined (log source id)
-    frame:HookScript("OnLeave", hide_tooltip)
+    frame:HookScript("OnLeave", ns.FS:Wrap("Dashboard:" .. id, hide_tooltip))  -- locale: joined (log source id)
     set_lines(frame, {})
   end
 end

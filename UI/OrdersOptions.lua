@@ -217,7 +217,7 @@ local function panel_group()
         L["Module OrderViewWarning: a line above the order details when the customer is blocked or a VIP."]),
       rowIcons = toggle({ module = "Orders", key = "showRowIcons", order = 4,
         name = L["Show reward and reagent icons on order rows"],
-        desc = L["Icons on each order row: the rewards of a patron order left of the row cells, and in the Reagents column the reagents you must supply (red when you have too few)."],
+        desc = L["Icons on each order row: a patron order's rewards in the Commission column, and in the Reagents column the reagents you still lack (red when you have too few)."],
         after = rows_changed }),
     },
   }

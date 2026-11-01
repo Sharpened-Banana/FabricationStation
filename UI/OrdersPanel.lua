@@ -21,8 +21,8 @@ local L = ns.L
 --                     public claims remaining, the best claimable order and the Claim Best Order button; and, above the
 --                     order list's top-left corner, the character's concentration for the profession shown (icon and
 --                     current / max, the game's own quantity while readable, else the snapshot projected to now; a
---                     tooltip with the time to full), refreshed on show, on a profession change, on
---                     CURRENCY_DISPLAY_UPDATE (debounced) and once a minute, only while the page is shown.
+--                     tooltip with the time to full), refreshed on show, on ORDERS_CHANGED / CUSTOMERS_CHANGED,
+--                     on CURRENCY_DISPLAY_UPDATE (debounced) and once a minute, only while the page is shown.
 --   OrderViewWarning  a line above the order detail view for a blocked or VIP customer.
 --
 -- No taint (design rules 2 and 7): every frame here is our own. The cells live in our own container (a child of the
@@ -913,7 +913,7 @@ local function new_cells(row)
   c.dimTexture:SetAllPoints(frame)
   c.dimTexture:SetColorTexture(DIM[1], DIM[2], DIM[3], DIM[4])
 
-  -- The strip, right to left: [profit] [warning] [score] [risk] [+]. Positions are fixed offsets from its right edge;
+  -- The strip, right to left: [profit] [warning] [conc] [score] [risk] [+]. Positions are fixed offsets from its right edge;
   -- only profit moves (left of the warning icon when that shows).
   local strip = CreateFrame("Frame", nil, frame)
   strip:SetSize(STRIP_WIDTH, STRIP_HEIGHT)
@@ -928,7 +928,7 @@ local function new_cells(row)
   c.add:SetScript("OnEnter", function(button)
     M.Guard(ROWS, show_tooltip, button, { { text = L["Add to queue"], color = TEXT_COLORS.white } })
   end)
-  c.add:SetScript("OnLeave", hide_tooltip)
+  c.add:SetScript("OnLeave", function() M.Guard(ROWS, hide_tooltip) end)
 
   c.risk = CreateFrame("Frame", nil, strip)
   c.risk:SetSize(RISK_WIDTH, STRIP_HEIGHT)
@@ -937,7 +937,7 @@ local function new_cells(row)
   c.riskCount = text(c.risk, "GameFontNormalSmall")
   c.riskCount:SetAllPoints(c.risk)
   c.risk:SetScript("OnEnter", function() M.Guard(ROWS, risk_tooltip, c) end)
-  c.risk:SetScript("OnLeave", hide_tooltip)
+  c.risk:SetScript("OnLeave", function() M.Guard(ROWS, hide_tooltip) end)
 
   c.score = text(strip)
   c.score:SetSize(CELL_WIDTH, STRIP_HEIGHT)
@@ -1711,13 +1711,16 @@ local function build_conc(browse)
   concDisplay = { frame = frame, icon = icon, text = label, background = background }
 end
 
+-- Built once: the debounce takes this function, so an event does not build a new wrapper.
+local refreshWrapped = ns.FS:Wrap(SIDE, refresh_conc)
+
 -- Starts what keeps the display fresh while the page is shown: CURRENCY_DISPLAY_UPDATE (debounced) and a minute timer
 -- (the regeneration estimate moves with time); stops both when hidden or the module turns off.
 local function start_conc()
   if not concListening then
     concListening = true
     SidePanel:RegisterEvent("CURRENCY_DISPLAY_UPDATE", function()
-      M.Guard(SIDE, function() ns.FS:Debounce(CONC_KEY, CONC_DEBOUNCE_SECONDS, ns.FS:Wrap(SIDE, refresh_conc)) end)
+      M.Guard(SIDE, function() ns.FS:Debounce(CONC_KEY, CONC_DEBOUNCE_SECONDS, refreshWrapped) end)
     end)
   end
   if not concTicker then

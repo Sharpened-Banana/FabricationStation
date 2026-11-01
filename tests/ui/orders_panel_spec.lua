@@ -928,6 +928,92 @@ describe("OrdersPanel on the crafting orders page", function()
       assert.equal(2871, seen)
     end)
 
+    it("wraps the concentration refresh once, not once per event", function()
+      setup()
+      local wrapped = 0
+      local wrap = ns.FS.Wrap
+      ns.FS.Wrap = function(self, source, fn)
+        if source == "OrdersSidePanel" then wrapped = wrapped + 1 end
+        return wrap(self, source, fn)
+      end
+      for i = 1, 3 do
+        data.value = 130 + i
+        W.fire("CURRENCY_DISPLAY_UPDATE"); W.advance(DEBOUNCE)
+        assert.equal(("%d / 250"):format(130 + i), display.text:GetText())
+      end
+      ns.FS.Wrap = wrap
+      assert.equal(0, wrapped)
+    end)
+
+    -- A raising game call reads as no answer: the module's state with the call raising equals its state with the call
+    -- returning nothing, and nothing is logged or turned off. hits proves the call was made.
+    describe("when a game call raises", function()
+      local hits
+      local function stub(mode, nilResult)
+        return function()
+          hits = hits + 1
+          if mode == "raise" then error("boom") end
+          return nilResult
+        end
+      end
+      local ICON, LIVE = 654321, { quantity = 200, maxQuantity = 260, iconFileID = 654321 }
+      local function live_currency()
+        C_TradeSkillUI.GetConcentrationCurrencyID = function() return 3333 end
+        _G.C_CurrencyInfo = { GetCurrencyInfo = function(id) if id == 3333 then return LIVE end end }
+      end
+      local CASES = {
+        { name = "C_TradeSkillUI.GetChildProfessionInfo", arm = function(mode)
+            C_TradeSkillUI.GetChildProfessionInfo = stub(mode)
+          end },
+        { name = "C_TradeSkillUI.GetConcentrationCurrencyID", arm = function(mode)
+            C_TradeSkillUI.GetConcentrationCurrencyID = stub(mode, 0)
+          end,
+          after = live_currency },
+        { name = "C_CurrencyInfo.GetCurrencyInfo", arm = function(mode)
+            C_TradeSkillUI.GetConcentrationCurrencyID = function() return 3333 end
+            _G.C_CurrencyInfo = { GetCurrencyInfo = stub(mode) }
+          end,
+          after = live_currency },
+        { name = "Scanner:ProjectConcentration", arm = function(mode)
+            ns.FS:GetModule("Scanner").ProjectConcentration = stub(mode)
+          end },
+        { name = "Scanner:GetProfession", arm = function(mode)
+            ns.FS:GetModule("Scanner").GetProfession = stub(mode)
+          end },
+      }
+      -- Only the display's own refresh: the side panel's refresh reads the profession through other, unguarded calls.
+      local function redraw() W.fire("CURRENCY_DISPLAY_UPDATE"); W.advance(DEBOUNCE) end
+      local function observed()
+        return { ns.UI.OrdersPanel.ConcentrationState(), display.frame:IsShown(), display.text:GetText(),
+          display.icon:GetTexture() }
+      end
+
+      it("reads each as no answer", function()
+        for _, case in ipairs(CASES) do
+          local states = {}
+          for _, mode in ipairs({ "nil", "raise" }) do
+            setup()
+            hits = 0
+            case.arm(mode)
+            redraw()
+            states[mode] = observed()
+            if mode == "raise" then
+              assert.is_true(hits > 0, case.name .. " was never called")
+              assert.same({}, ns.FS.db.global.diagnostics.errors, case.name)
+              assert.is_true(side():IsEnabled(), case.name)
+              if case.after then
+                case.after()
+                redraw()
+                -- nothing was cached from the failed answers: the currency's own answer shows once it comes
+                assert.same({ "200 / 260", ICON }, { display.text:GetText(), display.icon:GetTexture() }, case.name)
+              end
+            end
+          end
+          assert.are.same(states["nil"], states["raise"], case.name)
+        end
+      end)
+    end)
+
     describe("tooltip", function()
       it("lists current / max and the time until it is full", function()
         setup()

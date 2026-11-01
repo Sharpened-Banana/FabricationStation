@@ -627,6 +627,18 @@ describe("Orders dashboard widgets", function()
     assert.equal("No sales recorded yet", plain(shown[2]))
   end)
 
+  it("logs a failing leave handler under the widget's source instead of raising", function()
+    _G.GameTooltip = { SetOwner = function() end, SetText = function() end, AddLine = function() end,
+      Show = function() end, Hide = function() error("boom") end }
+    for _, id in ipairs({ "openOrders", "goldThisWeek" }) do
+      local frame = frames[id]
+      assert.has_no.errors(function() frame:GetScript("OnLeave")(frame) end)
+    end
+    local errors = ns.FS.db.global.diagnostics.errors
+    assert.same({ "Dashboard:openOrders", "Dashboard:goldThisWeek" }, { errors[1] and errors[1].source, errors[2] and errors[2].source })
+    assert.is_true(ns.FS:GetModule("OrdersWidgets"):IsEnabled())
+  end)
+
   it("refreshes the dashboard once after a burst of order and ledger changes, and stops when turned off", function()
     L:Add({ type = "sale", amount = 1 })
     O:SendMessage(ns.Msg.ORDERS_CHANGED)

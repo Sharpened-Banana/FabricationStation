@@ -1112,6 +1112,15 @@ P6-4. **Setup guide footer and scan list.** `/fs setup`. Expected:
 - `/run local b = CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate"); b:SetText("x"); print(type(b:GetFontString().GetUnboundedStringWidth))`
   prints `function` (if not, the buttons use the older width call; note it).
 
+P6-5. **Order rows after the polish.** On the crafting-orders board:
+- Hover and leave the "+" button, the risk count and the reward icons quickly several times. Expected: no error, and
+  tooltips never stay up.
+- Settings > Orders & Ledger: the row-icon option's description names the Commission column and the reagents you
+  still lack.
+- Take a patron or personal order where the customer provides a reagent at a different quality rank than the one the
+  optimiser picks (Midnight reagents have two ranks). Note whether the Reagents column still asks you for that
+  reagent; if it does, report it (the need is matched by exact item ID).
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

@@ -147,7 +147,7 @@ end
 local function build(frame)
   frame:EnableMouse(true)
   frame:HookScript("OnEnter", ns.FS:Wrap(WIDGET_SOURCE, show_tooltip))
-  frame:HookScript("OnLeave", hide_tooltip)
+  frame:HookScript("OnLeave", ns.FS:Wrap(WIDGET_SOURCE, hide_tooltip))
   frame:HookScript("OnMouseUp", ns.FS:Wrap(WIDGET_SOURCE, open_planner))
   set_lines(frame, { lines = {} })
 end
