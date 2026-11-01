@@ -365,9 +365,16 @@ describe("Social.Protocol", function()
         -- 10^6 entries: a validator that walked the whole list would be visibly slow, one that stops at the cap is not
         local t = {}
         for i = 1, 1000000 do t[i] = 1 end
+        -- Collect first and keep the collector off while timing: the clock is CPU time, and a GC step walking a big heap
+        -- is not the validator's cost (on CI it made this call overrun the budget).
+        collectgarbage()
+        collectgarbage("stop")
         local started = os.clock()
-        assert.is_false(valid(rdata("r", t)))
-        assert.is_true(os.clock() - started < 0.5)
+        local ok = valid(rdata("r", t))
+        local elapsed = os.clock() - started
+        collectgarbage("restart")
+        assert.is_false(ok)
+        assert.is_true(elapsed < 0.5, "took " .. elapsed .. " s")
       end)
     end)
 

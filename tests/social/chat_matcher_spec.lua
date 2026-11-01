@@ -178,13 +178,19 @@ describe("Social.ChatMatcher", function()
 
   it("bounds the work on long or hostile lines", function()
     local many = ("|cffffffff|Hitem:1::|h[a]|h|r"):rep(5000)
+    -- Collect first and keep the collector off while timing: the clock is CPU time, and a GC step walking a big heap
+    -- is not the parser's cost.
+    collectgarbage()
+    collectgarbage("stop")
     local t0 = os.clock()
     ChatMatcher.Parse(("|Hitem:1|h"):rep(5000), cfg)
     ChatMatcher.Parse(("|A"):rep(20000), cfg)
     ChatMatcher.Parse(("lf crafter "):rep(5000), cfg)
     ChatMatcher.Parse(("x"):rep(1000000), cfg)
     local r = ChatMatcher.Parse(many, cfg)
-    assert.is_true(os.clock() - t0 <= 0.25)
+    local elapsed = os.clock() - t0
+    collectgarbage("restart")
+    assert.is_true(elapsed <= 0.25, "took " .. elapsed .. " s")
     assert.are.equal(ChatMatcher.MAX_LINKS, #r.itemLinks)
     assert.is_true(#r.plain <= ChatMatcher.MAX_LENGTH)
   end)
