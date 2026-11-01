@@ -55,3 +55,55 @@ Migrations.Register(2, function(global)
   if not store then error("ProfileStore is not loaded") end
   store.MigrateDirectory(dirs)
 end)
+
+-- 3: the single order snapshot { time, charKey, orders } becomes one board per character,
+-- orderBoards[charKey] = { time, orders = { [orderID] = OrderView }, scopes = {} }. The owner is the snapshot's
+-- charKey, else the charKey of its lowest-orderID view that has one. A board already there keeps its views (an
+-- existing orderID wins). A snapshot with orders and no owner is kept as ordersSnapshotLegacy (read by nothing).
+local function non_empty_string(v)
+  return type(v) == "string" and v ~= ""
+end
+
+local function snapshot_owner(charKey, orders)
+  if non_empty_string(charKey) then return charKey end
+  local owner, lowest
+  for id, view in pairs(orders) do
+    if type(view) == "table" and non_empty_string(view.charKey) and type(id) == "number"
+      and (lowest == nil or id < lowest) then
+      owner, lowest = view.charKey, id
+    end
+  end
+  return owner
+end
+
+Migrations.Register(3, function(global)
+  local old = rawget(global, "ordersSnapshot")
+  if type(old) ~= "table" then
+    global.ordersSnapshot = nil
+    return
+  end
+  local boards = rawget(global, "orderBoards")
+  if type(boards) ~= "table" then
+    boards = {}
+    global.orderBoards = boards
+  end
+  local orders = type(old.orders) == "table" and old.orders or {}
+  if next(orders) ~= nil then
+    local owner = snapshot_owner(old.charKey, orders)
+    if owner then
+      local board = boards[owner]
+      if type(board) ~= "table" then
+        board = { time = old.time, orders = {}, scopes = {} }
+        boards[owner] = board
+      end
+      if type(board.orders) ~= "table" then board.orders = {} end
+      if type(board.scopes) ~= "table" then board.scopes = {} end
+      for id, view in pairs(orders) do
+        if type(view) == "table" and board.orders[id] == nil then board.orders[id] = view end
+      end
+    else
+      global.ordersSnapshotLegacy = old
+    end
+  end
+  global.ordersSnapshot = nil
+end)

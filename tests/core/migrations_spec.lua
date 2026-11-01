@@ -81,7 +81,7 @@ describe("Migrations", function()
     assert.has_error(function() ns.Migrations.Register(9, "nope") end)
   end)
   it("Latest is the highest registered version", function()
-    assert.equals(2, ns.Migrations.Latest()); ns.Migrations.Register(base + 4, function() end)
+    assert.equals(3, ns.Migrations.Latest()); ns.Migrations.Register(base + 4, function() end)
     assert.equals(base + 4, ns.Migrations.Latest())
   end)
 
@@ -103,7 +103,7 @@ describe("Migrations", function()
         ["Other-Realm"] = "junk" } } }
       W.boot()
       local g = ns.FS.db.global
-      assert.are.equal(2, g.schemaVersion)
+      assert.are.equal(3, g.schemaVersion)
       local dir = g.guildDirectory["G-Realm"]
       assert.are.same({ { s = 2907, k = 5, m = 9, r = ",100:34," } }, dir.profiles["A-Realm"].pr)
       assert.is_nil(dir.profiles["A-Realm"].lines)
@@ -135,7 +135,7 @@ describe("Migrations", function()
     end)
 
     it("does nothing on a database without guild data", function()
-      W.boot(); assert.is_nil(rawget(ns.FS.db.global, "guildDirectory")); assert.are.equal(2, ns.FS.db.global.schemaVersion)
+      W.boot(); assert.is_nil(rawget(ns.FS.db.global, "guildDirectory")); assert.are.equal(3, ns.FS.db.global.schemaVersion)
     end)
 
     it("leaves a newer database alone", function()
@@ -150,6 +150,71 @@ describe("Migrations", function()
       assert.are.equal(1, ns.FS.db.global.schemaVersion)
       assert.is_table(ns.FS.db.global.guildDirectory.G.profiles.A.lines)
       assert.equals("Migrations", ns.FS.db.global.diagnostics.errors[1].source)
+    end)
+  end)
+
+  describe("migration 3", function()
+    local function run(global) global.schemaVersion = 2; return ns.Migrations.Run(global) end
+    it("moves the phase 6 snapshot to its character's board", function()
+      local g = { ordersSnapshot = { time = 500, charKey = "Aria-Realm", orders = { [7] = { orderID = 7 } } } }
+      assert.is_true((run(g)))
+      assert.equals(3, g.schemaVersion); assert.is_nil(g.ordersSnapshot)
+      assert.equals(500, g.orderBoards["Aria-Realm"].time); assert.equals(7, g.orderBoards["Aria-Realm"].orders[7].orderID)
+      assert.same({}, g.orderBoards["Aria-Realm"].scopes); assert.is_nil(g.ordersSnapshotLegacy)
+    end)
+    it("takes the owner from a view when the snapshot has no charKey", function()
+      local g = { ordersSnapshot = { orders = { [9] = { orderID = 9, charKey = "Bren-Realm" }, [3] = { orderID = 3 } } } }
+      run(g); assert.truthy(g.orderBoards["Bren-Realm"].orders[3]); assert.truthy(g.orderBoards["Bren-Realm"].orders[9])
+    end)
+    it("takes the owner from the lowest orderID view with a charKey", function()
+      local g = { ordersSnapshot = { charKey = "", orders = { [9] = { orderID = 9, charKey = "Bren-Realm" },
+        [4] = { orderID = 4, charKey = "Cal-Realm" }, [2] = { orderID = 2, charKey = "" }, [1] = { orderID = 1 } } } }
+      run(g)
+      assert.truthy(g.orderBoards["Cal-Realm"].orders[9]); assert.is_nil(g.orderBoards["Bren-Realm"])
+    end)
+    it("keeps an ownerless snapshot as ordersSnapshotLegacy", function()
+      local old = { orders = { [3] = { orderID = 3 } } }
+      local g = { ordersSnapshot = old }; run(g)
+      assert.equal(old, g.ordersSnapshotLegacy); assert.same({}, g.orderBoards); assert.is_nil(g.ordersSnapshot)
+    end)
+    it("keeps a board already present and never overwrites its views", function()
+      local kept = { orderID = 8, kept = true }
+      local board = { time = 900, orders = { [8] = kept }, scopes = { ["public:7"] = 900 } }
+      local g = { orderBoards = { ["Aria-Realm"] = board },
+        ordersSnapshot = { time = 500, charKey = "Aria-Realm", orders = { [8] = { orderID = 8 }, [7] = { orderID = 7 },
+          [6] = "junk" } } }
+      run(g)
+      assert.equal(board, g.orderBoards["Aria-Realm"]); assert.equals(900, board.time)
+      assert.equal(kept, board.orders[8]); assert.equals(7, board.orders[7].orderID); assert.is_nil(board.orders[6])
+      assert.same({ ["public:7"] = 900 }, board.scopes)
+    end)
+    it("removes the empty default snapshot and creates no board", function()
+      local g = { ordersSnapshot = { orders = {} } }
+      assert.is_true((run(g)))
+      assert.is_nil(g.ordersSnapshot); assert.same({}, g.orderBoards); assert.is_nil(g.ordersSnapshotLegacy)
+    end)
+    it("replaces a damaged orderBoards and ignores a snapshot that is not a table", function()
+      local g = { orderBoards = "junk", ordersSnapshot = { charKey = "Aria-Realm", orders = { [1] = { orderID = 1 } } } }
+      run(g); assert.truthy(g.orderBoards["Aria-Realm"].orders[1])
+      local h = { ordersSnapshot = "junk" }
+      assert.is_true((run(h)))
+      assert.is_nil(h.ordersSnapshot); assert.is_nil(h.orderBoards); assert.equals(3, h.schemaVersion)
+    end)
+    it("leaves a newer database alone", function()
+      local snap = { time = 5, charKey = "Aria-Realm", orders = { [1] = { orderID = 1 } } }
+      local g = { schemaVersion = 4, ordersSnapshot = snap }
+      local ok, _, _, err = ns.Migrations.Run(g)
+      assert.is_false(ok); assert.equals("newer", err)
+      assert.equal(snap, g.ordersSnapshot); assert.is_nil(g.orderBoards); assert.equals(4, g.schemaVersion)
+    end)
+    it("moves a stored phase 6 snapshot at boot", function()
+      _G.FabricationStationDB = { global = { schemaVersion = 2,
+        ordersSnapshot = { time = 500, charKey = "Aria-Realm", orders = { [7] = { orderID = 7 } } } } }
+      W.boot()
+      local g = ns.FS.db.global
+      assert.equals(3, g.schemaVersion); assert.is_nil(g.ordersSnapshot)
+      assert.equals(7, g.orderBoards["Aria-Realm"].orders[7].orderID)
+      assert.same({}, g.diagnostics.errors)
     end)
   end)
 end)

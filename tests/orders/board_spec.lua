@@ -101,7 +101,7 @@ describe("Orders board", function()
       allocation = { { itemID = 100, quantity = 2 } }, reagents = { 1, 2, 3 }, breakdown = "big" }
     ns.FS:GetModule("Recipes").Evaluate = function() return shared end
     O:OnBoardShown(2, { P2.raw_order() })
-    local stored = ns.FS.db.global.ordersSnapshot.orders[777]
+    local stored = ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777]
     assert.is_table(stored)
     assert.are_not.equal(shared, stored.result)
     assert.same({ expectedQuality = 3, reagentCost = 200000, expectedSale = 900000, profit = 700000,
@@ -149,10 +149,10 @@ describe("Orders board", function()
     O:ClearLive()
     assert.same({}, O:GetLiveViews())
     assert.equal(777, O:GetView(777).orderID)
-    assert.equal(ns.FS.db.global.ordersSnapshot.orders[777], O:GetView(777))
+    assert.equal(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777], O:GetView(777))
   end)
 
-  it("starts a fresh snapshot when another character opens the board", function()
+  it("GetSnapshot shows the board of the character logged in now", function()
     O:OnBoardShown(0, { P2.raw_order({orderID=1, orderType=0}) })
     O:OnBoardShown(2, { P2.raw_order({orderID=2}) })
     ns.FS.CharKey = function() return "Alt-Silvermoon" end
@@ -177,8 +177,8 @@ describe("Orders board", function()
     assert.equal(0, O:GetView(777).rewardsValue)
     O:OnRewardsUpdated("CRAFTINGORDERS_UPDATE_REWARDS", { {itemLink="|Hitem:210000::|h[R]|h", count=2} }, 777)
     assert.equal(60000, O:GetView(777).rewardsValue)
-    assert.equal(60000, ns.FS.db.global.ordersSnapshot.orders[777].rewardsValue)
-    assert.same({ {itemID=210000, count=2} }, ns.FS.db.global.ordersSnapshot.orders[777].input.rewards)
+    assert.equal(60000, ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777].rewardsValue)
+    assert.same({ {itemID=210000, count=2} }, ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777].input.rewards)
   end)
 
   it("ignores name and reward updates for unknown orders and NPC customer names", function()
@@ -286,6 +286,101 @@ describe("Orders board", function()
     end)
   end)
 
+  describe("one board per character", function()
+    local function show_board(charKey, profession, orders)
+      local name = charKey:match("^(.-)%-")
+      _G.UnitName = function() return name end
+      O:OnBoardShown(0, orders, profession)
+    end
+    local function order(id) return P2.raw_order({orderID=id, orderType=0}) end
+
+    it("keeps both alts' boards when the second alt opens the same profession", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, { order(888) })
+      local boards = O:GetBoards()
+      assert.equals(2, #boards); assert.equals("Alt-Silvermoon", boards[1].charKey)   -- current first
+      assert.equals("Me-Silvermoon", boards[2].charKey)
+      assert.same({888}, {boards[1].orders[1].orderID}); assert.same({777}, {boards[2].orders[1].orderID})
+      assert.truthy(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777])
+      assert.truthy(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[888])
+      assert.is_nil(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[777])
+    end)
+    it("rescores each board for its own character", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, { order(888) })
+      local s = spy.on(O, "BuildContext")
+      O:Rescore()
+      assert.spy(s).was.called(2)
+      assert.spy(s).was.called_with(O, "Me-Silvermoon"); assert.spy(s).was.called_with(O, "Alt-Silvermoon")
+      assert.equal("Me-Silvermoon", ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777].charKey)
+      assert.equal("Alt-Silvermoon", ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[888].charKey)
+    end)
+    it("GetSnapshot falls back to the newest board when this character has none", function()
+      show_board("Me-Silvermoon", 7, { order(777) })
+      W.advance(10); show_board("Alt-Silvermoon", 7, { order(888) })
+      _G.UnitName = function() return "Third" end
+      local snap = O:GetSnapshot()
+      assert.equal("Alt-Silvermoon", snap.charKey); assert.equal(1010, snap.time); assert.equal(888, snap.orders[1].orderID)
+      _G.UnitName = function() return "Me" end
+      snap = O:GetSnapshot()
+      assert.equal("Me-Silvermoon", snap.charKey); assert.equal(1000, snap.time); assert.equal(777, snap.orders[1].orderID)
+    end)
+    it("GetSnapshot is empty without boards and creates none", function()
+      assert.same({ orders = {} }, O:GetSnapshot()); assert.same({}, O:GetBoards())
+      assert.is_nil(ns.FS.db.global.orderBoards)
+    end)
+    it("GetView finds an order on another character's board", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, { order(888) })
+      O:ClearLive()
+      assert.equal(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777], O:GetView(777))
+      assert.equal(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[888], O:GetView(888))
+    end)
+    it("GetView prefers the current character's copy of an order both boards hold", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, { order(777) })
+      O:ClearLive()
+      assert.equal(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[777], O:GetView(777))
+      _G.UnitName = function() return "Me" end
+      assert.equal(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777], O:GetView(777))
+    end)
+    it("records the scope of every board shown", function()
+      show_board("Me-Silvermoon", 7, { order(777) })
+      assert.equals(ns.FS:Now(), ns.FS.db.global.orderBoards["Me-Silvermoon"].scopes["public:7"])
+      W.advance(5); O:OnBoardShown(2, {}, 8)
+      local mine = ns.FS.db.global.orderBoards["Me-Silvermoon"]
+      assert.equals(1005, mine.scopes["personal:8"]); assert.equals(1000, mine.scopes["public:7"])
+      assert.equals(1005, mine.time)
+    end)
+    it("drops expired views from every board", function()
+      show_board("Me-Silvermoon", 7, { order(777), P2.raw_order({orderID=1, orderType=0, expirationTime=6000}) })
+      assert.truthy(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[1])
+      W.advance(1500); show_board("Alt-Silvermoon", 7, {})
+      assert.is_nil(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[1])
+      assert.truthy(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777])
+    end)
+    it("applies a late customer name to the board holding the order", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, {})
+      O:OnCustomerNameUpdated("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", "Bad", 777)
+      assert.equal("Bad-Silvermoon", ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777].customer)
+      assert.same({}, ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders)
+    end)
+    it("removes a fulfilled order from every board", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, { order(777) })
+      O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+      assert.is_nil(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777])
+      assert.is_nil(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[777])
+    end)
+    it("sorts boards current first, then newest, then by name, and skips damaged ones", function()
+      ns.FS.db.global.orderBoards = {
+        ["Zed-Silvermoon"] = { time = 500, orders = {} }, ["Abe-Silvermoon"] = { time = 500, orders = {} },
+        ["Old-Silvermoon"] = { orders = { [1] = { orderID = 1 } } }, ["New-Silvermoon"] = { time = 900, orders = "junk" },
+        ["Me-Silvermoon"] = { time = 100, orders = { [3] = { orderID = 3 }, [2] = { orderID = 2 } } }, ["Bad-Silvermoon"] = "junk" }
+      local keys = {}
+      for _, b in ipairs(O:GetBoards()) do keys[#keys + 1] = b.charKey end
+      assert.same({ "Me-Silvermoon", "New-Silvermoon", "Abe-Silvermoon", "Zed-Silvermoon", "Old-Silvermoon" }, keys)
+      local me = O:GetBoards()[1]
+      assert.equal(100, me.time); assert.same({2, 3}, {me.orders[1].orderID, me.orders[2].orderID})
+      assert.same({}, O:GetBoards()[2].orders)
+    end)
+  end)
+
   describe("board scope", function()
     it("replaces views per order type and profession, keeping other professions in the snapshot", function()
       O:OnBoardShown(2, { P2.raw_order({orderID=1}) }, 7)
@@ -301,13 +396,13 @@ describe("Orders board", function()
       O:OnBoardShown(2, { P2.raw_order() })
       assert.equal(7, O:GetView(777).profession)
       O:Rescore()
-      assert.equal(7, O:GetView(777).profession); assert.equal(7, ns.FS.db.global.ordersSnapshot.orders[777].profession)
+      assert.equal(7, O:GetView(777).profession); assert.equal(7, ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777].profession)
       O:OnCustomerNameUpdated("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", "Bad", 777)
       assert.equal(7, O:GetView(777).profession)
     end)
     it("replaces saved views of that type that have no profession", function()
-      ns.FS.db.global.ordersSnapshot.orders[5] = { orderID = 5, orderType = "personal", charKey = "Me-Silvermoon" }
-      ns.FS.db.global.ordersSnapshot.orders[6] = { orderID = 6, orderType = "public", charKey = "Me-Silvermoon" }
+      ns.FS.db.global.orderBoards = { ["Me-Silvermoon"] = { orders = { [5] = { orderID = 5, orderType = "personal", charKey = "Me-Silvermoon" } } } }
+      ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[6] = { orderID = 6, orderType = "public", charKey = "Me-Silvermoon" }
       O:OnBoardShown(2, {}, 7)
       assert.same({6}, {O:GetSnapshot().orders[1].orderID}); assert.equal(1, #O:GetSnapshot().orders)
     end)
@@ -323,7 +418,7 @@ describe("Orders board", function()
       O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
       local sent = messages("FS_ORDER_FULFILLED")
       assert.equal(1, #sent); assert.is_nil(sent[1][2].quality)   -- no output link: quality unknown
-      assert.is_nil(O:GetView(777)); assert.is_nil(ns.FS.db.global.ordersSnapshot.orders[777])
+      assert.is_nil(O:GetView(777)); assert.is_nil(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777])
       assert.same({}, O:GetLiveViews())
       O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)   -- no second message
       assert.equal(1, #messages("FS_ORDER_FULFILLED"))
@@ -414,10 +509,10 @@ describe("Orders board", function()
   describe("read-only saved data", function()
     it("writes nothing to saved data while it is newer, but still works for the session", function()
       ns.FS.dbIsNewer = true
-      local before = ns.FS.db.global.ordersSnapshot
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
       O:OnBoardShown(2, { P2.raw_order() })
       O:UpdatePersonalCounts({ {profession=7, professionName="Tailoring", numPersonalOrders=1} })
-      assert.same({}, before.orders); assert.is_nil(before.time); assert.is_nil(ns.FS.db.global.ordersState)
+      assert.same(before, ns.FS.db.global); assert.is_nil(ns.FS.db.global.orderBoards); assert.is_nil(ns.FS.db.global.ordersState)
       assert.equal(1, #O:GetSnapshot().orders)
       assert.same({{profession=7, professionName="Tailoring", count=2, delta=1}},
         O:UpdatePersonalCounts({ {profession=7, professionName="Tailoring", numPersonalOrders=2} }))

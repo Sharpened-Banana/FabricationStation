@@ -17,7 +17,6 @@ ns.DBDefaults = {
     queue = { entries = {}, restock = {} },
     customers = {},
     ledger = { entries = {} },
-    ordersSnapshot = { orders = {} },
     diagnostics = { errors = {}, mismatches = {} },
     captures = { nextID = 1, list = {} },
     characters = {},

@@ -568,7 +568,7 @@ describe("Orders dashboard widgets", function()
   it("shows open orders with the best score, its markers and why others have none", function()
     D:RefreshAll()
     assert.equal("No orders seen yet", line_texts(frames.openOrders)[1])
-    local db = ns.FS.db.global.ordersSnapshot
+    local db = {}; ns.FS.db.global.orderBoards = { ["Me-Silvermoon"] = db }
     db.time, db.charKey = 400, "Me-Silvermoon"
     db.orders = {
       [1] = { orderID = 1, orderType = "personal", score = 50000, flags = { estimated = true } },
@@ -590,7 +590,7 @@ describe("Orders dashboard widgets", function()
   end)
 
   it("takes the best score from the orders the filters leave", function()
-    local db = ns.FS.db.global.ordersSnapshot
+    local db = {}; ns.FS.db.global.orderBoards = { ["Me-Silvermoon"] = db }
     db.time, db.charKey = 400, "Me-Silvermoon"
     db.orders = {
       [1] = { orderID = 1, orderType = "personal", score = 50000, flags = {} },

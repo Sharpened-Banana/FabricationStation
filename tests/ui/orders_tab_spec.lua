@@ -157,7 +157,7 @@ describe("Orders tab frames", function()
   local function snapshot(views)
     local orders = {}
     for _, v in ipairs(views) do orders[v.orderID] = v end
-    ns.FS.db.global.ordersSnapshot = { time = 400, charKey = "Me-Silvermoon", orders = orders }
+    ns.FS.db.global.orderBoards = { ["Me-Silvermoon"] = { time = 400, orders = orders, scopes = {} } }
   end
   local function view(overrides)
     return P2.merge({ orderID = 10, orderType = "personal", customer = "Bob-Silvermoon", recipeID = 4444, itemID = 5,

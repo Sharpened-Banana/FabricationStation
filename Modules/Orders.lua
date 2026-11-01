@@ -594,16 +594,17 @@ function Orders:GetBestClaimable(views, claim)
 end
 
 ---------------------------------------------------------------------------
--- Board: live views and the saved snapshot
+-- Board: live views and the saved boards (one per character)
 ---------------------------------------------------------------------------
 -- The live set holds the views of the board as it is open now (keyed by orderID): only the open profession's, and
 -- no public orders while Blizzard shows the public bucket list; it is emptied when the Professions frame closes.
--- db.global.ordersSnapshot = { time, charKey, orders = {[orderID] = OrderView} } keeps the last board seen per
--- (order type, profession), for the Orders tab and later sessions. A stored view is a deep copy of plain values
+-- db.global.orderBoards[charKey] = { time, orders = {[orderID] = OrderView}, scopes = {["<type>:<profession>"] =
+-- time} } keeps the last board each character saw per (order type, profession), for the Orders tab and later
+-- sessions (migration 3 moved phase 6's single ordersSnapshot into it). A stored view is a deep copy of plain values
 -- whose `result` keeps only SNAPSHOT_RESULT_KEYS (never Recipes' cached result table). Every captured view carries
 -- `profession` (Enum.Profession of the open profession; also kept in view.input.profession so rescoring keeps it).
--- While the saved data is read-only (newer version) the snapshot and personal counts live in session-only copies
--- and nothing is written.
+-- Boards of characters that are gone are kept. While the saved data is read-only (newer version) the boards and
+-- personal counts live in session-only copies and nothing is written.
 
 local PROFESSIONS_ADDON = "Blizzard_Professions"
 local RESCORE_KEY = "orders.rescore"
@@ -620,25 +621,74 @@ local SNAPSHOT_RESULT_KEYS = {
 local live = {}            -- [orderID] = OrderView (current board)
 local pending = {}         -- [orderID] = { fulfilled = FulfilledOrder without time/charKey, at = Now() }
 local claimInFlight        -- { orderID, at } while a ClaimOrder waits for its response
-local sessionSnapshot      -- snapshot while the saved data is read-only
+local sessionBoards        -- orderBoards while the saved data is read-only
 local sessionState         -- ordersState while the saved data is read-only
 
-local function snapshot_table()
-  local snap
+-- The table of boards ({ [charKey] = board }). Without `create`, nil while the saved data has none (reads never
+-- create it). While read-only: a session copy of the stored boards, made once.
+local function boards_root(create)
   if writable() then
     local g = global()
-    if type(g.ordersSnapshot) ~= "table" then g.ordersSnapshot = {} end
-    snap = g.ordersSnapshot
-  else
-    if not sessionSnapshot then
-      local g = global()
-      local stored = g and g.ordersSnapshot
-      sessionSnapshot = type(stored) == "table" and copy(stored) or {}
+    if type(g.orderBoards) ~= "table" then
+      if not create then return nil end
+      g.orderBoards = {}
     end
-    snap = sessionSnapshot
+    return g.orderBoards
   end
-  if type(snap.orders) ~= "table" then snap.orders = {} end
-  return snap
+  if not sessionBoards then
+    local g = global()
+    local stored = g and g.orderBoards
+    sessionBoards = type(stored) == "table" and copy(stored) or {}
+  end
+  return sessionBoards
+end
+
+-- orderBoards[charKey], created (and repaired) with `orders = {}, scopes = {}` on first write; nil for a read of a
+-- character without a board.
+local function board_for(charKey, create)
+  local root = boards_root(create)
+  if not root then return nil end
+  local board = root[charKey]
+  if type(board) ~= "table" then
+    if not create then return nil end
+    board = {}
+    root[charKey] = board
+  end
+  if create then
+    if type(board.orders) ~= "table" then board.orders = {} end
+    if type(board.scopes) ~= "table" then board.scopes = {} end
+  end
+  return board
+end
+
+local NO_ORDERS = {}
+
+-- A board's orders table, or an empty one (never written) when it is damaged.
+local function orders_of(board)
+  return type(board.orders) == "table" and board.orders or NO_ORDERS
+end
+
+local function board_time(board)
+  return type(board.time) == "number" and board.time or nil
+end
+
+-- Every board that is a table, as { { charKey, board } }: the current character's first, then by time, newest
+-- first (no time last), then by charKey.
+local function sorted_boards()
+  local list, current = {}, ns.FS:CharKey()
+  for charKey, board in pairs(boards_root(false) or {}) do
+    if type(board) == "table" and type(charKey) == "string" then list[#list + 1] = { charKey = charKey, board = board } end
+  end
+  table.sort(list, function(a, b)
+    if (a.charKey == current) ~= (b.charKey == current) then return a.charKey == current end
+    local ta, tb = board_time(a.board), board_time(b.board)
+    if ta ~= tb then
+      if ta == nil or tb == nil then return ta ~= nil end
+      return ta > tb
+    end
+    return a.charKey < b.charKey
+  end)
+  return list
 end
 
 local function state_for(charKey)
@@ -703,21 +753,20 @@ local function in_scope(view, typeName, profession)
 end
 
 -- A board page was shown: orders (C_CraftingOrders.GetCrafterOrders(), cumulative across pages) replace every view
--- of that order type and profession (default: the open one) in the snapshot; the live set keeps only that
--- profession's views and replaces those of that type. One scoring context for the whole board, one ScoreInput per
--- order. A snapshot made by another character is started afresh (its personal orders are not this one's). Expired
--- stored views are dropped.
+-- of that order type and profession (default: the open one) on the current character's board, which records the
+-- time and the scope ("<type>:<profession>"); the live set keeps only that profession's views and replaces those of
+-- that type. One scoring context for the whole board, one ScoreInput per order. Other characters' boards are left
+-- alone, except that expired views are dropped from every board.
 function Orders:OnBoardShown(orderTypeEnum, orders, profession)
   if profession == nil then profession = current_profession() end
   local typeName = self.ORDER_TYPES[orderTypeEnum]
   local charKey = ns.FS:CharKey()
-  local snap = snapshot_table()
-  if snap.charKey ~= nil and snap.charKey ~= charKey then snap.orders = {} end
+  local board = board_for(charKey, true)
   for id, view in pairs(live) do
     if view.profession ~= profession or view.orderType == typeName then live[id] = nil end
   end
-  for id, view in pairs(snap.orders) do
-    if type(view) ~= "table" or in_scope(view, typeName, profession) then snap.orders[id] = nil end
+  for id, view in pairs(board.orders) do
+    if type(view) ~= "table" or in_scope(view, typeName, profession) then board.orders[id] = nil end
   end
   local ctx = self:BuildContext(charKey)
   for _, info in ipairs(type(orders) == "table" and orders or {}) do
@@ -726,20 +775,24 @@ function Orders:OnBoardShown(orderTypeEnum, orders, profession)
       input.profession = profession
       local view = score(self, input, ctx)
       live[input.orderID] = view
-      snap.orders[input.orderID] = stored_copy(view)
+      board.orders[input.orderID] = stored_copy(view)
     end
   end
   local now = ns.FS:Now()
-  for id, view in pairs(snap.orders) do
-    if expired(view, now) then snap.orders[id] = nil end
+  for _, other in pairs(boards_root(true)) do
+    if type(other) == "table" and type(other.orders) == "table" then
+      for id, view in pairs(other.orders) do
+        if type(view) == "table" and expired(view, now) then other.orders[id] = nil end
+      end
+    end
   end
-  snap.time = now
-  snap.charKey = charKey
+  board.time = now
+  board.scopes[tostring(typeName) .. ":" .. tostring(profession)] = now
   self:SendMessage(ns.Msg.ORDERS_CHANGED)
 end
 
 -- The public bucket list is shown (no flat public orders on screen): drops the live public views so Claim Best
--- Order cannot spend a public claim on an order that is not shown. The snapshot keeps them.
+-- Order cannot spend a public claim on an order that is not shown. The saved board keeps them.
 function Orders:OnBucketsShown()
   local changed = false
   for id, view in pairs(live) do
@@ -751,16 +804,40 @@ function Orders:OnBucketsShown()
   if changed then self:SendMessage(ns.Msg.ORDERS_CHANGED) end
 end
 
--- { time, charKey, orders = { OrderView } } (stored views, by orderID, leaving out expired ones). The views are the
--- stored tables themselves: read-only for callers.
-function Orders:GetSnapshot()
-  local snap = snapshot_table()
-  local now, list = ns.FS:Now(), {}
-  for _, view in pairs(snap.orders) do
+-- A board's unexpired stored views, by orderID.
+local function board_views(board, now)
+  local list = {}
+  for _, view in pairs(orders_of(board)) do
     if type(view) == "table" and not expired(view, now) then list[#list + 1] = view end
   end
   table.sort(list, by_order_id)
-  return { time = snap.time, charKey = snap.charKey, orders = list }
+  return list
+end
+
+-- { time, charKey, orders = { OrderView } }: the current character's board when it has a time, else the board seen
+-- most recently (stored views, by orderID, leaving out expired ones); { orders = {} } without boards. The views are
+-- the stored tables themselves: read-only for callers.
+function Orders:GetSnapshot()
+  local boards, current = sorted_boards(), ns.FS:CharKey()
+  local chosen = boards[1]
+  if chosen and not (chosen.charKey == current and board_time(chosen.board)) then
+    for _, entry in ipairs(boards) do
+      if entry.charKey ~= current and board_time(entry.board) then chosen = entry; break end
+    end
+  end
+  if not chosen then return { orders = {} } end
+  return { time = chosen.board.time, charKey = chosen.charKey, orders = board_views(chosen.board, ns.FS:Now()) }
+end
+
+-- Every board: { { charKey, time, orders = { OrderView } } } (unexpired views by orderID), the current character's
+-- first, then the most recently seen (boards without a time last), then by charKey. The views are the stored tables
+-- themselves: read-only for callers.
+function Orders:GetBoards()
+  local now, out = ns.FS:Now(), {}
+  for _, entry in ipairs(sorted_boards()) do
+    out[#out + 1] = { charKey = entry.charKey, time = entry.board.time, orders = board_views(entry.board, now) }
+  end
+  return out
 end
 
 -- The views of the board as it is open now, by orderID (empty after the Professions frame closes). Read-only.
@@ -771,12 +848,16 @@ function Orders:GetLiveViews()
   return list
 end
 
--- The live view, else the stored one (nil when unknown or expired). Read-only: it is the live or stored table.
+-- The live view, else the stored one from the current character's board, else from the other boards, newest first
+-- (nil when unknown or expired). Read-only: it is the live or stored table.
 function Orders:GetView(orderID)
   if orderID == nil then return nil end
   if live[orderID] then return live[orderID] end
-  local view = snapshot_table().orders[orderID]
-  if type(view) == "table" and not expired(view, ns.FS:Now()) then return view end
+  local now = ns.FS:Now()
+  for _, entry in ipairs(sorted_boards()) do
+    local view = orders_of(entry.board)[orderID]
+    if type(view) == "table" and not expired(view, now) then return view end
+  end
   return nil
 end
 
@@ -786,19 +867,31 @@ function Orders:ClearLive()
   self:SendMessage(ns.Msg.ORDERS_CHANGED)
 end
 
--- Rescores every live and stored view from its stored input, with one context for the snapshot's character (an
--- order seen on another character is scored for that character, not the one logged in now).
+-- Rescores every live and stored view from its stored input, with one context per board's character (an order seen
+-- on another character is scored for that character, not the one logged in now); the live views use the current
+-- character's, and the current board takes their fresh copies.
 function Orders:Rescore()
-  local snap = snapshot_table()
-  local ctx = self:BuildContext(snap.charKey or ns.FS:CharKey())
-  for id, view in pairs(live) do
-    local fresh = score(self, view.input, ctx)
-    live[id] = fresh
-    if snap.orders[id] ~= nil then snap.orders[id] = stored_copy(fresh) end
+  local current = ns.FS:CharKey()
+  local contexts = {}
+  local function context(charKey)
+    if contexts[charKey] == nil then contexts[charKey] = self:BuildContext(charKey) end
+    return contexts[charKey]
   end
-  for id, view in pairs(snap.orders) do
-    if live[id] == nil and type(view) == "table" and type(view.input) == "table" then
-      snap.orders[id] = stored_copy(score(self, view.input, ctx))
+  local currentBoard = board_for(current, false)
+  local currentOrders = currentBoard and orders_of(currentBoard) or NO_ORDERS
+  for id, view in pairs(live) do
+    local fresh = score(self, view.input, context(current))
+    live[id] = fresh
+    if currentOrders[id] ~= nil then currentOrders[id] = stored_copy(fresh) end
+  end
+  for charKey, board in pairs(boards_root(false) or {}) do
+    if type(board) == "table" and type(board.orders) == "table" then
+      local isCurrent = charKey == current
+      for id, view in pairs(board.orders) do
+        if not (isCurrent and live[id] ~= nil) and type(view) == "table" and type(view.input) == "table" then
+          board.orders[id] = stored_copy(score(self, view.input, context(charKey)))
+        end
+      end
     end
   end
   self:SendMessage(ns.Msg.ORDERS_CHANGED)
@@ -812,20 +905,25 @@ function Orders:ScheduleRescore()
   end))
 end
 
--- Changes one order's input with mutate(input) and scores it once; the live view and the stored copy both take the
--- new view. False when the order is not known.
+-- Changes one order's input with mutate(input) and scores it once; the live view and the stored copy (on the board
+-- holding the order, the current character's first) both take the new view. False when the order is not known.
 local function update_order(self, orderID, mutate)
   if orderID == nil then return false end
-  local snap = snapshot_table()
   local view = live[orderID]
-  local stored = snap.orders[orderID]
-  if type(stored) ~= "table" then stored = nil end
+  local holder, holderKey, stored
+  for _, entry in ipairs(sorted_boards()) do
+    local candidate = orders_of(entry.board)[orderID]
+    if type(candidate) == "table" then
+      holder, holderKey, stored = entry.board, entry.charKey, candidate
+      break
+    end
+  end
   local base = view or stored
   if not base or type(base.input) ~= "table" then return false end
   mutate(base.input)
-  local fresh = score(self, base.input, self:BuildContext(base.charKey or snap.charKey or ns.FS:CharKey()))
+  local fresh = score(self, base.input, self:BuildContext(base.charKey or holderKey or ns.FS:CharKey()))
   if view then live[orderID] = fresh end
-  if stored then snap.orders[orderID] = stored_copy(fresh) end
+  if stored then holder.orders[orderID] = stored_copy(fresh) end
   self:SendMessage(ns.Msg.ORDERS_CHANGED)
   return true
 end
@@ -984,7 +1082,7 @@ end
 
 -- CRAFTINGORDERS_FULFILL_ORDER_RESPONSE(result, orderID): on Ok sends ns.Msg.ORDER_FULFILLED with the
 -- FulfilledOrder (Customers records the customer's order from it; NPC orders have no customer) and removes the order
--- from the board and the snapshot. Any other result keeps the pending fulfilment for a retry.
+-- from the live board and every saved board. Any other result keeps the pending fulfilment for a retry.
 function Orders:OnFulfillResponse(_, result, orderID)
   if result ~= ok_result() then return end
   local now = ns.FS:Now()
@@ -997,12 +1095,17 @@ function Orders:OnFulfillResponse(_, result, orderID)
     fulfilled.charKey = ns.FS:CharKey()
     self:SendMessage(ns.Msg.ORDER_FULFILLED, fulfilled)
   end
-  local snap = snapshot_table()
-  if live[orderID] ~= nil or snap.orders[orderID] ~= nil then
-    live[orderID] = nil
-    snap.orders[orderID] = nil
-    self:SendMessage(ns.Msg.ORDERS_CHANGED)
+  local changed = live[orderID] ~= nil
+  live[orderID] = nil
+  if orderID ~= nil then
+    for _, board in pairs(boards_root(false) or {}) do
+      if type(board) == "table" and type(board.orders) == "table" and board.orders[orderID] ~= nil then
+        board.orders[orderID] = nil
+        changed = true
+      end
+    end
   end
+  if changed then self:SendMessage(ns.Msg.ORDERS_CHANGED) end
 end
 
 ---------------------------------------------------------------------------

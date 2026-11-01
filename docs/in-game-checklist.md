@@ -1136,6 +1136,14 @@ P6-6. **English text unchanged after the phase 6 locale polish.** In game (enUS)
 Expected: every text reads exactly as before. There are no doubled or missing spaces, no stray brackets, and no `%s`
 or `%d` shows.
 
+## Phase 7
+
+P7-1. **Upgrade keeps the last board, and alts keep their own.** First login after the update with a phase 6 save:
+no error, and the Orders tab shows the last board under the character that saw it. Then open the same profession's
+board on a second character and run
+`/run local n=0 for _ in pairs(FabricationStationDB.global.orderBoards) do n=n+1 end print(n)`. Expected: it prints
+2.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

@@ -65,7 +65,7 @@ describe("upgrading phase-4 SavedVariables end to end", function()
   it("migrates, keeps the hash so a HELLO requests nothing, and every reader sees the compact shape", function()
     -- the boot already ran migration 2 on the file
     local g = ns.FS.db.global
-    assert.are.equal(2, g.schemaVersion)
+    assert.are.equal(3, g.schemaVersion)
     local d = g.guildDirectory["G-Realm"]
     local b = d.profiles["B-Realm"]
     assert.are.same({ { s = 2907, k = 50, m = 100, r = ",100:35,101:24," } }, b.pr)
