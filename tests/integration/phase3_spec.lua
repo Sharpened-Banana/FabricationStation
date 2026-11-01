@@ -393,9 +393,10 @@ describe("phase 3 integration", function()
       -- SaleLog (phase 7 Task 6): the names only as hook("PostItem" / "PostCommodity") post-hook targets, pinned by
       -- tests/salelog/salelog_spec.lua ("source").
       ["Modules/SaleLog.lua"] = { PostItem = 1, PostCommodity = 1 },
-      -- CraftLog (phase 7 Task 9): the name only as the hook(C_TradeSkillUI, "CraftRecipe", ...) post-hook target, pinned
-      -- by tests/queue/craft_spec.lua (one post-hook line per file).
-      ["Modules/CraftLog.lua"] = { CraftRecipe = 1 },
+      -- CraftLog (phase 7 Task 9): the names only as hook(C_TradeSkillUI, "<name>", ...) post-hook targets
+      -- (CraftRecipe, and the clear-only RecraftRecipe, RecraftRecipeForOrder, CraftEnchant, CraftSalvage), pinned
+      -- by tests/queue/craft_spec.lua.
+      ["Modules/CraftLog.lua"] = { CraftRecipe = 1, RecraftRecipe = 1, CraftEnchant = 1, CraftSalvage = 1 },
       ["UI/OrdersPanel.lua"] = { ClaimBest = 1 },
       ["UI/ProfessionPanel.lua"] = { CraftNext = 1 },
       ["UI/Tabs/Queue.lua"] = { CraftNext = 2 },

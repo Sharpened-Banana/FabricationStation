@@ -581,6 +581,31 @@ describe("click-only crafting", function()
     end
   end)
 
+  -- Phase 7 Task 9 fix round 1: besides its CraftRecipe post-hook, CraftLog has exactly the four clear-only post-hooks
+  -- below (crafts that do not go through CraftRecipe end the pending craft), whose target OnUntrackedCraft only
+  -- forgets the pending craft, and no other hook or hooksecurefunc call.
+  it("allows only clear-only recraft, enchant and salvage post-hooks besides it in Modules/CraftLog.lua", function()
+    local expected = {
+      'hook(C_TradeSkillUI, "CraftRecipe", function(...) self:OnCraftRecipe(...) end)',
+      'hook(C_TradeSkillUI, "RecraftRecipe", function() self:OnUntrackedCraft() end)',
+      'hook(C_TradeSkillUI, "RecraftRecipeForOrder", function() self:OnUntrackedCraft() end)',
+      'hook(C_TradeSkillUI, "CraftEnchant", function() self:OnUntrackedCraft() end)',
+      'hook(C_TradeSkillUI, "CraftSalvage", function() self:OnUntrackedCraft() end)',
+    }
+    local lines = code_lines("Modules/CraftLog.lua")
+    local calls, body, inside = {}, {}, false
+    for _, line in ipairs(lines) do
+      local trimmed = line:match("^%s*(.-)%s*$")
+      if trimmed:match("^hook%(") then calls[#calls + 1] = trimmed end
+      if line:find("hooksecurefunc", 1, true) then assert.truthy(line:match(LEDGER_HOOK_HELPER), line) end
+      if line:match("^function CraftLog:OnUntrackedCraft%(%)%s*$") then inside = true
+      elseif inside and line:match("^end") then inside = false
+      elseif inside and trimmed ~= "" then body[#body + 1] = trimmed end
+    end
+    assert.same(expected, calls)
+    assert.same({ "pending = nil" }, body)
+  end)
+
   it("calls CraftRecipe only inside Queue:CraftNext", function()
     local hits = {}
     for _, path in ipairs(lua_files()) do

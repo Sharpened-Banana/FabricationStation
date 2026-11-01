@@ -1230,12 +1230,14 @@ P7-16. **Craft result fields.** Craft one quality recipe with concentration, the
 `/dump FabricationStationDB.global.craftLog.entries[#FabricationStationDB.global.craftLog.entries]`. Expected:
 `actual.quality` matches the item you made, `game.quality` and `predicted.quality` are filled. Report whether
 `actual.concentrationSpent`, `actual.ingenuityRefund`, `actual.ingenuityProc` and a `multicraft` number from the game
-are present (a missing one stays nil; `multicraft` 0 only means no extra items were seen).
+are present (a missing one stays nil; without the game's `multicraft` field it stays nil until an extra arrives).
 
 P7-17. **Multicraft extras.** Craft until a Multicraft proc. Expected: one entry for that craft with
 `actual.multicraft` equal to the extra items (and `actual.quantity` the base plus the extras), not a second entry.
 Also craft once from Blizzard's own Craft button with another recipe selected before (or a different recipe than
-FabricationStation's panel last showed): the entry's `recipeID` is the recipe actually crafted.
+FabricationStation's panel last showed): the entry's `recipeID` is the recipe actually crafted. Then start a
+"Create All" of 3 or more, stop it after the first cast (move), and recraft an item of that recipe within a minute:
+no new entry (the Ledger shows no new craft either).
 
 ## Not done here
 

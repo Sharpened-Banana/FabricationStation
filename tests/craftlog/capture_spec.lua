@@ -59,7 +59,8 @@ describe("CraftLog capture", function()
     assert.same(reagents, e.fixture.reagents)
     assert.same(ns.FS.db.global.recipeCalib["Main-Realm"][9001], e.fixture.calib)
     assert.equals("70575", e.fixture.build)
-    assert.same({ quality = 2, quantity = 1, baseQuantity = 1, multicraft = 0, resourcesReturned = {} }, e.actual)
+    -- multicraft unknown: no field from the game, no extra
+    assert.same({ quality = 2, quantity = 1, baseQuantity = 1, resourcesReturned = {} }, e.actual)
     assert.equals(2, ns.FS.db.global.craftLog.nextID)
     assert.equals(1, changes())
     assert.same({}, ns.FS.db.global.diagnostics.errors)
@@ -93,7 +94,8 @@ describe("CraftLog capture", function()
     result({ itemID = 5002, quantity = 2, operationID = 11 })
     craft(9001, reagents); result({ itemID = 5002, quantity = 1, operationID = 12 })
     local list = CL:GetEntries()
-    assert.equals(0, list[1].actual.multicraft); assert.equals(2, list[2].actual.multicraft)
+    -- Fix round 1 (M3): without the game's field and without an extra, multicraft is unknown (nil), not 0.
+    assert.is_nil(list[1].actual.multicraft); assert.equals(2, list[2].actual.multicraft)
     assert.equals(2, #list)
     assert.equals(3, list[2].actual.quantity); assert.equals(1, list[1].actual.quantity)
     assert.equals(3, changes())
@@ -123,7 +125,72 @@ describe("CraftLog capture", function()
   it("leaves an actual value nil when the game omits it", function()
     craft(9001, reagents); result({ itemID = 5002, operationID = 11, multicraft = "x", concentrationSpent = "30" })
     local a = CL:GetEntries()[1].actual
-    assert.same({ multicraft = 0, resourcesReturned = {}, baseQuantity = 1 }, a)
+    assert.same({ resourcesReturned = {}, baseQuantity = 1 }, a)
+  end)
+
+  it("keeps a real 0 multicraft from the game and leaves a missing one unknown", function()
+    craft(9001, reagents); result({ itemID = 5002, quantity = 1, operationID = 11, multicraft = 0 })
+    craft(9001, reagents); result({ itemID = 5002, quantity = 1, operationID = 12 })
+    local list = CL:GetEntries()
+    assert.is_nil(list[1].actual.multicraft); assert.equals(0, list[2].actual.multicraft)
+  end)
+
+  it("adds an extra to multicraft but leaves an unknown quantity unknown", function()
+    craft(9001, reagents); result({ itemID = 5002, operationID = 11 })
+    result({ itemID = 5002, quantity = 2, operationID = 11 })
+    local a = CL:GetEntries()[1].actual
+    assert.is_nil(a.quantity); assert.equals(2, a.multicraft)
+  end)
+
+  -- Fix round 1 (I1): a craft that does not go through CraftRecipe ends the pending one, so its result is not logged
+  -- as a cast of it (and the Ledger, which clears its own pending craft the same way, agrees).
+  it("logs nothing new for a recraft after a multi-cast craft that stopped", function()
+    local Ledger = ns.FS:GetModule("Ledger")
+    craft(9001, reagents, false, 3); result({ itemID = 5002, quantity = 1, operationID = 11 })
+    C_TradeSkillUI.RecraftRecipe("Item-1-0-ABC")
+    result({ itemID = 5002, quantity = 1, operationID = 12 })
+    assert.equals(1, #CL:GetEntries())
+    assert.equals(#Ledger:Query({ type = "craft" }), #CL:GetEntries())
+  end)
+
+  it("clears the pending craft from each of the recraft, enchant and salvage hooks", function()
+    local calls = {
+      RecraftRecipe = { "Item-1-0-ABC" }, RecraftRecipeForOrder = { 77, "Item-1-0-ABC" },
+      CraftEnchant = { 9001, 1, {}, nil }, CraftSalvage = { 9001, 1, nil },
+    }
+    for name, args in pairs(calls) do
+      craft(9001, reagents)
+      C_TradeSkillUI[name](unpack(args))
+      result({ itemID = 5002, quantity = 1, operationID = #CL:GetEntries() + 100 })
+      assert.equals(0, #CL:GetEntries(), name)
+    end
+    craft(9001, reagents); result({ itemID = 5002, quantity = 1, operationID = 200 })
+    assert.equals(1, #CL:GetEntries())
+    ns.FS:SetModuleEnabled("CraftLog", false)                         -- off: the hook bodies do nothing
+    craft(9001, reagents)
+    ns.FS:SetModuleEnabled("CraftLog", true)
+    local hooks = 0
+    for _, h in ipairs(W.hooks) do if calls[h[2]] then hooks = hooks + 1 end end
+    ns.FS:SetModuleEnabled("CraftLog", false); ns.FS:SetModuleEnabled("CraftLog", true)
+    local after = 0
+    for _, h in ipairs(W.hooks) do if calls[h[2]] then after = after + 1 end end
+    assert.equals(hooks, after)                                       -- installed once per session
+    assert.equals(8, hooks)                                           -- the Ledger's four and CraftLog's four
+  end)
+
+  it("drops the pending craft when the player's cast fails", function()
+    craft(9001, reagents)
+    W.fire("UNIT_SPELLCAST_FAILED", "party1", "guid", 9001)           -- another unit
+    W.fire("UNIT_SPELLCAST_FAILED", "player", "guid", 1234)           -- another spell
+    result({ itemID = 5002, quantity = 1, operationID = 11 })
+    assert.equals(1, #CL:GetEntries())
+    craft(9001, reagents)
+    W.fire("UNIT_SPELLCAST_FAILED", "player", "guid", 9001)
+    result({ itemID = 5002, quantity = 1, operationID = 12 })
+    craft(9001, reagents)
+    W.fire("UNIT_SPELLCAST_FAILED", "player", "guid", nil)
+    result({ itemID = 5002, quantity = 1, operationID = 13 })
+    assert.equals(1, #CL:GetEntries())
   end)
 
   it("leaves baseQuantity nil for a recipe with a yield range", function()
@@ -275,5 +342,15 @@ describe("CraftLog capture", function()
     assert.same(before, ns.FS.db.global)
     assert.equals(sent, changes())
     assert.equals(1, #CL:GetEntries())                                -- reads still work
+  end)
+
+  it("adds no extra to the last logged cast while the saved data is from a newer version", function()
+    craft(9001, reagents); result({ itemID = 5002, quantity = 1, operationID = 11 })
+    ns.FS.dbIsNewer = true
+    local before, sent = ns.Util.DeepCopy(ns.FS.db.global, 30), changes()
+    result({ itemID = 5002, quantity = 2, operationID = 11,
+      resourcesReturned = { { reagent = { itemID = 1002 }, quantity = 1 } } })
+    assert.same(before, ns.FS.db.global)
+    assert.equals(sent, changes())
   end)
 end)

@@ -36,7 +36,7 @@ Modules/SaleLog.lua:your listings are not recorded
 Modules/SaleLog.lua:expired auctions are not recorded
 Modules/SaleLog.lua:what depends on that event is not recorded
 Modules/SaleLog.lua:that action is not recorded
-Modules/CraftLog.lua:crafts are not logged
+Modules/CraftLog.lua:crafts are not logged correctly
 Modules/Social/Guild.lua:own profile of %s failed validation (%s); not shared
 Modules/Social/GuildOptions.lua:no codec
 Modules/Social/GuildOptions.lua:no profile

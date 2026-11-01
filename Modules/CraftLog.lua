@@ -8,24 +8,27 @@ local _, ns = ...
 --                   resourcefulnessValue? } | nil,
 --     game = { quality, concentrationCost?, baseSkill?, bonusSkill?, baseDifficulty?, bonusDifficulty?,
 --              lowerSkillThreshold?, upperSkillTreshold? } | nil,
---     actual = { quality?, quantity?, baseQuantity?, multicraft (extra items, 0 = none),
+--     actual = { quality?, quantity?, baseQuantity?,
+--                multicraft? (extra items: the game's number, else the extras seen; nil = unknown),
 --                resourcesReturned = { [itemID] = qty }, concentrationSpent?, ingenuityRefund?, ingenuityProc? },
 --     fixture = { reagents, calib, build } | nil }
 --
 -- It only watches. A post-hook on C_TradeSkillUI.CraftRecipe (Blizzard's own button and Queue:CraftNext alike; this
--- file never calls it, tests/queue/craft_spec.lua allows exactly the one hook line) remembers the pending craft with
+-- file never calls it, tests/queue/craft_spec.lua allows exactly that hook line) remembers the pending craft with
 -- both predictions, made right then from the reagents the call passed. The recipe is the one the call crafted, never
 -- the profession window's selection. TRADE_SKILL_ITEM_CRAFTED_RESULT then logs one entry per cast:
 --   * a result with the operationID of the last logged one is a Multicraft extra: it adds to that entry only;
 --   * else it is the pending craft's next cast when the craft is at most 60 s old (counted from the call, then from
 --     each logged cast) and the item is one of its schematic's outputs; any other result is not logged.
--- The player's UNIT_SPELLCAST_INTERRUPTED for the pending recipe (or for no spellID) drops the pending craft.
--- Recrafts, enchants and salvage are not logged, as in the Ledger (Ruling P3): they do not go through CraftRecipe, an
--- enchant result (data.isEnchant) is ignored, and a recraft result is not the output of a pending craft.
+-- The player's UNIT_SPELLCAST_INTERRUPTED or UNIT_SPELLCAST_FAILED for the pending recipe (or for no spellID) drops the
+-- pending craft.
+-- Recrafts, enchants and salvage are not logged, as in the Ledger (Ruling P3): clear-only post-hooks on RecraftRecipe,
+-- RecraftRecipeForOrder, CraftEnchant and CraftSalvage drop the pending craft (so a recraft after a multi-cast craft
+-- that stopped early is not taken for its next cast), and an enchant result (data.isEnchant) is ignored.
 -- The Ledger keeps its own pending craft; the two modules share no state.
 --
 -- Every handler and the hook body run through ns.FS:Wrap("CraftLog", ...), so a failure turns off only this module.
--- The hook is installed once per session (hooksecurefunc cannot be undone) and does nothing while the module is off.
+-- The hooks are installed once per session (hooksecurefunc cannot be undone) and do nothing while the module is off.
 -- Nothing is written while the saved data is from a newer version (ns.FS.dbIsNewer); saved rows are never wiped (a
 -- damaged part is replaced by an empty one, a damaged row is skipped when reading). Unknown values stay nil.
 -- Unverified (P7-16): the payload's multicraft, concentrationSpent, ingenuityRefund and hasIngenuityProc fields.
@@ -160,7 +163,7 @@ local function actual_of(data, schematic)
     quality = number_or_nil(data.craftingQuality),
     quantity = number_or_nil(data.quantity),
     baseQuantity = baseQuantity,
-    multicraft = number_or_nil(data.multicraft) or 0,
+    multicraft = number_or_nil(data.multicraft),
     resourcesReturned = add_returned({}, data.resourcesReturned),
     concentrationSpent = number_or_nil(data.concentrationSpent),
     ingenuityRefund = number_or_nil(data.ingenuityRefund),
@@ -209,7 +212,8 @@ local function add_extra(self, data)
   local actual = entry.actual
   local quantity = number_or_nil(data.quantity)
   if quantity and quantity > 0 then
-    actual.quantity = (number_or_nil(actual.quantity) or 0) + quantity
+    -- An unknown base quantity stays unknown; the extras still count as Multicraft items.
+    if number_or_nil(actual.quantity) then actual.quantity = actual.quantity + quantity end
     if not last.multicraftGiven then actual.multicraft = (number_or_nil(actual.multicraft) or 0) + quantity end
   end
   if type(actual.resourcesReturned) ~= "table" then actual.resourcesReturned = {} end
@@ -261,11 +265,17 @@ function CraftLog:OnCraftResult(data)
   self:SendMessage(ns.Msg.CRAFTLOG_CHANGED)
 end
 
--- The player's UNIT_SPELLCAST_INTERRUPTED(unit, castGUID, spellID): an interrupted cast of the pending recipe (or of
--- an unnamed spell) drops the pending craft. Recipe IDs are the craft spells' IDs.
+-- The player's UNIT_SPELLCAST_INTERRUPTED / UNIT_SPELLCAST_FAILED(unit, castGUID, spellID): an interrupted or failed
+-- cast of the pending recipe (or of an unnamed spell) drops the pending craft. Recipe IDs are the craft spells' IDs.
 function CraftLog:OnSpellcastInterrupted(unit, _, spellID)
   if not pending or unit ~= "player" then return end
   if spellID == nil or spellID == pending.recipeID then pending = nil end
+end
+
+-- Post-hook body for RecraftRecipe, RecraftRecipeForOrder, CraftEnchant and CraftSalvage: what follows is not the
+-- pending craft. It only forgets it (tests/queue/craft_spec.lua pins this body).
+function CraftLog:OnUntrackedCraft()
+  pending = nil
 end
 
 ---------------------------------------------------------------------------
@@ -307,8 +317,9 @@ function CraftLog:OnEnable()
   local function wrap(fn) return ns.FS:Wrap("CraftLog", fn) end
   self:RegisterEvent("TRADE_SKILL_ITEM_CRAFTED_RESULT", wrap(function(_, data) self:OnCraftResult(data) end))
   self:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED", wrap(function(_, ...) self:OnSpellcastInterrupted(...) end))
+  self:RegisterEvent("UNIT_SPELLCAST_FAILED", wrap(function(_, ...) self:OnSpellcastInterrupted(...) end))
 
-  -- hooksecurefunc cannot be undone: install once per session; the body does nothing while the module is off.
+  -- hooksecurefunc cannot be undone: install once per session; the bodies do nothing while the module is off.
   if self.hooked then return end
   self.hooked = true
   local function body(fn)
@@ -320,13 +331,18 @@ function CraftLog:OnEnable()
     if type(tbl) == "table" and type(tbl[name]) == "function" then
       hooksecurefunc(tbl, name, body(fn))
     else
-      log_missing(name, "crafts are not logged")
+      log_missing(name, "crafts are not logged correctly")
     end
   end
   wrap(function()
     -- A post-hook only: FabricationStation calls CraftRecipe nowhere but Queue:CraftNext (tests/queue/craft_spec.lua
     -- allows exactly this line in this file and in the Ledger).
     hook(C_TradeSkillUI, "CraftRecipe", function(...) self:OnCraftRecipe(...) end)
+    -- Clear-only post-hooks: crafts that do not go through CraftRecipe end the pending craft (they are not logged).
+    hook(C_TradeSkillUI, "RecraftRecipe", function() self:OnUntrackedCraft() end)
+    hook(C_TradeSkillUI, "RecraftRecipeForOrder", function() self:OnUntrackedCraft() end)
+    hook(C_TradeSkillUI, "CraftEnchant", function() self:OnUntrackedCraft() end)
+    hook(C_TradeSkillUI, "CraftSalvage", function() self:OnUntrackedCraft() end)
   end)()
 end
 
