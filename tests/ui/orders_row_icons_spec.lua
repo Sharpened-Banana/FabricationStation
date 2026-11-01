@@ -4,15 +4,42 @@ local FILES = { "Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Order
   "UI/OrdersPanel.lua", "UI/OrdersOptions.lua" }
 local QUESTION_MARK = 134400
 local RED, WHITE = { 1, 0.25, 0.25 }, { 1, 1, 1 }
+-- The columns of the order list, as { left, right } on a row spanning 100..860: item name, Customer 145, Tip 160,
+-- Reagents 90, Expiration 65. (Blizzard's own widths are 160 / 160 / 90 / 60; these differ, so a spec can tell what
+-- was measured from the fixed layout.)
+local NAME_COLUMN = { 100, 400 }
+local COLUMNS = { { 400, 545 }, { 545, 705 }, { 705, 795 }, { 795, 860 } }
+local function copy_columns(columns)
+  local out = {}
+  for i, c in ipairs(columns) do out[i] = { c[1], c[2] } end
+  return out
+end
 
 -- Order rows (OrdersRowAddons): a strip of reward icons in the item-name column, and a cover over Blizzard's Reagents
 -- cell that shows the reagents the crafter must supply (a check when the customer provides them all, "?" when they
 -- are unknown). Which icons an order gets, where they sit, what the tooltips say, the setting that turns them off.
 describe("OrdersPanel row icons", function()
-  local ns, W, form, tooltip, owned, ownedCalls, evalResult, board, cached, requests
+  local ns, W, form, tooltip, owned, ownedCalls, evalResult, board, cached, requests, headers
 
-  -- Order 10 as the rest of the specs build it: a personal order from Bob, 500000 tip.
-  local function order(overrides) return P2.raw_order(P2.merge({ orderID = 10 }, overrides or {})) end
+  -- The list's column headers (read-only for the addon): the name column and `columns`, handed out in a scrambled
+  -- creation order. texts[i] = the text of the i-th column (nil: the header has no text).
+  local function set_headers(columns, texts)
+    local all = { NAME_COLUMN }
+    for _, c in ipairs(columns) do all[#all + 1] = c end
+    headers = {}
+    for i, c in ipairs(all) do
+      headers[i] = { GetLeft = function() return c[1] end, GetRight = function() return c[2] end,
+        GetText = function() return texts and texts[i] or nil end }
+    end
+    local scrambled = {}
+    for n, i in ipairs({ 3, 1, 5, 2, 4, 6, 7 }) do scrambled[n] = headers[i] end
+    for i = #scrambled, 1, -1 do if scrambled[i] == nil then table.remove(scrambled, i) end end
+    form.raw(form.orderList).HeaderContainer.GetChildren = function() return unpack(scrambled) end
+  end
+
+  -- Order 10 as the rest of the specs build it: a personal order from Bob, 500000 tip, the customer provides no
+  -- reagents (reagentState 2, "None"; raw_order's own default is 0, "All").
+  local function order(overrides) return P2.raw_order(P2.merge({ orderID = 10, reagentState = 2 }, overrides or {})) end
   local function reagent(itemID, quantity)
     return { reagentInfo = { reagent = { itemID = itemID }, quantity = quantity }, source = 1 }
   end
@@ -30,6 +57,7 @@ describe("OrdersPanel row icons", function()
     tooltip = { lines = {} }
     local GameTooltip = {
       SetOwner = function(_, owner) tooltip.owner = owner; tooltip.lines = {} end,
+      GetOwner = function() return tooltip.owner end,
       SetText = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
       AddLine = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
       Show = function() tooltip.shown = true end,
@@ -64,6 +92,8 @@ describe("OrdersPanel row icons", function()
     form = fake_professions_frame()
     P2.load(ns, FILES)
     W.fire("ADDON_LOADED", "Blizzard_Professions")
+    headers = nil
+    set_headers(COLUMNS, nil)
   end
 
   local function rows() return ns.FS:GetModule("OrdersRowAddons") end
@@ -71,17 +101,19 @@ describe("OrdersPanel row icons", function()
     board = orders
     form.ordersPage:ShowOrders(0, false)
   end
-  local function row_for(option, geometry)
-    local row = form.newOrderRow(geometry)
-    form.acquireOrderRow(row, form.orderElement(option), true)
-    return row
-  end
   -- Row geometry as in orders_panel_spec: the row spans 100..860, the strip's right edge is 294 from the row's left,
   -- the name ends at 22 + textWidth. With the whole strip (132 wide) the reward icons end 4 px left of it: room =
-  -- 132 - textWidth. The Reagents cell is the 90 px before the last 60.
+  -- 132 - textWidth. The other columns are COLUMNS.
   local function geometry(textWidth)
     return { left = 100, width = 760, itemRight = 400, textLeft = 122, textWidth = textWidth,
-      reagentsLeft = 710, reagentsRight = 800 }
+      columns = copy_columns(COLUMNS) }
+  end
+  -- A row laid out like the list (geometry(50) unless given); `false`: a row that was not laid out at all.
+  local function row_for(option, g)
+    if g == nil then g = geometry(50) end
+    local row = form.newOrderRow(g or nil)
+    form.acquireOrderRow(row, form.orderElement(option), true)
+    return row
   end
   local function cells_of(row) return rows():GetCells(row) end
   -- The icons that show in a slot pool, in order ({ slot index, texture, count text }); the "+N" slot is not one.
@@ -214,7 +246,7 @@ describe("OrdersPanel row icons", function()
       for i = 1, 7 do rewards[i] = item_reward(2000 + i, 1) end
       local raw = order({ orderType = 3, npcOrderRewards = rewards })
       show_board({ raw })
-      local row = row_for(raw)
+      local row = row_for(raw, false)
       local c = cells_of(row)
       assert.same({ "all", true, 7, nil }, state(c))
       assert.same({ "RIGHT", row, "RIGHT", -(470 + 6 + 132 + 4), 0 }, { c.icons:GetPoint(1) })
@@ -260,7 +292,7 @@ describe("OrdersPanel row icons", function()
       local c = cells_of(row_for(raw))
       local function x(i) local _, _, _, px = c.coverSlots[i].icon:GetPoint(1); return px end
       assert.same({ 4, 19, 34 }, { x(1), x(2), x(3) })
-      assert.same({ "LEFT", c.cover, "LEFT", 4, 0 }, { c.coverSlots[1].icon:GetPoint(1) })
+      assert.same({ "LEFT", c.coverContent, "LEFT", 4, 0 }, { c.coverSlots[1].icon:GetPoint(1) })
       assert.same({ 14, 14 }, { c.coverSlots[1].icon:GetSize() })
     end)
     it("colours a count red when you own less than it needs, white otherwise or when unknown", function()
@@ -309,7 +341,7 @@ describe("OrdersPanel row icons", function()
       local c = cells_of(row_for(raw, geometry(50)))
       assert.equal(4, #shown(c.coverSlots))   -- room 82: 4 icons (59) and a 22 px "+3"
       assert.same({ true, "+3", 22 }, { c.coverMore:IsShown(), c.coverMore:GetText(), c.coverMore:GetWidth() })
-      assert.same({ "LEFT", c.cover, "LEFT", 4 + 60, 0 }, { c.coverMore:GetPoint(1) })
+      assert.same({ "LEFT", c.coverContent, "LEFT", 4 + 60, 0 }, { c.coverMore:GetPoint(1) })
       assert.is_true(c.cover.clips)
     end)
   end)
@@ -331,6 +363,22 @@ describe("OrdersPanel row icons", function()
       local raw = order()
       show_board({ raw })
       assert.equal("provided", cells_of(row_for(raw)).coverMode)
+    end)
+    it("shows the check when Blizzard's own reagent state says the customer provides all", function()
+      boot()
+      evalResult = allocation({ itemID = 1001, quantity = 3 })
+      local raw = order({ reagentState = 0 })   -- Enum.CraftingOrderReagentsType.All
+      show_board({ raw })
+      local c = cells_of(row_for(raw))
+      assert.equal("provided", c.coverMode)
+      assert.is_true(c.coverCheck:IsShown())
+      assert.same({}, c.reagentEntries)
+      evalResult = nil   -- even where nothing could be evaluated
+      show_board({ order({ orderID = 11, reagentState = 0 }) })
+      assert.equal("provided", ns.UI.OrdersPanel.ReagentState({ input = { reagentState = "all" } }))
+      assert.equal("unsure", ns.UI.OrdersPanel.ReagentState({ input = { reagentState = "all", isRecraft = true } }))
+      assert.equal("reagents", ns.UI.OrdersPanel.ReagentState({ input = { reagentState = "some" },
+        result = { allocation = { { itemID = 5, quantity = 1 } } } }))
     end)
     it("shows ? for a recraft", function()
       boot()
@@ -382,50 +430,107 @@ describe("OrdersPanel row icons", function()
   end)
 
   describe("the Reagents cover: position", function()
-    it("covers the row's Reagents cell, measured read-only", function()
+    local function points(c) return { { c.cover:GetPoint(1) }, { c.cover:GetPoint(2) }, c.cover:GetWidth() } end
+    local function expect(row, offset, width)
+      return { { "TOPRIGHT", row, "TOPRIGHT", -offset, 0 }, { "BOTTOMRIGHT", row, "BOTTOMRIGHT", -offset, 0 }, width }
+    end
+    local function one_order()
       boot()
       local raw = order()
       show_board({ raw })
-      local row = row_for(raw, geometry(50))
+      return raw
+    end
+
+    it("covers the Reagents column as the header measures it (not the fixed 60 px offset)", function()
+      local raw = one_order()
+      local row = row_for(raw)
       local c = cells_of(row)
-      assert.same({ { "TOPRIGHT", row, "TOPRIGHT", -60, 0 }, { "BOTTOMRIGHT", row, "BOTTOMRIGHT", -60, 0 }, 90 },
-        { { c.cover:GetPoint(1) }, { c.cover:GetPoint(2) }, c.cover:GetWidth() })
+      assert.is_true(c.cover:IsShown())
+      assert.same(expect(row, 65, 90), points(c))   -- the row ends at 860, the column at 795
       assert.same({}, form.assignedFields)
     end)
-    it("takes the column header's span when the row's cell cannot be read", function()
-      boot()
-      local raw = order()
-      show_board({ raw })
-      local g = geometry(50)
-      g.reagentsLeft = nil
-      local header = function(left, right)
-        return { GetLeft = function() return left end, GetRight = function() return right end }
-      end
-      local headers = { header(0, 1), header(1, 2), header(2, 3), header(720, 810), header(810, 860) }
-      form.raw(form.orderList).HeaderContainer.GetChildren = function() return unpack(headers) end
-      local row = row_for(raw, g)
-      local c = cells_of(row)
-      assert.same({ { "TOPRIGHT", row, "TOPRIGHT", -50, 0 }, { "BOTTOMRIGHT", row, "BOTTOMRIGHT", -50, 0 }, 90 },
-        { { c.cover:GetPoint(1) }, { c.cover:GetPoint(2) }, c.cover:GetWidth() })
+    it("sorts the headers by their left edge, whatever order they were created in", function()
+      local raw = one_order()
+      set_headers({ { 400, 560 }, { 560, 700 }, { 700, 790 }, { 790, 860 } })   -- handed out scrambled by set_headers
+      local row = row_for(raw)
+      assert.same(expect(row, 70, 90), points(cells_of(row)))
     end)
-    it("falls back to the fixed layout: Reagents 90 px, then Expiration 60 px at the right edge", function()
-      boot()
-      local raw = order()
-      show_board({ raw })
-      local row = row_for(raw)   -- not laid out at all
+    it("finds the Reagents header by its text, in any layout", function()
+      local raw = one_order()
+      _G.PROFESSIONS_COLUMN_HEADER_REAGENTS = "Reagents"
+      -- Reagents is the third of four columns and 120 px wide: only its text says so.
+      set_headers({ { 400, 520 }, { 520, 640 }, { 640, 860 } }, { "Item", "Customer", "Reagents", "Tip" })
+      local row = row_for(raw)
       local c = cells_of(row)
-      assert.same({ { "TOPRIGHT", row, "TOPRIGHT", -60, 0 }, { "BOTTOMRIGHT", row, "BOTTOMRIGHT", -60, 0 }, 90 },
-        { { c.cover:GetPoint(1) }, { c.cover:GetPoint(2) }, c.cover:GetWidth() })
-      -- a header or cell with nonsense geometry is no better
+      assert.is_true(c.cover:IsShown())
+      assert.same(expect(row, 220, 120), points(c))
+      _G.PROFESSIONS_COLUMN_HEADER_REAGENTS = nil
+    end)
+    it("falls back to the known five-column widths when no header carries the text", function()
+      local raw = one_order()
+      _G.PROFESSIONS_COLUMN_HEADER_REAGENTS = "Reagents"
+      set_headers(COLUMNS, { "Item", "Customer", "Tip", "Cost", "Expiration" })   -- no header says "Reagents"
+      local row = row_for(raw)
+      assert.is_true(cells_of(row).cover:IsShown())   -- the width and the place fit the known layout
+      _G.PROFESSIONS_COLUMN_HEADER_REAGENTS = nil
+    end)
+    it("covers nothing on a four-column layout", function()
+      local raw = one_order()
+      set_headers({ { 400, 560 }, { 560, 710 }, { 710, 860 } })   -- the name and three more
+      local row = row_for(raw)
+      local c = cells_of(row)
+      assert.is_false(c.cover:IsShown())
+      assert.is_true(c.frame:IsShown())   -- the rest of the row still works
+    end)
+    it("covers nothing on a three-column layout", function()
+      local raw = one_order()
+      form.raw(form.orderList).HeaderContainer.GetChildren = function() return end   -- no headers to read
       local g = geometry(50)
-      g.reagentsLeft, g.reagentsRight = 800, 710
-      c = cells_of(row_for(raw, g))
-      assert.equal(90, c.cover:GetWidth())
+      g.columns = { { 400, 640 }, { 640, 860 } }
+      local c = cells_of(row_for(raw, g))
+      assert.is_false(c.cover:IsShown())
+    end)
+    it("covers nothing when the layout has five columns but the fourth is not 80 to 100 px wide", function()
+      local raw = one_order()
+      set_headers({ { 400, 540 }, { 540, 640 }, { 640, 800 }, { 800, 860 } })   -- the fourth, 160 px: Tip's width
+      local row = row_for(raw)
+      assert.is_false(cells_of(row).cover:IsShown())
+      set_headers({ { 400, 545 }, { 545, 705 }, { 705, 770 }, { 770, 860 } })   -- 65 px
+      assert.is_false(cells_of(row_for(raw)).cover:IsShown())
+    end)
+    it("covers nothing when the 90 px column is not the one before the last", function()
+      local raw = one_order()
+      set_headers({ { 400, 490 }, { 490, 650 }, { 650, 810 }, { 810, 860 } })   -- 90 px, but second: in a different order
+      assert.is_false(cells_of(row_for(raw)).cover:IsShown())
+    end)
+    it("measures the row's own cells when the list has no header to read", function()
+      local raw = one_order()
+      form.raw(form.orderList).HeaderContainer.GetChildren = function() return end
+      local g = geometry(50)
+      g.columns = { { 400, 550 }, { 550, 700 }, { 700, 790 }, { 790, 860 } }
+      local row = row_for(raw, g)
+      assert.same(expect(row, 70, 90), points(cells_of(row)))
+    end)
+    it("covers nothing on a row whose cells are not the known layout either", function()
+      local raw = one_order()
+      form.raw(form.orderList).HeaderContainer.GetChildren = function() return end
+      local g = geometry(50)
+      g.columns = { { 400, 560 }, { 560, 720 }, { 720, 860 } }
+      assert.is_false(cells_of(row_for(raw, g)).cover:IsShown())
+      assert.is_false(cells_of(row_for(raw, false)).cover:IsShown())   -- not laid out, nothing to read
+    end)
+    it("uses the fixed layout (Reagents 90 px, then Expiration 60 px) only for five headers whose edges cannot be read", function()
+      local raw = one_order()
+      local unread = {}
+      for i = 1, 5 do unread[i] = { GetText = function() return nil end } end
+      form.raw(form.orderList).HeaderContainer.GetChildren = function() return unpack(unread) end
+      local row = row_for(raw, false)   -- the row is not laid out either
+      assert.same(expect(row, 60, 90), points(cells_of(row)))
+      unread[6] = unread[1]   -- six headers: not the known layout
+      assert.is_false(cells_of(row_for(raw, false)).cover:IsShown())
     end)
     it("is an opaque background of one named colour under the icons, in our own container", function()
-      boot()
-      local raw = order()
-      show_board({ raw })
+      local raw = one_order()
       local c = cells_of(row_for(raw))
       assert.equal(c.frame, c.cover:GetParent())
       assert.equal(rows():GetContainer(), c.frame:GetParent())
@@ -434,15 +539,22 @@ describe("OrdersPanel row icons", function()
       assert.equal(1, ns.UI.OrdersPanel.COVER_COLOR[4])   -- opaque
     end)
     it("re-measures when the row is re-fitted", function()
-      boot()
-      local raw = order()
-      show_board({ raw })
-      local g = geometry(50)
-      local row = row_for(raw, g)
+      local raw = one_order()
+      local row = row_for(raw)
       local c = cells_of(row)
-      g.reagentsLeft, g.reagentsRight = 720, 800
+      set_headers({ { 400, 545 }, { 545, 715 }, { 715, 795 }, { 795, 860 } })   -- Reagents 80 px now
       W.advance(0)
       assert.equal(80, c.cover:GetWidth())
+    end)
+    it("hides again when a re-fit finds a layout it does not know", function()
+      local raw = one_order()
+      local row = row_for(raw)
+      local c = cells_of(row)
+      assert.is_true(c.cover:IsShown())
+      c.cover:GetScript("OnEnter")(c.cover)
+      set_headers({ { 400, 560 }, { 560, 710 }, { 710, 860 } })
+      W.advance(0)
+      assert.is_false(c.cover:IsShown()); assert.falsy(c.tipping)
     end)
   end)
 
@@ -541,6 +653,25 @@ describe("OrdersPanel row icons", function()
       assert.truthy(c.tipping)
       form.ordersPage:ShowBuckets(0, false)
       assert.falsy(c.tipping)
+    end)
+    it("hides the tooltip when it is ours and the strip or cover goes away, and leaves another owner's alone", function()
+      boot()
+      evalResult = allocation({ itemID = 1001, quantity = 3 })
+      local raw = order()
+      show_board({ raw })
+      local c = cells_of(row_for(raw))
+      c.cover:GetScript("OnEnter")(c.cover)
+      assert.is_true(tooltip.shown)
+      ns.FS:GetModule("Orders"):Settings().showRowIcons = false
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.is_false(tooltip.shown)
+      ns.FS:GetModule("Orders"):Settings().showRowIcons = true
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      c.cover:GetScript("OnEnter")(c.cover)
+      tooltip.owner = "some other frame"   -- another addon took the tooltip
+      ns.FS:GetModule("Orders"):Settings().showRowIcons = false
+      ns.FS:SendMessage("FS_ORDERS_CHANGED")
+      assert.is_true(tooltip.shown)
     end)
     it("turns off only OrdersRowAddons when a tooltip fails", function()
       boot()
@@ -660,19 +791,23 @@ describe("OrdersPanel row icons", function()
   end)
 
   describe("dimming and recycling", function()
-    it("gives the reward strip the strip's alpha 0.6 and the cover its own dark overlay on a dimmed row", function()
+    it("gives the reward strip the strip's alpha 0.6 and the cover's icons the same strength over a dark overlay", function()
       boot()
       evalResult = allocation({ itemID = 1001, quantity = 3 })
       local raw = order({ expirationTime = 5100, orderType = 3, npcOrderRewards = { item_reward(2001, 1) } })
       local row = row_for(raw)
       show_board({ raw })
       local c = cells_of(row)
-      assert.same({ 1, 1, 1, false }, { c.strip:GetAlpha(), c.icons:GetAlpha(), c.cover:GetAlpha(), c.coverDim:IsShown() })
+      assert.same({ 1, 1, 1, 1, false }, { c.strip:GetAlpha(), c.icons:GetAlpha(), c.cover:GetAlpha(), c.coverContent:GetAlpha(),
+        c.coverDim:IsShown() })
       ns.FS:GetModule("Orders"):Settings().filters.hideRisks.expiringSoon = true
       ns.FS:SendMessage("FS_ORDERS_CHANGED")
       assert.is_true(c.dimmed)
-      assert.same({ 0.6, 0.6, 1, true }, { c.strip:GetAlpha(), c.icons:GetAlpha(), c.cover:GetAlpha(), c.coverDim:IsShown() })
-   end)
+      -- the cover itself stays opaque (Blizzard's word must not show through); its icons are at 60% like the strip's
+      assert.same({ 0.6, 0.6, 1, 0.6, true }, { c.strip:GetAlpha(), c.icons:GetAlpha(), c.cover:GetAlpha(),
+        c.coverContent:GetAlpha(), c.coverDim:IsShown() })
+      assert.same({ 0, 0, 0 }, { c.coverDim.color[1], c.coverDim.color[2], c.coverDim.color[3] })
+    end)
     it("shows a recycled row's new order's icons only", function()
       boot()
       local first = order({ orderID = 10, orderType = 3, npcOrderRewards = { item_reward(2001, 2), item_reward(2002, 1) } })
@@ -714,6 +849,83 @@ describe("OrdersPanel row icons", function()
       form.acquireOrderRow(row, form.orderElement(second), false)
       assert.same({ true, true, 2, 3 }, { c.slots[1].icon == one, c.slots[2].icon == two, #c.slots, #c.coverSlots })
       assert.same({ true, false, false }, { one:IsShown(), two:IsShown(), cover3:IsShown() })
+    end)
+  end)
+
+  describe("the cover keeps the row's tint and hover highlight", function()
+    local VIP, BLOCKED, REPEAT = { 1, 0.82, 0, 0.18 }, { 1, 0.1, 0.1, 0.25 }, { 0.3, 0.7, 1, 0.12 }
+    local function setup()
+      boot()
+      local raw = order()
+      show_board({ raw })
+      return raw, cells_of(row_for(raw))
+    end
+
+    it("paints the row's tint on the cover too: VIP, blocked, repeat, and none", function()
+      local _, c = setup()
+      local C = ns.FS:GetModule("Customers")
+      assert.is_false(c.coverTint:IsShown())
+      C:SetTag("Bob-Silvermoon", "VIP", true)
+      assert.same({ true, VIP }, { c.coverTint:IsShown(), c.coverTint.color })
+      C:SetTag("Bob-Silvermoon", "VIP", false)
+      C:RecordOrder("Bob-Silvermoon", { orderID = 1 }); C:RecordOrder("Bob-Silvermoon", { orderID = 2 })
+      assert.same({ true, REPEAT }, { c.coverTint:IsShown(), c.coverTint.color })
+      C:SetTag("Bob-Silvermoon", "blocked", true)
+      assert.same({ true, BLOCKED }, { c.coverTint:IsShown(), c.coverTint.color })
+      assert.same(c.tintColor, c.coverTint.color)
+      C:SetTag("Bob-Silvermoon", "blocked", false)
+      C:RecordOrder("Bob-Silvermoon", { orderID = 3 })   -- still a repeat customer
+      C:SetTag("Bob-Silvermoon", "VIP", true); C:SetTag("Bob-Silvermoon", "VIP", false)
+      assert.is_true(c.coverTint:IsShown())
+    end)
+    it("lights the cover while the row is hovered, and only then", function()
+      local _, c = setup()
+      local row = c.hoverRow
+      assert.is_false(c.coverHover:IsShown())
+      form.raw(row):GetScript("OnEnter")(row)
+      assert.is_true(c.coverHover:IsShown())
+      form.raw(row):GetScript("OnLeave")(row)
+      assert.is_false(c.coverHover:IsShown())
+    end)
+    it("lights the cover while the pointer is on it, even when the row reports leaving", function()
+      local _, c = setup()
+      local row = c.hoverRow
+      form.raw(row):GetScript("OnEnter")(row)
+      c.cover:GetScript("OnEnter")(c.cover)
+      form.raw(row):GetScript("OnLeave")(row)   -- the row loses the pointer to our cover
+      assert.is_true(c.coverHover:IsShown())
+      c.cover:GetScript("OnLeave")(c.cover)
+      assert.is_false(c.coverHover:IsShown())
+    end)
+    it("hooks the row once per row frame, however often it is recycled, and writes nothing on it", function()
+      boot()
+      local raw = order()
+      show_board({ raw })
+      local row = form.newOrderRow(geometry(50))
+      form.acquireOrderRow(row, form.orderElement(raw), true)
+      form.releaseOrderRow(row)
+      form.acquireOrderRow(row, form.orderElement(raw), false)
+      local c = cells_of(row)
+      local lit, show = 0, c.coverHover.Show
+      c.coverHover.Show = function(self) lit = lit + 1; return show(self) end
+      form.raw(row):GetScript("OnEnter")(row)
+      assert.equal(1, lit)   -- one handler, not one per recycle
+      assert.same({}, form.assignedFields)
+    end)
+    it("forgets a hover that ended while the row was recycled", function()
+      local _, c = setup()
+      local row = c.hoverRow
+      form.raw(row):GetScript("OnEnter")(row)
+      form.releaseOrderRow(row)
+      assert.is_false(c.coverHover:IsShown())
+    end)
+    it("turns off only OrdersRowAddons when a hover handler fails", function()
+      local _, c = setup()
+      c.coverHover.Show = function() error("boom") end
+      local row = c.hoverRow
+      form.raw(row):GetScript("OnEnter")(row)
+      assert.is_false(rows():IsEnabled())
+      assert.is_true(ns.FS:GetModule("OrdersSidePanel"):IsEnabled())
     end)
   end)
 

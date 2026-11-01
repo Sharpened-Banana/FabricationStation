@@ -30,7 +30,11 @@ local L = ns.L
 -- The Reagents cover is replaced, not edited: Blizzard's cell and its text are never written (no SetText, SetAlpha or
 -- Hide on them). Our own frame, in our own container, is anchored over the cell (measured read-only from the row's
 -- fourth cell or the column header, else Blizzard's fixed 90 px before the 60 px Expiration column) with an opaque
--- background of COVER_COLOR, so the word underneath cannot be seen. A row with no view of ours has no cover.
+-- background of COVER_COLOR, so the word underneath cannot be seen. It fails closed: the cover goes only over a column
+-- identified as Reagents (the header's own text, else the known five-column layout, headers sorted by position); on any
+-- other layout, or on a row with no view of ours, there is no cover and Blizzard's text shows. Because the cover hides
+-- the row's tint and Blizzard's hover highlight in that cell, it repaints both itself (the hover through post-hooks on
+-- the row's OnEnter / OnLeave, installed once per row frame).
 --
 -- Claiming (design rule 3): Orders:ClaimBest (C_CraftingOrders.ClaimOrder is HasRestrictions) is called only as a
 -- direct call inside the Claim Best Order button's OnClick handler (tests/orders/claim_click_only_spec.lua enforces
@@ -73,6 +77,12 @@ local UNKNOWN_ICON = 134400                           -- the question mark, for 
 -- The Reagents cover over Blizzard's cell (ProfessionsCraftingOrderPageMixin:SetupTable, 12.1.5: the Reagents column
 -- is 90 px wide and the 60 px Expiration column is last).
 local COVER_WIDTH, COVER_RIGHT, COVER_PAD = 90, 60, 4
+-- The cover goes only over a column that is identified as Reagents: by the header's own text (the global string below),
+-- else by the known layout: five columns (name, Customer, Tip, Reagents, Expiration) whose fourth is 80 to 100 px wide
+-- and ends where the last begins. Anything else gets no cover, and Blizzard's text shows.
+local KNOWN_COLUMNS, REAGENTS_MIN, REAGENTS_MAX = 5, 80, 100
+local REAGENTS_HEADER_GLOBAL = "PROFESSIONS_COLUMN_HEADER_REAGENTS"   -- unverified name, see the in-game checklist (P5-11)
+local HOVER_COLOR = { 1, 1, 1, 0.1 }   -- the cover's own highlight while its row is hovered
 -- The cover's opaque background, a dark colour close to the order list's own. (The list's background atlas cannot be
 -- read from Blizzard's region without relying on its layout, so this is the one value to adjust.)
 local COVER_COLOR = { 0.06, 0.05, 0.04, 1 }
@@ -453,12 +463,15 @@ end
 -- OrderView + owned(itemID) -> count|nil (nil: not asked) -> the reagents the crafter must supply:
 -- { kind = "reagent", itemID, count = still to supply, have = owned|nil }, one per itemID: the result's allocation
 -- summed by itemID minus what the customer provides (view.input.provided), positive remainders only, in the order the
--- allocation names them. An empty list: nothing to supply. nil: not known (a recraft, an order without a result).
+-- allocation names them. An empty list: nothing to supply (also when the order's reagent state is "all"). nil: not
+-- known (a recraft, an order without a result).
 function M.ReagentEntries(view, owned)
   if type(view) ~= "table" then return nil end
   local input = type(view.input) == "table" and view.input or {}
   local result = type(view.result) == "table" and view.result or nil
-  if flags_of(view).recraft or input.isRecraft or not (result and type(result.allocation) == "table") then return nil end
+  if flags_of(view).recraft or input.isRecraft then return nil end
+  if input.reagentState == "all" then return {} end   -- Blizzard's own word for it: the customer provides everything
+  if not (result and type(result.allocation) == "table") then return nil end
   local provided = type(input.provided) == "table" and input.provided or {}
   local need, order, out = {}, {}, {}
   for _, slot in ipairs(result.allocation) do
@@ -664,6 +677,35 @@ local function hover_leave(c)
   hide_tooltip()
 end
 
+-- Stops following the pointer (when `which` is given, only if it is that part's tooltip) and hides the tooltip when it
+-- is still ours: a frame that hides may not get its OnLeave.
+local function clear_tipping(c, which)
+  local current = c.tipping
+  if not current or (which and current ~= which) then return end
+  c.tipping = nil
+  if type(GameTooltip) ~= "table" then return end
+  if type(GameTooltip.GetOwner) == "function" then
+    local ok, owner = pcall(GameTooltip.GetOwner, GameTooltip)
+    if ok and owner ~= (current == "icons" and c.icons or c.cover) then return end
+  end
+  hide_tooltip()
+end
+
+-- The cover's own hover highlight: lit while the row or the cover has the pointer (Blizzard's highlight is under it).
+local function update_hover(c)
+  set_shown(c.coverHover, c.rowHover == true or c.coverHovered == true)
+end
+
+local function row_hover(c, on)
+  c.rowHover = on
+  update_hover(c)
+end
+
+local function cover_hover(c, on)
+  c.coverHovered = on
+  update_hover(c)
+end
+
 -- Our overlay frames let clicks and hover through to Blizzard's row beneath (unverified API names: pcall-guarded).
 local function pass_through(frame)
   for _, method in ipairs({ "SetPropagateMouseClicks", "SetPropagateMouseMotion" }) do
@@ -798,31 +840,60 @@ local function new_cells(row)
   c.iconBank = new_bank(c.icons)
   c.slots, c.more = c.iconBank.slots, c.iconBank.more
 
-  -- The Reagents cover: an opaque background over Blizzard's Reagents cell (its word must not show), the reagent
-  -- icons (the same pooled slots), the check and the "?", and a dark overlay of its own for a dimmed row.
+  -- The Reagents cover: an opaque background over Blizzard's Reagents cell (its word must not show), the row's tint and
+  -- hover highlight repainted on it (they are drawn under the cover), a dark overlay of its own for a dimmed row, and
+  -- a content frame (the reagent icons in the same pooled slots, the check and the "?") whose alpha follows the strip's.
   c.cover = CreateFrame("Frame", nil, frame)
   c.cover:SetClipsChildren(true)
   c.cover:EnableMouse(true)
   pass_through(c.cover)
-  c.cover:SetScript("OnEnter", function() M.Guard(ROWS, hover_enter, c, "cover") end)
-  c.cover:SetScript("OnLeave", function() hover_leave(c) end)
+  c.cover:SetScript("OnEnter", function()
+    M.Guard(ROWS, function()
+      cover_hover(c, true)
+      hover_enter(c, "cover")
+    end)
+  end)
+  c.cover:SetScript("OnLeave", function()
+    M.Guard(ROWS, function()
+      cover_hover(c, false)
+      hover_leave(c)
+    end)
+  end)
   c.coverBg = c.cover:CreateTexture(nil, "BACKGROUND")
   c.coverBg:SetAllPoints(c.cover)
   c.coverBg:SetColorTexture(COVER_COLOR[1], COVER_COLOR[2], COVER_COLOR[3], COVER_COLOR[4])
-  c.coverDim = c.cover:CreateTexture(nil, "OVERLAY", nil, 7)
+  c.coverTint = c.cover:CreateTexture(nil, "BORDER")
+  c.coverTint:SetAllPoints(c.cover)
+  c.coverTint:Hide()
+  c.coverHover = c.cover:CreateTexture(nil, "BORDER", nil, 1)
+  c.coverHover:SetAllPoints(c.cover)
+  c.coverHover:SetColorTexture(HOVER_COLOR[1], HOVER_COLOR[2], HOVER_COLOR[3], HOVER_COLOR[4])
+  c.coverHover:Hide()
+  c.coverDim = c.cover:CreateTexture(nil, "BORDER", nil, 2)
   c.coverDim:SetAllPoints(c.cover)
   c.coverDim:SetColorTexture(DIM[1], DIM[2], DIM[3], DIM[4])
-  c.coverCheck = c.cover:CreateTexture(nil, "ARTWORK")
+  c.coverDim:Hide()
+  c.coverContent = CreateFrame("Frame", nil, c.cover)
+  c.coverContent:SetAllPoints(c.cover)
+  c.coverCheck = c.coverContent:CreateTexture(nil, "ARTWORK")
   c.coverCheck:SetTexture(CHECK_ICON)
   c.coverCheck:SetSize(ICON_SIZE + 2, ICON_SIZE + 2)
   c.coverCheck:SetPoint("LEFT", c.cover, "LEFT", COVER_PAD, 0)
-  c.coverQuestion = text(c.cover, "GameFontNormal")
+  c.coverQuestion = text(c.coverContent, "GameFontNormal")
   c.coverQuestion:SetText("?")
   color_text(c.coverQuestion, TEXT_COLORS.grey)
   c.coverQuestion:SetPoint("LEFT", c.cover, "LEFT", COVER_PAD + 3, 0)
-  c.coverBank = new_bank(c.cover)
+  c.coverBank = new_bank(c.coverContent)
   c.coverSlots, c.coverMore = c.coverBank.slots, c.coverBank.more
   c.cover:Hide()
+
+  -- The pointer on Blizzard's row lights the cover (a post-hook on the row's own scripts, once per row frame: this
+  -- table is made once per row and reused when the row is recycled).
+  c.hoverRow = row
+  if type(row.HookScript) == "function" then
+    row:HookScript("OnEnter", function() M.Guard(ROWS, row_hover, c, true) end)
+    row:HookScript("OnLeave", function() M.Guard(ROWS, row_hover, c, false) end)
+  end
   cells[row] = c
   return c
 end
@@ -863,7 +934,7 @@ local function render_icons(c, row, reserve, room, visible)
   local layout = c.fit ~= "none" and M.IconLayout(c.iconEntries, room) or { shown = 0, width = 0 }
   if not draw_bank(c.iconBank, c.iconEntries, layout, 0) then
     c.icons:Hide()
-    if c.tipping == "icons" then c.tipping = nil end
+    clear_tipping(c, "icons")
     return
   end
   c.icons:ClearAllPoints()
@@ -872,33 +943,105 @@ local function render_icons(c, row, reserve, room, visible)
   c.icons:Show()
 end
 
--- Whether left < right look like a real column span (a cell that was not laid out reads 0 or reversed).
+-- Whether left..right look like a real column span (a cell that was not laid out reads 0 or reversed).
 local function plausible_span(left, right)
   return left ~= nil and right ~= nil and right - left >= 20 and right - left <= 300
 end
 
--- The Reagents column's span in screen coordinates (read only): the row's fourth cell, else the fourth column header
--- of the list; nil when neither can be read.
-local function reagents_span(row)
-  local cell = type(row.cells) == "table" and child(row.cells, 4) or nil
-  local left, right = read_number(cell, "GetLeft"), read_number(cell, "GetRight")
-  if plausible_span(left, right) then return left, right end
-  if rowsHeader and type(rowsHeader.GetChildren) == "function" then
-    local found = { pcall(rowsHeader.GetChildren, rowsHeader) }
-    local header = type(found[5]) == "table" and found[5] or nil
-    left, right = read_number(header, "GetLeft"), read_number(header, "GetRight")
-    if plausible_span(left, right) then return left, right end
+-- The frames (tables) among `...`, as a list.
+local function tables_of(...)
+  local list = {}
+  for i = 1, select("#", ...) do
+    local value = select(i, ...)
+    if type(value) == "table" then list[#list + 1] = value end
+  end
+  return list
+end
+
+-- { span = { left, right, frame }... } for the frames whose edges can be read, sorted by their left edge (creation
+-- order says nothing), and how many could not be read.
+local function column_spans(frames)
+  local spans, unreadable = {}, 0
+  for _, frame in ipairs(frames) do
+    local left, right = read_number(frame, "GetLeft"), read_number(frame, "GetRight")
+    if left and right and right > left then
+      spans[#spans + 1] = { left = left, right = right, frame = frame }
+    else
+      unreadable = unreadable + 1
+    end
+  end
+  table.sort(spans, function(a, b) return a.left < b.left end)
+  return spans, unreadable
+end
+
+-- The known layout: five columns, the fourth 80 to 100 px wide and ending where the last begins.
+local function known_reagents_span(spans)
+  if #spans ~= KNOWN_COLUMNS then return nil end
+  local reagents, last = spans[KNOWN_COLUMNS - 1], spans[KNOWN_COLUMNS]
+  local width = reagents.right - reagents.left
+  if width >= REAGENTS_MIN and width <= REAGENTS_MAX and math.abs(last.left - reagents.right) <= GAP then
+    return reagents.left, reagents.right
   end
   return nil
 end
 
--- Anchors the cover over Blizzard's Reagents cell: its right edge as far from the row's right edge as the cell's, its
--- width the cell's; Blizzard's fixed layout (90 px, then the 60 px Expiration column) when it cannot be measured.
+local function header_frames()
+  if not (rowsHeader and type(rowsHeader.GetChildren) == "function") then return {} end
+  return tables_of(select(2, pcall(rowsHeader.GetChildren, rowsHeader)))
+end
+
+-- A header's text (read only), or nil.
+local function header_text(header)
+  local source = type(header.GetText) == "function" and header or child(header, "Text")
+  if not (source and type(source.GetText) == "function") then return nil end
+  local ok, value = pcall(source.GetText, source)
+  return ok and type(value) == "string" and value or nil
+end
+
+-- Which column is Reagents, read-only, or nil when it cannot be told (then there is no cover and Blizzard's text
+-- shows). In order: the header whose text is Blizzard's Reagents header string; the known five-column layout read from
+-- the headers (sorted by their left edge); with no headers to read, the same from the row's own cells. Returns
+-- left, right (screen coordinates), or "fixed" when exactly the known number of headers exist but none can be read:
+-- then Blizzard's fixed layout stands (Reagents 90 px, then 60 px of Expiration at the right edge).
+local function reagents_column(row)
+  local headers = header_frames()
+  if #headers > 0 then
+    local spans, unreadable = column_spans(headers)
+    local want = rawget(_G, REAGENTS_HEADER_GLOBAL)
+    if type(want) == "string" and want ~= "" then
+      for _, span in ipairs(spans) do
+        if plausible_span(span.left, span.right) and header_text(span.frame) == want then return span.left, span.right end
+      end
+    end
+    if unreadable == 0 then return known_reagents_span(spans) end
+    if #headers == KNOWN_COLUMNS then return "fixed" end
+    return nil
+  end
+  local cellList = {}
+  if type(row.cells) == "table" then
+    for i = 1, 12 do
+      if type(row.cells[i]) == "table" then cellList[#cellList + 1] = row.cells[i] end
+    end
+  end
+  local spans, unreadable = column_spans(cellList)
+  if unreadable == 0 then return known_reagents_span(spans) end
+  return nil
+end
+
+-- Anchors the cover over the identified Reagents column and returns its width, or nil (nothing identified, or the row's
+-- right edge is unknown) when there is to be no cover.
 local function place_cover(c, row)
-  local offset, width = COVER_RIGHT, COVER_WIDTH
-  local left, right = reagents_span(row)
-  local rowRight = read_number(row, "GetRight")
-  if left and rowRight and rowRight >= right then offset, width = rowRight - right, right - left end
+  local left, right = reagents_column(row)
+  local offset, width
+  if left == "fixed" then
+    offset, width = COVER_RIGHT, COVER_WIDTH
+  elseif left then
+    local rowRight = read_number(row, "GetRight")
+    if not rowRight or rowRight < right then return nil end
+    offset, width = rowRight - right, right - left
+  else
+    return nil
+  end
   c.cover:ClearAllPoints()
   c.cover:SetPoint("TOPRIGHT", row, "TOPRIGHT", -offset, 0)
   c.cover:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -offset, 0)
@@ -906,16 +1049,18 @@ local function place_cover(c, row)
   return width
 end
 
--- Shows the Reagents cover for the row's mode (c.coverMode: "reagents" | "provided" | "unsure" | nil for none).
+-- Shows the Reagents cover for the row's mode (c.coverMode: "reagents" | "provided" | "unsure" | nil for none), over
+-- the column place_cover identifies; no cover when there is none to show or the column cannot be told.
 local function render_cover(c, row)
-  local mode = c.coverMode
-  if not mode then
+  local width = c.coverMode and place_cover(c, row) or nil
+  if not width then
     c.cover:Hide()
-    if c.tipping == "cover" then c.tipping = nil end
+    clear_tipping(c, "cover")
     return
   end
-  local width = place_cover(c, row)
+  local mode = c.coverMode
   set_shown(c.coverDim, c.dimmed)
+  c.coverContent:SetAlpha(c.dimmed and 0.6 or 1)
   set_shown(c.coverCheck, mode == "provided")
   set_shown(c.coverQuestion, mode == "unsure")
   local entries = mode == "reagents" and c.reagentEntries or {}
@@ -927,7 +1072,9 @@ local function hide_cells(c)
   c.frame:Hide()
   c.icons:Hide()
   c.cover:Hide()
-  c.tipping = nil
+  clear_tipping(c)
+  c.rowHover, c.coverHovered = false, false
+  update_hover(c)
 end
 
 local function hide_row(row)
@@ -1032,6 +1179,8 @@ local function show_row(row, elementData)
   c.tint, c.tintColor = model.highlight, tint
   if tint then c.tintTexture:SetColorTexture(tint[1], tint[2], tint[3], tint[4]) end
   set_shown(c.tintTexture, tint ~= nil)
+  if tint then c.coverTint:SetColorTexture(tint[1], tint[2], tint[3], tint[4]) end
+  set_shown(c.coverTint, tint ~= nil)
   c.dimmed = model.dimmed
   set_shown(c.dimTexture, model.dimmed)
   c.strip:SetAlpha(model.dimmed and 0.6 or 1)

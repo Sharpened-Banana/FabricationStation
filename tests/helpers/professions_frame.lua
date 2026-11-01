@@ -64,10 +64,10 @@
 --   orderElement(option, browseType?)  a list element as Blizzard inserts it: { option, browseType ("flat" by
 --                         default; a bucket is { option = bucketInfo, browseType = "bucketed" }), pageFrame }
 --   newOrderRow(geometry?) a fake order-list row (a Button; writes recorded as "OrderRow.<key>"). geometry (read-only):
---                         { left, width, itemRight, textLeft, textWidth, reagentsLeft?, reagentsRight? }:
---                         row:GetLeft/GetRight/GetWidth and row.cells[1] (the item-name cell) with GetRight and
---                         .Text:GetLeft/GetStringWidth, and row.cells[4] (the Reagents cell) with GetLeft/GetRight
---                         when reagentsLeft is given
+--                         { left, width, itemRight, textLeft, textWidth, columns? }:
+--                         row:GetLeft/GetRight/GetWidth and row.cells[1] (the item-name cell) with GetLeft/GetRight
+--                         and .Text:GetLeft/GetStringWidth; columns = { {left, right}, ... } adds the cells after
+--                         the item name (row.cells[2..]) with GetLeft/GetRight
 --   acquireOrderRow(row, elementData, new?, fill?)  the ScrollBox shows the row for elementData, in Blizzard's order
 --                         (ScrollBoxListView): OnAcquiredFrame callbacks fn(owner, row, elementData, new); then the
 --                         initializer, played by fill(row, elementData) (e.g. change the geometry's textWidth as
@@ -400,9 +400,9 @@ local function fake_professions_frame(opts)
       rawset(target, "GetRight", function() return g.left and g.width and g.left + g.width end)
       rawset(target, "GetWidth", function() return g.width end)
       local text = { GetLeft = function() return g.textLeft end, GetStringWidth = function() return g.textWidth end }
-      local cells = { { GetRight = function() return g.itemRight end, Text = text } }
-      if g.reagentsLeft then   -- the Reagents cell (the fourth column), when the geometry gives it
-        cells[4] = { GetLeft = function() return g.reagentsLeft end, GetRight = function() return g.reagentsRight end }
+      local cells = { { GetLeft = function() return g.left end, GetRight = function() return g.itemRight end, Text = text } }
+      for i, column in ipairs(g.columns or {}) do   -- the cells after the item name: { left, right } each
+        cells[i + 1] = { GetLeft = function() return column[1] end, GetRight = function() return column[2] end }
       end
       rawset(target, "cells", cells)
     end

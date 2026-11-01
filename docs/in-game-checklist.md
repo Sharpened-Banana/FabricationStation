@@ -1002,16 +1002,23 @@ icons (the count they need, red while you own fewer, white otherwise; white when
 means the customer provides every reagent; a "?" means the reagents are not known (a recraft, or an order the addon
 could not evaluate); a row the addon has no score for (Orders module off) keeps Blizzard's word. Expected: no word shows
 through the panel, and the panel's colour matches the list background (if it does not, change COVER_COLOR in
-UI/OrdersPanel.lua; note the colour you see). An icon with no texture shows the question mark, not a Lua error:
+UI/OrdersPanel.lua; note the colour you see, and whether the list is one flat colour or striped: compare the panel on an
+odd and an even row). An icon with no texture shows the question mark, not a Lua error:
 `/dump C_Item.GetItemIconByID, GetItemIcon` tells which icon function exists (the addon uses the first and falls back to
-the second), and `/dump C_CurrencyInfo.GetCurrencyInfo(<currencyID>).iconFileID` is a number. Also look at the row's hover
-highlight in the Reagents cell: Blizzard's highlight sits under the panel, so the cell stays dark while the rest of the
-row lights up. Note whether that looks acceptable.
+the second), and `/dump C_CurrencyInfo.GetCurrencyInfo(<currencyID>).iconFileID` is a number. A VIP, repeat or blocked row's
+tint shows on the panel too, and hovering the row (or the panel) lights the panel with a faint white highlight: note
+whether both look like the rest of the row. A dimmed row's panel is darker and its icons are as faint as the reward
+icons. An order whose customer provides everything shows the check even when the addon has no result for it
+(Blizzard's reagent state "All", or the allocation minus what is provided is empty).
 
 P5-11. **Where the cover sits and how it gives way.** The panel lines up with the Reagents column on every row, also after
-resizing the window and scrolling. If it is off, `/dump ProfessionsFrame.OrdersPage.BrowseFrame.OrderList.HeaderContainer`
-and its `:GetChildren()` (the addon reads the fourth child's GetLeft/GetRight when a row's fourth cell, `row.cells[4]`,
-cannot be read; otherwise it assumes 90 px then 60 px at the right edge). With more reagents than fit, the last slot
+resizing the window and scrolling. It is only drawn over a column it can identify as Reagents: the header whose text is
+`PROFESSIONS_COLUMN_HEADER_REAGENTS` (an unverified name: `/dump PROFESSIONS_COLUMN_HEADER_REAGENTS`; if it is nil, find
+the real one with `/dump ProfessionsFrame.OrdersPage.BrowseFrame.OrderList.HeaderContainer:GetChildren()` and look at the
+headers' `:GetText()`), else the known five columns (name, Customer, Tip, Reagents 80-100 px, then the last column
+touching it), read from those header children sorted by their left edge, else from the row's own `row.cells`. On any
+other layout there is NO panel and Blizzard's "Some" / "None" / "All" shows: if you see no panel at all, that is why,
+so report the header children's GetLeft/GetRight/GetText. With more reagents than fit, the last slot
 reads "+N" and stays inside the panel. In the item-name column, a long name keeps the reward icons clear of it: fewer
 icons are drawn and the last slot reads "+N" (N counts the hidden icons too); when the cells are hidden for lack of room,
 the reward icons are hidden too (the Reagents panel stays). Dimmed rows (orders your filters hide) show both faded like
@@ -1024,7 +1031,9 @@ over the "?". An item the client has not cached reads "item:<id>" and becomes it
 stays open (if not, note whether `/dump C_Item.RequestLoadItemDataByID` exists). Clicking an order row where the icons or
 the panel sit still opens the order, and the row beneath still highlights on hover (the addon calls
 SetPropagateMouseClicks and SetPropagateMouseMotion; `/dump CreateFrame("Frame").SetPropagateMouseMotion` tells whether
-the client has that function: if it is nil, note where the click or hover is lost). Put a reagent in your bags (or use
+the client has that function: if it is nil, note where the click or hover is lost). Hover the panel and note whether a
+Blizzard tooltip appears beside ours (the old cell may have its own): if it does, SetPropagateMouseMotion on the cover
+must go. Put a reagent in your bags (or use
 one up) with the list open: the red/white counts update within a moment.
 
 P5-13. **The icons setting.** Settings > Orders & Ledger > Crafting-orders window: "Show reward and reagent icons on order
