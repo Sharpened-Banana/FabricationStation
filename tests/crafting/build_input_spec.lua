@@ -168,6 +168,21 @@ describe("CraftingData.BuildInput", function()
       local r = ns.Math.Profit.EvaluateAllocation(input, ALL_LOW, { 7002 })
       assert.is_nil(r.flags.unknownOptional); assert.equals(520, r.skill); assert.equals(5000, r.reagentCost)
     end)
+    it("lists the optional slots with their items", function()
+      local slots = schematic.reagentSlots
+      slots[#slots + 1] = { slotIndex = 6, required = true, quantity = 1, reagents = { 7101 }, kind = "optional", dataSlotIndex = 16 }
+      slots[#slots + 1] = { slotIndex = 7, quantity = 1, reagents = {}, kind = "finishing", dataSlotIndex = 17 }
+      slots[4].quantity = 2
+      local input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = world.priceValues(), optionalItemIDs = {} })
+      assert.same({
+        { slotIndex = 4, kind = "optional", quantity = 2, itemIDs = { 7001, 7002 } },
+        { slotIndex = 5, kind = "finishing", quantity = 1, itemIDs = { 7003 } },
+      }, input.optionalSlots)
+      -- a copy: changing it leaves the schematic alone
+      input.optionalSlots[1].itemIDs[1] = 1
+      assert.equals(7001, schematic.reagentSlots[4].reagents[1])
+      assert.is_nil(CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = world.priceValues() }).optionalSlots)
+    end)
     it("lists none when no optionals are selected, so EvaluateCraft applies none", function()
       local input = CD.BuildInput(gd, { schematic = schematic, calib = calib, prices = world.priceValues() })
       assert.same({}, input.optionals)

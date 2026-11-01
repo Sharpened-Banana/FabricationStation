@@ -22,6 +22,9 @@ Recipes.DEFAULTS = {
   -- Restock targets count mail attachments and the player's own auction listings as held.
   restockCountMail = true,
   restockCountListed = true,
+  -- Which optional and finishing reagents BestOptionals tries: "off", "simple" (one slot at a time) or "permutation"
+  -- (every combination, up to Math.Optionals.MAX_COMBINATIONS; more falls back to "simple").
+  optionalMode = "simple",
 }
 
 -- bonusStatName -> stat key, for Math.Stats.ParseBonusStats. enUS only: other client languages get
@@ -39,6 +42,8 @@ local itemStamps = {}      -- [charKey] = integer, bumped on every "items" messa
 local warbandStamp = 0     -- bumped on every "warband" message
 local cache = {}           -- [cacheKey] = { stamp, itemStamp|nil, day, schematic, build, time, result }
 local cachePriceVersion    -- Prices:GetVersion() the cache entries were computed with
+local bestCache = {}       -- BestOptionals: [cacheKey] = { stamp, itemStamp|nil, day, schematic, build, time, best|false }
+local bestPriceVersion     -- Prices:GetVersion() the bestCache entries were computed with
 local itemIndex            -- [itemID] = { { recipeID, quality } }; nil = rebuild on the next lookup
 
 ---------------------------------------------------------------------------
@@ -110,6 +115,14 @@ local function range(order, key, name, min, max)
   }
 end
 
+local function choice(order, key, name, values, sorting)
+  return {
+    type = "select", order = order, width = "double", name = name, values = values, sorting = sorting,
+    get = function() return Recipes:GetSetting(key) end,
+    set = function(_, value) set_setting(key, value) end,
+  }
+end
+
 local function build_options()
   return {
     type = "group", name = L["Crafting"], order = 30,
@@ -123,6 +136,9 @@ local function build_options()
       scanBudgetMs = range(6, "scanBudgetMs", L["Recipe scan time per frame (ms)"], 1, 16),
       restockCountMail = toggle(7, "restockCountMail", L["Count items in mail as held for restock targets"]),
       restockCountListed = toggle(8, "restockCountListed", L["Count my auction listings as held for restock targets"]),
+      optionalMode = choice(9, "optionalMode", L["Optional reagents"], {
+        off = L["Off"], simple = L["One slot at a time"], permutation = L["Every combination (up to 64)"],
+      }, { "off", "simple", "permutation" }),
     },
   }
 end
@@ -384,6 +400,21 @@ local function serialize(v)
   return "{" .. table.concat(parts, ",") .. "}"
 end
 
+-- The sorted, distinct number itemIDs of a list; nil when it is not a table or holds none.
+local function sorted_item_ids(list)
+  if type(list) ~= "table" then return nil end
+  local out, seen = {}, {}
+  for _, itemID in ipairs(list) do
+    if type(itemID) == "number" and not seen[itemID] then
+      seen[itemID] = true
+      out[#out + 1] = itemID
+    end
+  end
+  if #out == 0 then return nil end
+  table.sort(out)
+  return out
+end
+
 -- opts with defaults filled in: the cache key's opts and what the evaluation uses.
 local function full_opts(opts)
   opts = opts or {}
@@ -401,6 +432,8 @@ local function full_opts(opts)
     ownedReagentsFree = ownedFree,
     -- Only owned counts read it: without owned reagents free it is always false (one cache entry).
     excludeWarband = ownedFree and opts.excludeWarband and true or false,
+    -- [phase 7 Task 11] Sorted IDs, nil when absent or empty: a plain call and an empty list share one entry.
+    optionalItemIDs = sorted_item_ids(opts.optionalItemIDs),
   }
 end
 
@@ -443,14 +476,20 @@ local function build(recipeID, charKey, o, optionalItemIDs, schematic)
   }
 end
 
--- Price results the chosen plan relies on: reagents it buys (beyond owned + provided) and its output.
-local function used_prices(r, ctx)
+-- Price results the chosen plan relies on: reagents it buys (beyond owned + provided), the requested optionals it
+-- buys and its output.
+local function used_prices(r, ctx, optionals)
   local used, need = {}, {}
   for _, row in ipairs(r.allocation or {}) do
     need[row.itemID] = (need[row.itemID] or 0) + (row.quantity or 0)
   end
   for itemID, n in pairs(need) do
     if n - (ctx.owned[itemID] or 0) - (ctx.provided[itemID] or 0) > 0 then used[#used + 1] = ctx.results[itemID] end
+  end
+  for _, opt in ipairs(optionals or {}) do
+    if type(opt.price) == "number" and opt.price > 0 and ctx.results[opt.itemID] then
+      used[#used + 1] = ctx.results[opt.itemID]
+    end
   end
   local outputs = ctx.schematic.outputItemIDs or {}
   used[#used + 1] = ctx.results[outputs[r.expectedQuality]]
@@ -460,11 +499,50 @@ end
 -- extraStats (phase 3 spec what-if, nil = none): { skill, multicraft, resourcefulness, ingenuity } added through
 -- 1b's own optional-reagent path as a free pseudo-optional (Stats.ApplyOptionals adds skill and converts the
 -- ratings with Stats.RATING_PER_UNIT; price 0 adds no cost), so Math needs no change.
+-- RecipeResult.optionalAllocation: each requested itemID in the first not yet used optional slot that lists it (as
+-- Scanner's optional reagent infos place it), with that slot's quantity; an item no free slot lists has no row.
+local function optional_allocation(optionalSlots, itemIDs)
+  local out, used = {}, {}
+  for _, itemID in ipairs(itemIDs or {}) do
+    for _, slot in ipairs(optionalSlots or {}) do
+      local listed = false
+      for _, id in ipairs(slot.itemIDs) do
+        if id == itemID then listed = true end
+      end
+      if listed and not used[slot] then
+        used[slot] = true
+        out[#out + 1] = { slotIndex = slot.slotIndex, itemID = itemID, quantity = slot.quantity }
+        break
+      end
+    end
+  end
+  return out
+end
+
 local function evaluate(recipeID, charKey, o, schematic, extraStats)
-  local input, ctx = build(recipeID, charKey, o, nil, schematic)
+  local input, ctx = build(recipeID, charKey, o, o.optionalItemIDs, schematic)
   if not input then return nil end
+  -- [phase 7 Task 11] Only the requested optionals are applied (EvaluateCraft applies every listed one). A requested
+  -- itemID the schematic does not list has unknown cost and effects: unpriced, flagged, never free.
+  local unknownOptional = false
+  local requested = input.optionals
+  if o.optionalItemIDs then
+    local byID = {}
+    for _, opt in ipairs(input.optionals or {}) do byID[opt.itemID] = opt end
+    requested = {}
+    for _, itemID in ipairs(o.optionalItemIDs) do
+      local opt = byID[itemID]
+      if not opt then
+        opt = { itemID = itemID, price = nil, stats = {} }
+        unknownOptional = true
+      end
+      requested[#requested + 1] = opt
+    end
+    input.optionals = requested
+  end
   if extraStats then
-    input.optionals = input.optionals or {}
+    input.optionals = {}
+    for i, opt in ipairs(requested or {}) do input.optionals[i] = opt end
     input.optionals[#input.optionals + 1] = { itemID = 0, price = 0, stats = extraStats }
   end
   local r = ns.Math.Profit.EvaluateCraft(input)
@@ -472,7 +550,7 @@ local function evaluate(recipeID, charKey, o, schematic, extraStats)
 
   local P = prices()
   local stalePrice, priceAgeDays = false, nil
-  for _, pr in ipairs(used_prices(r, ctx)) do
+  for _, pr in ipairs(used_prices(r, ctx, o.optionalItemIDs and requested or nil)) do
     if P:IsStale(pr) then stalePrice = true end
     if type(pr.ageDays) == "number" and (priceAgeDays == nil or pr.ageDays > priceAgeDays) then priceAgeDays = pr.ageDays end
   end
@@ -499,8 +577,9 @@ local function evaluate(recipeID, charKey, o, schematic, extraStats)
     estimated = calib == nil or noThresholds or defaultThresholds or input.missingWeights == true
       or input.thresholdsEstimated == true,
     unreachableTarget = mathFlags.unreachableTarget == true,
-    unknownOptional = mathFlags.unknownOptional == true,
+    unknownOptional = mathFlags.unknownOptional == true or unknownOptional,
   }
+  r.optionalAllocation = optional_allocation(input.optionalSlots, o.optionalItemIDs)
   return r
 end
 
@@ -513,8 +592,12 @@ end
 -- (floor(Now() / 86400), so time-based flags and price ages move) are unchanged; treat them as read-only.
 -- [phase 3 Task 11] opts.extraStats = { skill, multicraft, resourcefulness, ingenuity } (each optional; ratings, as
 -- optional reagents carry them) evaluates a what-if with those bonuses (spec advice). A non-empty table is read
--- before full_opts (which keeps only the five cached opts) and such calls neither read nor write the cache; an empty
+-- before full_opts (which keeps only the cached opts) and such calls neither read nor write the cache; an empty
 -- or non-table value is a plain call.
+-- [phase 7 Task 11] opts.optionalItemIDs = { itemID } applies exactly those optional/finishing reagents (a sixth
+-- cached key, sorted; absent or empty = a plain call sharing its cache entry). A requested itemID the schematic does
+-- not list makes the result unpriced with flags.unknownOptional. RecipeResult.optionalAllocation =
+-- { { slotIndex, itemID, quantity } } places them ({} for a plain call).
 function Recipes:Evaluate(recipeID, charKey, opts)
   charKey = charKey or ns.FS:CharKey()
   local schematic = scanner():GetSchematic(recipeID)
@@ -559,6 +642,57 @@ end
 -- Blizzard-style reagent infos back to a ReagentAllocation and optional itemIDs, over the cached schematic.
 function Recipes:FromCraftingReagentInfo(recipeID, infos)
   return ns.CraftingData.AllocationFromReagentInfo(scanner():GetSchematic(recipeID), infos)
+end
+
+-- [phase 7 Task 11] The optional and finishing reagents that add the most profit to recipeID on charKey, with
+-- opts as for Evaluate (the cached keys; opts.optionalItemIDs is ignored). Returns { itemIDs (sorted), result =
+-- RecipeResult with them, base = RecipeResult without, gain = copper|nil (result.profit - base.profit when both are
+-- numbers), mode (the one that ran), skipped = { unknownPrice, noEffect } }, or nil with optionalMode "off", no
+-- cached schematic or no optional slot. Memoised per recipe, character, opts and mode while the price version, the
+-- data stamp (and, as for Evaluate, the schematic, the day and owned-free item counts) are unchanged: treat it as
+-- read-only. On demand only; the recipe scan ranks plain results.
+function Recipes:BestOptionals(recipeID, charKey, opts)
+  local mode = self:GetSetting("optionalMode")
+  if mode == "off" then return nil end
+  charKey = charKey or ns.FS:CharKey()
+  local schematic = scanner():GetSchematic(recipeID)
+  if not schematic then return nil end
+  local o = full_opts(opts)
+  o.optionalItemIDs = nil
+
+  local version = prices():GetVersion()
+  if version ~= bestPriceVersion then
+    bestCache, bestPriceVersion = {}, version
+  end
+  local key = tostring(recipeID) .. "|" .. tostring(charKey) .. "|" .. serialize(o) .. "|" .. tostring(mode)
+  local stamp = self:GetDataStamp(charKey)
+  local itemStamp = o.ownedReagentsFree and ((itemStamps[charKey] or 0) + warbandStamp) or nil
+  local day = math.floor(ns.FS:Now() / DAY)
+  local entry = bestCache[key]
+  if entry and entry.stamp == stamp and entry.itemStamp == itemStamp and entry.day == day
+    and entry.schematic == schematic and entry.build == schematic.build and entry.time == schematic.time then
+    return entry.best or nil
+  end
+  local function remember(best)
+    bestCache[key] = { stamp = stamp, itemStamp = itemStamp, day = day, schematic = schematic, build = schematic.build,
+      time = schematic.time, best = best }
+    return best or nil
+  end
+
+  local input = build(recipeID, charKey, o, {}, schematic)
+  -- false remembers "no optional slot", so lists asking for every row rebuild nothing.
+  if not input or not input.optionalSlots or #input.optionalSlots == 0 then return remember(false) end
+  local picked = ns.Math.Optionals.Best(input, { mode = mode, maxCombinations = ns.Math.Optionals.MAX_COMBINATIONS })
+  local base = self:Evaluate(recipeID, charKey, o)
+  local withOpts = {}
+  for k, v in pairs(o) do withOpts[k] = v end
+  withOpts.optionalItemIDs = picked.itemIDs
+  local result = self:Evaluate(recipeID, charKey, withOpts)
+  if not base or not result then return nil end
+  local gain
+  if type(result.profit) == "number" and type(base.profit) == "number" then gain = result.profit - base.profit end
+  return remember({ itemIDs = picked.itemIDs, result = result, base = base, gain = gain, mode = picked.mode,
+    skipped = picked.skipped })
 end
 
 ---------------------------------------------------------------------------

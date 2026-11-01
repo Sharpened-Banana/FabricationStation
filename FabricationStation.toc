@@ -29,6 +29,7 @@ Math\Concentration.lua
 Math\Stats.lua
 Math\Optimizer.lua
 Math\Profit.lua
+Math\Optionals.lua
 Modules\Scanner.lua
 Modules\Prices.lua
 Modules\Diagnostics.lua

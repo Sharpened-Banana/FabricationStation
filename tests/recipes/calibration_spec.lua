@@ -146,7 +146,7 @@ describe("Recipes settings", function()
   it("has the defaults", function()
     assert.same({ staleCalibrationDays = 14, queueUseWarband = true, tooltipCraftCost = true,
       applyWritesBlizzardSlots = false, selfCheck = true, scanBudgetMs = 4,
-      restockCountMail = true, restockCountListed = true }, R.DEFAULTS)
+      restockCountMail = true, restockCountListed = true, optionalMode = "simple" }, R.DEFAULTS)
     for key, value in pairs(R.DEFAULTS) do assert.equals(value, R:GetSetting(key), key) end
   end)
   it("Apply does not write Blizzard's reagent slots until the user turns it on", function()

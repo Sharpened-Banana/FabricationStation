@@ -229,6 +229,8 @@ end
 -- optionals: with optionalItemIDs (a list, possibly empty), every item of every other optional and finishing
 -- slot with its OptionalStats and price, so EvaluateAllocation(input, allocation, optionalItemIDs) can pick the
 -- selected ones; without, none (EvaluateCraft applies every listed optional).
+-- optionalSlots (only with optionalItemIDs): { { slotIndex, kind, quantity, itemIDs } } for every optional or
+-- finishing slot that is not allocated (see IsAllocated) and has reagents, in schematic order (Math.Optionals.Best).
 -- A non-number maxQuality becomes nil (Math treats it as 1, with no thresholds).
 function CraftingData.BuildInput(gd, args)
   local schematic = args.schematic or EMPTY
@@ -249,6 +251,7 @@ function CraftingData.BuildInput(gd, args)
   local fallbackWeight = weightCount > 0 and weightSum / weightCount or 1
 
   local slots, optionals, seen = {}, {}, {}
+  local optionalSlots = args.optionalItemIDs and {} or nil
   local missingWeights = false
   for _, slot in ipairs(schematic.reagentSlots or EMPTY) do
     local reagents = type(slot.reagents) == "table" and slot.reagents or EMPTY
@@ -269,7 +272,13 @@ function CraftingData.BuildInput(gd, args)
       end
       slots[#slots + 1] = { slotIndex = slot.slotIndex, quantity = slot.quantity or 0, weight = weight, items = items,
         noResourcefulness = (not basic) or nil, singleItem = (not basic) or nil }
-    elseif args.optionalItemIDs and (slot.kind == "optional" or slot.kind == "finishing") then
+    elseif optionalSlots and (slot.kind == "optional" or slot.kind == "finishing") then
+      local itemIDs = {}
+      for i, itemID in ipairs(reagents) do itemIDs[i] = itemID end
+      if #itemIDs > 0 then
+        optionalSlots[#optionalSlots + 1] = { slotIndex = slot.slotIndex, kind = slot.kind, quantity = slot.quantity or 1,
+          itemIDs = itemIDs }
+      end
       for _, itemID in ipairs(reagents) do
         if not seen[itemID] then
           seen[itemID] = true
@@ -299,6 +308,7 @@ function CraftingData.BuildInput(gd, args)
     slots = slots,
     missingWeights = missingWeights,
     optionals = optionals,
+    optionalSlots = optionalSlots,
     stats = stats,
     yield = { min = schematic.quantityMin, max = schematic.quantityMax },
     outputPrices = outputPrices,

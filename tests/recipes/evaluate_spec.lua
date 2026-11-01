@@ -170,6 +170,113 @@ describe("Recipes:Evaluate", function()
     end)
   end)
 
+  describe("optional reagents", function()
+    local function opt(ids) return R:Evaluate(9001, "Main-Realm", { optionalItemIDs = ids }) end
+    before_each(function()
+      ns.GameData.Define("OptionalReagents", 70575, {
+        [7001] = { categoryID = 60, effects = { { type = "skill", amount = 40 } } },
+        [7002] = { categoryID = 60, effects = { { type = "skill", amount = 20 } } },
+        [7003] = { categoryID = 61, effects = { { type = "multicraft", amount = 110 } } },
+      })
+      local slots = world.schematics[9001].reagentSlots
+      slots[#slots + 1] = { slotIndex = 4, quantity = 2, reagents = { 7001, 7002 }, kind = "optional", dataSlotIndex = 14,
+        dataSlotType = 2 }
+      slots[#slots + 1] = { slotIndex = 5, quantity = 1, reagents = { 7003 }, kind = "finishing", dataSlotIndex = 15,
+        dataSlotType = 2 }
+      world.prices[7001] = { value = 50000, source = "auction", ageDays = 1 }
+      world.prices[7002] = { value = 10, source = "auction", ageDays = 1 }
+      world.prices[7003] = { value = 1000, source = "auction", ageDays = 1 }
+    end)
+    it("evaluates only the requested optionals and caches by their sorted IDs", function()
+      local plain = R:Evaluate(9001, "Main-Realm", {})
+      assert.equals(500, plain.perQuality[1].skill)             -- no listed optional applied to a plain call
+      local both = opt({ 7003, 7002 })
+      assert.equals(both, opt({ 7002, 7003 })); assert.equals(both, opt({ 7002, 7003, 7002 }))
+      assert.are_not.equal(both, plain); assert.are_not.equal(both, opt({ 7002 }))
+      assert.equals(520, opt({ 7002 }).perQuality[1].skill)     -- 7001 (+40) is not applied
+      assert.equals(540, opt({ 7001 }).perQuality[1].skill)
+      assert.equals(560, opt({ 7001, 7002 }).perQuality[1].skill)
+      assert.equals(3000 + 20, opt({ 7002 }).perQuality[1].reagentCost)    -- two copies of 7002 for the slot
+      assert.is_false(both.flags.unknownOptional); assert.is_false(both.flags.noPrice)
+    end)
+    it("shares the plain cache entry for an empty list", function()
+      local plain = R:Evaluate(9001, "Main-Realm", {})
+      assert.equals(plain, opt({})); assert.equals(plain, opt({ "x" }))
+      assert.same({}, plain.optionalAllocation)
+      assert.same(ALL_FLAGS_CLEAR, plain.flags)
+    end)
+    it("marks an unknown requested optional unpriced", function()
+      local r = opt({ 7002, 424242 })
+      assert.is_true(r.flags.unknownOptional); assert.is_true(r.flags.noPrice); assert.is_nil(r.profit)
+      assert.same({ { slotIndex = 4, itemID = 7002, quantity = 2 } }, r.optionalAllocation)
+      -- a listed optional without a price is unpriced too, but known
+      world.prices[7003] = nil; world.bumpPriceVersion()
+      local u = opt({ 7003 })
+      assert.is_nil(u.profit); assert.is_true(u.flags.noPrice); assert.is_false(u.flags.unknownOptional)
+    end)
+    it("fills optionalAllocation with the slot quantity", function()
+      assert.same({ { slotIndex = 4, itemID = 7002, quantity = 2 }, { slotIndex = 5, itemID = 7003, quantity = 1 } },
+        opt({ 7003, 7002 }).optionalAllocation)
+      -- one slot takes one item: a second item of the same slot has no free slot
+      assert.same({ { slotIndex = 4, itemID = 7001, quantity = 2 } }, opt({ 7001, 7002 }).optionalAllocation)
+    end)
+    it("counts a bought optional's price age", function()
+      world.prices[7002].ageDays = 9
+      assert.equals(9, opt({ 7002 }).priceAgeDays); assert.equals(1, R:Evaluate(9001, "Main-Realm", {}).priceAgeDays)
+    end)
+    it("applies optionals and extraStats together, uncached", function()
+      local r = R:Evaluate(9001, "Main-Realm", { optionalItemIDs = { 7002 }, extraStats = { skill = 10 } })
+      assert.equals(530, r.perQuality[1].skill)
+      assert.equals(520, opt({ 7002 }).perQuality[1].skill)
+    end)
+    it("BestOptionals returns the pick and the gain", function()
+      local best = R:BestOptionals(9001, "Main-Realm", {})
+      assert.same({ 7002, 7003 }, best.itemIDs); assert.equals("simple", best.mode)
+      assert.equals(best.result, opt({ 7002, 7003 })); assert.equals(best.base, R:Evaluate(9001, "Main-Realm", {}))
+      assert.equals(133900 - 120010, best.gain); assert.equals(best.result.profit - best.base.profit, best.gain)
+      assert.same({ unknownPrice = 0, noEffect = 0 }, best.skipped)
+      assert.same({ { slotIndex = 4, itemID = 7002, quantity = 2 }, { slotIndex = 5, itemID = 7003, quantity = 1 } },
+        best.result.optionalAllocation)
+    end)
+    it("BestOptionals is nil with optionalMode off", function()
+      local option = ns.FS:GetOptionsTable().args.crafting.args.optionalMode
+      assert.equals("simple", option.get())
+      assert.same({ "off", "simple", "permutation" }, option.sorting)
+      option.set(nil, "off")
+      assert.equals("off", ns.FS.db.global.settings.crafting.optionalMode)
+      assert.is_nil(R:BestOptionals(9001, "Main-Realm", {}))
+      option.set(nil, "permutation")
+      assert.equals("permutation", R:BestOptionals(9001, "Main-Realm", {}).mode)
+    end)
+    it("BestOptionals is nil without a schematic or an optional slot", function()
+      assert.is_nil(R:BestOptionals(424242, "Main-Realm", {}))
+      local slots = world.schematics[9001].reagentSlots
+      slots[5], slots[4] = nil, nil
+      assert.is_nil(R:BestOptionals(9001, "Main-Realm", {}))
+      assert.is_nil(R:BestOptionals(9001, "Main-Realm", {}))           -- remembered
+      slots[4] = { slotIndex = 4, quantity = 1, reagents = { 7002 }, kind = "optional", dataSlotIndex = 14, dataSlotType = 2 }
+      world.schematics[9001].build = 70600                               -- a new schematic build: asked again
+      assert.same({ 7002 }, R:BestOptionals(9001, "Main-Realm", {}).itemIDs)
+    end)
+    it("BestOptionals memoises until the price version changes", function()
+      local a = R:BestOptionals(9001, "Main-Realm", {})
+      assert.equals(a, R:BestOptionals(9001, "Main-Realm", {}))
+      assert.are_not.equal(a, R:BestOptionals(9001, "Main-Realm", { targetQuality = 1 }))
+      world.bumpPriceVersion()
+      local b = R:BestOptionals(9001, "Main-Realm", {})
+      assert.are_not.equal(a, b); assert.same(a.itemIDs, b.itemIDs)
+      ns.FS:SendMessage("FS_DATA_CHANGED", "Main-Realm", "spec")
+      assert.are_not.equal(b, R:BestOptionals(9001, "Main-Realm", {}))
+    end)
+    it("BestOptionals never writes while the saved data is newer", function()
+      ns.FS.dbIsNewer = true
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      assert.is_table(R:BestOptionals(9001, "Main-Realm", {}))
+      assert.same(before, ns.FS.db.global)
+      ns.FS.dbIsNewer = false
+    end)
+  end)
+
   describe("missing reagent weights", function()
     it("flags a calibrated result as estimated when a ranked slot has no GameData weight", function()
       ns.GameData.Define("ReagentQuality", 70575, { [2001] = { rank = 1, categoryID = 2 }, [2002] = { rank = 2, categoryID = 2 } })
