@@ -3,7 +3,7 @@
 -- The roster and the query are the phase-4 harness fakes (p4.guild); postQuery = { skillLineID, recipeID, list =
 -- { { displayName, fullName, classFile, online } } }.
 local SOCIAL_FILES = { "Modules/Social/Util.lua", "Modules/Social/Gate.lua", "Modules/Social/Codec.lua",
-  "Modules/Social/Protocol.lua", "Modules/Social/Comm.lua", "Modules/Social/Guild.lua",
+  "Modules/Social/Protocol.lua", "Modules/Social/ProfileStore.lua", "Modules/Social/Comm.lua", "Modules/Social/Guild.lua",
   "Modules/Social/GuildNative.lua" }
 local DAY = 86400
 

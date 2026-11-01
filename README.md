@@ -108,6 +108,8 @@ profession are never shared.
 **Who receives it:** only members of your guild who run FabricationStation, over addon messages (to the guild channel,
 and by whisper for single requests). The messages are not visible in chat. Nothing is sent when you are not in a guild.
 What you receive from guildmates is stored in your SavedVariables and dropped after 30 days without an update.
+FabricationStation keeps at most 300 guildmates' characters per guild; when there are more, the one seen least recently
+is dropped and fetched again at its owner's next login.
 
 **Which characters (Settings > Guild > Which characters to share):**
 

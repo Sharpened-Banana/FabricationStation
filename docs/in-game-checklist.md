@@ -938,6 +938,14 @@ the guildmate run `/fs guild`: this character's profiles have not arrived (nothi
 within a few seconds the guildmate sees the HELLO and then the profiles. A character that already finished the guide
 syncs at login as before, and so does one with Onboarding turned off under Settings > Modules.
 
+## Phase 5
+
+P5-1. **Compact guild data after the upgrade (Task 1).** Before updating, note the size of
+`WTF/Account/<acct>/SavedVariables/FabricationStation.lua`. Update, log in, let the guild sync for a minute, `/reload`.
+Expected: `schemaVersion = 2`; each entry under `guildDirectory` has `pr` with strings like `",1230772:35,..."` and no
+`lines`; the file is clearly smaller; the Guild tab shows the same crafters as before; `/fs guild` shows no burst of
+requests after login.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

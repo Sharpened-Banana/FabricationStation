@@ -3,8 +3,8 @@
 -- no DATA; finishing or skipping the guide starts both at once. Without a guide to offer there is no hold at all.
 -- Scanner and Recipes are p4.fake_module fakes, as in guild_sync_spec.
 local FILES = { "Modules/Social/Util.lua", "Modules/Social/Gate.lua", "Modules/Social/Codec.lua",
-  "Modules/Social/Protocol.lua", "Modules/Social/Comm.lua", "Modules/Social/Guild.lua", "Modules/Onboarding.lua",
-  "UI/OnboardingWizard.lua" }
+  "Modules/Social/Protocol.lua", "Modules/Social/ProfileStore.lua", "Modules/Social/Comm.lua", "Modules/Social/Guild.lua",
+  "Modules/Onboarding.lua", "UI/OnboardingWizard.lua" }
 
 describe("Guild sync waits for the setup guide", function()
   local ns, W, p4, Guild, Protocol, Onboarding, Wizard

@@ -100,7 +100,7 @@ describe("DB", function()
   end)
   it("runs migrations before flushing pending errors", function()
     ns.FS:LogError("X", "pre")
-    ns.Migrations.Register(2, function() error("bad") end)
+    ns.Migrations.Register(ns.Migrations.Latest() + 1, function() error("bad") end)
     W.boot()
     local errs = ns.FS.db.global.diagnostics.errors
     assert.equals("pre", errs[1].err); assert.equals("Migrations", errs[2].source)

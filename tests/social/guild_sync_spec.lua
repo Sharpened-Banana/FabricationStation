@@ -2,7 +2,7 @@
 -- and pruning. Scanner and Recipes are p4.fake_module fakes; the AceComm, guild roster and encoding fakes are the
 -- phase-4 harness ones (p4.comm, p4.guild, the reversible C_EncodingUtil).
 local SOCIAL_FILES = { "Modules/Social/Util.lua", "Modules/Social/Gate.lua", "Modules/Social/Codec.lua",
-  "Modules/Social/Protocol.lua", "Modules/Social/Comm.lua", "Modules/Social/Guild.lua" }
+  "Modules/Social/Protocol.lua", "Modules/Social/ProfileStore.lua", "Modules/Social/Comm.lua", "Modules/Social/Guild.lua" }
 local DAY = 86400
 
 describe("Guild sync", function()
@@ -72,7 +72,7 @@ describe("Guild sync", function()
 
   local function dir() return Guild:GetDirectory() end
   local function store_profile(charKey, h, owner)
-    dir().profiles[charKey] = { c = charKey, ts = 0, lv = "r", h = h, owner = owner, rt = ns.FS:Now(), lines = {} }
+    dir().profiles[charKey] = { c = charKey, ts = 0, lv = "r", h = h, owner = owner, rt = ns.FS:Now(), pr = {} }
   end
 
   local PB = { c = "B-Realm", ts = 1000, lv = "q", pr = { { s = 2907, k = 50, m = 100, r = { 100, 3, 5, 101, 2, 4 } } } }
@@ -339,11 +339,7 @@ describe("Guild sync", function()
       Guild:OnData(Protocol.Data(Wreal), "V-Realm", "WHISPER")
       assert.are.equal("V-Realm", dir().profiles["W-Realm"].owner)
       assert.is_true(dir().profiles["W-Realm"].verified)
-      assert.are.same({ 101 }, (function()
-        local k = {}
-        for id in pairs(dir().profiles["W-Realm"].lines[2907].recipes) do k[#k + 1] = id end
-        return k
-      end)())
+      assert.are.equal(",101:23,", dir().profiles["W-Realm"].pr[1].r)
     end)
 
     it("lets a verified claim replace an unverified copy and keeps a verified one from unverified claims", function()
@@ -410,25 +406,23 @@ describe("Guild sync", function()
       Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = msg.h }), "Peer-Realm", "GUILD")
       Guild:OnData(msg, "Peer-Realm", "WHISPER")
       local p = dir().profiles["B-Realm"]
-      assert.are.same({ "c", "h", "lines", "lv", "owner", "rt", "ts", "verified" }, sorted((function()
+      assert.are.same({ "c", "h", "lv", "owner", "pr", "rt", "ts", "verified" }, sorted((function()
         local k = {}
         for key in pairs(p) do k[#k + 1] = key end
         return k
       end)()))
       assert.are.equal(Protocol.HashProfile(dup), p.h)
-      assert.are.same({ [2907] = { k = 50, m = 100, recipes = { [100] = true, [101] = true },
-        q = { [100] = 4, [101] = 2 }, qc = { [100] = 5, [101] = 4 } } }, p.lines)
+      assert.are.same({ { s = 2907, k = 50, m = 100, r = ",100:45,101:24," } }, p.pr)
     end)
 
     it("withdraws profiles on opt-out and clears quality on downgrade", function()
       seed_peer_with_profile("Peer-Realm", PB)                 -- PB.lv == "q"
-      assert.are.same({ [100] = 3, [101] = 2 }, dir().profiles["B-Realm"].lines[2907].q)
+      assert.are.equal(",100:35,101:24,", dir().profiles["B-Realm"].pr[1].r)
       local PBr = as_recipes_only(PB)
       Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = Protocol.HashProfile(PBr) }), "Peer-Realm", "GUILD")
       Guild:OnData(Protocol.Data(PBr), "Peer-Realm", "WHISPER")
       assert.are.equal("r", dir().profiles["B-Realm"].lv)
-      assert.is_nil(dir().profiles["B-Realm"].lines[2907].q)
-      assert.is_nil(dir().profiles["B-Realm"].lines[2907].qc)
+      assert.are.equal(",100,101,", dir().profiles["B-Realm"].pr[1].r)
       Guild:OnHello(Protocol.Hello("1.0.0", {}), "Peer-Realm", "GUILD")
       assert.is_nil(dir().profiles["B-Realm"])
     end)
@@ -477,6 +471,56 @@ describe("Guild sync", function()
       p4.advance(1000)
       Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = Protocol.HashProfile(PB) }), "Peer-Realm", "GUILD")
       assert.are.equal(ns.FS:Now(), dir().profiles["B-Realm"].rt)
+    end)
+
+    it("keeps the stored hash so a confirming HELLO requests nothing", function()
+      seed_peer_with_profile("Peer-Realm", PB)
+      clear_sent()
+      Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = Protocol.HashProfile(PB) }), "Peer-Realm", "GUILD")
+      assert.are.equal(0, count_sent("Q"))
+    end)
+
+    local function profile_of(c)
+      return { c = c, ts = 1, lv = "r", pr = { { s = 2907, k = 1, m = 10, r = { 100 } } } }
+    end
+
+    it("evicts the least recently seen profile beyond the cap and counts it", function()
+      local cap = ns.Social.ProfileStore.MAX_PER_GUILD
+      ns.Social.ProfileStore.MAX_PER_GUILD = 2
+      finally(function() ns.Social.ProfileStore.MAX_PER_GUILD = cap end)
+      local before = Guild.stats.evicted
+      seed_peer_with_profile("PA-Realm", profile_of("A-Realm"))
+      p4.advance(1)
+      seed_peer_with_profile("PB-Realm", profile_of("B-Realm"))
+      p4.advance(1)
+      seed_peer_with_profile("PC-Realm", profile_of("C-Realm"))
+      assert.is_nil(dir().profiles["A-Realm"]); assert.is_table(dir().profiles["B-Realm"])
+      assert.is_table(dir().profiles["C-Realm"])
+      assert.are.equal(before + 1, Guild.stats.evicted)
+    end)
+
+    it("never evicts the profile just stored, even when it is the oldest", function()
+      local cap = ns.Social.ProfileStore.MAX_PER_GUILD
+      ns.Social.ProfileStore.MAX_PER_GUILD = 1
+      finally(function() ns.Social.ProfileStore.MAX_PER_GUILD = cap end)
+      dir().profiles["Z-Realm"] = { c = "Z-Realm", ts = 1, lv = "r", h = "00000001", owner = "PZ-Realm",
+        rt = ns.FS:Now() + 100, pr = {} }
+      seed_peer_with_profile("PA-Realm", profile_of("A-Realm"))
+      assert.is_table(dir().profiles["A-Realm"]); assert.is_nil(dir().profiles["Z-Realm"])
+    end)
+
+    it("does not re-request a pair whose DATA was stored and then evicted", function()
+      local cap = ns.Social.ProfileStore.MAX_PER_GUILD
+      ns.Social.ProfileStore.MAX_PER_GUILD = 1
+      finally(function() ns.Social.ProfileStore.MAX_PER_GUILD = cap end)
+      seed_peer_with_profile("PA-Realm", profile_of("A-Realm"))
+      p4.advance(1)
+      seed_peer_with_profile("PB-Realm", profile_of("B-Realm"))
+      assert.is_nil(dir().profiles["A-Realm"]); assert.is_table(dir().profiles["B-Realm"])
+      clear_sent()
+      p4.advance(Guild.REREQUEST_COOLDOWN + 1)
+      Guild:_RetryRequests()
+      assert.are.equal(0, count_sent("Q"))
     end)
   end)
 

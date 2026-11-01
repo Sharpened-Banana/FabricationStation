@@ -44,3 +44,13 @@ end
 
 -- 1: initial layout (see ns.DBDefaults). Nothing to convert.
 Migrations.Register(1, function() end)
+
+-- 2: guildmates' stored profiles move to the compact shape of Modules/Social/ProfileStore.lua (packed recipe strings
+-- instead of three per-recipe maps), with the per-guild cap applied. Runs at InitDB, after every file has loaded.
+Migrations.Register(2, function(global)
+  local dirs = rawget(global, "guildDirectory")
+  if type(dirs) ~= "table" then return end
+  local store = ns.Social and ns.Social.ProfileStore
+  if not store then error("ProfileStore is not loaded") end
+  store.MigrateDirectory(dirs)
+end)

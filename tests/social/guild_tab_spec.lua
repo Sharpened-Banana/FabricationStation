@@ -71,18 +71,26 @@ describe("Guild tab, settings and diagnostics", function()
   local function dir() return Guild:GetDirectory() end
   local function now() return ns.FS:Now() end
 
-  -- A stored peer profile in the Task 6 shape: one skill line with the given recipes (id -> { q, qc }).
+  -- A stored peer profile in the compact shape (Modules/Social/ProfileStore.lua): one skill line with the given
+  -- recipes (id -> { q, qc } or true), packed from the DATA it would have come in, with that DATA's hash.
   local function store(charKey, owner, opts)
     opts = opts or {}
     local lv = opts.lv or "q"
-    local line = { k = opts.k or 50, m = 100, recipes = {} }
-    if lv == "q" then line.q, line.qc = {}, {} end
-    for id, quality in pairs(opts.recipes or { [100] = { 3, 5 } }) do
-      line.recipes[id] = true
-      if lv == "q" then line.q[id], line.qc[id] = quality[1], quality[2] end
+    local recipes = opts.recipes or { [100] = { 3, 5 } }
+    local ids = {}
+    for id in pairs(recipes) do ids[#ids + 1] = id end
+    table.sort(ids)
+    local flat = {}
+    for _, id in ipairs(ids) do
+      flat[#flat + 1] = id
+      if lv == "q" then
+        flat[#flat + 1] = recipes[id][1]
+        flat[#flat + 1] = recipes[id][2]
+      end
     end
-    dir().profiles[charKey] = { c = charKey, ts = 1, lv = lv, h = "00000001", owner = owner,
-      verified = opts.verified ~= false, rt = opts.rt or now(), lines = { [opts.line or 2907] = line } }
+    local data = { lv = lv, pr = { { s = opts.line or 2907, k = opts.k or 50, m = 100, r = flat } } }
+    dir().profiles[charKey] = { c = charKey, ts = 1, lv = lv, h = ns.Social.Protocol.HashProfile(data), owner = owner,
+      verified = opts.verified ~= false, rt = opts.rt or now(), pr = ns.Social.ProfileStore.FromData(data) }
   end
   local function native_members(recipeID, members, skillLineID)
     dir().native[recipeID] = { time = now(), skillLineID = skillLineID or 2907, members = members }

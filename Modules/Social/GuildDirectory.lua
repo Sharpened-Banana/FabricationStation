@@ -18,6 +18,7 @@ local ADDON_NAME, ns = ...
 local Guild = ns.FS:GetModule("Guild")
 local Util = ns.Social.Util
 local ItemIndex = ns.Social.ItemIndex
+local ProfileStore = ns.Social.ProfileStore
 
 local TOOLTIP_NAMES = 3          -- names on the tooltip line before "+N more"
 local PANEL_ROWS = 5             -- crafter rows in the profession panel before "+N more"
@@ -78,14 +79,6 @@ local function quality(v)
   return nil
 end
 
--- The skill line of a stored profile that knows recipeID, or nil.
-local function line_for(profile, recipeID)
-  for _, line in pairs(profile.lines) do
-    if type(line) == "table" and type(line.recipes) == "table" and line.recipes[recipeID] then return line end
-  end
-  return nil
-end
-
 -- A cheap per-call context: the account's own characters and the owners already checked against the roster.
 local function context(self)
   return { self = self, own = nil, member = {} }
@@ -129,17 +122,18 @@ local function addon_rows(ctx, dir, recipeID, byName, rows)
   if type(dir.profiles) ~= "table" then return end
   local contested = type(dir.contested) == "table" and dir.contested or {}
   for charKey, profile in pairs(dir.profiles) do
-    if type(charKey) == "string" and type(profile) == "table" and type(profile.lines) == "table"
+    if type(charKey) == "string" and type(profile) == "table" and type(profile.pr) == "table"
         and type(profile.owner) == "string" and type(profile.rt) == "number" then
-      local line = line_for(profile, recipeID)
+      local lineIndex, q, qc = ProfileStore.Find(profile, recipeID)
       -- A contested character (two unverified claimants) has no trustworthy copy: no addon row for it.
-      if line and not contested[charKey] and not own_chars(ctx)[charKey] and owner_in_guild(ctx, profile.owner) then
+      if lineIndex and not contested[charKey] and not own_chars(ctx)[charKey] and owner_in_guild(ctx, profile.owner) then
+        local line = profile.pr[lineIndex]
         local row = { name = charKey, owner = profile.owner, source = "addon", verified = profile.verified == true,
           time = profile.rt }
         if type(line.k) == "number" then row.skill = line.k end
         if profile.lv == "q" then
-          if type(line.q) == "table" then row.expectedQuality = quality(line.q[recipeID]) end
-          if type(line.qc) == "table" then row.concentrationQuality = quality(line.qc[recipeID]) end
+          row.expectedQuality = quality(q)
+          row.concentrationQuality = quality(qc)
         end
         byName[charKey] = row
         rows[#rows + 1] = row
@@ -218,15 +212,13 @@ local function tab_candidates(dir)
   end
   if type(dir.profiles) == "table" then
     for charKey, profile in pairs(dir.profiles) do
-      if type(charKey) == "string" and type(profile) == "table" and type(profile.lines) == "table" then
-        for skillLineID, line in pairs(profile.lines) do
-          if type(line) == "table" and type(line.recipes) == "table" then
-            for recipeID in pairs(line.recipes) do
-              if type(recipeID) == "number" then
-                note(recipeID, skillLineID)
-                byRecipe[recipeID][charKey] = profile
-              end
-            end
+      if type(charKey) == "string" and type(profile) == "table" and type(profile.pr) == "table" then
+        for _, line in ipairs(profile.pr) do
+          if type(line) == "table" then
+            ProfileStore.Each(line, profile.lv, function(recipeID)
+              note(recipeID, line.s)
+              byRecipe[recipeID][charKey] = profile
+            end)
           end
         end
       end
@@ -638,17 +630,15 @@ local function collect(self, force)
   local ids, seen = {}, {}
   if type(dir.profiles) == "table" then
     for charKey, profile in pairs(dir.profiles) do
-      if type(profile) == "table" and type(profile.lines) == "table" and (force or indexed[charKey] ~= profile.h) then
+      if type(profile) == "table" and type(profile.pr) == "table" and (force or indexed[charKey] ~= profile.h) then
         indexed[charKey] = profile.h
-        for _, line in pairs(profile.lines) do
-          if type(line) == "table" and type(line.recipes) == "table" then
-            for recipeID in pairs(line.recipes) do
-              if type(recipeID) == "number" and not seen[recipeID] then
-                seen[recipeID] = true
-                ids[#ids + 1] = recipeID
-              end
+        for _, line in ipairs(profile.pr) do
+          ProfileStore.Each(line, profile.lv, function(recipeID)
+            if not seen[recipeID] then
+              seen[recipeID] = true
+              ids[#ids + 1] = recipeID
             end
-          end
+          end)
         end
       end
     end

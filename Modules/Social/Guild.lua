@@ -34,14 +34,17 @@ local ADDON_NAME, ns = ...
 --                                          native = { [recipeID] = { time, skillLineID, members } } (GuildNative's cache),
 --                                          contested = { [charKey] = Now() of the contest } }
 --     Member = { addonVersion, proto, lastSeen, chars = { [charKey] = hash }, lastHelloSent }
---     Stored = { c, ts, lv, h, owner, verified, rt, lines = { [skillLineID] = { k, m, recipes = { [recipeID] = true },
---                q = { [recipeID] = 0..5 } | nil, qc = { [recipeID] = 0..5 } | nil } } }
---       (a keyed copy of a validated DATA: a repeated line or recipeID overwrites, unknown keys are never copied,
---        q/qc exist only for lv = "q"; h is recomputed here; rt = when it arrived or its owner's HELLO last confirmed it)
+--     Stored = { c, ts, lv, h, owner, verified, rt, pr = { { s = skillLineID, k = skill, m = maxSkill, r = packed } } }
+--       (the compact copy of a validated DATA, see Modules/Social/ProfileStore.lua: one pr entry per distinct s, sorted
+--        by s, a repeated line or recipeID keeps its last occurrence; packed = ",100:35,101:24," for lv = "q" (id:q qc),
+--        ",100,101," for lv = "r", "," when empty; unknown keys are never copied; h is recomputed here; rt = when it
+--        arrived or its owner's HELLO last confirmed it). At most ProfileStore.MAX_PER_GUILD per guild: storing one
+--        beyond it evicts the smallest rt (never the one just stored), counted in Guild.stats.evicted.
 --   db.global.guildMyChars[charKey] = guildKey   (the guild each of the account's characters was last seen in)
 local Guild = ns.FS:NewModule("Guild", "AceEvent-3.0", "AceComm-3.0")
 
 local Util = ns.Social.Util
+local ProfileStore = ns.Social.ProfileStore
 
 Guild.REQUEST_WINDOW = 3
 Guild.HELLO_REPLY_COOLDOWN = 600
@@ -140,7 +143,7 @@ local replyKeys = {}       -- [debounce key] = true
 local loggedDrops = {}     -- [charKey] = true: the oversize/dropped DATA was logged
 
 Guild.stats = { helloSent = 0, requestSent = 0, dataSent = 0, dataDropped = 0, rejected = 0, trimmed = 0, strangers = 0,
-  retried = 0 }
+  retried = 0, evicted = 0 }
 
 local function cancel_retry()
   if retryTimer then retryTimer:Cancel(); retryTimer = nil end
@@ -1072,29 +1075,16 @@ function Guild:OnRequest(msg, sender, distribution)
   arm_flush(self)
 end
 
--- The keyed copy stored for a validated DATA (known fields only; see the header).
+-- The compact copy stored for a validated DATA (known fields only; see the header).
 local function stored_copy(msg, c, hash, owner, isVerified, t)
-  local quality = msg.lv == "q"
-  local lines = {}
-  for _, line in ipairs(msg.pr) do
-    local entry = { k = line.k, m = line.m, recipes = {} }
-    local r = line.r
-    if quality then
-      entry.q, entry.qc = {}, {}
-      for i = 1, #r, 3 do
-        entry.recipes[r[i]] = true
-        entry.q[r[i]], entry.qc[r[i]] = r[i + 1], r[i + 2]
-      end
-    else
-      for i = 1, #r do entry.recipes[r[i]] = true end
-    end
-    lines[line.s] = entry
-  end
-  return { c = c, ts = msg.ts, lv = msg.lv, h = hash, owner = owner, verified = isVerified, rt = t, lines = lines }
+  return { c = c, ts = msg.ts, lv = msg.lv, h = hash, owner = owner, verified = isVerified, rt = t,
+    pr = ProfileStore.FromData(msg) }
 end
 
 -- A DATA: stored (replacing the previous copy, so an "r" profile drops the qualities) only when the sender's last
 -- HELLO lists exactly this hash, the content hashes to it, and the claim rules let the sender publish the character.
+-- The answered request is forgotten (an evicted copy must not look unanswered to the re-request pass), and a guild
+-- beyond ProfileStore.MAX_PER_GUILD loses its least recently seen other profiles.
 function Guild:OnData(msg, sender, distribution)
   sender = Util.NormalizeName(sender)
   if not self:IsEnabled() or not writable() or type(sender) ~= "string" then return end
@@ -1116,6 +1106,9 @@ function Guild:OnData(msg, sender, distribution)
     return
   end
   dir.profiles[c] = stored_copy(msg, c, hash, sender, kind == "verified", t)
+  requested[request_key(sender, c, msg.h)] = nil
+  local gone = ProfileStore.Evict(dir.profiles, ProfileStore.MAX_PER_GUILD, c)
+  self.stats.evicted = self.stats.evicted + #gone
   changed(self)
 end
 

@@ -3,8 +3,9 @@
 -- (last = "UI/Tooltips.lua"); the Scanner's character list and schematic cache are p4.fake_module overrides, the
 -- roster and the native query are the phase-4 harness fakes (p4.guild).
 local SOCIAL_FILES = { "Modules/Social/Util.lua", "Modules/Social/Gate.lua", "Modules/Social/Codec.lua",
-  "Modules/Social/Protocol.lua", "Modules/Social/Comm.lua", "Modules/Social/ItemIndex.lua", "Modules/Social/Guild.lua",
-  "Modules/Social/GuildNative.lua", "Modules/Social/GuildDirectory.lua" }
+  "Modules/Social/Protocol.lua", "Modules/Social/ProfileStore.lua", "Modules/Social/Comm.lua",
+  "Modules/Social/ItemIndex.lua", "Modules/Social/Guild.lua", "Modules/Social/GuildNative.lua",
+  "Modules/Social/GuildDirectory.lua" }
 local HOUR = 3600
 
 describe("Social.ItemIndex", function()
@@ -100,20 +101,26 @@ describe("Guild directory", function()
     return out
   end
 
-  -- A stored peer profile in the Task 6 shape: one skill line with the given recipes (id -> { q, qc } or true).
+  -- A stored peer profile in the compact shape (Modules/Social/ProfileStore.lua): one skill line with the given
+  -- recipes (id -> { q, qc } or true), packed from the DATA it would have come in, with that DATA's hash.
   local function store(charKey, owner, opts)
     opts = opts or {}
-    local line = { k = opts.k or 50, m = 100, recipes = {} }
     local lv = opts.lv or "q"
-    if lv == "q" then line.q, line.qc = {}, {} end
-    for id, quality in pairs(opts.recipes or { [100] = { 3, 5 } }) do
-      line.recipes[id] = true
+    local recipes = opts.recipes or { [100] = { 3, 5 } }
+    local ids = {}
+    for id in pairs(recipes) do ids[#ids + 1] = id end
+    table.sort(ids)
+    local flat = {}
+    for _, id in ipairs(ids) do
+      flat[#flat + 1] = id
       if lv == "q" then
-        line.q[id], line.qc[id] = quality[1], quality[2]
+        flat[#flat + 1] = recipes[id][1]
+        flat[#flat + 1] = recipes[id][2]
       end
     end
-    dir().profiles[charKey] = { c = charKey, ts = 1, lv = lv, h = "00000001", owner = owner,
-      verified = opts.verified ~= false, rt = opts.rt or now(), lines = { [opts.line or 2907] = line } }
+    local data = { lv = lv, pr = { { s = opts.line or 2907, k = opts.k or 50, m = 100, r = flat } } }
+    dir().profiles[charKey] = { c = charKey, ts = 1, lv = lv, h = ns.Social.Protocol.HashProfile(data), owner = owner,
+      verified = opts.verified ~= false, rt = opts.rt or now(), pr = ns.Social.ProfileStore.FromData(data) }
   end
   local function native_members(recipeID, members, at)
     dir().native[recipeID] = { time = at or now(), skillLineID = 2907, members = members }
@@ -396,15 +403,15 @@ describe("Guild directory", function()
     it("reads the recipe from any skill line of a profile", function()
       store("L-Realm", "Peer-Realm", { line = 2908, recipes = { [100] = { 4, 4 } } })
       local profile = dir().profiles["L-Realm"]
-      profile.lines[2909] = { k = 7, m = 100, recipes = { [555] = true } }
+      table.insert(profile.pr, { s = 2909, k = 7, m = 100, r = ",555," })
       assert.are.equal("L-Realm", names(Guild:GetCrafters(100))[1])
       assert.are.same({}, Guild:GetCrafters(556))
     end)
 
     it("survives damaged saved data", function()
       dir().profiles["X-Realm"] = "junk"
-      dir().profiles["Y-Realm"] = { owner = "Peer-Realm", lines = "junk" }
-      dir().profiles["W-Realm"] = { owner = "Peer-Realm", rt = now(), lines = { [1] = { recipes = "junk" }, [2] = "junk" } }
+      dir().profiles["Y-Realm"] = { owner = "Peer-Realm", pr = "junk" }
+      dir().profiles["W-Realm"] = { owner = "Peer-Realm", rt = now(), pr = { [1] = { r = 5 }, [2] = "junk" } }
       dir().native[100].members[#dir().native[100].members + 1] = "junk"
       dir().native[100].members[#dir().native[100].members + 1] = { name = 5 }
       assert.has_no.errors(function() Guild:GetCrafters(100) end)
@@ -511,7 +518,7 @@ describe("Guild directory", function()
     end)
 
     it("does not throw on damaged data", function()
-      dir().profiles["X-Realm"] = { owner = {}, rt = "x", lines = { [1] = { recipes = { [100] = true }, q = "junk" } } }
+      dir().profiles["X-Realm"] = { owner = {}, rt = "x", pr = { { s = 1, r = ",100:xx," } } }
       assert.has_no.errors(function() Guild:TooltipLines(5001) end)
     end)
   end)
