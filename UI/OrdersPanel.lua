@@ -4,10 +4,12 @@ local L = ns.L
 -- OrdersPanel: our additions to Blizzard's crafting-orders list (ProfessionsFrame.OrdersPage), as three modules that
 -- are each switched on and off by 1a's module toggles (Settings > Modules) and fail on their own:
 --   OrdersRowAddons   per order row: a tint for VIP / repeat / blocked customers, a dark overlay on rows the filters
---                     hide, a strip of cells (net profit, score, risk count with a tooltip, Add to Queue) and, left of
---                     it, a strip of small icons: the rewards of a patron order, then the reagents the crafter must
---                     supply (the allocation minus what the customer provides; the count is red while the character
---                     owns fewer), with a tooltip that lists them all (setting Orders.showRowIcons).
+--                     hide, a strip of cells (net profit, score, risk count with a tooltip, Add to Queue), left of it a
+--                     strip of small icons for the rewards of a patron order, and a cover over Blizzard's Reagents
+--                     cell that replaces its "Some" / "None" / "All" with the reagents the crafter must supply (the
+--                     allocation minus what the customer provides, as icons whose count is red while the character
+--                     owns fewer), a green check when the customer provides every reagent, or "?" when they are not
+--                     known (a recraft, no result). Both have tooltips (setting Orders.showRowIcons turns them off).
 --   OrdersSidePanel   a panel docked at ProfessionsFrame's right edge while the order list is shown: risk filters,
 --                     public claims remaining, the best claimable order and the Claim Best Order button.
 --   OrderViewWarning  a line above the order detail view for a blocked or VIP customer.
@@ -25,6 +27,10 @@ local L = ns.L
 -- first, then the whole strip; our cells never cover Blizzard's item name. The icon strip sits just left of the
 -- visible cells and gives way to the name the same way, in the same fit pass: it shows as many icons as fit between
 -- the end of the name and the cells (the last visible slot becomes "+N"), and it is hidden with the cell strip.
+-- The Reagents cover is replaced, not edited: Blizzard's cell and its text are never written (no SetText, SetAlpha or
+-- Hide on them). Our own frame, in our own container, is anchored over the cell (measured read-only from the row's
+-- fourth cell or the column header, else Blizzard's fixed 90 px before the 60 px Expiration column) with an opaque
+-- background of COVER_COLOR, so the word underneath cannot be seen. A row with no view of ours has no cover.
 --
 -- Claiming (design rule 3): Orders:ClaimBest (C_CraftingOrders.ClaimOrder is HasRestrictions) is called only as a
 -- direct call inside the Claim Best Order button's OnClick handler (tests/orders/claim_click_only_spec.lua enforces
@@ -62,8 +68,16 @@ local CORE_WIDTH = ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP + CELL_WIDTH   --
 local WARN_SLOT, PROFIT_SLOT = WARN_SIZE + CELL_GAP, CELL_WIDTH + CELL_GAP
 local STRIP_WIDTH = CORE_WIDTH + WARN_SLOT + PROFIT_SLOT
 local PAD, GAP = 6, 4
-local ICON_SIZE, ICON_GAP, GROUP_GAP = 14, 1, 4   -- the icon strip: 14 px icons 1 px apart, rewards and reagents 4 px apart
-local UNKNOWN_ICON = 134400                        -- the question mark, for an icon the client cannot give
+local ICON_SIZE, ICON_GAP, MORE_WIDTH = 14, 1, 22   -- icons: 14 px, 1 px apart; the "+N" slot has a width of its own
+local UNKNOWN_ICON = 134400                           -- the question mark, for an icon the client cannot give
+-- The Reagents cover over Blizzard's cell (ProfessionsCraftingOrderPageMixin:SetupTable, 12.1.5: the Reagents column
+-- is 90 px wide and the 60 px Expiration column is last).
+local COVER_WIDTH, COVER_RIGHT, COVER_PAD = 90, 60, 4
+-- The cover's opaque background, a dark colour close to the order list's own. (The list's background atlas cannot be
+-- read from Blizzard's region without relying on its layout, so this is the one value to adjust.)
+local COVER_COLOR = { 0.06, 0.05, 0.04, 1 }
+M.COVER_COLOR = COVER_COLOR
+local CHECK_ICON = "Interface\\RaidFrame\\ReadyCheck-Ready"
 local CONTAINER_LEVELS = 20   -- our container sits this many frame levels above the ScrollBox (rows are ~2-4 above)
 local TINTS = {
   vip = { 1, 0.82, 0, 0.18 },
@@ -409,23 +423,19 @@ local set_result
 -- Reward and reagent icons (pure helpers)
 ---------------------------------------------------------------------------
 
--- How many of itemID the logged-in character owns (bags, bank, reagent bank and the warband bank: Scanner's game
--- count), or nil when it cannot be told (unknown is nil, never 0).
+-- How many of itemID the logged-in character owns (bags, bank, reagent bank and the warband bank: the game's own
+-- count through Scanner), or nil when the game cannot tell (unknown is nil, never 0, so no snapshot stands in).
 local function owned_count(itemID)
   local scanner = ns.FS:GetModule("Scanner", true)
-  if not (scanner and type(scanner.GetOwnedCount) == "function") then return nil end
-  local ok, n = pcall(scanner.GetOwnedCount, scanner, itemID, nil, true)
+  if not (scanner and type(scanner.GetLiveOwnedCount) == "function") then return nil end
+  local ok, n = pcall(scanner.GetLiveOwnedCount, scanner, itemID, true)
   if ok and type(n) == "number" and n == n then return n end
   return nil
 end
 
--- OrderView + owned(itemID) -> count|nil (nil: not asked) -> the icons of its row, rewards first then reagents:
---   { kind = "reward", itemID? | currencyID?, count }                  one per entry of view.rewards that has an ID;
---   { kind = "reagent", itemID, count = still to supply, have = owned|nil }   one per itemID the crafter supplies:
--- the result's allocation summed by itemID minus what the customer provides (view.input.provided), positive
--- remainders only, in the order the allocation names them. A recraft, an order without a result and an order that
--- provides everything have none.
-function M.IconEntries(view, owned)
+-- OrderView -> the rewards of its row: { kind = "reward", itemID? | currencyID?, count }, one per entry of view.rewards
+-- that has an ID, in order.
+function M.RewardEntries(view)
   local out = {}
   if type(view) ~= "table" then return out end
   for _, reward in ipairs(type(view.rewards) == "table" and view.rewards or {}) do
@@ -437,12 +447,20 @@ function M.IconEntries(view, owned)
         count = type(reward.count) == "number" and reward.count or 1 }
     end
   end
+  return out
+end
+
+-- OrderView + owned(itemID) -> count|nil (nil: not asked) -> the reagents the crafter must supply:
+-- { kind = "reagent", itemID, count = still to supply, have = owned|nil }, one per itemID: the result's allocation
+-- summed by itemID minus what the customer provides (view.input.provided), positive remainders only, in the order the
+-- allocation names them. An empty list: nothing to supply. nil: not known (a recraft, an order without a result).
+function M.ReagentEntries(view, owned)
+  if type(view) ~= "table" then return nil end
   local input = type(view.input) == "table" and view.input or {}
   local result = type(view.result) == "table" and view.result or nil
-  if flags_of(view).recraft or input.isRecraft or not (result and type(result.allocation) == "table") then return out end
-  local provided = type(input.provided) == "table" and input.provided or type(view.provided) == "table" and view.provided
-    or {}
-  local need, order = {}, {}
+  if flags_of(view).recraft or input.isRecraft or not (result and type(result.allocation) == "table") then return nil end
+  local provided = type(input.provided) == "table" and input.provided or {}
+  local need, order, out = {}, {}, {}
   for _, slot in ipairs(result.allocation) do
     if type(slot) == "table" and type(slot.itemID) == "number" then
       if need[slot.itemID] == nil then order[#order + 1] = slot.itemID end
@@ -458,24 +476,34 @@ function M.IconEntries(view, owned)
   return out
 end
 
-local function icon_slot_x(i, rewards)
-  return (i - 1) * (ICON_SIZE + ICON_GAP) + ((rewards > 0 and i > rewards) and GROUP_GAP or 0)
+-- ReagentEntries -> what the Reagents cover shows: "reagents" (icons), "provided" (a check: the customer provides
+-- every reagent) or "unsure" ("?"). Nil for a value that is not a view.
+local function reagent_state(entries)
+  if entries == nil then return "unsure" end
+  return #entries == 0 and "provided" or "reagents"
 end
 
--- IconEntries + the room for them in pixels (nil: unlimited) -> { shown = icons drawn, more = N|nil, width }. With
--- room for all of them: all drawn. Otherwise the slots that fit (k) draw k-1 icons and the last one becomes "+N" (N =
--- the entries not drawn); no room for one slot: nothing (width 0). Slots are 14 px, 1 px apart, and rewards are
--- separated from the reagents after them by a small gap.
+function M.ReagentState(view)
+  if type(view) ~= "table" then return nil end
+  return reagent_state(M.ReagentEntries(view))
+end
+
+local function icon_slot_x(i)
+  return (i - 1) * (ICON_SIZE + ICON_GAP)
+end
+
+-- A list of icons + the room for them in pixels (nil: unlimited) -> { shown = icons drawn, more = N|nil, width }.
+-- With room for all of them: all drawn. Otherwise the slots that fit (k) draw k-1 icons and the last one becomes "+N"
+-- (N = the entries not drawn; a slot of its own width MORE_WIDTH); no room for one slot: nothing (width 0). Icons are
+-- 14 px, 1 px apart.
 function M.IconLayout(entries, room)
-  local total, rewards = #entries, 0
-  for _, entry in ipairs(entries) do
-    if entry.kind == "reward" then rewards = rewards + 1 end
-  end
+  local total = #entries
   if total == 0 then return { shown = 0, width = 0 } end
-  local function width_of(n) return icon_slot_x(n, rewards) + ICON_SIZE end
-  if room == nil or width_of(total) <= room then return { shown = total, width = width_of(total) } end
+  local all = icon_slot_x(total) + ICON_SIZE
+  if room == nil or all <= room then return { shown = total, width = all } end
   for k = total - 1, 1, -1 do
-    if width_of(k) <= room then return { shown = k - 1, more = total - (k - 1), width = width_of(k) } end
+    local width = icon_slot_x(k) + MORE_WIDTH
+    if width <= room then return { shown = k - 1, more = total - (k - 1), width = width } end
   end
   return { shown = 0, width = 0 }
 end
@@ -558,11 +586,13 @@ end
 
 local rowsAttached     -- hooks installed (once per session)
 local rowsBox          -- the order list's ScrollBox
+local rowsHeader       -- the order list's column header container (read only), or nil
 local container        -- our clipping container over it
 local rowsOwner = {}   -- owner token of our ScrollBox callbacks
 local cells = setmetatable({}, { __mode = "k" })  -- [Blizzard row] = our cell set
 local REFIT_KEY = "ordersRowAddons.refit"
-local apply_fit, schedule_refit   -- defined with the re-fit pass below
+local BAGS_KEY = "ordersRowAddons.bags"
+local apply_fit, schedule_refit, refresh_current_rows   -- defined below
 
 -- The orderID a list element holds: nil for a bucket (grouped by recipe) or anything else.
 local function order_id_of(elementData)
@@ -599,19 +629,46 @@ local function risk_tooltip(c)
   show_tooltip(c.risk, lines)
 end
 
--- The icon strip's tooltip: every reward and reagent of the row (c.tipping keeps it fresh while the pointer is on it).
+-- The reward strip's tooltip: the "Rewards" lines. c.tipping ("icons" | "cover") keeps an open tooltip fresh while the
+-- pointer is on the strip or the cover, and is cleared when that part hides.
 local function icons_tooltip(c)
-  show_tooltip(c.icons, icon_lines(c.iconEntries or {}))
+  show_tooltip(c.icons, icon_lines(c.iconEntries))
 end
 
-local function icons_enter(c)
-  c.tipping = true
-  icons_tooltip(c)
+-- The Reagents cover's tooltip: the reagents to supply, or why there is a check or a "?".
+local function cover_tooltip(c)
+  local lines
+  if c.coverMode == "reagents" then
+    lines = icon_lines(c.reagentEntries)
+  elseif c.coverMode == "provided" then
+    lines = { { text = L["The customer provides every reagent"], color = TEXT_COLORS.white } }
+  elseif c.coverMode == "unsure" then
+    lines = { { text = L["Reagents unknown for this order"], color = TEXT_COLORS.white } }
+  else
+    return
+  end
+  show_tooltip(c.cover, lines)
 end
 
-local function icons_leave(c)
-  c.tipping = false
+local function refresh_tooltip(c)
+  if c.tipping == "icons" then icons_tooltip(c) elseif c.tipping == "cover" then cover_tooltip(c) end
+end
+
+local function hover_enter(c, which)
+  c.tipping = which
+  refresh_tooltip(c)
+end
+
+local function hover_leave(c)
+  c.tipping = nil
   hide_tooltip()
+end
+
+-- Our overlay frames let clicks and hover through to Blizzard's row beneath (unverified API names: pcall-guarded).
+local function pass_through(frame)
+  for _, method in ipairs({ "SetPropagateMouseClicks", "SetPropagateMouseMotion" }) do
+    if type(frame[method]) == "function" then pcall(frame[method], frame, true) end
+  end
 end
 
 local function add_to_queue(c)
@@ -621,8 +678,63 @@ local function add_to_queue(c)
   if message then set_result(message, tone) end
 end
 
+-- A pool of icon slots in a frame (texture and count text each, created when first needed) and its "+N" text.
+local function new_bank(frame)
+  local more = text(frame)
+  more:SetJustifyH("LEFT")
+  more:SetWidth(MORE_WIDTH)
+  more:SetWordWrap(false)
+  more:Hide()
+  return { frame = frame, slots = {}, more = more }
+end
+
+local function bank_slot(bank, i)
+  local slot = bank.slots[i]
+  if not slot then
+    slot = { icon = bank.frame:CreateTexture(nil, "ARTWORK"), count = text(bank.frame, "NumberFontNormalSmall") }
+    slot.icon:SetSize(ICON_SIZE, ICON_SIZE)
+    slot.count:SetPoint("BOTTOMRIGHT", slot.icon, "BOTTOMRIGHT", 1, -1)
+    bank.slots[i] = slot
+  end
+  return slot
+end
+
+-- Draws `entries` per `layout` (IconLayout) into the bank, the first icon x0 pixels from the frame's left edge; every
+-- slot is set or hidden, so a recycled row shows no leftovers. Returns whether anything was drawn.
+local function draw_bank(bank, entries, layout, x0)
+  for _, slot in ipairs(bank.slots) do
+    slot.icon:Hide()
+    slot.count:Hide()
+  end
+  bank.more:Hide()
+  if layout.width == 0 then return false end
+  for i = 1, layout.shown do
+    local slot, entry = bank_slot(bank, i), entries[i]
+    slot.icon:SetTexture(icon_of(entry))
+    slot.icon:ClearAllPoints()
+    slot.icon:SetPoint("LEFT", bank.frame, "LEFT", x0 + icon_slot_x(i), 0)
+    slot.icon:Show()
+    if entry.kind == "reagent" or entry.count > 1 then
+      slot.count:SetText(tostring(entry.count))
+      color_text(slot.count, entry.kind == "reagent" and entry.have ~= nil and entry.have < entry.count
+        and TEXT_COLORS.red or TEXT_COLORS.white)
+      slot.count:Show()
+    else
+      slot.count:SetText("")
+      slot.count:Hide()   -- (a new slot starts shown)
+    end
+  end
+  if layout.more then
+    bank.more:ClearAllPoints()
+    bank.more:SetPoint("LEFT", bank.frame, "LEFT", x0 + icon_slot_x(layout.shown + 1), 0)
+    bank.more:SetText("+" .. layout.more)
+    bank.more:Show()
+  end
+  return true
+end
+
 local function new_cells(row)
-  local c = { dimmed = false, warnShown = false, fit = "all", iconEntries = {}, slots = {} }
+  local c = { dimmed = false, warnShown = false, fit = "all", iconEntries = {}, reagentEntries = {} }
   local frame = CreateFrame("Frame", nil, container)
   frame:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
   frame:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", 0, 0)
@@ -673,79 +785,46 @@ local function new_cells(row)
   c.profit:SetSize(CELL_WIDTH, STRIP_HEIGHT)
   c.profit:SetJustifyH("RIGHT")
 
-  -- The icon strip, a sibling of the cell strip (it has its own width and alpha): one pooled slot (texture and count)
-  -- per icon, created when first needed and reused by whatever order the recycled row shows next; "+N" in the last
-  -- visible slot when not every icon fits. Clicks pass through to Blizzard's row beneath.
+  -- The reward icon strip, a sibling of the cell strip (it has its own width and alpha): one pooled slot (texture and
+  -- count) per icon, created when first needed and reused by whatever order the recycled row shows next; "+N" in the
+  -- last visible slot when not every icon fits.
   c.icons = CreateFrame("Frame", nil, frame)
   c.icons:SetSize(ICON_SIZE, ICON_SIZE)
+  c.icons:SetClipsChildren(true)
   c.icons:EnableMouse(true)
-  if type(c.icons.SetPropagateMouseClicks) == "function" then pcall(c.icons.SetPropagateMouseClicks, c.icons, true) end
-  c.icons:SetScript("OnEnter", function() M.Guard(ROWS, icons_enter, c) end)
-  c.icons:SetScript("OnLeave", function() icons_leave(c) end)
-  c.more = text(c.icons)
-  c.more:SetJustifyH("LEFT")
-  c.more:Hide()
+  pass_through(c.icons)
+  c.icons:SetScript("OnEnter", function() M.Guard(ROWS, hover_enter, c, "icons") end)
+  c.icons:SetScript("OnLeave", function() hover_leave(c) end)
+  c.iconBank = new_bank(c.icons)
+  c.slots, c.more = c.iconBank.slots, c.iconBank.more
+
+  -- The Reagents cover: an opaque background over Blizzard's Reagents cell (its word must not show), the reagent
+  -- icons (the same pooled slots), the check and the "?", and a dark overlay of its own for a dimmed row.
+  c.cover = CreateFrame("Frame", nil, frame)
+  c.cover:SetClipsChildren(true)
+  c.cover:EnableMouse(true)
+  pass_through(c.cover)
+  c.cover:SetScript("OnEnter", function() M.Guard(ROWS, hover_enter, c, "cover") end)
+  c.cover:SetScript("OnLeave", function() hover_leave(c) end)
+  c.coverBg = c.cover:CreateTexture(nil, "BACKGROUND")
+  c.coverBg:SetAllPoints(c.cover)
+  c.coverBg:SetColorTexture(COVER_COLOR[1], COVER_COLOR[2], COVER_COLOR[3], COVER_COLOR[4])
+  c.coverDim = c.cover:CreateTexture(nil, "OVERLAY", nil, 7)
+  c.coverDim:SetAllPoints(c.cover)
+  c.coverDim:SetColorTexture(DIM[1], DIM[2], DIM[3], DIM[4])
+  c.coverCheck = c.cover:CreateTexture(nil, "ARTWORK")
+  c.coverCheck:SetTexture(CHECK_ICON)
+  c.coverCheck:SetSize(ICON_SIZE + 2, ICON_SIZE + 2)
+  c.coverCheck:SetPoint("LEFT", c.cover, "LEFT", COVER_PAD, 0)
+  c.coverQuestion = text(c.cover, "GameFontNormal")
+  c.coverQuestion:SetText("?")
+  color_text(c.coverQuestion, TEXT_COLORS.grey)
+  c.coverQuestion:SetPoint("LEFT", c.cover, "LEFT", COVER_PAD + 3, 0)
+  c.coverBank = new_bank(c.cover)
+  c.coverSlots, c.coverMore = c.coverBank.slots, c.coverBank.more
+  c.cover:Hide()
   cells[row] = c
   return c
-end
-
--- The slot for icon i of a row's icon strip (created once).
-local function icon_slot(c, i)
-  local slot = c.slots[i]
-  if not slot then
-    slot = { icon = c.icons:CreateTexture(nil, "ARTWORK"), count = text(c.icons, "NumberFontNormalSmall") }
-    slot.icon:SetSize(ICON_SIZE, ICON_SIZE)
-    slot.count:SetPoint("BOTTOMRIGHT", slot.icon, "BOTTOMRIGHT", 1, -1)
-    c.slots[i] = slot
-  end
-  return slot
-end
-
--- Draws the row's icon strip: the icons that fit in `room` pixels (see IconLayout; nil = unlimited) to the left of
--- `visible` pixels of cells that end `reserve + PAD` from the row's right edge; nothing when the cell strip is
--- hidden, there are no icons or none fits. Every slot is set or hidden, so a recycled row shows no leftovers.
-local function render_icons(c, row, reserve, room, visible)
-  local entries = c.iconEntries
-  local layout = c.fit ~= "none" and M.IconLayout(entries, room) or { shown = 0, width = 0 }
-  for i = 1, #c.slots do
-    c.slots[i].icon:Hide()
-    c.slots[i].count:Hide()
-  end
-  c.more:Hide()
-  if layout.width == 0 then
-    c.icons:Hide()
-    return
-  end
-  local rewards = 0
-  for _, entry in ipairs(entries) do
-    if entry.kind == "reward" then rewards = rewards + 1 end
-  end
-  c.icons:ClearAllPoints()
-  c.icons:SetPoint("RIGHT", row, "RIGHT", -(reserve + PAD + visible + GAP), 0)
-  c.icons:SetSize(layout.width, ICON_SIZE)
-  for i = 1, layout.shown do
-    local slot, entry = icon_slot(c, i), entries[i]
-    slot.icon:SetTexture(icon_of(entry))
-    slot.icon:ClearAllPoints()
-    slot.icon:SetPoint("LEFT", c.icons, "LEFT", icon_slot_x(i, rewards), 0)
-    slot.icon:Show()
-    if entry.kind == "reagent" or entry.count > 1 then
-      slot.count:SetText(tostring(entry.count))
-      color_text(slot.count, entry.kind == "reagent" and entry.have ~= nil and entry.have < entry.count
-        and TEXT_COLORS.red or TEXT_COLORS.white)
-      slot.count:Show()
-    else
-      slot.count:SetText("")
-      slot.count:Hide()   -- (a new slot starts shown)
-    end
-  end
-  if layout.more then
-    c.more:ClearAllPoints()
-    c.more:SetPoint("LEFT", c.icons, "LEFT", icon_slot_x(layout.shown + 1, rewards), 0)
-    c.more:SetText("+" .. layout.more)
-    c.more:Show()
-  end
-  c.icons:Show()
 end
 
 -- Places the strip at the right of the item-name column (measured read-only; Blizzard's fixed columns otherwise) and
@@ -777,19 +856,87 @@ local function fit(c, row, warn)
   return "none", reserve, nil
 end
 
+-- Draws the reward strip: the icons that fit in `room` pixels (see IconLayout; nil = unlimited) to the left of
+-- `visible` pixels of cells that end `reserve + PAD` from the row's right edge; nothing when the cell strip is
+-- hidden, there are no rewards or none fits.
+local function render_icons(c, row, reserve, room, visible)
+  local layout = c.fit ~= "none" and M.IconLayout(c.iconEntries, room) or { shown = 0, width = 0 }
+  if not draw_bank(c.iconBank, c.iconEntries, layout, 0) then
+    c.icons:Hide()
+    if c.tipping == "icons" then c.tipping = nil end
+    return
+  end
+  c.icons:ClearAllPoints()
+  c.icons:SetPoint("RIGHT", row, "RIGHT", -(reserve + PAD + visible + GAP), 0)
+  c.icons:SetSize(layout.width, ICON_SIZE)
+  c.icons:Show()
+end
+
+-- Whether left < right look like a real column span (a cell that was not laid out reads 0 or reversed).
+local function plausible_span(left, right)
+  return left ~= nil and right ~= nil and right - left >= 20 and right - left <= 300
+end
+
+-- The Reagents column's span in screen coordinates (read only): the row's fourth cell, else the fourth column header
+-- of the list; nil when neither can be read.
+local function reagents_span(row)
+  local cell = type(row.cells) == "table" and child(row.cells, 4) or nil
+  local left, right = read_number(cell, "GetLeft"), read_number(cell, "GetRight")
+  if plausible_span(left, right) then return left, right end
+  if rowsHeader and type(rowsHeader.GetChildren) == "function" then
+    local found = { pcall(rowsHeader.GetChildren, rowsHeader) }
+    local header = type(found[5]) == "table" and found[5] or nil
+    left, right = read_number(header, "GetLeft"), read_number(header, "GetRight")
+    if plausible_span(left, right) then return left, right end
+  end
+  return nil
+end
+
+-- Anchors the cover over Blizzard's Reagents cell: its right edge as far from the row's right edge as the cell's, its
+-- width the cell's; Blizzard's fixed layout (90 px, then the 60 px Expiration column) when it cannot be measured.
+local function place_cover(c, row)
+  local offset, width = COVER_RIGHT, COVER_WIDTH
+  local left, right = reagents_span(row)
+  local rowRight = read_number(row, "GetRight")
+  if left and rowRight and rowRight >= right then offset, width = rowRight - right, right - left end
+  c.cover:ClearAllPoints()
+  c.cover:SetPoint("TOPRIGHT", row, "TOPRIGHT", -offset, 0)
+  c.cover:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -offset, 0)
+  c.cover:SetWidth(width)
+  return width
+end
+
+-- Shows the Reagents cover for the row's mode (c.coverMode: "reagents" | "provided" | "unsure" | nil for none).
+local function render_cover(c, row)
+  local mode = c.coverMode
+  if not mode then
+    c.cover:Hide()
+    if c.tipping == "cover" then c.tipping = nil end
+    return
+  end
+  local width = place_cover(c, row)
+  set_shown(c.coverDim, c.dimmed)
+  set_shown(c.coverCheck, mode == "provided")
+  set_shown(c.coverQuestion, mode == "unsure")
+  local entries = mode == "reagents" and c.reagentEntries or {}
+  draw_bank(c.coverBank, entries, M.IconLayout(entries, width - 2 * COVER_PAD), COVER_PAD)
+  c.cover:Show()
+end
+
+local function hide_cells(c)
+  c.frame:Hide()
+  c.icons:Hide()
+  c.cover:Hide()
+  c.tipping = nil
+end
+
 local function hide_row(row)
   local c = cells[row]
-  if c then
-    c.frame:Hide()
-    c.tipping = false
-  end
+  if c then hide_cells(c) end
 end
 
 local function hide_all_cells()
-  for _, c in pairs(cells) do
-    c.frame:Hide()
-    c.tipping = false
-  end
+  for _, c in pairs(cells) do hide_cells(c) end
 end
 
 -- Fits a row's strip to Blizzard's item name as it is now (see fit) and shows the parts that have room.
@@ -804,6 +951,7 @@ function apply_fit(c, row)
   set_shown(c.strip, c.fit ~= "none")
   local core = CORE_WIDTH + (c.warnShown and WARN_SLOT or 0)
   render_icons(c, row, reserve, room, c.fit == "all" and core + PROFIT_SLOT or core)
+  render_cover(c, row)
 end
 
 -- Re-fit pass (fit only; values and tint stay): over the ScrollBox's current frames, so a released row is never
@@ -817,7 +965,7 @@ local function refit_rows()
     local c = cells[row]
     if c and c.frame:IsShown() then
       apply_fit(c, row)
-      if c.tipping then icons_tooltip(c) end   -- an open tooltip learns names that arrived
+      refresh_tooltip(c)   -- an open tooltip learns names that arrived
     end
   end)
 end
@@ -830,8 +978,14 @@ function schedule_refit()
   ns.FS:Debounce(REFIT_KEY, 0, refitPass)
 end
 
--- ITEM_DATA_LOAD_RESULT / GET_ITEM_INFO_RECEIVED are listened to only while the cells are attached and the order list
--- is on screen (the ScrollBox's OnShow / OnHide), and never while the module is off.
+local bagsPass = ns.FS:Wrap(ROWS, function()
+  if RowAddons:IsEnabled() then refresh_current_rows() end
+end)
+
+-- ITEM_DATA_LOAD_RESULT / GET_ITEM_INFO_RECEIVED (the names) and BAG_UPDATE_DELAYED (the owned counts, which the reagent
+-- icons colour by) are listened to only while the cells are attached and the order list is on screen (the ScrollBox's
+-- OnShow / OnHide), and never while the module is off. A bag change redoes the rows on screen (a re-fit pass does not
+-- recompute the entries), coalesced into the next frame.
 local ITEM_EVENTS = { "ITEM_DATA_LOAD_RESULT", "GET_ITEM_INFO_RECEIVED" }
 local listening = false
 
@@ -845,6 +999,14 @@ local function listen_for_items(on)
     else
       RowAddons:UnregisterEvent(event)
     end
+  end
+  if on then
+    RowAddons:RegisterEvent("BAG_UPDATE_DELAYED", function()
+      M.Guard(ROWS, function() ns.FS:Debounce(BAGS_KEY, 0, bagsPass) end)
+    end)
+  else
+    RowAddons:UnregisterEvent("BAG_UPDATE_DELAYED")
+    ns.FS:CancelDebounce(BAGS_KEY)
   end
 end
 
@@ -874,8 +1036,12 @@ local function show_row(row, elementData)
   set_shown(c.dimTexture, model.dimmed)
   c.strip:SetAlpha(model.dimmed and 0.6 or 1)
   c.icons:SetAlpha(model.dimmed and 0.6 or 1)
-  local settings = O:Settings()
-  c.iconEntries = settings.showRowIcons ~= false and M.IconEntries(view, owned_count) or {}
+  -- The rewards, and what the Reagents cover shows (none while the setting is off: Blizzard's column shows as usual).
+  local on = O:Settings().showRowIcons ~= false
+  local reagents = M.ReagentEntries(view, owned_count)
+  c.iconEntries = on and M.RewardEntries(view) or {}
+  c.reagentEntries = on and reagents or {}
+  c.coverMode = on and reagent_state(reagents) or nil
 
   c.profit:SetText(M.ProfitText(view))
   color_text(c.profit, sign_color(view.net))
@@ -895,6 +1061,13 @@ local function show_row(row, elementData)
   c.frame:Show()
   -- Blizzard may write the name after us (callback order between owners is not fixed; uncached names come later).
   schedule_refit()
+end
+
+-- The rows on screen redone in place (values, icons, owned counts), without hiding them first.
+function refresh_current_rows()
+  if rowsBox and type(rowsBox.ForEachFrame) == "function" then
+    rowsBox:ForEachFrame(function(row, elementData) show_row(row, elementData) end)
+  end
 end
 
 -- Every row on screen again (and only those): hides all cells, then shows the ScrollBox's current rows.
@@ -936,6 +1109,7 @@ local function attach_rows(self)
   container:SetClipsChildren(true)
   container:SetFrameLevel((read_number(box, "GetFrameLevel") or 0) + CONTAINER_LEVELS)
   rowsBox = box
+  rowsHeader = child(child(child(page, "BrowseFrame"), "OrderList"), "HeaderContainer")
 
   hooksecurefunc(page, "ShowOrders", function() M.Guard(ROWS, refresh_rows) end)
   hooksecurefunc(page, "ShowBuckets", function() M.Guard(ROWS, hide_all_cells) end)
@@ -977,6 +1151,7 @@ end
 function RowAddons:OnDisable()
   listen_for_items(false)
   ns.FS:CancelDebounce(REFIT_KEY)
+  ns.FS:CancelDebounce(BAGS_KEY)
   hide_all_cells()
 end
 

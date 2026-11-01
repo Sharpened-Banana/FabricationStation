@@ -994,29 +994,43 @@ within a few seconds the footer reads "Sync: on" and a guildmate's `/fs guild` s
 the guide opens again (it is still due). Then step through the guide with Next to "All set" and press Escape:
 `/dump FabricationStationDB.global.onboarding` shows `skipped = false`, and it does not return after `/reload`.
 
-P5-10. **Reward and reagent icons on the order rows.** Open a profession's Crafting Orders list (Patron tab, then Public
-or Personal). Left of each row's cells (profit, score, risk, +) there is a strip of 14 px icons: first a patron order's
-rewards (item or currency icon, a count bottom-right when above 1), a small gap, then the reagents you must supply (the
-count they need, red while you own fewer, white otherwise). Expected: a reward or reagent that has no icon shows the
-question mark (not a Lua error); `/dump C_Item.GetItemIconByID, GetItemIcon` tells which icon function exists (the addon
-uses the first and falls back to the second), and `/dump C_CurrencyInfo.GetCurrencyInfo(<currencyID>).iconFileID` is a
-number. A recraft order and an order whose customer provides every reagent show no reagent icons.
+P5-10. **Reward icons and the Reagents cover on the order rows.** Open a profession's Crafting Orders list (Patron tab,
+then Public or Personal). Patron orders show their rewards as 14 px icons in the item-name column, left of the row's cells
+(item or currency icon, a count bottom-right when above 1). In the Reagents column (the 90 px one before Expiration) the
+word Blizzard writes there ("Some", "None", "All") is gone, covered by a dark panel with the reagents you must supply as
+icons (the count they need, red while you own fewer, white otherwise; white when the game cannot tell). A green check
+means the customer provides every reagent; a "?" means the reagents are not known (a recraft, or an order the addon
+could not evaluate); a row the addon has no score for (Orders module off) keeps Blizzard's word. Expected: no word shows
+through the panel, and the panel's colour matches the list background (if it does not, change COVER_COLOR in
+UI/OrdersPanel.lua; note the colour you see). An icon with no texture shows the question mark, not a Lua error:
+`/dump C_Item.GetItemIconByID, GetItemIcon` tells which icon function exists (the addon uses the first and falls back to
+the second), and `/dump C_CurrencyInfo.GetCurrencyInfo(<currencyID>).iconFileID` is a number. Also look at the row's hover
+highlight in the Reagents cell: Blizzard's highlight sits under the panel, so the cell stays dark while the rest of the
+row lights up. Note whether that looks acceptable.
 
-P5-11. **The icon strip gives way to the item name.** On a row with a long item name the icons stay clear of the name
-(never overlap it): fewer icons are drawn and the last slot reads "+N" (N counts the hidden icons too); when even the
-cells are hidden for lack of room, the icons are hidden too. Widen the window or resize the list and the icons come
-back after a moment. Dimmed rows (orders your filters hide) show the icons faded like the cells.
+P5-11. **Where the cover sits and how it gives way.** The panel lines up with the Reagents column on every row, also after
+resizing the window and scrolling. If it is off, `/dump ProfessionsFrame.OrdersPage.BrowseFrame.OrderList.HeaderContainer`
+and its `:GetChildren()` (the addon reads the fourth child's GetLeft/GetRight when a row's fourth cell, `row.cells[4]`,
+cannot be read; otherwise it assumes 90 px then 60 px at the right edge). With more reagents than fit, the last slot
+reads "+N" and stays inside the panel. In the item-name column, a long name keeps the reward icons clear of it: fewer
+icons are drawn and the last slot reads "+N" (N counts the hidden icons too); when the cells are hidden for lack of room,
+the reward icons are hidden too (the Reagents panel stays). Dimmed rows (orders your filters hide) show both faded like
+the cells.
 
-P5-12. **The icon tooltip.** Hover the icon strip: a "Rewards" header with "<icon> <name> x<count>" lines, then a
-"Reagents to supply" header with "<name>: need N, have M" (just "need N" when your count is unknown); a line is red
-while M < N. An item the client has not cached reads "item:<id>" and becomes its name within a moment while the tooltip
-stays open (if not, note whether `/dump C_Item.RequestLoadItemDataByID` exists). Clicking an order row where the icons
-sit still opens the order (the strip passes clicks through; `/dump CreateFrame("Frame").SetPropagateMouseClicks` tells
-whether the client has that function: if it is nil, the click is swallowed there and the row must be clicked elsewhere).
+P5-12. **The tooltips and the mouse.** Hover the reward icons: a "Rewards" header with "<icon> <name> x<count>" lines.
+Hover the Reagents panel: a "Reagents to supply" header with "<name>: need N, have M" (just "need N" when your count is
+unknown; red while M < N), or "The customer provides every reagent" over the check, or "Reagents unknown for this order"
+over the "?". An item the client has not cached reads "item:<id>" and becomes its name within a moment while the tooltip
+stays open (if not, note whether `/dump C_Item.RequestLoadItemDataByID` exists). Clicking an order row where the icons or
+the panel sit still opens the order, and the row beneath still highlights on hover (the addon calls
+SetPropagateMouseClicks and SetPropagateMouseMotion; `/dump CreateFrame("Frame").SetPropagateMouseMotion` tells whether
+the client has that function: if it is nil, note where the click or hover is lost). Put a reagent in your bags (or use
+one up) with the list open: the red/white counts update within a moment.
 
 P5-13. **The icons setting.** Settings > Orders & Ledger > Crafting-orders window: "Show reward and reagent icons on order
-rows" is on by default. Turn it off: the icons disappear from the rows on screen at once (the cells stay) and stay off
-after `/reload`; turn it on again and they return.
+rows" is on by default. Turn it off: the reward icons and the Reagents panel disappear from the rows on screen at once
+(the cells stay, and Blizzard's "Some" / "None" / "All" shows again) and stay off after `/reload`; turn it on again and
+they return.
 
 ## Not done here
 

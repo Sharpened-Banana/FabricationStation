@@ -259,6 +259,7 @@ local function install(overrides)
     local t = new_object()
     local file, shown, points, w, h = nil, true, {}, 0, 0
     function t:SetTexture(f) file = f end
+    function t:SetColorTexture(r, g, b, a) t.color = { r, g, b, a } end
     function t:GetTexture() return file end
     function t:Show() shown = true end
     function t:Hide() shown = false end
@@ -326,6 +327,7 @@ local function install(overrides)
     function f:SetParent(p) par = p end
     function f:GetParent() return par end
     function f:GetName() return name end
+    function f:SetClipsChildren(v) f.clips = v and true or false end
     local alpha = 1
     function f:SetAlpha(a) alpha = a end
     function f:GetAlpha() return alpha end

@@ -118,6 +118,15 @@ describe("H1-5 Scanner owned counts", function()
       assert.equals(1, Scanner:GetOwnedCount(1002, K, false))
     end)
 
+    it("GetLiveOwnedCount is the game's count only: nil, never the snapshot, when the game cannot answer", function()
+      assert.equals(15, Scanner:GetLiveOwnedCount(1002, true))
+      assert.equals(10, Scanner:GetLiveOwnedCount(1002, false))
+      C_Item.GetItemCount = nil
+      assert.is_nil(Scanner:GetLiveOwnedCount(1002, true))
+      C_Item.GetItemCount = function() error("boom") end
+      assert.is_nil(Scanner:GetLiveOwnedCount(1002, true))
+    end)
+
     it("reads the warband count live, else from the snapshot", function()
       assert.equals(5, Scanner:GetWarbandCount(1002))
       C_Item.GetItemCount = nil

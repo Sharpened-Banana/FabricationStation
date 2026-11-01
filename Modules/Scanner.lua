@@ -801,6 +801,13 @@ local function live_count(itemID, includeAccountBank)
   return nil
 end
 
+-- The game's own count of itemID for the logged-in character (the same C_Item.GetItemCount call GetOwnedCount makes
+-- first), or nil when the game cannot answer: unlike GetOwnedCount it never falls back to a snapshot, so a caller that
+-- must tell "none" from "unknown" can.
+function Scanner:GetLiveOwnedCount(itemID, includeWarband)
+  return live_count(itemID, includeWarband)
+end
+
 -- How many of itemID charKey (nil = the current character) holds in bags, bank and reagent bank, plus the warband
 -- bank when includeWarband. The current character's count is the game's own (C_Item.GetItemCount), so reagents count
 -- even when no snapshot has seen them yet; other characters', and the current one's when the game cannot answer,
