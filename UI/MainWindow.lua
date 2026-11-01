@@ -242,7 +242,7 @@ function MainWindow:GetHeaderText()
   local tab = ledger_tab()
   if summary and is_number(summary.profit) and tab then
     local approximate = tab.IsApproximate and tab.IsApproximate(summary)
-    text.expansion = (L["%s %s"]):format(summary.expansion.name,
+    text.expansion = (L["%s profit %s"]):format(summary.expansion.name,
       (approximate and "~" or "") .. compact_money(summary.profit))
   end
   return text

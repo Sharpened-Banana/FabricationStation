@@ -1295,7 +1295,7 @@ panel is darker with fainter icons. Turn off Settings > Orders & Ledger > "Show 
 both panels go and Blizzard's Commission and Reagents columns show as normal.
 
 P7-19b. **Header gold: pocket, session, expansion.** Open the main window. Expected: the centre of the header reads
-"<gold in your pocket> · session +412g · Midnight 1,234g", the session part being your gold now minus your gold when you
+"<gold in your pocket> · session +412g · Midnight profit 1,234g", the session part being your gold now minus your gold when you
 logged in (or reloaded), signed ("+0g" before anything changed), and the last part the crafting profit of every
 character this expansion (the Ledger's own profit: sales and commissions minus their known costs). Earn or spend gold
 and craft and sell something (collect the sale from the mail) with the window open: the three parts update within a

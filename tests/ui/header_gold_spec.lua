@@ -100,14 +100,14 @@ describe("Main window header gold", function()
       sale(OLD_RECIPE, 900 * G, 0)                                       -- an older expansion
       sale(nil, 700 * G, 0)                                              -- no recipe: cannot be placed
       ledger:Add({ type = "craft", amount = -5 * G, recipeID = MIDNIGHT_A })   -- a cost record, no profit
-      assert.equal("Midnight 65g", MW:GetHeaderText().expansion)
+      assert.equal("Midnight profit 65g", MW:GetHeaderText().expansion)
       MW:Show()
-      assert.equal(ns.UI.FormatMoney(100 * G) .. " · session +0g · Midnight 65g", centre())
+      assert.equal(ns.UI.FormatMoney(100 * G) .. " · session +0g · Midnight profit 65g", centre())
     end)
 
     it("counts entries from before this session too", function()
       sale(MIDNIGHT_A, 50 * G, 10 * G, { time = W.now - 90 * 86400 })
-      assert.equal("Midnight 40g", MW:GetHeaderText().expansion)
+      assert.equal("Midnight profit 40g", MW:GetHeaderText().expansion)
     end)
 
     it("takes the expansion's name from a scanned profession record when there is one", function()
@@ -116,7 +116,7 @@ describe("Main window header gold", function()
         GetCharacter = function() return { professions = { [2906] = { expansionName = "Midnight!", recipes = {} } } } end,
       })
       sale(MIDNIGHT_A, 10 * G, 0)
-      assert.equal("Midnight! 10g", MW:GetHeaderText().expansion)
+      assert.equal("Midnight! profit 10g", MW:GetHeaderText().expansion)
     end)
 
     it("counts a recipe a scanned character knows on a current line even when the data has no row for it", function()
@@ -125,13 +125,13 @@ describe("Main window header gold", function()
         GetCharacter = function() return { professions = { [2907] = { recipes = { [777777] = true } } } } end,
       })
       sale(777777, 10 * G, 0)
-      assert.equal("Midnight 10g", MW:GetHeaderText().expansion)
+      assert.equal("Midnight profit 10g", MW:GetHeaderText().expansion)
     end)
 
     it("puts ~ before the profit when an entry has a missing cost", function()
       sale(MIDNIGHT_A, 50 * G, 10 * G)
       sale(MIDNIGHT_A, 5 * G, nil)   -- no known cost
-      assert.equal("Midnight ~45g", MW:GetHeaderText().expansion)
+      assert.equal("Midnight profit ~45g", MW:GetHeaderText().expansion)
     end)
 
     it("is omitted when nothing is recorded for the expansion", function()
@@ -143,7 +143,7 @@ describe("Main window header gold", function()
 
     it("shows a loss as a negative amount", function()
       sale(MIDNIGHT_A, 1 * G, 11 * G)
-      assert.equal("Midnight -10g", MW:GetHeaderText().expansion)
+      assert.equal("Midnight profit -10g", MW:GetHeaderText().expansion)
     end)
   end)
 
@@ -162,7 +162,7 @@ describe("Main window header gold", function()
       money = 112 * G
       sale(MIDNIGHT_A, 50 * G, 10 * G, { time = ns.FS:SessionStart() + 1 })
       local text = hover()
-      assert.is_truthy(text:find(ns.UI.FormatMoney(112 * G) .. " · session +12g · Midnight 40g", 1, true))
+      assert.is_truthy(text:find(ns.UI.FormatMoney(112 * G) .. " · session +12g · Midnight profit 40g", 1, true))
       assert.is_truthy(text:find("Crafting profit this session: " .. ns.UI.FormatMoney(40 * G), 1, true))
       assert.is_truthy(text:find("Gold change includes everything, not only crafting.", 1, true))
     end)
@@ -215,7 +215,7 @@ describe("Main window header gold", function()
       sale(MIDNIGHT_A, 50 * G, 10 * G)
       assert.equal(ns.UI.FormatMoney(100 * G) .. " · session +0g", centre())   -- not yet: debounced
       W.advance(1)
-      assert.equal(ns.UI.FormatMoney(100 * G) .. " · session +0g · Midnight 40g", centre())
+      assert.equal(ns.UI.FormatMoney(100 * G) .. " · session +0g · Midnight profit 40g", centre())
     end)
 
     it("reads the Ledger again when the window shows", function()
@@ -223,7 +223,7 @@ describe("Main window header gold", function()
       ledger:Add({ type = "sale", amount = 20 * G, cost = 0, recipeID = MIDNIGHT_A, time = W.now })
       W.advance(0)   -- nothing pending is needed: showing reads it again
       MW:Show()
-      assert.is_truthy(centre():find("Midnight 20g", 1, true))
+      assert.is_truthy(centre():find("Midnight profit 20g", 1, true))
     end)
 
     it("cancels its pending redraw when the module is disabled", function()
@@ -250,7 +250,7 @@ describe("Main window header gold", function()
     end
 
     it("keeps every part when there is room", function()
-      assert.equal(ns.UI.FormatMoney(100 * G) .. " · session +0g · Midnight 40g", with_widths(700))
+      assert.equal(ns.UI.FormatMoney(100 * G) .. " · session +0g · Midnight profit 40g", with_widths(700))
     end)
 
     it("drops the expansion first", function()
@@ -265,7 +265,7 @@ describe("Main window header gold", function()
       with_widths(400)
       local hit = MW:GetGoldHit()
       hit:GetScript("OnEnter")(hit)
-      assert.is_truthy(table.concat(tooltip.lines, "\n"):find("session +0g · Midnight 40g", 1, true))
+      assert.is_truthy(table.concat(tooltip.lines, "\n"):find("session +0g · Midnight profit 40g", 1, true))
     end)
 
     it("leaves the character and prices texts alone", function()
@@ -276,14 +276,14 @@ describe("Main window header gold", function()
     end)
 
     it("picks the parts with CentreText, by measure", function()
-      local parts = { pocket = "P", session = "session +1g", expansion = "Midnight 9g" }
-      local full = "P · session +1g · Midnight 9g"
+      local parts = { pocket = "P", session = "session +1g", expansion = "Midnight profit 9g" }
+      local full = "P · session +1g · Midnight profit 9g"
       local measure = function(t) return #t end
       assert.same({ full, 3 }, { MW.CentreText(parts, #full, measure) })
       assert.same({ "P · session +1g", 2 }, { MW.CentreText(parts, #full - 1, measure) })
       assert.same({ "P", 1 }, { MW.CentreText(parts, 3, measure) })
       assert.same({ full, 3 }, { MW.CentreText(parts) })   -- no measure: nothing dropped
-      assert.same({ "P · Midnight 9g", 2 }, { MW.CentreText({ pocket = "P", expansion = "Midnight 9g" }) })
+      assert.same({ "P · Midnight profit 9g", 2 }, { MW.CentreText({ pocket = "P", expansion = "Midnight profit 9g" }) })
     end)
   end)
 
