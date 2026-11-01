@@ -16,6 +16,7 @@ L["synced %s ago"] = true
 -- Guild tab, guild settings and /fs guild (Task 9)
 L[" (%d bytes)"] = true
 L["%d addon users, %d profiles, %d recipes from guild queries, %d messages queued"] = true
+L["received: %d rate-limited, %d refused, %d invalid; %d re-requests"] = true
 L["%d crafter profiles stored"] = true
 L["%d guildmates seen with the addon"] = true
 L["%d messages waiting"] = true

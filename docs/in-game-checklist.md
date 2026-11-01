@@ -905,6 +905,37 @@ share" to "Recipes only" and finish: the Guild options show the same. Turn Chat 
 Trade request afterwards. "Open price settings" must open the main window on the Settings tab with the Prices group
 selected (not the first group); the guide stays open next to it.
 
+P4-27. **A 25-alt sharer syncs completely (final fix wave).** On account A, share 25 or more characters with current
+professions (Settings > Guild > Which characters to share: All my characters). On account B, in the same guild, run
+`/fs settings` > Guild > "Forget this guild's crafter data", `/reload`, then log in A. Within a few minutes run
+`/fs guild` on B: the profiles count must be every shared character of A (plus any others in the guild). Report the
+count against the number A shares. If some are missing at first, wait 2 to 6 minutes (the re-request runs every two
+minutes, three times) and check again.
+
+P4-28. **The real addon-message throttle (final fix wave).** After the big sync of P4-27, run `/fs guild` on B and
+report the "received: N rate-limited, N refused, N invalid; N re-requests" line, and on A the "sent: ..." line. Expected:
+0 rate-limited (the inbound limit is 80 messages and 256 KB per sender per minute). A non-zero re-request count shows
+the game's per-prefix throttle or a lockdown dropped DATA and the re-request recovered it; report the numbers either way.
+
+P4-29. **Chat box after a toast whisper (M7, final fix wave).** Earlier in the session, click Whisper on a chat-scan
+toast and send that whisper. Later, inside an instance during a boss encounter, type a normal `/say` line and a
+`/w <name>` line and press Enter on each. Expected: both send, with no "blocked" or "forbidden" message and no taint
+report from BugSack (the toast called `ChatFrameUtil.SendTellWithMessage` from addon code; the chat box must stay
+usable for the player's own sends afterwards).
+
+P4-30. **"Ask guild" in the profession window (final fix wave).** Open a profession and select a recipe that no
+guildmate running the addon has (so the panel shows no "Guild crafters" rows). Under the provider rows an "Ask guild"
+button appears. Click it: the line next to it reads "Asking the guild...", the button is disabled, then "Guild answered:
+N can craft this" and the guildmates who know it appear under "Guild crafters" with "quality unknown". Inside an
+instance the button is disabled and reads "Sync paused (instance)". Selecting other recipes or hovering items never asks
+by itself (only the click does).
+
+P4-31. **The setup guide holds guild sync until it is done (final fix wave).** On a fresh install (delete the saved
+variables as in P4-23) in a guild with a guildmate running the addon: log in and leave the guide open for a minute. On the
+guildmate run `/fs guild`: this character's profiles have not arrived (nothing was sent). Finish or skip the guide: within
+a few seconds the guildmate sees the HELLO and then the profiles. A character that already finished the guide syncs at
+login as before, and so does one with Onboarding turned off under Settings > Modules.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

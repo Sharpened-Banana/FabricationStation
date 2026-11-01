@@ -7,7 +7,8 @@ local P4 = require("tests.helpers.phase4_stubs")
 local PHASE4_MODULES = { "Guild", "GuildTab", "ChatScan", "ChatToasts", "Onboarding" }
 
 -- Debounce key prefixes of the modules the disable test turns off (Guild also owns the native query and the gate).
-local OWNED_PREFIXES = { "guild", "Gate:", "chatScan", "onboarding." }
+-- "guild." and "guildHello" are Guild's own keys; a bare "guild" would also claim GuildTab's "guildTab." keys.
+local OWNED_PREFIXES = { "guild.", "guildHello", "guildNative.", "Gate:", "chatScan", "onboarding." }
 
 -- Records which debounce keys are pending and how often each one ran. Installed on ns.FS before W.boot, so the
 -- debounces OnEnable schedules are seen too.
@@ -42,13 +43,15 @@ end
 -- The full addon logged in as Me-Realm, in the guild "G-Realm" (opts.guild == false: no guild). Returns W, ns, spy,
 -- refreshes (MainWindow:RefreshTab calls by tab id), p4. opts.settle (default true) fires the first loading screen and
 -- runs the login work to completion (the 5 s setup guide, the login refresh and the jittered HELLO); with
--- settle == false the first PLAYER_ENTERING_WORLD is fired and nothing has run yet.
+-- settle == false the first PLAYER_ENTERING_WORLD is fired and nothing has run yet. opts.before_load(W, p4) runs after
+-- the stubs are installed and before the addon loads.
 local function world(opts)
   opts = opts or {}
   _G.FabricationStationDB = nil
   local W = install_wow_stubs(P4.GLOBALS)
   local p4 = install_phase4_stubs(W)
   if opts.guild ~= false then p4.guild.key = { "G", "Realm" } end
+  if opts.before_load then opts.before_load(W, p4) end
   local ns = load_addon({})
   local spy = spy_debounces(ns)
   W.boot()
@@ -81,6 +84,26 @@ local function count(W, name)
 end
 
 local function settle(W, seconds) for _ = 1, seconds or 30 do W.advance(1) end end
+
+-- Wraps C_Timer.NewTimer / NewTicker so every handle created from a Modules/Social file is recorded with a callback
+-- that counts the runs after `track.off` was set. Installed before the addon loads (opts.before_load).
+local function track_social_timers(track)
+  local timer = _G.C_Timer
+  for _, name in ipairs({ "NewTimer", "NewTicker" }) do
+    local base = timer[name]
+    timer[name] = function(seconds, fn, ...)
+      local info = debug.getinfo(2, "S")
+      if not (info and info.source and info.source:find("Modules/Social/", 1, true)) then return base(seconds, fn, ...) end
+      local handle
+      handle = base(seconds, function(...)
+        if track.off then track.ranAfterOff = track.ranAfterOff + 1 end
+        return fn(...)
+      end, ...)
+      track.handles[#track.handles + 1] = handle
+      return handle
+    end
+  end
+end
 
 describe("phase 4 integration", function()
   describe("whole-TOC boot", function()
@@ -208,9 +231,11 @@ describe("phase 4 integration", function()
     local EMPTY = { events = {}, messages = {} }
 
     it("Guild, ChatScan and Onboarding leave no registrations and no pending keys, and come back the same", function()
-      local W, ns, spy, _, p4 = world({ settle = false })
+      local track = { handles = {}, ranAfterOff = 0 }
+      local W, ns, spy, _, p4 = world({ settle = false, before_load = function() track_social_timers(track) end })
       local Guild, ChatScan, Onboarding = ns.FS:GetModule("Guild"), ns.FS:GetModule("ChatScan"),
         ns.FS:GetModule("Onboarding")
+      local Protocol = ns.Social.Protocol
       local guildRegs, scanRegs = W.registrations(Guild), W.registrations(ChatScan)
       assert.is_true(#guildRegs.events > 0 and #guildRegs.messages > 0)
       assert.is_true(#scanRegs.events > 0 and #scanRegs.messages > 0)
@@ -220,8 +245,18 @@ describe("phase 4 integration", function()
       Guild:SendMessage("FS_RECIPES_CHANGED")
       Guild:_Changed()
       ChatScan:SendMessage("FS_DATA_CHANGED", "Me-Realm", "recipes")
+      -- And Guild's own C_Timer handles: the login refresh ticker (started by the first loading screen), the
+      -- re-request pass and the diagnostic build.
+      Guild:OnRequest(Protocol.Request({ "Me-Realm" }), "Peer-Realm", "GUILD")
+      Guild:OnHello(Protocol.Hello("1.0.0", { ["B-Realm"] = "0000bbbb" }), "Peer-Realm", "GUILD")
+      Guild:BuildProfileAsync("Me-Realm", function() end)
+      assert.is_true(Guild:IsRefreshing())
+      assert.is_true(Guild:IsRetryArmed())
+      assert.is_true(Guild:IsDiagnosticBuilding())
+      assert.is_true(#track.handles >= 3)
       local pending = owned_pending(spy)
-      for _, key in ipairs({ "guild.loginHello", "guildHello", "guild.changed", "onboarding.show" }) do
+      for _, key in ipairs({ "guild.loginHello", "guildHello", "guild.changed", "guild.reply:Peer-Realm",
+        "onboarding.show", "chatScanIndex" }) do
         assert.is_true(pending[1] ~= nil and table.concat(pending, " "):find(key, 1, true) ~= nil, key .. " not pending")
       end
 
@@ -232,10 +267,12 @@ describe("phase 4 integration", function()
           assert.same(EMPTY, W.registrations(module))
         end
         assert.same({}, owned_pending(spy))
+        assert.is_false(Guild:IsRefreshing() or Guild:IsRetryArmed() or Guild:IsDiagnosticBuilding())
         assert.is_false(ns.UI.OnboardingWizard:IsShown())
         assert.is_nil(p4.comm.registered[ns.Social.Protocol.PREFIX])
 
         spy.reset(); W.printed = {}
+        track.off = true
         local sentBefore = #p4.comm.sent
         W.fire("PLAYER_ENTERING_WORLD"); W.fire("GUILD_ROSTER_UPDATE"); W.fire("CHAT_MSG_CHANNEL", "LF crafter",
           "Buyer-Realm", "", "", "", "", 2, 2, "Trade", 0, 1)
@@ -247,6 +284,8 @@ describe("phase 4 integration", function()
         end
         assert.equal(sentBefore, #p4.comm.sent)
         assert.same({}, W.printed)
+        assert.equal(0, track.ranAfterOff)                  -- no Social C_Timer callback ran while the modules were off
+        track.off, track.handles = false, {}
 
         for _, name in ipairs({ "Guild", "ChatScan", "Onboarding" }) do ns.FS:SetModuleEnabled(name, true) end
         assert.is_true(Guild:IsEnabled() and ChatScan:IsEnabled() and Onboarding:IsEnabled())
@@ -397,19 +436,35 @@ describe("phase 4 integration", function()
       end
     end)
 
-    it("a real run sends no chat message: the stubbed SendChatMessage is never reached", function()
-      local W, ns, _, _, p4 = world()
-      local called = 0
+    it("a real run sends no chat message; a toast's Whisper click opens exactly one tell", function()
+      local called, saved = 0, {}
       local function trap() called = called + 1 end
-      _G.SendChatMessage = trap
-      _G.C_ChatInfo.SendChatMessage = trap
-      finally(function() _G.SendChatMessage = nil end)
+      -- The trap is in place before the addon loads, so a reference cached at load time would hit it too.
+      local W, ns, _, _, p4 = world({ before_load = function()
+        saved.global, saved.chatInfo = _G.SendChatMessage, _G.C_ChatInfo.SendChatMessage
+        _G.SendChatMessage = trap
+        _G.C_ChatInfo.SendChatMessage = trap
+      end })
+      finally(function()
+        _G.SendChatMessage = saved.global
+        _G.C_ChatInfo.SendChatMessage = saved.chatInfo
+      end)
       ns.FS:GetModule("Guild"):SendMessage("FS_RECIPES_CHANGED")
       W.fire("CHAT_MSG_CHANNEL", "LF crafter", "Buyer-Realm", "", "", "", "", 2, 2, "Trade", 0, 1)
       ns.FS:GetModule("MainWindow"):Show("guild")
       settle(W)
-      assert.equal(0, called)
       assert.same({}, p4.tells)
+      local link = "|cffa335ee|Hitem:212345::::::::80:::::|h[Everforged Gloves]|h|r"
+      ns.FS:SendMessage(ns.Msg.CHATSCAN_MATCH, { sender = "Buyer-Realm", kind = "trade", text = "LF crafter " .. link,
+        lineID = 1, time = W.now, recipes = { { recipeID = 100, itemID = 212345, link = link, name = "Everforged Gloves",
+          best = { charKey = "Me-Realm", expectedQuality = 3, profit = 123456, noPrice = false } } } })
+      local toast = ns.UI.ChatToast:GetToasts()[1]
+      assert.is_table(toast)
+      toast.whisper:GetScript("OnClick")(toast.whisper)
+      settle(W)
+      assert.equal(1, #p4.tells)
+      assert.equal("Buyer-Realm", p4.tells[1][1])
+      assert.equal(0, called)
       assert_clean(ns, W)
     end)
   end)

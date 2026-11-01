@@ -149,6 +149,9 @@ local function print_status()
   local st = s.stats
   say(L["sent: %d hello, %d requests, %d data; dropped %d, rejected %d, strangers %d, trimmed %d"]:format(st.helloSent,
     st.requestSent, st.dataSent, st.dataDropped, st.rejected, st.strangers, st.trimmed))
+  local r = s.received
+  say(L["received: %d rate-limited, %d refused, %d invalid; %d re-requests"]:format(r.rateLimited, r.refused, r.invalid,
+    st.retried or 0))
   if s.gateLocked then
     say(L["Chat sync is locked (%s)"]:format(tostring(s.gateReason)))
   end

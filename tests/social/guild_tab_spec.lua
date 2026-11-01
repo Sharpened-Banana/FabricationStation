@@ -508,6 +508,16 @@ describe("Guild tab, settings and diagnostics", function()
       assert.truthy(text:find("3 profiles", 1, true))
     end)
 
+    it("prints what the inbound limit and the re-requests did (the in-game throttle check)", function()
+      Guild.comm.stats.rateLimited, Guild.comm.stats.refused = 4, 2
+      Guild.stats.retried = 3
+      ns.FS:HandleSlash("guild")
+      local text = table.concat(W.printed, "\n")
+      assert.truthy(text:find("received: 4 rate-limited, 2 refused, 0 invalid; 3 re-requests", 1, true))
+      local s = Guild:Status()
+      assert.are.same({ rateLimited = 4, refused = 2, invalid = 0 }, s.received)
+    end)
+
     it("prints the self-test result", function()
       ns.FS:HandleSlash("guild selftest")
       local line = printed()

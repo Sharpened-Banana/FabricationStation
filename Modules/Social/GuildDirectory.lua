@@ -335,13 +335,15 @@ end
 
 -- A summary of the sync for the tab's footer and /fs guild: { guildKey, addonMembers (guildmates seen running the
 -- addon), profiles (stored crafter profiles), nativeCached (recipes with a cached roster answer), gateLocked,
--- gateReason, queue (messages waiting for the chat gate), sync = Guild:SyncStatus(), stats = a copy of Guild.stats }.
+-- gateReason, queue (messages waiting for the chat gate), sync = Guild:SyncStatus(), stats = a copy of Guild.stats,
+-- received = { rateLimited, refused, invalid } from the comm's inbound counters (zeros without a comm) }.
 -- Counts are of the saved directory of the current guild, whether or not Guild is on. Read-only.
 function Guild:Status()
   local dir = peek(self)
   local locked, reason = ns.Social.Gate:IsLocked()
   local stats = {}
   for k, v in pairs(self.stats) do stats[k] = v end
+  local cs = self.comm and self.comm.stats
   return {
     guildKey = self.guildKey,
     addonMembers = dir and count(dir.members) or 0,
@@ -352,6 +354,8 @@ function Guild:Status()
     queue = self.comm and self.comm:QueueSize() or 0,
     sync = self:SyncStatus(),
     stats = stats,
+    received = { rateLimited = cs and cs.rateLimited or 0, refused = cs and cs.refused or 0,
+      invalid = cs and cs.invalid or 0 },
   }
 end
 
