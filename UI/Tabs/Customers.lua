@@ -139,8 +139,9 @@ end
 -- Models (pure apart from reading the Customers module)
 ---------------------------------------------------------------------------
 
--- records -> { { nameRealm, orders = count, tipsTotal, lastSeen, tagsText, linkedTo, alts, blockedVia } }; tagsText
--- is the sorted tags joined with ", ". alts (a group's other characters) is set only when there are any; blockedVia
+-- records -> { { nameRealm, orders = count, tipsTotal, lastSeen, tags, tagsText, linkedTo, alts, blockedVia } }; tags
+-- is the sorted tag list and tagsText the same tags joined with the list separator (for search and the tooltip; the
+-- Tags cell is built from the list). alts (a group's other characters) is set only when there are any; blockedVia
 -- (the first other character that is blocked, from the group's blockedBy) only when the group is blocked through
 -- another character and not by its own tag.
 -- The other character a group record is blocked through: nil when the record itself is blocked or nobody is.
@@ -156,12 +157,14 @@ function Tab.ListModel(records)
   local rows = {}
   for _, record in ipairs(type(records) == "table" and records or {}) do
     if type(record) == "table" then
+      local tags = sorted_tags(record.tags)
       rows[#rows + 1] = {
         nameRealm = record.nameRealm,
         orders = type(record.orders) == "table" and #record.orders or 0,
         tipsTotal = record.tipsTotal,
         lastSeen = record.lastSeen,
-        tagsText = ns.UI.JoinList(sorted_tags(record.tags)),
+        tags = tags,
+        tagsText = ns.UI.JoinList(tags),
         linkedTo = record.linkedTo,
         alts = type(record.alts) == "number" and record.alts > 0 and record.alts or nil,
         blockedVia = Tab.BlockedVia(record),
@@ -305,21 +308,6 @@ function Tab.HistoryLayout(width)
   return { hidden = hidden, item = item, left = left }
 end
 
--- `text` cut at every plain occurrence of `sep` (a list joined by ns.UI.JoinList).
-local function split_list(text, sep)
-  if sep == "" then return { text } end
-  local out, start = {}, 1
-  while true do
-    local from, to = text:find(sep, start, true)
-    if not from then
-      out[#out + 1] = text:sub(start)
-      return out
-    end
-    out[#out + 1] = text:sub(start, from - 1)
-    start = to + 1
-  end
-end
-
 -- The Tags cell text: "blocked" reads "blocked (via Name-Realm)" when the group is blocked through another
 -- character ("-Realm" left out when it is the main's realm), or "blocked (alt)" when that would not fit.
 local function tags_cell(row)
@@ -329,11 +317,12 @@ local function tags_cell(row)
   local name, realm = via:match("^(.-)%-([^%-]+)$")
   local mainRealm = type(row.nameRealm) == "string" and row.nameRealm:match("%-([^%-]+)$") or nil
   if name and name ~= "" and realm == mainRealm then via = name end
-  -- The tags are data, joined with the list separator; the "blocked" tag reads as the whole phrase.
+  -- The tags are data, joined with the list separator; the "blocked" tag reads as the whole phrase. The list is the
+  -- row's tag list, never its joined text (a tag may itself contain the separator).
   local function with(blockedText)
-    local parts = split_list(text, L[", "])
-    for i, part in ipairs(parts) do
-      if part == "blocked" then parts[i] = blockedText end
+    local parts = {}
+    for i, tag in ipairs(type(row.tags) == "table" and row.tags or {}) do
+      parts[i] = tag == "blocked" and blockedText or tag
     end
     return ns.UI.JoinList(parts)
   end
@@ -376,7 +365,7 @@ local function history_cells(row)
   return {
     date = date_text(row.time, "%m-%d"),
     item = item,
-    quality = type(row.quality) == "number" and ("Q" .. row.quality) or "--",
+    quality = type(row.quality) == "number" and L["Q%d"]:format(row.quality) or "--",
     tip = money_text(row.tip, true),
   }
 end
@@ -1085,7 +1074,7 @@ local function refresh_detail()
   end
   for i, tag in ipairs(custom) do
     local chip = chip_at(d, "chips", d.right, i, function(self) remove_tag(self.value) end, tag_chip_tooltip)
-    chip.value, chip.label = tag, tag .. " x"
+    chip.value, chip.label = tag, L["%s x"]:format(tag)
     chip:SetText(chip.label)
   end
   d.chipsShown = flow_chips(d.right, d.chips, #custom, RIGHT_WIDTH, 2, 0, d.chipsTop, d.chipsMore)

@@ -580,7 +580,7 @@ end
 local function format_age(seconds)
   local UI = ns.UI
   if type(UI) == "table" and type(UI.FormatAge) == "function" then return UI.FormatAge(seconds) end
-  return tostring(math.floor(seconds / DAY)) .. "d"
+  return L["%dd"]:format(math.floor(seconds / DAY))
 end
 
 local function realm_of(charKey) return charKey:match("^[^%-]*%-(.*)$") end

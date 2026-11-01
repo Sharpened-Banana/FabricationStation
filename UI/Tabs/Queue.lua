@@ -86,13 +86,13 @@ end
 -- "2h 5m", "1d 3h", "45m", "<1m": a coarse wait, zero parts left out.
 function Tab.FormatDuration(seconds)
   seconds = math.max(0, math.floor(tonumber(seconds) or 0))
-  if seconds < MINUTE then return "<1m" end
+  if seconds < MINUTE then return L["<1m"] end
   local d = math.floor(seconds / DAY)
   local h = math.floor((seconds % DAY) / HOUR)
   local m = math.floor((seconds % HOUR) / MINUTE)
-  if d > 0 then return h > 0 and (d .. "d " .. h .. "h") or (d .. "d") end
-  if h > 0 then return m > 0 and (h .. "h " .. m .. "m") or (h .. "h") end
-  return m .. "m"
+  if d > 0 then return h > 0 and L["%dd %dh"]:format(d, h) or L["%dd"]:format(d) end
+  if h > 0 then return m > 0 and L["%dh %dm"]:format(h, m) or L["%dh"]:format(h) end
+  return L["%dm"]:format(m)
 end
 
 local function missing_text(missing)

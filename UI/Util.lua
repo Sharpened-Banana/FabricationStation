@@ -79,11 +79,11 @@ function UI.JoinList(parts)
   return table.concat(parts, ns.L[", "])
 end
 
--- A coarse age: "never" for nil, then "<1m", "Nm", "Nh", "Nd".
+-- A coarse age: "never" for nil, then "<1m", "Nm", "Nh", "Nd" (each unit letter is a key).
 function UI.FormatAge(seconds)
   if type(seconds) ~= "number" then return L["never"] end
-  if seconds < 60 then return "<1m" end
-  if seconds < 3600 then return math.floor(seconds / 60) .. "m" end
-  if seconds < 86400 then return math.floor(seconds / 3600) .. "h" end
-  return math.floor(seconds / 86400) .. "d"
+  if seconds < 60 then return L["<1m"] end
+  if seconds < 3600 then return L["%dm"]:format(math.floor(seconds / 60)) end
+  if seconds < 86400 then return L["%dh"]:format(math.floor(seconds / 3600)) end
+  return L["%dd"]:format(math.floor(seconds / 86400))
 end

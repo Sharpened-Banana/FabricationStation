@@ -30,10 +30,12 @@ V.OFF_TEXT = L["Alts is turned off"]
 function V.FormatDuration(seconds)
   if not finite(seconds) then return EM_DASH end
   if seconds <= 0 then return L["now"] end
-  if seconds < 60 then return "<1m" end
-  if seconds < 3600 then return math.floor(seconds / 60) .. "m" end
-  if seconds < 86400 then return math.floor(seconds / 3600) .. "h " .. math.floor(seconds % 3600 / 60) .. "m" end
-  return math.floor(seconds / 86400) .. "d " .. math.floor(seconds % 86400 / 3600) .. "h"
+  if seconds < 60 then return L["<1m"] end
+  if seconds < 3600 then return L["%dm"]:format(math.floor(seconds / 60)) end
+  if seconds < 86400 then
+    return L["%dh %dm"]:format(math.floor(seconds / 3600), math.floor(seconds % 3600 / 60))
+  end
+  return L["%dd %dh"]:format(math.floor(seconds / 86400), math.floor(seconds % 86400 / 3600))
 end
 
 -- KnowledgeSummary -> weekly points left as text, "?" unless the status is "ok" (never "0 left" for unknown data).
@@ -91,7 +93,7 @@ local function conc_text(c)
   elseif finite(c.secondsToFull) then
     when = V.FormatDuration(c.secondsToFull)
   else
-    when = ">14d"
+    when = L[">14d"]
   end
   return whole(c.now) .. "/" .. whole(c.max) .. DOT .. when
 end

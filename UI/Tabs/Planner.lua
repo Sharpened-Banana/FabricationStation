@@ -197,7 +197,7 @@ function Tab.KnowledgeDetailLines(row, names)
   names = type(names) == "table" and names or {}
   local summary = type(row.summary) == "table" and row.summary or {}
   local states = type(row.states) == "table" and row.states or {}
-  local lines = { color(GOLD, tostring(row.charKey) .. " " .. tostring(row.name or profession_name(row.skillLineID))) }
+  local lines = { color(GOLD, L["%s %s"]:format(tostring(row.charKey), tostring(row.name or profession_name(row.skillLineID)))) }
   if summary.status == "noData" or #states == 0 then
     lines[#lines + 1] = L["  No knowledge data for this profession in this GameData build"]
   else
@@ -275,7 +275,7 @@ function Tab.WarningRow(w, now)
   return {
     key = "warn:" .. tostring(w.charKey) .. ":" .. tostring(w.skillLineID),
     cells = { character = tostring(w.charKey), profession = prof, recipe = color(code, text), caps = color(code, caps) },
-    tooltip = { text, tostring(w.charKey) .. " " .. prof,
+    tooltip = { text, L["%s %s"]:format(tostring(w.charKey), prof),
       L["Concentration: %s/%s"]:format(finite(w.value) and whole(w.value) or "?", finite(w.max) and whole(w.max) or "?"),
       capped and L["Spend it before more is wasted"] or L["Spend some before it is full"] },
   }
@@ -291,7 +291,7 @@ function Tab.ScheduleRow(r, now)
   if toFull == nil and r.rateUnknown then
     caps, capsLine = "?", L["Full in: unknown"]
   elseif toFull == nil then
-    caps, capsLine = ">14d", L["Full in: more than 14 days"]
+    caps, capsLine = L[">14d"], L["Full in: more than 14 days"]
   elseif toFull == 0 then
     caps, capsLine = L["Full"], L["Full in: now (full)"]
   else
@@ -305,7 +305,7 @@ function Tab.ScheduleRow(r, now)
     schedule = r, recipeName = name,
     cells = { character = tostring(r.charKey), profession = prof, recipe = name, crafts = crafts, conc = used,
       gain = money(r.expectedGain), gpc = money(r.goldPerConcentration), caps = caps, queue = "" },
-    tooltip = { name, tostring(r.charKey) .. " " .. prof, L["Crafts: %s (%s concentration)"]:format(crafts, used),
+    tooltip = { name, L["%s %s"]:format(tostring(r.charKey), prof), L["Crafts: %s (%s concentration)"]:format(crafts, used),
       L["Expected gain: %s"]:format(ns.UI.FormatMoney(r.expectedGain)),
       L["Gold per concentration: %s"]:format(ns.UI.FormatMoney(r.goldPerConcentration)), capsLine,
       L["Queue adds the crafts with concentration"] },
@@ -502,7 +502,7 @@ local function concentration_section(P)
   if warnStatus == "ok" then
     local parts = {}
     if status == "ok" then
-      parts[#parts + 1] = (crafts == 1 and L["Plan: %s craft"] or L["Plan: %s crafts"]):format(whole(crafts))
+      parts[#parts + 1] = (crafts == 1 and L["Plan: %d craft"] or L["Plan: %d crafts"]):format(math.floor(crafts))
     end
     parts[#parts + 1] = L["Capped: %d"]:format(capped)
     parts[#parts + 1] = L["Soon: %d"]:format(soon)
@@ -555,7 +555,7 @@ local function spec_section(P)
     }
   end
   if #out.rows > 0 then
-    out.status = (#out.rows == 1 and L["Spec advice: %s path"] or L["Spec advice: %s paths"]):format(whole(#out.rows))
+    out.status = (#out.rows == 1 and L["Spec advice: %d path"] or L["Spec advice: %d paths"]):format(math.floor(#out.rows))
   end
   return out
 end
@@ -579,7 +579,7 @@ local function missing_section(P)
     }
   end
   if #out.rows == 0 then out.empty = PV().EmptyText("missing", { char = alt.name }) end
-  out.status = (#out.rows == 1 and L["Missing: %s recipe"] or L["Missing: %s recipes"]):format(whole(#out.rows))
+  out.status = (#out.rows == 1 and L["Missing: %d recipe"] or L["Missing: %d recipes"]):format(math.floor(#out.rows))
   return out
 end
 

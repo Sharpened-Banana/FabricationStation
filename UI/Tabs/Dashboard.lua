@@ -43,7 +43,7 @@ end
 local function duration_text(seconds)
   if seconds >= 3600 and seconds < SECONDS_PER_DAY then
     local total = math.floor(seconds / 60)
-    return ("%dh %dm"):format(math.floor(total / 60), total % 60)
+    return L["%dh %dm"]:format(math.floor(total / 60), total % 60)
   end
   return ns.UI.FormatAge(seconds)
 end
@@ -460,7 +460,7 @@ local function concentration_line(row, now)
   else
     status = color(DIM, L["full in ?"])
   end
-  return ("%s  %s  %d/%d  %s"):format(short_name(row.charKey), tostring(row.profession or "?"),
+  return L["%s  %s  %d/%d  %s"]:format(short_name(row.charKey), tostring(row.profession or "?"),
     math.floor(row.value), math.floor(row.max), status)
 end
 

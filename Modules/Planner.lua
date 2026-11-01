@@ -268,7 +268,7 @@ end
 local function duration_text(seconds)
   local view = ns.UI and ns.UI.CharactersView
   if type(view) == "table" and type(view.FormatDuration) == "function" then return view.FormatDuration(seconds) end
-  return math.max(1, math.floor(seconds / 3600 + 0.5)) .. "h"
+  return L["%dh"]:format(math.max(1, math.floor(seconds / 3600 + 0.5)))
 end
 
 local function warning_text(A, w, now)

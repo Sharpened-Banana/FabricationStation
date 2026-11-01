@@ -111,9 +111,9 @@ function PV.ConcentrationLines(pools, now, max)
     elseif p.rateUnknown then
       right = "?"
     else
-      right = ">14d"
+      right = L[">14d"]
     end
-    items[#items + 1] = { tostring(p.charKey) .. " " .. profession_name(p.skillLineID), right,
+    items[#items + 1] = { L["%s %s"]:format(tostring(p.charKey), profession_name(p.skillLineID)), right,
       urgent = finite(toFull) and toFull <= urgentWithin }
   end
   return capped({}, items, max, { urgent = false })
@@ -130,7 +130,7 @@ function PV.KnowledgeLines(rows, max)
   local total, known, unknown, items = 0, false, false, {}
   for _, row in ipairs(rows) do
     local s = type(row.summary) == "table" and row.summary or {}
-    local left = tostring(row.charKey) .. " " .. tostring(row.name or profession_name(row.skillLineID))
+    local left = L["%s %s"]:format(tostring(row.charKey), tostring(row.name or profession_name(row.skillLineID)))
     if s.status == "ok" and finite(s.weeklyLeft) then
       total, known = total + s.weeklyLeft, true
       if s.weeklyLeft > 0 then items[#items + 1] = { left, L["%s KP"]:format(whole(s.weeklyLeft)) } end
@@ -361,7 +361,7 @@ end
 function PV.KnowledgeTooltipLines(row)
   local model = PV.KnowledgeCells(row)
   local c = model.cells
-  local lines = { c.character .. " " .. c.profession }
+  local lines = { L["%s %s"]:format(c.character, c.profession) }
   for _, col in ipairs(CATEGORY_COLUMNS) do
     lines[#lines + 1] = (model.done[col.key] and L["%s: %s (done)"] or L["%s: %s"]):format(col.long, c[col.key])
   end

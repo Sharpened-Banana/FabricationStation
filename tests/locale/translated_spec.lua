@@ -51,7 +51,7 @@ describe("a non-identity ns.L", function()
     for i, line in ipairs(lines) do
       if not is_title(row, line) then assert.equal("T:", plain(line):sub(1, 2), i .. ": " .. plain(line)) end
     end
-    assert.equal("T:Last seen: 10d ago (stale)", lines[3])
+    assert.equal("T:Last seen: T:10d ago (stale)", lines[3])
     assert.equal("T:  Knowledge left this week: 3", lines[6])
     assert.equal("T:  Concentration: 1000/1000 \194\183 T:Full", lines[5])
   end)
@@ -105,7 +105,7 @@ describe("a non-identity ns.L", function()
     local lines = V.DetailLines(A:GetAltRow("Aria-Silvermoon", NOW), NOW)
     assert.truthy(lines[2]:find("T:  Spec: T:17/63 spent \194\183 T:4 unspent Blacksmithing Knowledge \194\183 T:data ", 1, true))
     assert.truthy(lines[4]:find("\194\183 T:full at ", 1, true))
-    assert.truthy(lines[5]:find("T:  Cooldown: T:Recipe 1001 \194\183 T:ready in 2h 0m (", 1, true))
+    assert.truthy(lines[5]:find("T:  Cooldown: T:Recipe 1001 \194\183 T:ready in T:2h 0m (", 1, true))
     assert.equal("T:Older expansions: 1 (not shown in the grid)", lines[6])
     assert.equal("T:  Spec: no data (open this profession's specializations on Bren)",
       V.DetailLines(A:GetAltRow("Bren-Silvermoon", NOW), NOW)[2])
@@ -135,7 +135,7 @@ describe("a non-identity ns.L", function()
     local row = V.Row(A:GetAltRow("Aria-Silvermoon", NOW), NOW)
     row.hidden = true
     assert.truthy(plain(V.CellTexts(row, { hidden = {} }).name):find("T: (hidden)", 1, true))
-    assert.equal("1 \194\183 2h 0m", row.profs[1].cds)   -- a duration, not a sentence
+    assert.equal("1 \194\183 T:2h 0m", row.profs[1].cds)   -- the duration is a key
     local cooldowns = { { readyAt = NOW - 5 }, { readyAt = NOW + 3600 }, { readyAt = NOW - 1 } }
     assert.equal("3 \194\183 T:2 ready", ns.UI.CharactersView.Row({ professions = { { skillLineID = 1, cooldowns = cooldowns } } },
       NOW).profs[1].cds)
@@ -153,7 +153,7 @@ describe("a non-identity ns.L (data compared, not display text)", function()
     ns.FS.db.global.characters["Bren-Silvermoon"].knowledgeWeekly = {}   -- no snapshot: unknown
     local lines = PV.KnowledgeLines(ns.FS:GetModule("Planner"):GetKnowledgeChecklist(NOW), 6)
     local unknown
-    for _, pair in ipairs(lines) do if pair[1] == "Bren-Silvermoon Herbalism" then unknown = pair end end
+    for _, pair in ipairs(lines) do if pair[1] == "T:Bren-Silvermoon Herbalism" then unknown = pair end end
     assert.equal("T:? KP", unknown[2])
     assert.is_true(PV.IsUnknown(unknown))
     assert.is_false(PV.IsUnknown(lines[1]))
@@ -190,7 +190,7 @@ describe("a non-identity ns.L (core, crafting and social sentences)", function()
     ns.FS.db.global.priceMeta.lastUpdate = W.now - 7200
     local prices = MW:GetHeaderText().prices
     assert.truthy(prices:find("T:Prices: ", 1, true))
-    assert.equal("T:Prices: 2h ago", prices)
+    assert.equal("T:Prices: T:2h ago", prices)
   end)
 
   describe("the Queue tab", function()
@@ -303,9 +303,9 @@ describe("a non-identity ns.L (orders sentences)", function()
     local Tab = ns.UI.OrdersTab
     local filters = { hideRisks = {}, orderTypes = {} }
     local snap = { time = 970, charKey = "Me-Silvermoon", orders = {} }
-    assert.equal("T:Orders seen <1m ago on Me-Silvermoon", Tab.Model(snap, filters, 1000).header)
+    assert.equal("T:Orders seen T:<1m ago on Me-Silvermoon", Tab.Model(snap, filters, 1000).header)
     snap.charKey = nil
-    assert.equal("T:Orders seen <1m ago", Tab.Model(snap, filters, 1000).header)
+    assert.equal("T:Orders seen T:<1m ago", Tab.Model(snap, filters, 1000).header)
   end)
 
   it("translates the recraft note of a row", function()
@@ -371,12 +371,14 @@ describe("a non-identity ns.L (customers sentences)", function()
   end)
 
   it("translates the Tags cell, a joined tag list and its blocked phrase included", function()
-    local row = { nameRealm = "B-Silvermoon", orders = 1, tagsText = "blocked", blockedVia = "Al-Silvermoon" }
+    local row = { nameRealm = "B-Silvermoon", orders = 1, tagsText = "blocked", tags = { "blocked" },
+      blockedVia = "Al-Silvermoon" }
     assert.equal("T:blocked (via Al)", T.CellTexts(row, 1000).tags)   -- the main's realm is left out
     row.blockedVia = "Someone-Area52"
     assert.equal("T:blocked (alt)", T.CellTexts(row, 1000).tags)   -- the long phrase does not fit
     -- Two tags: the separator is the list key, "blocked" is replaced inside the list.
-    local both = { nameRealm = "B-Silvermoon", orders = 1, tagsText = "VIPT:, blocked", blockedVia = "Al-Silvermoon" }
+    local both = { nameRealm = "B-Silvermoon", orders = 1, tagsText = "VIPT:, blocked",
+      tags = { "VIP", "blocked" }, blockedVia = "Al-Silvermoon" }
     assert.equal("VIPT:, T:blocked (alt)", T.CellTexts(both, 1000).tags)
   end)
 
@@ -436,6 +438,21 @@ describe("a non-identity ns.L (customers sentences)", function()
     local history = v.detail.history.pool[1]
     history:GetScript("OnEnter")(history)
     assert.truthy(table.concat(tooltip.lines, "\n"):find("T:Order: T:Public", 1, true), table.concat(tooltip.lines, "|"))
+  end)
+
+  it("shows the tag chip and the history quality through keys", function()
+    C:RecordOrder("Bob-Silvermoon", { orderID = 1, time = 500, itemID = 5, quality = 3, tip = 100, orderType = "public" })
+    C:SetTag("Bob-Silvermoon", "friend", true)
+    local container = CreateFrame("Frame")
+    container:SetSize(740, 500)
+    reg.customers.build(container)
+    reg.customers.refresh(container)
+    local v = ns.FS:GetModule("CustomersTab"):GetView()
+    local row
+    for i = 1, v.list.shown do if v.list.pool[i].data.nameRealm == "Bob-Silvermoon" then row = v.list.pool[i] end end
+    row:GetScript("OnClick")(row)
+    assert.equal("T:friend x", v.detail.chips[1].label)
+    assert.equal("T:Q3", v.detail.history.pool[1].cells.quality:GetText())
   end)
 
   it("translates the customer and its alt count as one sentence", function()
@@ -552,7 +569,7 @@ describe("a non-identity ns.L (ledger sentences)", function()
     container:SetSize(740, 500)
     reg.ledger.build(container)
     reg.ledger.refresh(container)
-    assert.equal("T:1 entries, newest <1m ago", plain(ns.FS:GetModule("LedgerTab"):GetView().header:GetText()))
+    assert.equal("T:1 entries, newest T:<1m ago", plain(ns.FS:GetModule("LedgerTab"):GetView().header:GetText()))
   end)
 end)
 
@@ -609,7 +626,7 @@ describe("a non-identity ns.L (characters sentences)", function()
   it("translates the holdings tooltip lines, warband age and totals included", function()
     local lines = A:HoldingsLines(2001)
     assert.equal("T:15 (T:bags 5T:, T:bank 10)", lines[1][2])
-    assert.equal("T:3 (T:reagent bank 3T:, T:10d old)", lines[2][2])
+    assert.equal("T:3 (T:reagent bank 3T:, T:T:10d old)", lines[2][2])
     assert.equal("T:Warband bank", lines[3][1])
     assert.equal("T:Total", lines[4][1])
     A:Settings().tooltipMaxChars = 1
@@ -619,10 +636,16 @@ describe("a non-identity ns.L (characters sentences)", function()
   it("translates the warband bank age and the unscanned warband bank in the holdings", function()
     ns.FS.db.global.warband.time = NOW - 10 * 86400
     local lines = A:HoldingsLines(2001)
-    assert.equal("T:7 (10d old)", lines[3][2])
+    assert.equal("T:7 (T:10d old)", lines[3][2])
     ns.FS.db.global.warband = nil
     lines = A:HoldingsLines(2001)
     assert.equal("T:18+ (warband not scanned)", lines[#lines][2])
+  end)
+
+  it("translates the age fallback of the holdings when ns.UI.FormatAge is not loaded", function()
+    ns.UI.FormatAge = nil
+    ns.FS.db.global.warband.time = NOW - 10 * 86400
+    assert.equal("T:7 (T:10d old)", A:HoldingsLines(2001)[3][2])
   end)
 
   it("translates the reagent search status and its empty text", function()
@@ -745,6 +768,14 @@ describe("a non-identity ns.L (planner sentences)", function()
 
   before_each(function() boot() end)
 
+  -- Replaces the translation with one that also records the keys asked for (a %d key is the only plural that fits a
+  -- number; the T: text alone cannot tell it from a %s key).
+  local function record_keys()
+    local seen = {}
+    setmetatable(ns.L, { __index = function(_, key) seen[key] = true; return "T:" .. key end })
+    return seen
+  end
+
   local function all_translated(lines, from)
     for i = from or 1, #lines do assert.equal("T:", plain(lines[i]):sub(1, 2), i .. ": " .. plain(lines[i])) end
   end
@@ -762,7 +793,7 @@ describe("a non-identity ns.L (planner sentences)", function()
       assert.equal("T:Capped: concentration is full", plain(row.cells.recipe))
       assert.equal("T:Full", plain(row.cells.caps))
       assert.equal("T:Capped: concentration is full", row.tooltip[1])
-      assert.equal("Aria-Silvermoon Blacksmithing", row.tooltip[2])   -- character and profession: data
+      assert.equal("T:Aria-Silvermoon Blacksmithing", row.tooltip[2])   -- character and profession: data
       assert.equal("T:Concentration: 1000/1000", row.tooltip[3])
       assert.equal("T:Spend it before more is wasted", row.tooltip[4])
       all_translated(row.tooltip, 3)
@@ -771,7 +802,7 @@ describe("a non-identity ns.L (planner sentences)", function()
     it("translates the soon row, with an unknown value as ?", function()
       local row = Tab.WarningRow({ status = "soon", charKey = "Aria-Silvermoon", skillLineID = 2907,
         fullAt = NOW + 7200 }, NOW)
-      assert.equal("T:Soon: full in 2h 0m", plain(row.cells.recipe))
+      assert.equal("T:Soon: full in T:2h 0m", plain(row.cells.recipe))
       assert.equal("T:Concentration: ?/?", row.tooltip[3])
       assert.equal("T:Spend some before it is full", row.tooltip[4])
     end)
@@ -780,7 +811,7 @@ describe("a non-identity ns.L (planner sentences)", function()
       PL:Settings().capWarnHours = 72
       PL:AnnounceCapWarnings(NOW)
       assert.same({ "T:FabricationStation: T:Bren-Silvermoon Herbalism: concentration is full",
-        "T:FabricationStation: T:Aria-Silvermoon Blacksmithing: concentration full in 2d 12h" }, W.printed)
+        "T:FabricationStation: T:Aria-Silvermoon Blacksmithing: concentration full in T:2d 12h" }, W.printed)
     end)
   end)
 
@@ -795,11 +826,11 @@ describe("a non-identity ns.L (planner sentences)", function()
     it("translates every tooltip sentence after the names", function()
       local row = Tab.ScheduleRow(schedule(), NOW)
       assert.equal("Truesilver Transmute", row.tooltip[1])
-      assert.equal("Aria-Silvermoon Blacksmithing", row.tooltip[2])
+      assert.equal("T:Aria-Silvermoon Blacksmithing", row.tooltip[2])
       assert.equal("T:Crafts: 2 (400 concentration)", row.tooltip[3])
       assert.truthy(row.tooltip[4]:find("^T:Expected gain: "))
       assert.truthy(row.tooltip[5]:find("^T:Gold per concentration: "))
-      assert.equal("T:Full in: 3h 0m", row.tooltip[6])
+      assert.equal("T:Full in: T:3h 0m", row.tooltip[6])
       assert.equal("T:Queue adds the crafts with concentration", row.tooltip[7])
       all_translated(row.tooltip, 3)
     end)
@@ -829,10 +860,10 @@ describe("a non-identity ns.L (planner sentences)", function()
         { charKey = "Dora-Silvermoon", skillLineID = 2907, value = 40, max = 1000, fullAt = NOW + 9500 },
       }
       local lines = PV.ConcentrationLines(pools, NOW, 3)
-      assert.equal("Aria-Silvermoon Blacksmithing", lines[1][1])
+      assert.equal("T:Aria-Silvermoon Blacksmithing", lines[1][1])
       assert.equal("T:Full", lines[1][2])
-      assert.equal("Bren-Silvermoon T:Skill 4242", lines[2][1])   -- the character is data, the fallback name is text
-      assert.equal("2h 0m", lines[2][2])
+      assert.equal("T:Bren-Silvermoon T:Skill 4242", lines[2][1])   -- a name and a name, joined by one key
+      assert.equal("T:2h 0m", lines[2][2])
       assert.equal("T:+2 more", lines[3][1])
       assert.equal("", lines[3][2])
     end)
@@ -843,7 +874,7 @@ describe("a non-identity ns.L (planner sentences)", function()
 
     it("translates every detail line after the title", function()
       local lines = Tab.KnowledgeDetailLines(aria(), { [263455] = "Smith's Notes" })
-      assert.same({ "|cffffd100Aria-Silvermoon Blacksmithing|r",
+      assert.same({ "|cffffd100T:Aria-Silvermoon Blacksmithing|r",
         "T:  T:Darkmoon Faire: 0/3 KP \194\183 T:closed (not the faire week)",
         "T:  T:Treasure: 0/2 KP \194\183 T:open",
         "T:  T:One-time: 0/3 KP \194\183 T:open",
@@ -893,7 +924,7 @@ describe("a non-identity ns.L (planner sentences)", function()
 
     it("translates both footers and their tooltips", function()
       local text, tip = Tab.KnowledgeFooter()
-      assert.equal("T:Knowledge data: build 70575 \194\183 T:Weekly reset in 4d 3h", text)
+      assert.equal("T:Knowledge data: build 70575 \194\183 T:Weekly reset in T:4d 3h", text)
       assert.equal("T:Knowledge sources come from GameData build 70575", tip[2])
       text, tip = Tab.MissingFooter()
       assert.equal("T:Recipe sources: not generated \194\183 T:Recipe lists fill in when you open the profession on any character",
@@ -953,9 +984,11 @@ describe("a non-identity ns.L (planner sentences)", function()
 
     it("translates the Concentration status and the schedule row's hover", function()
       PL:Settings().capWarnHours = 72
+      local seen = record_keys()
       local v = open()
       select(v, "concentration")
       assert.equal("T:Plan: 2 crafts \194\183 T:Capped: 1 \194\183 T:Soon: 1", plain(v.status:GetText()))
+      assert.is_true(seen["Plan: %d crafts"])
       hover(row_frame(v.grids.concentration, "plan:Aria-Silvermoon:2907:1001"))
       assert.equal("Truesilver Transmute", tooltip.lines[1])
       all_translated(tooltip.lines, 3)
@@ -974,9 +1007,11 @@ describe("a non-identity ns.L (planner sentences)", function()
 
     it("translates the Spec advice status, row tooltip and pickers", function()
       stub_spec()
+      local seen = record_keys()
       local v = open()
       select(v, "spec")
       assert.equal("T:Spec advice: 2 paths", plain(v.status:GetText()))
+      assert.is_true(seen["Spec advice: %d paths"])
       assert.equal("T:Estimate from your top 20 profitable recipes", v.footer:GetText())
       hover(row_frame(v.grids.spec, 1))
       assert.same({ "Path 1", "T:Rank: 10/30", "T:Points to the next step: 5", "T:Gain: 25s 0c",
@@ -996,9 +1031,11 @@ describe("a non-identity ns.L (planner sentences)", function()
         return { { pathID = 1, name = "Path 1", rank = 1, maxRank = 3, points = 2, gain = 100, gainPerPoint = 50,
           affordable = true } }, "ok"
       end
+      local seen = record_keys()
       local v = open()
       select(v, "spec")
       assert.equal("T:Spec advice: 1 path", plain(v.status:GetText()))
+      assert.is_true(seen["Spec advice: %d path"])
     end)
 
     it("translates the Missing recipes status, row tooltip and footer", function()
@@ -1009,9 +1046,11 @@ describe("a non-identity ns.L (planner sentences)", function()
       }
       ns.GameData.Define("RecipeSources", nil, { bySkillLine = { [2907] = { [1005] = { kind = "item", itemID = 3001 },
         [1007] = { kind = "auto" } } } })
+      local seen = record_keys()
       local v = open()
       select(v, "missing")
       assert.equal("T:Missing: 3 recipes", plain(v.status:GetText()))
+      assert.is_true(seen["Missing: %d recipes"])
       assert.equal("T:Recipe 1007", row_frame(v.grids.missing, 1007).cells.recipe:GetText())
       assert.equal("T:Learned automatically", row_frame(v.grids.missing, 1007).cells.source:GetText())
       hover(row_frame(v.grids.missing, 1005))
@@ -1026,6 +1065,7 @@ describe("a non-identity ns.L (planner sentences)", function()
         [1005] = true }
       reg.planner.refresh(container)
       assert.equal("T:Missing: 1 recipe", plain(v.status:GetText()))
+      assert.is_true(seen["Missing: %d recipe"])
     end)
 
     it("translates the empty text of a fully known profession and the turned-off message", function()
@@ -1042,9 +1082,96 @@ describe("a non-identity ns.L (planner sentences)", function()
 
     it("translates the status of a plan with one craft", function()
       PL:Settings().maxCraftsPerRecipe = 1
+      local seen = record_keys()
       local v = open()
       select(v, "concentration")
       assert.equal("T:Plan: 1 craft \194\183 T:Capped: 1 \194\183 T:Soon: 0", plain(v.status:GetText()))
+      assert.is_true(seen["Plan: %d craft"])
+    end)
+  end)
+end)
+
+-- Task 6: duration and age units, plurals and the small labels are whole keys under a translated ns.L.
+describe("a non-identity ns.L (units, plurals and labels)", function()
+  local UNIT_FILES = { "Modules/Alts.lua", "Modules/AltsCollector.lua", "Modules/CraftingData.lua",
+    "Modules/Planner.lua", "Modules/PlannerSpec.lua", "UI/Widgets/ExpandGrid.lua", "UI/Tabs/ViewUtil.lua",
+    "UI/Tabs/CharactersView.lua", "UI/Tabs/PlannerView.lua", "UI/OrdersPanel.lua" }
+  local function translate(ns) setmetatable(ns.L, { __index = function(_, key) return "T:" .. key end }) end
+
+  describe("with the Characters and Planner files", function()
+    local ns, V, W
+
+    before_each(function()
+      ns, _, W = phase3_env({ files = UNIT_FILES,
+        before_load = function(n) setmetatable(n.L, { __index = function(_, key) return "T:" .. key end }) end })
+      V = ns.UI.CharactersView
+      W.advance(1)
+    end)
+
+    it("formats every duration through keys", function()
+      assert.are.equal("T:<1m", ns.UI.FormatAge(30)); assert.are.equal("T:5m", ns.UI.FormatAge(300))
+      assert.are.equal("T:2h", ns.UI.FormatAge(7200)); assert.are.equal("T:3d", ns.UI.FormatAge(3 * 86400))
+      assert.are.equal("T:<1m", V.FormatDuration(30)); assert.are.equal("T:45m", V.FormatDuration(45 * 60))
+      assert.are.equal("T:1h 1m", V.FormatDuration(3660))
+      assert.are.equal("T:2d 4h", V.FormatDuration(2 * 86400 + 4 * 3600))
+    end)
+
+    it("reads the cells of a pool that is not full within 14 days through the key", function()
+      local items = ns.UI.PlannerView.ConcentrationLines({ { charKey = "Aria-Silvermoon", skillLineID = 2907,
+        value = 10, max = 1000, fullAt = false } }, NOW, 5)
+      assert.equal("T:>14d", items[1][2])
+    end)
+
+    it("translates the whole-hour duration of the chat line when the Characters view is not loaded", function()
+      ns.UI.CharactersView = nil
+      ns.FS:GetModule("Planner"):Settings().capWarnHours = 72
+      ns.FS:GetModule("Planner"):AnnounceCapWarnings(NOW)
+      assert.equal("T:FabricationStation: T:Aria-Silvermoon Blacksmithing: concentration full in T:60h", W.printed[2])
+    end)
+
+    it("joins a character and a profession through one key in the concentration and knowledge lines", function()
+      local items = ns.UI.PlannerView.ConcentrationLines({ { charKey = "Aria-Silvermoon", skillLineID = 2907,
+        value = 1000, max = 1000, fullAt = NOW, secondsToFull = 0 } }, NOW, 5)
+      assert.equal("T:Aria-Silvermoon Blacksmithing", items[1][1])
+      local lines = ns.UI.PlannerView.KnowledgeTooltipLines({ charKey = "Aria-Silvermoon", skillLineID = 2907,
+        name = "Blacksmithing", summary = { status = "noData" }, states = {} })
+      assert.equal("T:Aria-Silvermoon Blacksmithing", lines[1])
+    end)
+  end)
+
+  describe("the Queue tab", function()
+    it("formats a wait through keys", function()
+      local ns = make_world({ last = "UI/Tabs/Queue.lua" })
+      translate(ns)
+      local Q = ns.UI.QueueTab
+      assert.are.equal("T:<1m", Q.FormatDuration(10)); assert.are.equal("T:5m", Q.FormatDuration(300))
+      assert.are.equal("T:2h", Q.FormatDuration(7200)); assert.are.equal("T:2h 5m", Q.FormatDuration(7500))
+      assert.are.equal("T:1d", Q.FormatDuration(86400)); assert.are.equal("T:1d 3h", Q.FormatDuration(86400 + 3 * 3600))
+    end)
+  end)
+
+  describe("the Dashboard", function()
+    it("formats the concentration row and its time to full through keys", function()
+      local ns, W, world = make_world({ last = "UI/Tabs/Dashboard.lua" })
+      translate(ns)
+      local D = ns.FS:GetModule("Dashboard")
+      local main = world.chars["Main-Realm"].professions[2906]
+      main.name = "Sample Crafting"
+      main.concentration = { currencyID = 1, value = 0, max = 100, time = W.now, perCycle = 5, cycleSeconds = 600 }
+      local frames = D:BuildAll(CreateFrame("Frame")); D:RefreshAll()
+      local text = frames.concentration.lines[1]:GetText()
+      assert.truthy(text:find("T:full in T:3h 20m", 1, true), text)
+      assert.equal("T:", plain(text):sub(1, 2))
+    end)
+  end)
+
+  describe("the Recipes tab", function()
+    it("shows the quality through a key", function()
+      local ns = make_world({ last = "UI/Tabs/Recipes.lua" })
+      translate(ns)
+      local cells = ns.UI.RecipesTab.CellTexts({ name = "X", flagsText = "", charKey = "Main-Realm", quality = 3,
+        cost = 1, sale = 2, profit = 1, noPrice = false, priceAge = nil })
+      assert.equal("T:Q3", cells.quality)
     end)
   end)
 end)

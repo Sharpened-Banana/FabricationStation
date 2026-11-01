@@ -14,7 +14,7 @@ describe("Customers tab", function()
   it("registers at order 50", function() assert.same({"Customers", 50}, {reg.customers.label, reg.customers.order}) end)
   it("builds list rows", function()
     local rows = T.ListModel({ {nameRealm="Bob-Silvermoon", orders={{},{}}, tipsTotal=7, lastSeen=9, tags={blocked=true, VIP=true}} })
-    assert.same({nameRealm="Bob-Silvermoon", orders=2, tipsTotal=7, lastSeen=9, tagsText="VIP, blocked"}, rows[1])
+    assert.same({nameRealm="Bob-Silvermoon", orders=2, tipsTotal=7, lastSeen=9, tags={"VIP","blocked"}, tagsText="VIP, blocked"}, rows[1])
   end)
   it("normalizes link input", function()
     assert.equal("Bob-Silvermoon", (T.LinkInput(" Bob ")))
@@ -47,7 +47,7 @@ describe("Customers tab models", function()
   it("copies the link and the alt count, and shows no tags as an empty text", function()
     local rows = T.ListModel({ { nameRealm = "Alt-Silvermoon", orders = {}, tipsTotal = 0, linkedTo = "Bob-Silvermoon" },
       { nameRealm = "Bob-Silvermoon", orders = { {} }, tipsTotal = 3, lastSeen = 4, tags = { zeta = true, alpha = true }, alts = 2 } })
-    assert.same({ nameRealm = "Alt-Silvermoon", orders = 0, tipsTotal = 0, tagsText = "", linkedTo = "Bob-Silvermoon" }, rows[1])
+    assert.same({ nameRealm = "Alt-Silvermoon", orders = 0, tipsTotal = 0, tags = {}, tagsText = "", linkedTo = "Bob-Silvermoon" }, rows[1])
     assert.same({ "alpha, zeta", 2 }, { rows[2].tagsText, rows[2].alts })
   end)
 
@@ -129,14 +129,27 @@ describe("Customers tab models", function()
     assert.same({ "blocked", "Al-Silvermoon" }, { row.tagsText, row.blockedVia })
     assert.equal("blocked (via Al)", T.CellTexts(row, 1000).tags)   -- the main's realm is left out
     assert.equal("blocked (alt)", T.CellTexts({ nameRealm = "Bob-Silvermoon", orders = 1, tagsText = "blocked",
-      blockedVia = "Someone-Area52" }, 1000).tags)   -- "blocked (via Someone-Area52)" does not fit
-    assert.equal("blocked (via Al-X)", T.CellTexts({ nameRealm = "B", orders = 1, tagsText = "blocked", blockedVia = "Al-X" }, 1000).tags)
-    assert.equal("VIP, blocked (alt)", T.CellTexts({ nameRealm = "B", orders = 1, tagsText = "VIP, blocked", blockedVia = "Long-Silvermoon" }, 1000).tags)
+      tags = { "blocked" }, blockedVia = "Someone-Area52" }, 1000).tags)   -- "blocked (via Someone-Area52)" does not fit
+    assert.equal("blocked (via Al-X)", T.CellTexts({ nameRealm = "B", orders = 1, tagsText = "blocked", tags = { "blocked" }, blockedVia = "Al-X" }, 1000).tags)
+    assert.equal("VIP, blocked (alt)", T.CellTexts({ nameRealm = "B", orders = 1, tagsText = "VIP, blocked", tags = { "VIP", "blocked" },
+      blockedVia = "Long-Silvermoon" }, 1000).tags)
     -- Blocked by its own tag: no "via".
     C:SetTag("Bob-Silvermoon", "blocked", true)
     group = T.Groups("")[1]
     assert.same({ "Bob-Silvermoon", "Al-Silvermoon" }, group.blockedBy)
     assert.is_nil(T.ListModel({ group })[1].blockedVia)
+  end)
+
+  it("builds the tags cell from the tag list, not from its text", function()
+    -- A tag that contains the list separator stays one tag: only the real "blocked" tag is replaced. (The via text
+    -- would not fit the cell, so the short phrase is used.)
+    local row = { nameRealm = "B-Silvermoon", orders = 1, tags = { "blocked, x", "blocked" },
+      tagsText = "blocked, x, blocked", blockedVia = "B-Silvermoon" }
+    assert.equal("blocked, x, blocked (alt)", T.CellTexts(row, 1000).tags)
+    -- and when it fits, the via text replaces that tag alone
+    row = { nameRealm = "B-Silvermoon", orders = 1, tags = { "x, y", "blocked" }, tagsText = "x, y, blocked",
+      blockedVia = "B-Silvermoon" }
+    assert.equal("x, y, blocked (via B)", T.CellTexts(row, 1000).tags)
   end)
 
   it("formats cells: compact tips, last seen age, never shows unknown money as 0", function()
