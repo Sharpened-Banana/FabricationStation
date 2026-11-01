@@ -469,7 +469,9 @@ local function ask_reason_text(reason)
   if reason == "off" then return L("Guild sync is turned off") end
   if reason == "readonly" then return L("Read-only: the saved data is from a newer version of the addon") end
   if reason == "noguild" then return L("Not in a guild") end
-  if reason == "native" then return L("Turned off in the Guild settings (\"Also use the game's guild recipe list\")") end
+  if reason == "native" then
+    return L("Turned off in the Guild settings (\"Also use the game's guild recipe list\")")
+  end
   if reason == "locked" then return L("Sync paused (instance)") end
   return L("The game's guild recipe query is not available")
 end

@@ -93,7 +93,8 @@ local function track_social_timers(track)
     local base = timer[name]
     timer[name] = function(seconds, fn, ...)
       local info = debug.getinfo(2, "S")
-      if not (info and info.source and info.source:find("Modules/Social/", 1, true)) then return base(seconds, fn, ...) end
+      local social = info and info.source and info.source:find("Modules/Social/", 1, true)
+      if not social then return base(seconds, fn, ...) end
       local handle
       handle = base(seconds, function(...)
         if track.off then track.ranAfterOff = track.ranAfterOff + 1 end
@@ -456,8 +457,9 @@ describe("phase 4 integration", function()
       assert.same({}, p4.tells)
       local link = "|cffa335ee|Hitem:212345::::::::80:::::|h[Everforged Gloves]|h|r"
       ns.FS:SendMessage(ns.Msg.CHATSCAN_MATCH, { sender = "Buyer-Realm", kind = "trade", text = "LF crafter " .. link,
-        lineID = 1, time = W.now, recipes = { { recipeID = 100, itemID = 212345, link = link, name = "Everforged Gloves",
-          best = { charKey = "Me-Realm", expectedQuality = 3, profit = 123456, noPrice = false } } } })
+        lineID = 1, time = W.now, recipes = { { recipeID = 100, itemID = 212345, link = link,
+          name = "Everforged Gloves", best = { charKey = "Me-Realm", expectedQuality = 3, profit = 123456,
+          noPrice = false } } } })
       local toast = ns.UI.ChatToast:GetToasts()[1]
       assert.is_table(toast)
       toast.whisper:GetScript("OnClick")(toast.whisper)

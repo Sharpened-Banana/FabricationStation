@@ -825,18 +825,19 @@ within about a second, "Ask guild" is disabled, and nothing is sent. After leavi
 and queued messages go out. If the footer pauses for a different situation (a world quest area, a scenario) or does not
 pause in a dungeon, report which Gate reason (hover the footer) it showed.
 
-P4-16. **Ask guild.** Click a row (it is only selected: no whisper opens), then "Ask guild". Expected: the status line says "Asking the guild...", then "Guild answered:
-N can craft this" within about 5 s, and the guildmates who know the recipe but do not run the addon appear as extra rows
-with Source "Guild query" and no quality. The tab passes the skill line ID of the row (the profile's line key for addon
-rows, the answer's for cached ones) to `GuildNative:Query`; if the game answers nothing for a recipe the guild does know,
-compare that ID with `GetGuildRecipeInfoPostQuery()`'s first return (P4-9) and report both. With "Also use the game's guild
-recipe list" turned off in the Guild settings the button is disabled and asks nothing.
+P4-16. **Ask guild.** Click a row (it is only selected: no whisper opens), then "Ask guild". Expected: the status line
+says "Asking the guild...", then "Guild answered: N can craft this" within about 5 s, and the guildmates who know the
+recipe but do not run the addon appear as extra rows with Source "Guild query" and no quality. The tab passes the skill
+line ID of the row (the profile's line key for addon rows, the answer's for cached ones) to `GuildNative:Query`; if the
+game answers nothing for a recipe the guild does know, compare that ID with `GetGuildRecipeInfoPostQuery()`'s first
+return (P4-9) and report both. With "Also use the game's guild recipe list" turned off in the Guild settings the button
+is disabled and asks nothing.
 
-P4-17. **Whisper after a click (preflight row 42).** Double-click a crafter row, or click it and then "Whisper": the chat
-box opens on `/w <name>` (for a "(via owner)" row on the owner's name). Type a word and press Enter, in the open world
-and again inside an instance. Expected: it sends with no "blocked" or "forbidden" message (the tab only calls
-`ChatFrameUtil.SendTell` from the click). A cross-realm guildmate must open the whisper as
-`Name-Realm`; report if the box opens empty or on the wrong name.
+P4-17. **Whisper after a click (preflight row 42).** Double-click a crafter row, or click it and then "Whisper": the
+chat box opens on `/w <name>` (for a "(via owner)" row on the owner's name). Type a word and press Enter, in the open
+world and again inside an instance. Expected: it sends with no "blocked" or "forbidden" message (the tab only calls
+`ChatFrameUtil.SendTell` from the click). A cross-realm guildmate must open the whisper as `Name-Realm`; report if the
+box opens empty or on the wrong name.
 
 P4-18. **Guild settings.** In `/fs settings` > Guild: switching "What to share" or "Which characters to share" makes
 guildmates' tabs show the change within about a minute; switching "Share my recipes with my guild" off removes your
@@ -913,9 +914,10 @@ count against the number A shares. If some are missing at first, wait 2 to 6 min
 minutes, three times) and check again.
 
 P4-28. **The real addon-message throttle (final fix wave).** After the big sync of P4-27, run `/fs guild` on B and
-report the "received: N rate-limited, N refused, N invalid; N re-requests" line, and on A the "sent: ..." line. Expected:
-0 rate-limited (the inbound limit is 80 messages and 256 KB per sender per minute). A non-zero re-request count shows
-the game's per-prefix throttle or a lockdown dropped DATA and the re-request recovered it; report the numbers either way.
+report the "received: N rate-limited, N refused, N invalid; N re-requests" line, and on A the "sent: ..." line.
+Expected: 0 rate-limited (the inbound limit is 80 messages and 256 KB per sender per minute). A non-zero re-request
+count shows the game's per-prefix throttle or a lockdown dropped DATA and the re-request recovered it; report the
+numbers either way.
 
 P4-29. **Chat box after a toast whisper (M7, final fix wave).** Earlier in the session, click Whisper on a chat-scan
 toast and send that whisper. Later, inside an instance during a boss encounter, type a normal `/say` line and a
@@ -931,10 +933,10 @@ instance the button is disabled and reads "Sync paused (instance)". Selecting ot
 by itself (only the click does).
 
 P4-31. **The setup guide holds guild sync until it is done (final fix wave).** On a fresh install (delete the saved
-variables as in P4-23) in a guild with a guildmate running the addon: log in and leave the guide open for a minute. On the
-guildmate run `/fs guild`: this character's profiles have not arrived (nothing was sent). Finish or skip the guide: within
-a few seconds the guildmate sees the HELLO and then the profiles. A character that already finished the guide syncs at
-login as before, and so does one with Onboarding turned off under Settings > Modules.
+variables as in P4-23) in a guild with a guildmate running the addon: log in and leave the guide open for a minute. On
+the guildmate run `/fs guild`: this character's profiles have not arrived (nothing was sent). Finish or skip the guide:
+within a few seconds the guildmate sees the HELLO and then the profiles. A character that already finished the guide
+syncs at login as before, and so does one with Onboarding turned off under Settings > Modules.
 
 ## Not done here
 

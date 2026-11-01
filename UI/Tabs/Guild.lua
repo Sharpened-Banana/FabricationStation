@@ -14,10 +14,11 @@ local _, ns = ...
 -- for "Whisper"); a double click on a row or the Whisper button opens a whisper (ChatFrameUtil.SendTell, from the click
 -- only: nothing is sent, the player types and sends). The whisper goes to the crafter, or for a copy the character has
 -- not confirmed ("<char> (via <owner>)") to the owner who shared it, who is the one known to be online. "Ask guild"
--- calls GuildNative:Query for the selected recipe (the profession panel's "Ask guild" is the other caller; Guild's
--- tooltip and panel lines only read the cache), so it checks settings.guild.useNative itself. It is disabled without a selected
--- row, while the chat gate is locked ("Sync paused (instance)"), when the setting is off, outside a guild and while
--- Guild is off. The answer is cached by GuildNative and announced through FS_GUILD_CHANGED, which refreshes the tab.
+-- calls GuildNative:Query for the selected recipe, so it checks settings.guild.useNative itself (the profession
+-- panel's "Ask guild" is the other caller; Guild's tooltip and panel lines only read the cache). It is disabled
+-- without a selected row, while the chat gate is locked ("Sync paused (instance)"), when the setting is off, outside a
+-- guild and while Guild is off. The answer is cached by GuildNative and announced through FS_GUILD_CHANGED, which
+-- refreshes the tab.
 --
 -- Second line: the last action's feedback or the selected recipe. Footer: the sync summary (Guild:Status), leading with
 -- "Sync:" or "Sync paused (instance)", with every number in its tooltip. While Guild is off the tab says so instead of
@@ -183,8 +184,9 @@ end
 -- shared it), otherwise the crafter.
 function Tab.WhisperTarget(crafter)
   if type(crafter) ~= "table" then return nil end
-  if crafter.source == "addon" and crafter.verified == false and type(crafter.owner) == "string" and crafter.owner ~= "" then
-    return crafter.owner
+  local owner = crafter.owner
+  if crafter.source == "addon" and crafter.verified == false and type(owner) == "string" and owner ~= "" then
+    return owner
   end
   return crafter.name
 end
@@ -568,8 +570,8 @@ local function build_bar(container, created)
   tell:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
     local selected = view and view.selected
     if selected and selected.whisper then
-      show_lines(self, { L["Whisper"], L["Opens a whisper to %s. Nothing is sent: you type and send it yourself."]:format(
-        ns.Social.Util.EscapePipes(selected.whisper)) })
+      local hint = L["Opens a whisper to %s. Nothing is sent: you type and send it yourself."]
+      show_lines(self, { L["Whisper"], hint:format(ns.Social.Util.EscapePipes(selected.whisper)) })
     else
       show_lines(self, { L["Whisper"], L["Click a row first"] })
     end

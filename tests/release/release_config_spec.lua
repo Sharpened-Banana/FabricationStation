@@ -201,8 +201,8 @@ describe("release configuration", function()
 
   it("does not ignore anything that must ship", function()
     local s = read(".pkgmeta")
-    for _, shipped in ipairs({ "LICENSE", "README.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "Locales", "Core", "UI",
-      "Modules", "Math", "Data", "Libs", "embeds.xml", "FabricationStation.toc" }) do
+    for _, shipped in ipairs({ "LICENSE", "README.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "Locales", "Core",
+      "UI", "Modules", "Math", "Data", "Libs", "embeds.xml", "FabricationStation.toc" }) do
       for _, entry in ipairs(ignore_entries(s)) do
         assert.is_false(ignores(entry, shipped), shipped .. " ignored by " .. entry)
       end
@@ -279,7 +279,8 @@ describe("release configuration", function()
         "      - 'v[0-9]+.[0-9]+.[0-9]+'",
         "      - 'v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+'",
         "      - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'" }, block("on"))
-      for _, k in ipairs({ "workflow_dispatch", "schedule", "branches", "pull_request", "workflow_run", "repository_dispatch" }) do
+      for _, k in ipairs({ "workflow_dispatch", "schedule", "branches", "pull_request", "workflow_run",
+        "repository_dispatch" }) do
         assert.is_nil(y:find(k, 1, true), k)
       end
     end)

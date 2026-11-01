@@ -846,7 +846,9 @@ describe("Guild sync", function()
   ---------------------------------------------------------------------------
 
   describe("sync robustness", function()
-    local function deliver(msg, dist, sender) return p4.comm.deliver(Protocol.PREFIX, Protocol.Wire(msg), dist, sender) end
+    local function deliver(msg, dist, sender)
+      return p4.comm.deliver(Protocol.PREFIX, Protocol.Wire(msg), dist, sender)
+    end
     local function requests_to(target)
       local out = {}
       for _, s in ipairs(sent_list()) do

@@ -203,7 +203,8 @@ function builders.welcome(frame)
   c.more = label(frame, "GameFontHighlight", 0, 112, CONTENT_WIDTH, 50, true)
   c.more:SetText(L["You can close this window at any time. It does not come back by itself, and /fs setup opens it again."])
   c.readOnly = label(frame, "GameFontHighlight", 0, 172, CONTENT_WIDTH, 50, true)
-  c.readOnly:SetText(ORANGE .. L["The saved data is from a newer version of FabricationStation, so the choices you make in this guide will not be saved."] .. "|r")
+  local readOnlyText = L["The saved data is from a newer version of FabricationStation, so the choices you make in this guide will not be saved."]
+  c.readOnly:SetText(ORANGE .. readOnlyText .. "|r")
   return c
 end
 
@@ -367,7 +368,7 @@ function builders.social(frame)
   c.levelButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 28, -114)
   attach_tooltip(c.levelButton, L["What to share"],
     L["Expected quality is what your character would craft with and without concentration."])
-  c.altsButton = button(frame, "", 360, function(self)
+  c.altsButton = button(frame, "", 430, function(self)
     choices.shareAlts = next_alts(choices.shareAlts)
     self:SetText(alts_button_text())
   end)
