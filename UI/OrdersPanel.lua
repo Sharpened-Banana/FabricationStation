@@ -4,7 +4,8 @@ local L = ns.L
 -- OrdersPanel: our additions to Blizzard's crafting-orders list (ProfessionsFrame.OrdersPage), as three modules that
 -- are each switched on and off by 1a's module toggles (Settings > Modules) and fail on their own:
 --   OrdersRowAddons   per order row: a tint for VIP / repeat / blocked customers, a dark overlay on rows the filters
---                     hide, a strip of cells (net profit, score, risk count with a tooltip, Add to Queue), left of it a
+--                     hide, a strip of cells (net profit, score, risk count with a tooltip, Add to Queue; the score cell
+--                     is blank while it would only repeat the profit shown beside it), left of it a
 --                     strip of 20 px icons for the rewards of a patron order, and a cover over Blizzard's Reagents
 --                     cell that replaces its "Some" / "None" / "All" with the reagents the crafter must supply (the
 --                     allocation minus what the customer provides) that the character is short of: 20 px icons with
@@ -1104,6 +1105,9 @@ function apply_fit(c, row)
   c.profit:ClearAllPoints()
   c.profit:SetPoint("RIGHT", c.strip, "RIGHT", -(CORE_WIDTH + CELL_GAP + (c.warnShown and WARN_SLOT or 0)), 0)
   set_shown(c.profit, c.fit == "all")
+  -- The score cell repeats the profit when no concentration is charged: blank it (it keeps its slot) while the profit
+  -- cell is shown beside it with the same text. Otherwise it keeps its text, the only number left once the profit gives way.
+  c.score:SetText(c.fit == "all" and c.scoreText == c.profitText and "" or c.scoreText)
   set_shown(c.strip, c.fit ~= "none")
   local core = CORE_WIDTH + (c.warnShown and WARN_SLOT or 0)
   render_icons(c, row, reserve, room, c.fit == "all" and core + PROFIT_SLOT or core)
@@ -1202,9 +1206,10 @@ local function show_row(row, elementData)
   c.shortEntries = M.ShortEntries(c.reagentEntries)
   c.coverMode = on and reagent_state(reagents) or nil
 
-  c.profit:SetText(M.ProfitText(view))
+  c.profitText, c.scoreText = M.ProfitText(view), M.ScoreText(view)
+  c.profit:SetText(c.profitText)
   color_text(c.profit, sign_color(view.net))
-  c.score:SetText(M.ScoreText(view))
+  c.score:SetText(c.scoreText)   -- (apply_fit blanks it when it would only repeat the profit shown beside it)
   color_text(c.score, sign_color(view.score))
   if model.riskCount > 0 or #c.notes > 0 then
     c.riskCount:SetText(model.riskCount > 0 and tostring(model.riskCount) or "i")
