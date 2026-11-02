@@ -2,12 +2,12 @@
 -- QueueSubCrafts. The crafting world's recipe 9100 makes reagent 1001 (buy price 100) from 2 x 1101 (price 20);
 -- world.addRecipe builds the longer graphs.
 describe("Intermediates", function()
-  local ns, world, I, Q, R
+  local ns, W, world, I, Q, R
   local ME, ALT = "Main-Realm", "Alt-Realm"
 
   local function boot(opts)
     opts = opts or {}
-    ns, _, world = make_world({ last = "Modules/Intermediates.lua", intermediates = true, calibrate = opts.calibrate })
+    ns, W, world = make_world({ last = "Modules/Intermediates.lua", intermediates = true, calibrate = opts.calibrate })
     I = ns.FS:GetModule("Intermediates"); Q = ns.FS:GetModule("Queue"); R = ns.FS:GetModule("Recipes")
   end
 
@@ -284,6 +284,26 @@ describe("Intermediates", function()
       local QC = ns.FS:GetModule("Queue")
       assert.equals("crafted", QC:CraftNext().status)
       assert.equals(9101, world.crafts[1][1])
+    end)
+
+    -- Follow-up F2: finishing a parent through Craft Next is not a removal of children: they were crafted first and went
+    -- as they reached 0, so nothing is left behind and no "Also removed" line is printed.
+    it("leaves no orphans when Craft Next finishes the parent, and prints no removal line", function()
+      I:QueueSubCrafts({ recipeID = 9001, quantity = 1, charKey = ME })
+      assert.same({ "9100", "9001" }, recipe_order(Q:GetEntries()))
+      world.haveAll(ME); world.openProfession(2906)
+      local QC = ns.FS:GetModule("Queue")
+      local op = 0
+      local function craft_and_finish(itemID)
+        assert.equals("crafted", QC:CraftNext().status)
+        op = op + 1
+        W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = itemID, operationID = op })
+      end
+      for _ = 1, Q:GetEntries()[1].quantity do craft_and_finish(1001) end
+      assert.same({ "9001" }, recipe_order(Q:GetEntries()))
+      craft_and_finish(world.outputOf(9001))
+      assert.same({}, Q:GetEntries())
+      for _, line in ipairs(W.printed) do assert.is_falsy(line:find("Also removed", 1, true)) end
     end)
 
     -- Review I2's probe: the Shopping List takes its counts from the Gather plan, so the 1001 the sub-crafts make is

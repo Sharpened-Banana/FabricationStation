@@ -559,7 +559,12 @@ local function create_queue_row(list)
   -- SetScript is deliberate: the buttons are our own and OnClick is their whole job.
   row.minus:SetScript("OnClick", ns.FS:Wrap("QueueTab:Edit", function()
     local d = row.data
-    if d and not d.isRestock then edit_queue(function(queue) queue:SetQuantity(d.id, d.quantity - 1) end) end
+    if d and not d.isRestock then
+      -- The last craft taken off is a removal by the player: Queue:Remove, so the entry's sub-crafts go with it.
+      edit_queue(function(queue)
+        if d.quantity - 1 < 1 then queue:Remove(d.id) else queue:SetQuantity(d.id, d.quantity - 1) end
+      end)
+    end
   end))
   row.plus:SetScript("OnClick", ns.FS:Wrap("QueueTab:Edit", function()
     local d = row.data

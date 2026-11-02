@@ -346,6 +346,39 @@ describe("Queue tab", function()
       assert.same({}, Queue:GetEntries()); assert.is_nil(id and Queue:GetEntries()[1])
       assert.equals(0, QT:GetView().queue.shown)
     end)
+    -- Follow-up F2: the minus button at quantity 1 is a removal by the player, so it goes through Queue:Remove.
+    it("minus on a parent of quantity 1 removes its sub-crafts and says how many", function()
+      local parent = add(1)
+      local child = Queue:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm", parentID = parent }, { before = parent })
+      Queue:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm", parentID = child }, { before = child })
+      local own = add(1)
+      MW:Show("queue")
+      local row
+      for _, r in ipairs(QT:GetView().queue.pool) do
+        if r.data and r.data.id == parent then row = r end
+      end
+      W.printed = {}
+      click(row.minus)
+      local ids = {}
+      for i, e in ipairs(Queue:GetEntries()) do ids[i] = e.id end
+      assert.same({ own }, ids)
+      assert.is_truthy(table.concat(W.printed, "\n"):find("Also removed 2 sub-crafts", 1, true))
+    end)
+    it("minus on a parent of quantity 2 leaves its sub-crafts alone", function()
+      local parent = add(2)
+      Queue:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm", parentID = parent }, { before = parent })
+      MW:Show("queue")
+      local row
+      for _, r in ipairs(QT:GetView().queue.pool) do
+        if r.data and r.data.id == parent then row = r end
+      end
+      W.printed = {}
+      click(row.minus)
+      local e = Queue:GetEntries()
+      assert.same({ 2, 3 }, { #e, e[1].quantity })
+      assert.same({ 1, parent }, { e[2].quantity, e[2].id })
+      assert.same({}, W.printed)
+    end)
     it("Remove drops the entry and its row", function()
       add(1); add(1); MW:Show("queue")
       local keep = Queue:GetEntries()[2].id
