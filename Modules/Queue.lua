@@ -522,6 +522,211 @@ function Queue:GetEntryCost(id)
 end
 
 ---------------------------------------------------------------------------
+-- Gathering plan (phase 7, Task 15)
+---------------------------------------------------------------------------
+
+local DAY = 86400
+
+local function is_number(v) return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge end
+
+-- The module when it exists and is on, else nil.
+local function enabled_module(name)
+  if not ns.FS:IsModuleEnabled(name) then return nil end
+  return ns.FS:GetModule(name, true)
+end
+
+-- The characters the phase 3 surfaces show: every saved character except those hidden through Alts (hidden characters
+-- are left out of the plan's mail and alt sources alike). Sorted by charKey.
+local function visible_characters()
+  local S = scanner()
+  local alts = enabled_module("Alts")
+  local hidden = alts and alts:Settings().hidden
+  if type(hidden) ~= "table" then hidden = {} end
+  local out = {}
+  for _, charKey in ipairs(S and S:GetCharacters() or {}) do
+    if type(charKey) == "string" and not hidden[charKey] then out[#out + 1] = charKey end
+  end
+  return out
+end
+
+-- Seconds since the oldest snapshot behind charKey's bag / bank counts of an item (its Scanner record's itemsTime, each
+-- part falling back to lastSeen); 0 for the logged-in character (the game's own counts); nil when no time is known.
+local function snapshot_age(charKey, counts)
+  if charKey == ns.FS:CharKey() then return 0 end
+  local c = scanner():GetCharacter(charKey)
+  if type(c) ~= "table" then return nil end
+  local times = type(c.itemsTime) == "table" and c.itemsTime or {}
+  local lastSeen = is_number(c.lastSeen) and c.lastSeen or nil
+  local oldest
+  local function seen(t)
+    if t and (oldest == nil or t < oldest) then oldest = t end
+  end
+  if (counts.bags or 0) > 0 then seen(is_number(times.bags) and times.bags or lastSeen) end
+  if (counts.bank or 0) + (counts.reagentBank or 0) > 0 then seen(is_number(times.bank) and times.bank or lastSeen) end
+  return oldest and math.max(0, ns.FS:Now() - oldest) or nil
+end
+
+-- The queued crafts' expected output of itemID: for every queued entry (sub-crafts, crafts queued from the gathering
+-- plan, restock entries) of a recipe that makes the item at the entry's target quality, floor(quantity * expected
+-- yield) (a yield that is not known counts 1). A reagent such a craft will make is not missing.
+local function queued_output(itemID, entries)
+  local found = recipes():FindRecipesForItem(itemID)
+  if #found == 0 then return 0 end
+  local made = 0
+  for _, e in ipairs(entries) do
+    for _, f in ipairs(found) do
+      if e.recipeID == f.recipeID and (e.targetQuality or 1) == f.quality then
+        local result = recipes():Evaluate(e.recipeID, e.charKey, { targetQuality = e.targetQuality })
+        local yield = result and result.expectedYield
+        if not (is_number(yield) and yield >= 1) then yield = 1 end
+        made = made + math.floor(e.quantity * yield)
+        break
+      end
+    end
+  end
+  return made
+end
+
+-- The sources of one missing reagent, in the order mail, alt, warband, craft, vendor, auction house (see GetGatheringPlan).
+local function gather_sources(itemID, characters, planners)
+  local S = scanner()
+  local alts, out = enabled_module("Alts"), {}
+
+  -- Mail: each character with attachments of the item (the mailbox snapshot's count and age).
+  local mail = {}
+  for _, charKey in ipairs(characters) do
+    local count, age = S:GetMailCount(itemID, charKey)
+    if is_number(count) and count > 0 then mail[#mail + 1] = { kind = "mail", charKey = charKey, count = count, ageSeconds = age } end
+  end
+  table.sort(mail, function(a, b)
+    if a.count ~= b.count then return a.count > b.count end
+    return a.charKey < b.charKey
+  end)
+  for _, source in ipairs(mail) do out[#out + 1] = source end
+
+  -- Alts: every other visible character holding the item (not a crafter the plan is for).
+  local holdings = alts and alts:GetHoldings(itemID)
+  if holdings then
+    for _, entry in ipairs(holdings.chars or {}) do
+      if not planners[entry.charKey] then
+        out[#out + 1] = { kind = "alt", charKey = entry.charKey, count = entry.total, ageSeconds = entry.dataAgeSeconds }
+      end
+    end
+  else
+    local held = {}
+    for _, charKey in ipairs(characters) do
+      if not planners[charKey] then
+        local count = S:GetOwnedCount(itemID, charKey, false)
+        if is_number(count) and count > 0 then
+          held[#held + 1] = { kind = "alt", charKey = charKey, count = count,
+            ageSeconds = snapshot_age(charKey, S:GetItemCount(itemID, charKey)) }
+        end
+      end
+    end
+    table.sort(held, function(a, b)
+      if a.count ~= b.count then return a.count > b.count end
+      return a.charKey < b.charKey
+    end)
+    for _, source in ipairs(held) do out[#out + 1] = source end
+  end
+
+  -- Warband bank: a source only while the queue does not already count it as held.
+  if not recipes():GetSetting("queueUseWarband") then
+    local count, age
+    if holdings then
+      count, age = holdings.warband, holdings.warbandAgeSeconds
+    else
+      count = S:GetWarbandCount(itemID)
+      local g = global()
+      local w = g and g.warband
+      if S:GetLiveOwnedCount(itemID, true) ~= nil then
+        age = 0
+      elseif type(w) == "table" and is_number(w.time) then
+        age = math.max(0, ns.FS:Now() - w.time)
+      end
+    end
+    if is_number(count) and count > 0 then out[#out + 1] = { kind = "warband", count = count, ageSeconds = age } end
+  end
+
+  -- Craft: the cheapest crafter's craft of one item (Intermediates).
+  local intermediates = enabled_module("Intermediates")
+  local option = intermediates and intermediates:CraftOption(itemID)
+  if option then
+    out[#out + 1] = { kind = "craft", charKey = option.charKey, unitPrice = option.unit, recipeID = option.recipeID,
+      quality = option.quality, yield = option.yield }
+  end
+
+  -- Vendor and auction house: the one price Prices:Get answers.
+  local P = ns.FS:GetModule("Prices", true)
+  local price = P and P:Get(itemID)
+  if type(price) == "table" and price.source == "vendor" then
+    out[#out + 1] = { kind = "vendor", unitPrice = price.value }
+  elseif type(price) == "table" and price.source == "auction" then
+    out[#out + 1] = { kind = "ah", unitPrice = price.value,
+      ageSeconds = is_number(price.ageDays) and price.ageDays * DAY or nil }
+  end
+  return out
+end
+
+local function plan_name(itemID)
+  local fn = type(C_Item) == "table" and C_Item.GetItemNameByID
+  local ok, name = false, nil
+  if type(fn) == "function" then ok, name = pcall(fn, itemID) end
+  if ok and type(name) == "string" and name ~= "" then return name:lower() end
+  return "item:" .. itemID
+end
+
+-- GatherRow = { itemID, need, sources = { GatherSource }, choice = "craft"|"buy"|nil } for each reagent the queue is still
+-- short of (GetMissingReagents(charKey): after everything the crafter holds, bank and warband included) that no queued
+-- craft will make, sorted by item name (the cached name, else item:<id>; case ignored), then itemID. need = the missing
+-- count less what queued crafts of the item will produce (queued_output; a reagent they cover leaves the plan).
+-- GatherSource = { kind, charKey?, count?, unitPrice?, ageSeconds?, recipeID?, quality?, yield? }, in this order:
+--   "mail"    each visible character with attachments of the item: count, ageSeconds of its mailbox snapshot.
+--   "alt"     each visible character holding the item in bags, bank or reagent bank, except the characters the plan is for
+--             (charKey; nil = every character with a queued craft): count, ageSeconds (Alts:GetHoldings while Alts is on,
+--             else the Scanner snapshots).
+--   "warband" only while settings.crafting.queueUseWarband is off and the warband bank holds some: count, ageSeconds.
+--   "craft"   only while Intermediates is on and someone can make the item (Intermediates:CraftOption): charKey = the
+--             crafter, unitPrice = the cost of one item (nil = unknown), recipeID, quality, yield (items per craft, nil =
+--             unknown).
+--   "vendor"  Prices:Get says source "vendor": unitPrice.
+--   "ah"      Prices:Get says source "auction": unitPrice, ageSeconds = ageDays * 86400 (nil = unknown).
+-- A count, price or age that is not known stays nil (shown "?"), never 0. choice is the player's saved Craft / Buy choice
+-- for the item (Intermediates:GetChoice); nil = the cheaper one. Reads only.
+function Queue:GetGatheringPlan(charKey)
+  local entries, own = self:GetEntries(), {}
+  for _, e in ipairs(entries) do
+    if charKey == nil or e.charKey == charKey then own[#own + 1] = e end
+  end
+  local missing = missing_total(own)   -- what GetMissingReagents(charKey) answers
+  local characters = visible_characters()
+  -- The characters the plan is for: charKey, or (nil) every character with a queued craft. Their holdings are the
+  -- plan's own, so they are not alt sources.
+  local planners = {}
+  if charKey ~= nil then
+    planners[charKey] = true
+  else
+    for _, e in ipairs(own) do planners[e.charKey] = true end
+  end
+  local intermediates = ns.FS:GetModule("Intermediates", true)
+  local rows = {}
+  for itemID, qty in pairs(missing) do
+    local need = qty - queued_output(itemID, entries)
+    if need > 0 then
+      rows[#rows + 1] = { itemID = itemID, need = need, sources = gather_sources(itemID, characters, planners),
+        choice = intermediates and intermediates:GetChoice(itemID) or nil }
+    end
+  end
+  local names = {}
+  for _, row in ipairs(rows) do names[row.itemID] = plan_name(row.itemID) end
+  table.sort(rows, function(a, b)
+    if names[a.itemID] ~= names[b.itemID] then return names[a.itemID] < names[b.itemID] end
+    return a.itemID < b.itemID
+  end)
+  return rows
+end
+
+---------------------------------------------------------------------------
 -- Lifecycle
 ---------------------------------------------------------------------------
 

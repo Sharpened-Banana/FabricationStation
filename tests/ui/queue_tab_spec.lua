@@ -908,6 +908,278 @@ describe("Queue tab", function()
     end)
   end)
 
+  -- Phase 7 Task 15: the Gather page. The world has recipe 9100 (makes reagent 1001 from 2 x 1101 at 20 each: a craft
+  -- of one costs 40c, the AH asks 100c); recipe 9001's plan is 1001 x2 and 2002 x1 (Main-Realm is the logged-in
+  -- character). OrdersPanel and FeatureLines are loaded: real CompactMoney, and the profession panel to refresh.
+  describe("Gather page", function()
+    local ALT = "Alt-Realm"
+    local DAY = 86400
+    local RED = "|cffff4040"
+    local function gather() return QT:GetView().gather end
+    local function open_gather()
+      MW:Show("queue")
+      click(QT:GetView().sections.gather)
+      return gather()
+    end
+    local function gather_status() return flat(gather().status:GetText()) end
+    local function row_data(itemID)
+      for _, r in ipairs(gather().list.rows) do if r.itemID == itemID then return r end end
+    end
+    local function row_frame(itemID)
+      for _, f in ipairs(gather().list.pool) do if f.data and f.data.itemID == itemID and f:IsShown() then return f end end
+    end
+    local function tooltip_of(frame)
+      local lines = {}
+      local saved = _G.GameTooltip
+      _G.GameTooltip = { SetOwner = function() end, SetText = function(_, t) lines[#lines + 1] = t end,
+        AddLine = function(_, t) lines[#lines + 1] = t end, Show = function() end, Hide = function() end }
+      frame:GetScript("OnEnter")(frame)
+      _G.GameTooltip = saved
+      return lines
+    end
+
+    -- Buttons that keep their text (the shared stubs make SetText a no-op), as characters_tab_spec does.
+    local function keep_button_text()
+      local real = _G.CreateFrame
+      _G.CreateFrame = function(frameType, name, parent, template)
+        local f = real(frameType, name, parent, template)
+        if frameType == "Button" then
+          local text
+          function f:SetText(t) text = t end
+          function f:GetText() return text end
+        end
+        return f
+      end
+    end
+
+    before_each(function()
+      ns, W, world = make_world({ last = "UI/FeatureLines.lua", intermediates = true })
+      keep_button_text()
+      Tab = ns.UI.QueueTab; QT = ns.FS:GetModule("QueueTab"); MW = ns.FS:GetModule("MainWindow")
+      Queue = ns.FS:GetModule("Queue")
+      world.fakeEvaluate(9001, { allocation = { { slotIndex = 1, itemID = 1001, quantity = 2 },
+        { slotIndex = 2, itemID = 2002, quantity = 1 } }, reagentCost = 900, flags = {} })
+      world.names[1001], world.names[2002] = "Bright Ore", "Glimmer Dust"
+    end)
+
+    it("is the third section button", function()
+      assert.same({ "queue", "Queue" }, { Tab.SECTIONS[1].id, Tab.SECTIONS[1].label })
+      assert.same({ "gather", "Gather" }, { Tab.SECTIONS[3].id, Tab.SECTIONS[3].label })
+      MW:Show("queue")
+      local v = QT:GetView()
+      assert.same({ false, false }, { v.gather.panel:IsShown(), v.lists.panel:IsShown() })
+      click(v.sections.gather)
+      assert.equal("gather", Tab.GetSection())
+      assert.same({ false, false, false, false, false, true }, { v.bar:IsShown(), v.headerBar:IsShown(),
+        v.restockPanel:IsShown(), v.empty:IsShown(), v.lists.panel:IsShown(), v.gather.panel:IsShown() })
+      click(v.sections.lists)
+      assert.same({ false, true }, { v.gather.panel:IsShown(), v.lists.panel:IsShown() })
+      click(v.sections.queue)
+      assert.same({ true, false, false }, { v.bar:IsShown(), v.gather.panel:IsShown(), v.lists.panel:IsShown() })
+    end)
+
+    it("words each source: kind, count and character, or kind and price", function()
+      assert.equals("Mail 4 (Alt)", Tab.SourceText({ kind = "mail", charKey = ALT, count = 4 }))
+      assert.equals("Alt 3 (Main)", Tab.SourceText({ kind = "alt", charKey = "Main-Realm", count = 3 }))
+      assert.equals("Alt ? (Main)", Tab.SourceText({ kind = "alt", charKey = "Main-Realm" }))
+      assert.equals("Warband bank 7", Tab.SourceText({ kind = "warband", count = 7 }))
+      assert.equals("Warband bank ?", Tab.SourceText({ kind = "warband" }))
+      assert.equals("Craft 40c (Main)", Tab.SourceText({ kind = "craft", charKey = "Main-Realm", unitPrice = 40 }))
+      assert.equals("Craft ? (Main)", Tab.SourceText({ kind = "craft", charKey = "Main-Realm" }))
+      assert.equals("Vendor 5s", Tab.SourceText({ kind = "vendor", unitPrice = 500 }))
+      assert.equals("Auction house 1,234g", Tab.SourceText({ kind = "ah", unitPrice = 12340000 }))
+      assert.equals("Auction house ?", Tab.SourceText({ kind = "ah" }))
+    end)
+
+    it("lists each missing reagent with its need and sources, first source first", function()
+      add(1)
+      world.chars[ALT].mail = { time = W.now - 3600, items = { [1001] = 1 } }
+      world.items[ALT][2002] = { bags = 4, bank = 0, reagentBank = 0 }
+      world.chars[ALT].itemsTime = { bags = W.now - DAY }
+      local g = open_gather()
+      assert.equals(2, #g.list.rows)
+      local ore, dust = row_data(1001), row_data(2002)
+      assert.same({ "Bright Ore", 2 }, { ore.name, ore.need })
+      assert.same({ "Glimmer Dust", 1 }, { dust.name, dust.need })
+      assert.equals("Mail 1 (Alt) \194\183 Craft 40c (Main) \194\183 Auction house 1s", flat(Tab.SourcesText(ore)))
+      assert.equals("Alt 4 (Alt) \194\183 Auction house 3s", flat(Tab.SourcesText(dust)))
+      local frame = row_frame(1001)
+      assert.equals("Bright Ore", frame.name:GetText())
+      assert.equals("2", frame.need:GetText())
+      assert.equals("Mail 1 (Alt) \194\183 Craft 40c (Main) \194\183 Auction house 1s", flat(frame.sources:GetText()))
+    end)
+
+    it("says when a reagent has no source at all, and when nothing is missing", function()
+      add(1)
+      world.prices[2002] = nil
+      local g = open_gather()
+      assert.equals("No source known", flat(Tab.SourcesText(row_data(2002))))
+      Queue:Clear(); MW:RefreshTab("queue")
+      assert.equals(0, #g.list.rows)
+      assert.equals("Nothing to gather: no reagents are missing", flat(g.empty:GetText()))
+    end)
+
+    it("shows the choice button only on rows that can be crafted", function()
+      add(1)
+      open_gather()
+      local ore, dust = row_frame(1001), row_frame(2002)
+      assert.same({ true, "Auto", true }, { ore.choiceButton:IsShown(), ore.choiceButton:GetText(), ore.queueButton:IsShown() })
+      assert.same({ false, false }, { dust.choiceButton:IsShown(), dust.queueButton:IsShown() })
+      assert.equals("Queue craft", ore.queueButton:GetText())
+    end)
+
+    it("cycles the choice and stores it", function()
+      add(1)
+      local I = ns.FS:GetModule("Intermediates")
+      open_gather()
+      local function press() click(row_frame(1001).choiceButton) end
+      press()
+      assert.same({ "craft", "Craft" }, { I:GetChoice(1001), row_frame(1001).choiceButton:GetText() })
+      assert.equals("craft", row_data(1001).choice)
+      press()
+      assert.same({ "buy", "Buy" }, { I:GetChoice(1001), row_frame(1001).choiceButton:GetText() })
+      press()
+      assert.same({ nil, "Auto" }, { I:GetChoice(1001), row_frame(1001).choiceButton:GetText() })
+      assert.same({}, ns.FS.db.global.intermediateChoices)
+    end)
+
+    it("asks the profession panel to redraw so its intermediate line follows the choice", function()
+      add(1)
+      local panel = ns.FS:GetModule("ProfessionPanel")
+      local redraws = 0
+      panel.RefreshLines = function() redraws = redraws + 1 end
+      open_gather()
+      click(row_frame(1001).choiceButton)
+      assert.equals(1, redraws)
+      panel.RefreshLines = function() error("boom") end                -- a failing redraw is isolated
+      click(row_frame(1001).choiceButton)
+      assert.equals("buy", ns.FS:GetModule("Intermediates"):GetChoice(1001))
+    end)
+
+    it("queues the reagent's craft", function()
+      add(1)
+      open_gather()
+      click(row_frame(1001).queueButton)
+      local entries = Queue:GetEntries()
+      assert.equals(2, #entries)
+      -- Recipe 9100 makes one 1001 a craft: two are needed.
+      assert.same({ 9100, 2, "Main-Realm", 1 }, { entries[2].recipeID, entries[2].quantity, entries[2].charKey,
+        entries[2].targetQuality })
+      assert.equals("Queued Sub Recipe 9100 (Main)", gather_status())
+      -- The queued craft covers the reagent: its row leaves the plan.
+      assert.is_nil(row_data(1001)); assert.is_truthy(row_data(2002))
+    end)
+
+    it("queues enough crafts for a recipe that makes several", function()
+      add(1)
+      world.fakeEvaluate(9100, { allocation = { { slotIndex = 1, itemID = 1101, quantity = 2 } }, reagentCost = 40,
+        expectedYield = 1.5, flags = {} })
+      open_gather()
+      click(row_frame(1001).queueButton)
+      assert.equals(2, Queue:GetEntries()[2].quantity)       -- ceil(2 / 1.5)
+    end)
+
+    it("marks old snapshots with their age in the tooltip", function()
+      add(1)
+      world.chars[ALT].mail = { time = W.now - 9 * DAY, items = { [1001] = 1 } }
+      world.items[ALT][1001] = { bags = 2, bank = 0, reagentBank = 0 }
+      world.chars[ALT].itemsTime = { bags = W.now - 2 * 3600 }
+      open_gather()
+      local lines = tooltip_of(row_frame(1001))
+      assert.equals("Bright Ore", lines[1])
+      assert.is_truthy(lines[2]:find(RED .. "9d ago|r", 1, true))      -- stale: past 7 days, red
+      assert.is_truthy(lines[2]:find("Mail 1 (Alt)", 1, true))
+      assert.is_truthy(lines[3]:find("Alt 2 (Alt)", 1, true)); assert.is_truthy(lines[3]:find("2h ago", 1, true))
+      assert.is_falsy(lines[3]:find(RED, 1, true))                     -- fresh: not red
+      assert.is_truthy(lines[4]:find("Craft 40c (Main)", 1, true))     -- a craft has no age
+      assert.is_falsy(lines[4]:find("ago", 1, true))
+      assert.is_truthy(lines[5]:find("Auction house", 1, true)); assert.is_truthy(lines[5]:find("1d ago", 1, true))
+      assert.equals(5, #lines)
+    end)
+
+    it("uses the Alts stale-days setting for red", function()
+      add(1)
+      world.chars[ALT].mail = { time = W.now - 2 * DAY, items = { [1001] = 1 } }
+      open_gather()
+      assert.is_falsy(tooltip_of(row_frame(1001))[2]:find(RED, 1, true))
+      ns.FS:GetModule("Alts"):Settings().staleDays = 1
+      assert.is_truthy(tooltip_of(row_frame(1001))[2]:find(RED .. "2d ago|r", 1, true))
+    end)
+
+    it("shows an unknown age in red", function()
+      add(1)
+      world.chars[ALT].mail = { items = { [1001] = 1 } }
+      open_gather()
+      assert.is_truthy(tooltip_of(row_frame(1001))[2]:find(RED .. "age unknown|r", 1, true))
+    end)
+
+    it("toggles between every character and this one", function()
+      add(1)
+      Queue:Add({ recipeID = 9001, quantity = 1, charKey = ALT })
+      local g = open_gather()
+      assert.equals("Characters: all", g.characters:GetText())
+      assert.equals(4, row_data(1001).need)
+      click(g.characters)
+      assert.equals("Characters: this one", g.characters:GetText())
+      assert.equals(2, row_data(1001).need)
+      click(g.characters)
+      assert.same({ "Characters: all", 4 }, { g.characters:GetText(), row_data(1001).need })
+    end)
+
+    it("has the Shopping List button, reporting in its own status line", function()
+      local api = world.recordAuctionatorTerms()
+      add(1)
+      local g = open_gather()
+      assert.equals("Shopping List", g.shoppingButton:GetText())
+      click(g.shoppingButton)
+      assert.equals(2, api.terms[1].quantity)
+      assert.equals("Shopping list updated (2 items)", gather_status())
+    end)
+
+    it("says the queue is read-only and changes nothing when the saved data is from a newer version", function()
+      add(1)
+      local I = ns.FS:GetModule("Intermediates")
+      local g = open_gather()
+      ns.FS.dbIsNewer = true
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      click(row_frame(1001).choiceButton)
+      assert.equals(READ_ONLY, gather_status()); assert.is_nil(I:GetChoice(1001))
+      g.status:SetText("")
+      click(row_frame(1001).queueButton)
+      assert.equals(READ_ONLY, gather_status())
+      assert.equals(1, #Queue:GetEntries())
+      assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+    end)
+
+    it("leaves a craft source out while Intermediates is off", function()
+      add(1)
+      ns.FS:GetModule("Intermediates"):Disable()
+      open_gather()
+      assert.is_false(row_frame(1001).choiceButton:IsShown()); assert.is_false(row_frame(1001).queueButton:IsShown())
+      assert.is_falsy(Tab.SourcesText(row_data(1001)):find("Craft", 1, true))
+    end)
+
+    it("does not compute the queue rows while the Gather page is shown", function()
+      add(1)
+      MW:Show("queue")
+      local calls = 0
+      local original = Queue.GetEntryResult
+      Queue.GetEntryResult = function(...) calls = calls + 1; return original(...) end
+      click(QT:GetView().sections.gather)
+      MW:RefreshTab("queue")
+      Queue.GetEntryResult = original
+      assert.equals(0, calls)
+    end)
+
+    it("refreshes with the queue while shown", function()
+      local g = open_gather()
+      assert.equals(0, #g.list.rows)
+      Queue:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      W.advance(1)
+      assert.equals(2, #g.list.rows)
+    end)
+  end)
+
   describe("refreshing", function()
     it("refreshes after a burst of FS_QUEUE_CHANGED while the tab is shown", function()
       MW:Show("queue")

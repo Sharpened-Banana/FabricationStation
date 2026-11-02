@@ -1359,6 +1359,20 @@ Links): the row shows a red "×" where the profit goes, with the red risk count 
 room for the other cells; hover the "×": "You have not learned this recipe", then where to get it. Craft Next on a
 socket recipe crafts without a socket (none is put in, none is used).
 
+P7-23b. **Where to get reagents.** (Numbered 23b because the socket-slot check above already took 23.) Queue a craft that
+is short of three reagents: one sitting in an alt's bags (that alt seen in this session), one that a character you have
+can craft (and Intermediates is on), and one that only the auction house sells. Open Queue > Gather. Expected: one row
+per missing reagent, the name and how many are needed, and under it the sources in this order: the alt row reads
+"Alt 5 (<alt>)", the craftable one "Craft <cost> (<crafter>)" with the "Auto" and "Queue craft" buttons, the AH one
+"Auction house <price>". Hover each row: every source is listed with the age of its data ("2d ago"; red once it is older
+than the days set under Settings > Characters, or "age unknown"). Put some of the reagent in your mailbox, open the
+mailbox, and the row gains "Mail <n> (<you>)" first; with "Use reagents in the warband bank for the queue" off, a
+reagent in the warband bank shows "Warband bank <n>". Press the choice button: Auto, Craft, Buy in turn, and the side
+panel's "craft ... buy ... crafting/buying" line for a recipe using that reagent follows (open the profession window
+while you press it). "Queue craft" adds the reagent's craft to the queue (the Queue page shows it, and the reagent
+leaves the Gather list); nothing is crafted, bought or moved. "Characters: this one" limits the plan to the logged-in
+character; Shopping List sends the missing reagents to Auctionator, reporting on this page.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

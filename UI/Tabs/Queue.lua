@@ -12,12 +12,21 @@ local L = ns.L
 -- when stale); an entry whose target quality cannot be reached says "[quality unreachable]". While the saved
 -- data is from a newer version every control that would change the queue says it is read-only instead.
 --
--- A row of section buttons above all of it (Tab.SECTIONS: Queue, Lists; session only, Queue is today's layout) switches
+-- A row of section buttons above all of it (Tab.SECTIONS: Queue, Lists, Gather; session only, Queue is today's layout) switches
 -- to the craft lists (phase 7, Task 13): the saved lists on the left, the selected list's recipes on the right (a
 -- character or "best crafter", a quantity stepper, Remove), its rules (min profit, min quality, concentration mode,
 -- best optionals) and the buttons New from queue, Rename, Delete (a second click within 5 s) and Queue list. Queue
 -- list adds the entries the rules allow (CraftLists:QueueList) and says how many it skipped and why; it runs only
 -- from that button's click.
+--
+-- The third page, Gather (phase 7, Task 15), is the gathering plan (Queue:GetGatheringPlan): one row per reagent the
+-- queue is still short of, with its need and where it can come from, in this order: mail, alts, the warband bank (while
+-- the queue does not count it), a craft (Intermediates), a vendor and the auction house. Mail and alt sources name the
+-- count and the character, the others a price (an unknown count or price is "?"). Rows with a craft source have a
+-- button cycling the saved Craft / Buy choice (Auto = the cheaper one; the profession panel's intermediate line is told
+-- to redraw) and a "Queue craft" button; the row's tooltip lists every source with the age of its data (red past
+-- Alts' stale days). The page also has the Shopping List button and a toggle between every character and this one
+-- (session only). It only shows a plan: nothing is gathered, bought or moved from here.
 --
 -- Craft Next is a protected action: the only reference to it is inside the button's OnClick handler (the
 -- structural check in tests/queue/craft_spec.lua enforces that).
@@ -61,10 +70,11 @@ local COLUMNS = {
   { key = "remove", label = "", width = 24 },
 }
 
--- The page buttons. Task 15 appends "gather".
+-- The page buttons.
 Tab.SECTIONS = {
   { id = "queue", label = L["Queue"] },
   { id = "lists", label = L["Lists"] },
+  { id = "gather", label = L["Gather"] },
 }
 local DEFAULT_SECTION = "queue"
 
@@ -73,6 +83,8 @@ local section = DEFAULT_SECTION   -- the page shown; session only (nothing is sa
 local selectedList    -- the id of the craft list shown on the Lists page (session only)
 local confirmDelete   -- the id of the list whose Delete was clicked once, until the second click or DELETE_SECONDS
 local listsStatus, listsStatusTone, listsStatusLines   -- the Lists page's one line of feedback, its tone and tooltip lines
+local gatherThisOne = false   -- the Gather page plans for this character only (session only); false = every character
+local gatherStatus, gatherTone   -- the Gather page's one line of feedback and its tone
 local status, statusKind, statusTone   -- one line of feedback; statusKind "crafted" ends when the queue changes
 local linkHooked      -- true once the item-link hook is installed
 
@@ -1165,6 +1177,254 @@ local function build_lists_page(container, created)
 end
 
 ---------------------------------------------------------------------------
+-- Gather page (phase 7, Task 15)
+---------------------------------------------------------------------------
+
+local GATHER_NEED, GATHER_CHOICE, GATHER_QUEUE = 44, 64, 96
+local GATHER_HEADER_TOP = BAR_TOP + BAR_ROW + STATUS_ROW
+local GATHER_BODY_TOP = GATHER_HEADER_TOP + HEADER_HEIGHT + 4
+local DEFAULT_STALE_DAYS = 7   -- Alts' default, when its settings cannot be read
+
+local KIND_LABELS = {
+  mail = function() return L["Mail"] end,
+  alt = function() return L["Alt"] end,
+  warband = function() return L["Warband bank"] end,
+  craft = function() return L["Craft"] end,
+  vendor = function() return L["Vendor"] end,
+  ah = function() return L["Auction house"] end,
+}
+
+-- Kinds whose data is a snapshot or a price with an age: the tooltip shows it ("age unknown" when it is not known).
+local AGED_KINDS = { mail = true, alt = true, warband = true, ah = true }
+
+-- Money for a narrow cell ("1,234g", "45s", "7c"): OrdersPanel's CompactMoney when loaded (it loads after this file),
+-- else the full FormatMoney. "?" for unknown money.
+local function compact_money(copper)
+  if type(copper) ~= "number" then return "?" end
+  local panel = ns.UI.OrdersPanel
+  return panel and panel.CompactMoney and panel.CompactMoney(copper) or ns.UI.FormatMoney(copper)
+end
+
+-- One GatherSource as the row shows it: "Mail 4 (Aria)" / "Alt 3 (Bob)" (kind, count, character), "Warband bank 7", "Craft
+-- 40c (Aria)" (kind, price of one, crafter), "Vendor 5s", "Auction house 12g". A count or price that is not known
+-- (nil) reads "?", never 0.
+function Tab.SourceText(source)
+  local label = KIND_LABELS[source.kind]
+  label = label and label() or tostring(source.kind)
+  local kind, count = source.kind, source.count
+  if kind == "mail" or kind == "alt" then
+    local who = short_name(source.charKey)
+    if type(count) == "number" then return L["%s %d (%s)"]:format(label, count, who) end
+    return L["%s %s (%s)"]:format(label, "?", who)
+  elseif kind == "warband" then
+    if type(count) == "number" then return L["%s %d"]:format(label, count) end
+    return L["%s %s"]:format(label, "?")
+  elseif kind == "craft" then
+    return L["%s %s (%s)"]:format(label, compact_money(source.unitPrice), short_name(source.charKey))
+  end
+  return L["%s %s"]:format(label, compact_money(source.unitPrice))
+end
+
+-- A row's sources on one line, in plan order; a dim note when there are none.
+function Tab.SourcesText(row)
+  local parts = {}
+  for i, source in ipairs(row.sources) do parts[i] = Tab.SourceText(source) end
+  if #parts == 0 then return color(DIM, L["No source known"]) end
+  return table.concat(parts, DOT)
+end
+
+-- GetGatheringPlan output -> rows { itemID, name, need, sources, choice, craft = the craft source|nil, sourcesText }.
+function Tab.BuildGatherRows(plan)
+  local rows = {}
+  for i, p in ipairs(plan or {}) do
+    local craft
+    for _, source in ipairs(p.sources) do
+      if source.kind == "craft" then craft = source; break end
+    end
+    rows[i] = { itemID = p.itemID, name = item_name(p.itemID), need = p.need, sources = p.sources, choice = p.choice,
+      craft = craft }
+    rows[i].sourcesText = Tab.SourcesText(rows[i])
+  end
+  return rows
+end
+
+-- The saved Craft / Buy choice after the next click: Auto (nil, the cheaper one) -> Craft -> Buy -> Auto.
+local NEXT_CHOICE = { craft = "buy", buy = false }
+function Tab.NextChoice(choice)
+  local after = NEXT_CHOICE[choice]
+  if after == nil then return "craft" end
+  return after or nil
+end
+
+-- The choice button's text: the choice now in force.
+function Tab.ChoiceText(choice)
+  if choice == "craft" then return L["Craft"] end
+  if choice == "buy" then return L["Buy"] end
+  return L["Auto"]
+end
+
+-- Seconds after which a snapshot reads as old: Alts' stale days setting.
+function Tab.StaleSeconds()
+  local alts = module("Alts")
+  local settings = alts and alts:Settings()
+  local days = type(settings) == "table" and settings.staleDays or nil
+  return (type(days) == "number" and days or DEFAULT_STALE_DAYS) * DAY
+end
+
+-- The tooltip lines of a Gather row: its item, then every source with the age of its data ("2d ago", red past
+-- staleSeconds; "age unknown" in red when a snapshot has no time). A craft and a vendor price have no age.
+function Tab.GatherTooltip(row, staleSeconds)
+  staleSeconds = staleSeconds or Tab.StaleSeconds()
+  local lines = { row.name }
+  for _, source in ipairs(row.sources) do
+    local line = Tab.SourceText(source)
+    if source.ageSeconds ~= nil then
+      local age = L["%s ago"]:format(ns.UI.FormatAge(source.ageSeconds))
+      line = line .. DOT .. (source.ageSeconds > staleSeconds and color(BAD, age) or age)
+    elseif AGED_KINDS[source.kind] then
+      line = line .. DOT .. color(BAD, L["age unknown"])
+    end
+    lines[#lines + 1] = line
+  end
+  return lines
+end
+
+local function show_gather_status()
+  if not view or not view.gather then return end
+  view.gather.status:SetText(gatherStatus or "")
+  local tone = TONES[gatherTone] or TONES.plain
+  view.gather.status:SetTextColor(tone[1], tone[2], tone[3])
+end
+
+local function set_gather_status(text, tone)
+  gatherStatus, gatherTone = text, tone
+  show_gather_status()
+end
+
+-- True (after saying so) while the saved data is from a newer version and nothing can be changed.
+local function gather_read_only()
+  if not ns.FS.dbIsNewer then return false end
+  set_gather_status(READ_ONLY, "bad")
+  return true
+end
+
+-- The profession panel's intermediate line reads the saved choice when it draws: ask it to draw again. Nothing
+-- happens while it is hidden or shows no recipe; an error in it is logged, not raised.
+local function refresh_profession_panel()
+  local panel = module("ProfessionPanel")
+  if panel and type(panel.RefreshLines) == "function" then
+    ns.FS:SafeCall("QueueTab:Gather", panel.RefreshLines, panel)
+  end
+end
+
+-- The choice button: Auto -> Craft -> Buy -> Auto, saved through Intermediates:SetChoice (the one store).
+local function cycle_choice(data)
+  if not data or not data.craft or gather_read_only() then return end
+  local intermediates = module("Intermediates")
+  if not intermediates then return end
+  intermediates:SetChoice(data.itemID, Tab.NextChoice(data.choice))
+  refresh_profession_panel()
+  request_refresh()
+end
+
+-- Queue craft: enough crafts of the craft source's recipe, by its crafter, for the need (ceil(need / yield)). One
+-- click, one entry; nothing is crafted.
+local function queue_craft(data)
+  if not data or not data.craft or gather_read_only() then return end
+  local queue = module("Queue")
+  if not queue then return end
+  local craft = data.craft
+  local yield = type(craft.yield) == "number" and craft.yield >= 1 and craft.yield or 1
+  local id = queue:Add({ recipeID = craft.recipeID, quantity = math.ceil(data.need / yield), charKey = craft.charKey,
+    targetQuality = craft.quality })
+  if id then
+    set_gather_status(L["Queued %s (%s)"]:format(recipe_name(craft.recipeID), short_name(craft.charKey)), "good")
+  else
+    set_gather_status(L["Not queued: the Queue is turned off"], "bad")
+  end
+  request_refresh()
+end
+
+local function create_gather_row(list)
+  local row = CreateFrame("Frame", nil, list.child)
+  row:SetHeight(ROW_HEIGHT)
+  row.background = row:CreateTexture(nil, "BACKGROUND")
+  row.background:SetAllPoints(row)
+  local top = CreateFrame("Frame", nil, row)
+  top:SetHeight(LINE_HEIGHT)
+  top:SetPoint("TOPLEFT", row, "TOPLEFT", 0, 0)
+  top:SetPoint("TOPRIGHT", row, "TOPRIGHT", 0, 0)
+  row.queueButton = create_button(top, L["Queue craft"], GATHER_QUEUE)
+  row.queueButton:SetPoint("RIGHT", top, "RIGHT", -PAD, 0)
+  row.choiceButton = create_button(top, L["Auto"], GATHER_CHOICE)
+  row.choiceButton:SetPoint("RIGHT", row.queueButton, "LEFT", -GAP, 0)
+  row.need = top:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.need:SetPoint("RIGHT", row.choiceButton, "LEFT", -GAP, 0)
+  row.need:SetWidth(GATHER_NEED)
+  row.need:SetJustifyH("RIGHT")
+  row.name = top:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.name:SetPoint("LEFT", top, "LEFT", PAD, 0)
+  row.name:SetPoint("RIGHT", row.need, "LEFT", -GAP, 0)
+  row.name:SetJustifyH("LEFT")
+  row.name:SetWordWrap(false)
+  row.sources = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.sources:SetPoint("TOPLEFT", top, "BOTTOMLEFT", PAD + 8, 0)
+  row.sources:SetPoint("TOPRIGHT", top, "BOTTOMRIGHT", -PAD, 0)
+  row.sources:SetJustifyH("LEFT")
+  row.sources:SetWordWrap(false)
+
+  -- SetScript is deliberate: the buttons are our own and OnClick is their whole job.
+  row.choiceButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:Gather", function() cycle_choice(row.data) end))
+  row.queueButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:Gather", function() queue_craft(row.data) end))
+  -- Hover only (the buttons keep their clicks): every source with the age of its data.
+  row:SetMouseMotionEnabled(true)
+  row:SetScript("OnEnter", ns.FS:Wrap("QueueTab:Tooltip", function(self)
+    if not self.data or type(GameTooltip) ~= "table" then return end
+    local lines = Tab.GatherTooltip(self.data)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(lines[1])
+    for i = 2, #lines do GameTooltip:AddLine(lines[i], 1, 1, 1, true) end
+    GameTooltip:Show()
+  end))
+  row:SetScript("OnLeave", function()
+    if type(GameTooltip) == "table" then GameTooltip:Hide() end
+  end)
+  return row
+end
+
+local function bind_gather_row(row, data, index)
+  row.background:SetColorTexture(1, 1, 1, index % 2 == 0 and 0.04 or 0)
+  row.name:SetText(data.name)
+  row.need:SetText(tostring(data.need))
+  row.sources:SetText(data.sourcesText)
+  if data.craft then
+    row.choiceButton:SetText(Tab.ChoiceText(data.choice))
+    row.choiceButton:Show()
+    row.queueButton:Show()
+  else
+    row.choiceButton:Hide()
+    row.queueButton:Hide()
+  end
+end
+
+-- Fills the Gather page from the gathering plan of every character, or of this one.
+local function refresh_gather()
+  local v = view.gather
+  local queue = module("Queue")
+  local plan = queue and queue:GetGatheringPlan(gatherThisOne and ns.FS:CharKey() or nil) or {}
+  list_set_rows(v.list, Tab.BuildGatherRows(plan))
+  v.characters:SetText(gatherThisOne and L["Characters: this one"] or L["Characters: all"])
+  if not queue then
+    v.empty:SetText(color(DIM, L["The queue is not available."]))
+  elseif #v.list.rows == 0 then
+    v.empty:SetText(color(DIM, L["Nothing to gather: no reagents are missing"]))
+  else
+    v.empty:SetText("")
+  end
+  show_gather_status()
+end
+
+---------------------------------------------------------------------------
 -- Refresh
 ---------------------------------------------------------------------------
 
@@ -1173,7 +1433,8 @@ local function apply_section()
   local queuePage = section == "queue"
   for _, part in ipairs(view.queueParts) do if queuePage then part:Show() else part:Hide() end end
   if not queuePage then view.empty:Hide() end
-  if queuePage then view.lists.panel:Hide() else view.lists.panel:Show() end
+  if section == "lists" then view.lists.panel:Show() else view.lists.panel:Hide() end
+  if section == "gather" then view.gather.panel:Show() else view.gather.panel:Hide() end
   for id, b in pairs(view.sections) do
     if id == section then b:LockHighlight() else b:UnlockHighlight() end
   end
@@ -1184,6 +1445,10 @@ local function refresh()
   apply_section()
   if section == "lists" then
     refresh_lists()
+    return
+  end
+  if section == "gather" then
+    refresh_gather()
     return
   end
   local queue = module("Queue")
@@ -1253,16 +1518,18 @@ local function show_craft_result(result)
   set_status(text, tone, result.status == "crafted" and "crafted" or nil)
 end
 
-local function export_shopping_list()
+-- say(text, tone) shows the result; the Queue page's status line unless the Gather page passes its own.
+local function export_shopping_list(say)
+  say = say or set_status
   local queue = module("Queue")
   if not queue then
-    set_status(L["The queue is not available"], "bad")
+    say(L["The queue is not available"], "bad")
     return
   end
   local function show(ok, info)
     local skipped = type(info) == "table" and info.skipped or 0
     local tone = not ok and "warn" or (skipped == 0 and "good" or (info.loading and "plain" or "warn"))
-    set_status(Tab.ShoppingText(ok, info), tone)
+    say(Tab.ShoppingText(ok, info), tone)
   end
   -- The second call comes later, when the item names the first export waited for have arrived.
   local ok, info = queue:ExportShoppingList(show)
@@ -1381,6 +1648,60 @@ local function build_restock_panel(container, created)
   return panel
 end
 
+local function build_gather_page(container, created)
+  local v = {}
+  local panel = CreateFrame("Frame", nil, container)
+  panel:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -SECTION_BAR)
+  panel:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
+  v.panel = panel
+  local function button(x, width, label, handler)
+    local b = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    b:SetSize(width, BAR_ROW - 4)
+    b:SetPoint("TOPLEFT", panel, "TOPLEFT", x, -BAR_TOP)
+    b:SetText(label)
+    b:SetScript("OnClick", ns.FS:Wrap("QueueTab:Gather", handler))
+    return b
+  end
+  v.shoppingButton = button(PAD, 110, L["Shopping List"], function() export_shopping_list(set_gather_status) end)
+  v.characters = button(PAD + 110 + GAP, 150, L["Characters: all"], function()
+    gatherThisOne = not gatherThisOne
+    request_refresh()
+  end)
+
+  v.status = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  v.status:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD + 2, -(BAR_TOP + BAR_ROW + 2))
+  v.status:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -PAD, -(BAR_TOP + BAR_ROW + 2))
+  v.status:SetJustifyH("LEFT")
+  v.status:SetWordWrap(false)
+
+  local headerBar = CreateFrame("Frame", nil, panel)
+  headerBar:SetHeight(HEADER_HEIGHT)
+  headerBar:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -GATHER_HEADER_TOP)
+  headerBar:SetPoint("TOPRIGHT", panel, "TOPRIGHT", 0, -GATHER_HEADER_TOP)
+  local needHeader = headerBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  needHeader:SetPoint("RIGHT", headerBar, "RIGHT", -(PAD + GATHER_QUEUE + GAP + GATHER_CHOICE + GAP), 0)
+  needHeader:SetWidth(GATHER_NEED)
+  needHeader:SetJustifyH("RIGHT")
+  needHeader:SetText(L["Need"])
+  local itemHeader = headerBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  itemHeader:SetPoint("LEFT", headerBar, "LEFT", PAD, 0)
+  itemHeader:SetPoint("RIGHT", needHeader, "LEFT", -GAP, 0)
+  itemHeader:SetJustifyH("LEFT")
+  itemHeader:SetText(L["Item"])
+
+  v.list = new_list(panel, ROW_HEIGHT, DEFAULT_VIEW_HEIGHT, create_gather_row, bind_gather_row, "QueueTab:Scroll")
+  v.list.scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -GATHER_BODY_TOP)
+  v.list.scroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", 0, 0)
+  v.empty = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  v.empty:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD + 4, -(GATHER_BODY_TOP + 8))
+  v.empty:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -PAD - 4, -(GATHER_BODY_TOP + 8))
+  v.empty:SetJustifyH("LEFT")
+
+  panel:Hide()
+  created.gather = v
+  return panel
+end
+
 local function build(container)
   local created = { container = container }
 
@@ -1413,7 +1734,7 @@ local function build(container)
     return button
   end
   created.shoppingButton = bar_button(0, 110, L["Shopping List"])
-  created.shoppingButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:Shopping", export_shopping_list))
+  created.shoppingButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:Shopping", function() export_shopping_list() end))
   created.clearButton = bar_button(114, 70, L["Clear"])
   created.clearButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:Clear", function()
     edit_queue(function(queue) queue:Clear() end)
@@ -1447,6 +1768,7 @@ local function build(container)
   -- What the Queue page shows and the Lists page hides.
   created.queueParts = { created.bar, created.headerBar, created.queue.scroll, created.restockPanel }
   build_lists_page(container, created)
+  build_gather_page(container, created)
   view = created
 end
 
