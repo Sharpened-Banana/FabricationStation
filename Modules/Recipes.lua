@@ -88,14 +88,18 @@ function Recipes:GetSetting(key)
   return value
 end
 
+-- Settings no recipe result depends on: a change moves no data stamp and starts no rescan.
+local NO_RESULT_EFFECT = { bankPullUseWarband = true }
+
 -- Stores settings.crafting[key] (created lazily). A change moves every data stamp, so cached
--- evaluations that depend on settings are recomputed.
+-- evaluations that depend on settings are recomputed (not for NO_RESULT_EFFECT keys).
 local function set_setting(key, value)
   if not writable() then return end
   local s = global().settings
   s.crafting = s.crafting or {}
   if s.crafting[key] == value then return end
   s.crafting[key] = value
+  if NO_RESULT_EFFECT[key] then return end
   settingsVersion = settingsVersion + 1
   -- RecipeScan's hook: results computed under the old setting are stale.
   if Recipes.OnCraftingSettingChanged then Recipes:OnCraftingSettingChanged(key) end

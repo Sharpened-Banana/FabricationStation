@@ -8,16 +8,21 @@ local L = ns.L
 -- No automation (design rule 3): BankPull:Step is the only caller of C_Container.UseContainerItem, SplitContainerItem
 -- and PickupContainerItem, and it is called only from the Retrieve button's OnClick handler
 -- (tests/ui/bank_pull_click_only_spec.lua). One press makes at most one move; after it nothing moves until the next
--- BAG_UPDATE_DELAYED or 3 s (the in-flight lock). On BANKFRAME_OPENED the panel is only shown. Besides the three
--- moves Step reads only GetContainerNumSlots, GetContainerItemInfo, GetContainerNumFreeSlots, C_Item.GetItemCount,
--- C_Bank.CanViewBank(Enum.BankType.Account), GetCursorInfo and InCombatLockdown, and calls ClearCursor only to put
--- back its own split when no bag slot took it.
+-- BAG_UPDATE_DELAYED or 3 s (the in-flight lock). Opening the bank, a bag update or a queue change only shows or
+-- redraws the panel. Besides the three moves Step reads only GetContainerNumSlots, GetContainerItemInfo,
+-- GetContainerNumFreeSlots, C_Item.GetItemCount, C_Item.GetItemFamily, C_Bank.CanViewBank(Enum.BankType.Account),
+-- GetCursorInfo and InCombatLockdown, and calls ClearCursor only to put back its own split when no bag slot took it.
+--
+-- Rows that cannot move never block the rest: a press takes the first plan row that can move now (an unlocked stack,
+-- and room in a bag whose family takes the item), and a row whose move the game did not make (a split that did not
+-- happen or was put back, a used stack still in the bank when the lock ends) is skipped until every other row has been
+-- tried, or the bank is opened again.
 --
 -- Own frames only (rules 2 and 7): the panel is FabricationStationBankPull, parented to UIParent and anchored to
 -- BankFrame's right edge (read-only; nothing of BankFrame is written). Unverified in game: P7-24 (the moves from an
--- addon click, and whether Craft Next already crafts from the bank) and P7-25 (BankFrame is the 12.x bank frame).
--- Every handler runs through ns.FS:Wrap("BankPull", ...); both timers are Debounce keys cancelled in OnDisable.
--- Nothing is saved: the only setting (bankPullUseWarband) is Recipes'.
+-- addon click, the cursor right after a split, the bag families, and whether Craft Next already crafts from the bank)
+-- and P7-25 (BankFrame is the 12.x bank frame). Every handler runs through ns.FS:Wrap("BankPull", ...); both timers
+-- are Debounce keys cancelled in OnDisable. Nothing is saved: the only setting (bankPullUseWarband) is Recipes'.
 local MODULE = "BankPull"
 local BankPull = ns.FS:NewModule(MODULE, "AceEvent-3.0")
 
@@ -40,6 +45,8 @@ local STATUS_TEXT = {
 }
 
 local inFlight = false   -- a move was made and the bags have not updated since (at most FLIGHT_SECONDS)
+local flight             -- the stack the last "moved" press used: { itemID, count, bag, slot }, until the lock ends
+local skipped = {}       -- [itemID] = true: the game did not make its last move this bank visit
 
 ---------------------------------------------------------------------------
 -- Containers
@@ -67,6 +74,13 @@ local function bank_open()
   return S ~= nil and S.bankOpen == true
 end
 
+-- The container reads Plan and Step use exist (the three moves, the cursor calls and ClearCursor are checked in Step).
+local function reads_ready()
+  return type(C_Container) == "table" and type(C_Container.GetContainerNumSlots) == "function"
+    and type(C_Container.GetContainerItemInfo) == "function"
+    and type(C_Container.GetContainerNumFreeSlots) == "function"
+end
+
 -- The warband tabs count while bankPullUseWarband is on and the game lets the player view the warband bank.
 local function warband_counts()
   local R = ns.FS:GetModule("Recipes", true)
@@ -78,19 +92,10 @@ local function warband_counts()
   return ok and can == true
 end
 
--- The bank tabs, then the warband tabs while they count: where Plan counts and Step takes from.
-local function source_bags()
-  local out = bag_list(BANK_NAMES)
-  if warband_counts() then
-    for _, bag in ipairs(bag_list(WARBAND_NAMES)) do out[#out + 1] = bag end
-  end
-  return out
-end
-
 -- { [itemID] = count } over the containers `bags` (locked slots included).
 local function count_bags(bags)
   local counts = {}
-  if type(C_Container) ~= "table" then return counts end
+  if not reads_ready() then return counts end
   for _, bag in ipairs(bags) do
     for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
       local info = C_Container.GetContainerItemInfo(bag, slot)
@@ -106,6 +111,81 @@ local function bag_count(itemID)
   if type(fn) ~= "function" then return nil end
   local ok, n = pcall(fn, itemID, false, false, false, false)
   return ok and type(n) == "number" and n or nil
+end
+
+-- The item's bag family bits (C_Item.GetItemFamily); 0 when the game cannot say (only a general bag takes it then).
+local function item_family(itemID)
+  local fn = type(C_Item) == "table" and C_Item.GetItemFamily or nil
+  if type(fn) ~= "function" then return 0 end
+  local ok, family = pcall(fn, itemID)
+  return ok and type(family) == "number" and family or 0
+end
+
+-- Whether a bag of `bagFamily` (GetContainerNumFreeSlots' second value) takes an item of `itemFamily`: a general bag
+-- (0) takes anything, a profession bag an item sharing a family bit. The bit test uses the client's `bit` library;
+-- without it (PUC Lua 5.1 has none) a profession bag takes nothing.
+local function accepts(bagFamily, itemFamily)
+  if bagFamily == nil or bagFamily == 0 then return true end
+  if type(bagFamily) ~= "number" or itemFamily == 0 then return false end
+  local lib = rawget(_G, "bit")
+  if type(lib) ~= "table" or type(lib.band) ~= "function" then return false end
+  local ok, both = pcall(lib.band, itemFamily, bagFamily)
+  return ok and type(both) == "number" and both ~= 0
+end
+
+-- Room for itemID in the bags (Backpack..Bag_4, then the reagent bag) whose family takes it: the free slots there,
+-- and the first empty one (bag, slot), or nil.
+local function room_for(itemID)
+  local family, free, toBag, toSlot = item_family(itemID), 0, nil, nil
+  for _, bag in ipairs(bag_list(BAG_NAMES)) do
+    local n, bagFamily = C_Container.GetContainerNumFreeSlots(bag)
+    if type(n) == "number" and n > 0 and accepts(bagFamily, family) then
+      free = free + n
+      for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+        if toBag == nil and C_Container.GetContainerItemInfo(bag, slot) == nil then toBag, toSlot = bag, slot end
+      end
+    end
+  end
+  return free, toBag, toSlot
+end
+
+-- The unlocked stacks of itemID as { bag, slot, count }: the bank tabs', or, only while the bank has no unlocked stack
+-- of it and the warband counts, the warband tabs'.
+local function stacks_of(itemID)
+  local function scan(bags)
+    local out = {}
+    for _, bag in ipairs(bags) do
+      for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
+        local info = C_Container.GetContainerItemInfo(bag, slot)
+        if info and info.itemID == itemID and not info.isLocked then
+          out[#out + 1] = { bag = bag, slot = slot, count = info.stackCount or 1 }
+        end
+      end
+    end
+    return out
+  end
+  local list = scan(bag_list(BANK_NAMES))
+  if #list == 0 and warband_counts() then list = scan(bag_list(WARBAND_NAMES)) end
+  return list
+end
+
+-- What a press would do for a plan row: { kind = "use", from, count } (the largest stack of at most `need`, the first
+-- found on a tie; needs a free slot that takes the item) or { kind = "split", from, toBag, toSlot, count = need } (the
+-- smallest stack; needs an empty slot that takes it); else nil and "locked" (no unlocked stack) or "bagsFull".
+local function choose(row)
+  local best, smallest
+  for _, st in ipairs(stacks_of(row.itemID)) do
+    if st.count <= row.need and (best == nil or st.count > best.count) then best = st end
+    if smallest == nil or st.count < smallest.count then smallest = st end
+  end
+  if not smallest then return nil, "locked" end
+  local free, toBag, toSlot = room_for(row.itemID)
+  if best then
+    if free < 1 then return nil, "bagsFull" end
+    return { kind = "use", itemID = row.itemID, from = best, count = best.count }
+  end
+  if toBag == nil then return nil, "bagsFull" end
+  return { kind = "split", itemID = row.itemID, from = smallest, toBag = toBag, toSlot = toSlot, count = row.need }
 end
 
 ---------------------------------------------------------------------------
@@ -136,79 +216,6 @@ end
 
 local refresh   -- defined with the panel
 
-local function start_flight()
-  inFlight = true
-  ns.FS:Debounce(FLIGHT_KEY, FLIGHT_SECONDS, ns.FS:Wrap(MODULE, function()
-    inFlight = false
-    refresh()
-  end))
-end
-
--- One press of Retrieve -> { status, itemID?, count? }. Checks, in order: "closed" (the bank is not open, or the
--- container API is missing), "combat", "cursorBusy" (anything on the cursor), "inFlight", "done" (empty plan). Then
--- the first plan row's unlocked stacks, bank tabs before warband tabs ("locked" when every one is locked): the
--- largest stack of at most `need` (the first found on a tie) is used into the bags ("moved", count = the stack; needs
--- a free bag slot, else "bagsFull"); else `need` is split off the smallest stack and put in the first empty slot of
--- the backpack, bags 1-4 and the reagent bag ("split", count = need; "bagsFull" without one). A split the slot did
--- not take is put back with ClearCursor ("bagsFull"). Any move starts the in-flight lock. At most one move per call.
--- Called only from the Retrieve button's OnClick handler.
-function BankPull:Step()
-  if not bank_open() or type(C_Container) ~= "table" or type(C_Container.UseContainerItem) ~= "function"
-    or type(C_Container.SplitContainerItem) ~= "function" or type(C_Container.PickupContainerItem) ~= "function"
-    or type(GetCursorInfo) ~= "function" then
-    return { status = "closed" }
-  end
-  if type(InCombatLockdown) == "function" and InCombatLockdown() then return { status = "combat" } end
-  if GetCursorInfo() ~= nil then return { status = "cursorBusy" } end
-  if inFlight then return { status = "inFlight" } end
-  local row = self:Plan()[1]
-  if not row then return { status = "done" } end
-  local itemID, need = row.itemID, row.need
-
-  local best, smallest
-  for _, bag in ipairs(source_bags()) do
-    for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
-      local info = C_Container.GetContainerItemInfo(bag, slot)
-      if info and info.itemID == itemID and not info.isLocked then
-        local n = info.stackCount or 1
-        if n <= need and (best == nil or n > best.count) then best = { bag = bag, slot = slot, count = n } end
-        if smallest == nil or n < smallest.count then smallest = { bag = bag, slot = slot, count = n } end
-      end
-    end
-  end
-  if not smallest then return { status = "locked", itemID = itemID } end
-
-  local bags = bag_list(BAG_NAMES)
-  if best then
-    local free = 0
-    for _, bag in ipairs(bags) do free = free + (C_Container.GetContainerNumFreeSlots(bag) or 0) end
-    if free < 1 then return { status = "bagsFull", itemID = itemID } end
-    C_Container.UseContainerItem(best.bag, best.slot)
-    start_flight()
-    return { status = "moved", itemID = itemID, count = best.count }
-  end
-
-  local toBag, toSlot
-  for _, bag in ipairs(bags) do
-    for slot = 1, C_Container.GetContainerNumSlots(bag) or 0 do
-      if toBag == nil and C_Container.GetContainerItemInfo(bag, slot) == nil then toBag, toSlot = bag, slot end
-    end
-  end
-  if toBag == nil then return { status = "bagsFull", itemID = itemID } end
-  C_Container.SplitContainerItem(smallest.bag, smallest.slot, need)
-  C_Container.PickupContainerItem(toBag, toSlot)
-  start_flight()
-  if GetCursorInfo() ~= nil then
-    if type(ClearCursor) == "function" then ClearCursor() end   -- our own split goes back to its slot
-    return { status = "bagsFull", itemID = itemID }
-  end
-  return { status = "split", itemID = itemID, count = need }
-end
-
----------------------------------------------------------------------------
--- Panel (FabricationStationBankPull)
----------------------------------------------------------------------------
-
 local function item_name(itemID)
   local fn = type(C_Item) == "table" and C_Item.GetItemNameByID or nil
   if type(fn) == "function" then
@@ -218,6 +225,94 @@ local function item_name(itemID)
   return "item:" .. tostring(itemID)
 end
 
+local function set_status(line)
+  if BankPull.view and line then BankPull.view.status:SetText(line) end
+end
+
+-- The in-flight lock ends (the next bag update, or 3 s). A used stack that is still in its bank slot, unchanged and
+-- unlocked, did not move: its row is skipped and the status says so; a stack that left reads "Moved"; a stack that is
+-- still locked is still on its way (the status stays "Moving").
+local function end_flight()
+  inFlight = false
+  local f = flight
+  flight = nil
+  if not f or not reads_ready() then return end
+  local info = C_Container.GetContainerItemInfo(f.bag, f.slot)
+  local same = info ~= nil and info.itemID == f.itemID and (info.stackCount or 1) == f.count
+  if not same then
+    set_status(L["Moved %d %s"]:format(f.count, item_name(f.itemID)))
+  elseif not info.isLocked then
+    skipped[f.itemID] = true
+    set_status(L["%s did not move; the next press tries another reagent"]:format(item_name(f.itemID)))
+  end
+end
+
+local function start_flight(used)
+  inFlight, flight = true, used
+  ns.FS:Debounce(FLIGHT_KEY, FLIGHT_SECONDS, ns.FS:Wrap(MODULE, function()
+    end_flight()
+    refresh()
+  end))
+end
+
+-- One press of Retrieve -> { status, itemID?, count?, undone? }. Checks, in order: "closed" (the bank is not open, or
+-- a call a move or its undo needs is missing), "combat", "cursorBusy" (anything on the cursor), "inFlight", "done"
+-- (empty plan). Then the first plan row that can move now (choose; rows skipped this visit come after every other
+-- row, and leave the skipped set when tried again); when none can, the first row's reason ("locked" or "bagsFull").
+--   use:   UseContainerItem(bag, slot) -> "moved", count = the stack. Whether it landed is known when the lock ends.
+--   split: SplitContainerItem(bag, slot, need); nothing on the cursor then means the split did not happen: no
+--          pickup, the row is skipped, "locked". Else PickupContainerItem(toBag, toSlot) -> "split", count = need; an
+--          item still on the cursor is our split, put back with ClearCursor: the row is skipped, "bagsFull", undone.
+-- Any move starts the in-flight lock. At most one move per call. Called only from the Retrieve button's OnClick.
+function BankPull:Step()
+  if not bank_open() or not reads_ready() or type(C_Container.UseContainerItem) ~= "function"
+    or type(C_Container.SplitContainerItem) ~= "function" or type(C_Container.PickupContainerItem) ~= "function"
+    or type(GetCursorInfo) ~= "function" or type(ClearCursor) ~= "function" then
+    return { status = "closed" }
+  end
+  if type(InCombatLockdown) == "function" and InCombatLockdown() then return { status = "combat" } end
+  if GetCursorInfo() ~= nil then return { status = "cursorBusy" } end
+  if inFlight then return { status = "inFlight" } end
+  local plan = self:Plan()
+  if #plan == 0 then return { status = "done" } end
+
+  local move, reason, reasonItem
+  for pass = 1, 2 do
+    for _, row in ipairs(plan) do
+      if move == nil and (skipped[row.itemID] and true or false) == (pass == 2) then
+        local why
+        move, why = choose(row)
+        if move == nil and reason == nil then reason, reasonItem = why, row.itemID end
+      end
+    end
+  end
+  if move == nil then return { status = reason, itemID = reasonItem } end
+  skipped[move.itemID] = nil
+
+  if move.kind == "use" then
+    C_Container.UseContainerItem(move.from.bag, move.from.slot)
+    start_flight({ itemID = move.itemID, count = move.count, bag = move.from.bag, slot = move.from.slot })
+    return { status = "moved", itemID = move.itemID, count = move.count }
+  end
+  C_Container.SplitContainerItem(move.from.bag, move.from.slot, move.count)
+  if GetCursorInfo() == nil then
+    skipped[move.itemID] = true
+    return { status = "locked", itemID = move.itemID }
+  end
+  C_Container.PickupContainerItem(move.toBag, move.toSlot)
+  start_flight(nil)
+  if GetCursorInfo() ~= nil then
+    ClearCursor()   -- our own split goes back to its slot
+    skipped[move.itemID] = true
+    return { status = "bagsFull", itemID = move.itemID, undone = true }
+  end
+  return { status = "split", itemID = move.itemID, count = move.count }
+end
+
+---------------------------------------------------------------------------
+-- Panel (FabricationStationBankPull)
+---------------------------------------------------------------------------
+
 local function in_combat()
   return type(InCombatLockdown) == "function" and InCombatLockdown() and true or false
 end
@@ -226,17 +321,20 @@ local function text(parent, template)
   return parent:CreateFontString(nil, "OVERLAY", template or "GameFontHighlightSmall")
 end
 
--- The status line after a press: what moved, or why nothing did (no text for "inFlight" and "closed").
+-- The status line after a press: what happened, or why nothing did (no text for "inFlight" and "closed"). A used
+-- stack reads "Moving" until the lock ends; a split is on its bag slot already.
 local function on_step(result)
-  local v = BankPull.view
-  if not v or type(result) ~= "table" then return end
-  local line
-  if (result.status == "moved" or result.status == "split") and result.itemID then
-    line = L["Moved %d %s"]:format(result.count or 0, item_name(result.itemID))
+  if type(result) ~= "table" then return end
+  local name = result.itemID and item_name(result.itemID)
+  if result.status == "moved" and name then
+    set_status(L["Moving %d %s"]:format(result.count or 0, name))
+  elseif result.status == "split" and name then
+    set_status(L["Moved %d %s"]:format(result.count or 0, name))
+  elseif result.undone and name then
+    set_status(L["%s did not move; the next press tries another reagent"]:format(name))
   else
-    line = STATUS_TEXT[result.status]
+    set_status(STATUS_TEXT[result.status])
   end
-  if line then v.status:SetText(line) end
 end
 
 local function build_view()
@@ -336,30 +434,46 @@ end
 -- Events
 ---------------------------------------------------------------------------
 
--- BANKFRAME_OPENED: only shows the panel, when the bank holds something the queue still needs.
-local function on_bank_opened()
-  local plan = BankPull:Plan()
-  if #plan == 0 then return end
-  local v = ensure_view()
-  place(v)
-  v.status:SetText("")
-  v.frame:Show()
+-- Shows the panel while the bank is open and holds something the queue still needs, and redraws it. Opening the bank,
+-- a bag update and a queue change only come here: nothing moves.
+local function update(plan)
+  if not bank_open() then return end
+  plan = plan or BankPull:Plan()
+  local v = BankPull.view
+  if not (v and v.frame:IsShown()) then
+    if #plan == 0 then return end
+    v = ensure_view()
+    place(v)
+    v.status:SetText("")
+    v.frame:Show()
+  end
   refresh(plan)
 end
 
+local function schedule_update()
+  if bank_open() then ns.FS:Debounce(REFRESH_KEY, REFRESH_DELAY, ns.FS:Wrap(MODULE, function() update() end)) end
+end
+
+-- BANKFRAME_OPENED: a new visit (no row skipped), and the panel when the bank holds something the queue needs.
+local function on_bank_opened()
+  skipped = {}
+  if BankPull.view then BankPull.view.frame:Hide() end
+  update()
+end
+
 local function on_bank_closed()
+  skipped = {}
+  ns.FS:CancelDebounce(REFRESH_KEY)
   if BankPull.view then BankPull.view.frame:Hide() end
 end
 
--- BAG_UPDATE_DELAYED: the last move has landed (the lock goes), and the shown panel is redrawn 0.2 s after a burst.
+-- BAG_UPDATE_DELAYED: the last move has landed (the lock ends), and the panel is redrawn 0.2 s after a burst.
 local function on_bags_updated()
   if inFlight then
-    inFlight = false
     ns.FS:CancelDebounce(FLIGHT_KEY)
+    end_flight()
   end
-  if BankPull.view and BankPull.view.frame:IsShown() then
-    ns.FS:Debounce(REFRESH_KEY, REFRESH_DELAY, ns.FS:Wrap(MODULE, function() refresh() end))
-  end
+  schedule_update()
 end
 
 function BankPull:OnEnable()
@@ -369,12 +483,14 @@ function BankPull:OnEnable()
   self:RegisterEvent("BAG_UPDATE_DELAYED", wrap(on_bags_updated))
   self:RegisterEvent("PLAYER_REGEN_DISABLED", wrap(function() refresh() end))
   self:RegisterEvent("PLAYER_REGEN_ENABLED", wrap(function() refresh() end))
+  self:RegisterMessage(ns.Msg.QUEUE_CHANGED, wrap(schedule_update))
 end
 
 function BankPull:OnDisable()
   ns.FS:CancelDebounce(FLIGHT_KEY)
   ns.FS:CancelDebounce(REFRESH_KEY)
   self:UnregisterAllEvents()
-  inFlight = false
+  self:UnregisterAllMessages()
+  inFlight, flight, skipped = false, nil, {}
   if self.view then self.view.frame:Hide() end
 end

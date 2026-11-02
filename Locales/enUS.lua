@@ -1254,3 +1254,5 @@ L["Put down the item on your cursor first"] = true   -- bank panel status: the p
 L["Not in combat"] = true   -- bank panel status: nothing can be retrieved during combat
 L["Everything the queue needs is in your bags"] = true   -- bank panel status: nothing left to retrieve
 L["That stack is locked; try again"] = true   -- bank panel status: the bank stack is still being moved by the game
+L["Moving %d %s"] = true   -- bank panel status: the last press asked the game to move this many of the item into the bags; shown until the bags show it
+L["%s did not move; the next press tries another reagent"] = true   -- bank panel status: the game did not move the item (no room it accepts, or the stack was busy); the next press skips it

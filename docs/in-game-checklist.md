@@ -1384,7 +1384,14 @@ and a split never leaves the item on the cursor. Repeat with the stacks in the w
 craft with reagents left in the bank or warband bank (no Retrieve)? If yes, the pull matters only for moving reagents to
 mail to an alt. If UseContainerItem on a bank or warband slot does not move the stack into the bags from the button, or
 the split does not land in the empty slot, report which (P7-24 assumes both work from an addon click while the bank is
-open).
+open, that the split is on the cursor right after SplitContainerItem, and that a used bank stack shows locked until
+it lands; a move that works but reads "<reagent> did not move" breaks that last one). Do it once right after logging
+in (the first bank visit of the session): the panel should appear, at the latest after the first bag update. With the
+bank open, queue another craft that needs a banked reagent: the panel appears or gains the line without reopening.
+Put a profession bag (herb or mining) in the first bag slot with the backpack full and a general bag with room after
+it: a split of cloth or ore lands in the general bag, never "Bags are full" while it has room. With two reagents
+listed, leave room only in a profession bag that takes the second but not the first (an herb bag, an herb second):
+the next press retrieves the second reagent.
 
 P7-25. **Bank panel place.** Open the bank and switch between the character bank and the warband bank tabs. Expected:
 the panel sits next to the bank window (its top left at the window's top right) on both tabs and closes with the bank.

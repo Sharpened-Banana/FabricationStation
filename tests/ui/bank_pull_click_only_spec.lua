@@ -31,6 +31,47 @@ describe("click-only bank pull", function()
     end
   end)
 
+  it("calls ClearCursor only inside BankPull:Step, to undo its own split", function()
+    local ok, message = click_only.only_inside("ClearCursor", PATH, STEP, { files = { PATH } })
+    assert.is_true(ok, message)
+  end)
+
+  -- The game calls UI/BankPull.lua may make. Step and its helpers: the plan's list (Decisions, "Bank pull"), plus
+  -- C_Item.GetItemFamily (fix round 1, review I1: a profession bag's free slots count only for an item its family takes;
+  -- a read). The panel adds only frame creation and the item name of its lines.
+  local ALLOWED = {
+    ["C_Container.GetContainerNumSlots"] = true, ["C_Container.GetContainerItemInfo"] = true,
+    ["C_Container.GetContainerNumFreeSlots"] = true, ["C_Container.UseContainerItem"] = true,
+    ["C_Container.SplitContainerItem"] = true, ["C_Container.PickupContainerItem"] = true,
+    ["C_Item.GetItemCount"] = true, ["C_Item.GetItemFamily"] = true, ["C_Bank.CanViewBank"] = true,
+    GetCursorInfo = true, ClearCursor = true, InCombatLockdown = true,
+  }
+  local PANEL_ONLY = { ["C_Item.GetItemNameByID"] = true, CreateFrame = true }
+
+  -- Every C_<Namespace>.<Name> reference and every call of a capitalised global in `text` (comments left out).
+  local function game_calls(text)
+    local out, tokens = {}, click_only.tokens(text)
+    for k, t in ipairs(tokens) do
+      local nextTok, prev = tokens[k + 1], tokens[k - 1]
+      if t.kind == "name" and t.text:match("^C_") and nextTok and nextTok.text == "." and tokens[k + 2] then
+        out[t.text .. "." .. tokens[k + 2].text] = true
+      elseif t.kind == "name" and t.text:match("^%u") and nextTok and nextTok.text == "("
+        and not (prev and (prev.text == "." or prev.text == ":")) then
+        out[t.text] = true
+      end
+    end
+    return out
+  end
+
+  it("makes only the allowed game calls, Step only the plan's list", function()
+    for call in pairs(game_calls(click_only.read(PATH))) do
+      assert.is_true(ALLOWED[call] or PANEL_ONLY[call] or false, call)
+    end
+    for call in pairs(game_calls(click_only.body_of(PATH, STEP))) do
+      assert.is_true(ALLOWED[call] or false, call)
+    end
+  end)
+
   it("references BankPull:Step only from an OnClick handler", function()
     local ok, message, calls = click_only.referenced_only_from_onclick("Step", { PATH },
       { definedIn = PATH, files = files_but_wizard() })

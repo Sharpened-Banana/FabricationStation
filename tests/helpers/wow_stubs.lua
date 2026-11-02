@@ -845,7 +845,7 @@ local function install(overrides)
     C_QuestLog = { IsQuestFlaggedCompleted = retFalse },
     C_Spell = { GetSpellName = retNil },
     GetCurrentRegion = function() return 1 end,
-    C_Item = { GetItemCount = retZero, GetItemNameByID = retNil, RequestLoadItemDataByID = noop },
+    C_Item = { GetItemCount = retZero, GetItemNameByID = retNil, RequestLoadItemDataByID = noop, GetItemFamily = retZero },
     C_CurrencyInfo = {
       GetCurrencyInfo = retNil, GetCurrencyListInfo = retNil, GetCurrencyListLink = retNil,
       GetCurrencyListSize = retZero,

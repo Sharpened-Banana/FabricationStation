@@ -2,23 +2,42 @@
 -- Main-Realm is the logged-in character. The containers are a small model: the backpack (bag 0) has 4 slots, the
 -- first character bank tab (bag 6) and the first warband tab (bag 12) 8 each; C_Item.GetItemCount counts the bags
 -- (0..5) as the game does. The wow_stubs fakes record every move in W.containerOps; this spec wraps them so a move also
--- happens in the model and the record carries the item and the count.
+-- happens in the model and the record carries the item and the count. Bag families: families[bag] (0 = a general bag)
+-- and itemFamilies[itemID] (C_Item.GetItemFamily); a bag takes an item when its family is 0 or shares a bit with the
+-- item's (bit.band, a pure Lua 5.1 stand-in for the client's bit library, installed per test).
 describe("BankPull", function()
   local ns, W, world, BP, Q
   local ME = "Main-Realm"
   local BANK, WARBAND, BACKPACK = 6, 12, 0
   local slots, numSlots, cursor, cleared, pickupRefuses, pending
+  local families, itemFamilies, useRefuses, splitFails, realBit
   local requiredItems
+
+  -- bit.band for non-negative integers without LuaJIT's bit library (CI runs PUC Lua 5.1).
+  local function band(a, b)
+    local r, p = 0, 1
+    while a > 0 and b > 0 do
+      local x, y = a % 2, b % 2
+      if x == 1 and y == 1 then r = r + p end
+      a, b, p = (a - x) / 2, (b - y) / 2, p * 2
+    end
+    return r
+  end
+  local function takes(bag, itemID)
+    local f = families[bag] or 0
+    return f == 0 or band(f, itemFamilies[itemID] or 0) ~= 0
+  end
 
   local function stack_of(bag, slot) return slots[bag] and slots[bag][slot] end
 
   local function install_containers()
-    slots, numSlots, cursor, cleared, pickupRefuses = { [BACKPACK] = {}, [BANK] = {}, [WARBAND] = {} },
-      { [BACKPACK] = 4, [BANK] = 8, [WARBAND] = 8 }, nil, 0, false
-    local function first_empty(from, to)
+    slots, numSlots, cursor, cleared, pickupRefuses = { [BACKPACK] = {}, [1] = {}, [2] = {}, [BANK] = {},
+      [WARBAND] = {} }, { [BACKPACK] = 4, [BANK] = 8, [WARBAND] = 8 }, nil, 0, false
+    families, itemFamilies, useRefuses, splitFails = {}, {}, false, false
+    local function first_empty(from, to, itemID)
       for bag = from, to do
         for slot = 1, numSlots[bag] or 0 do
-          if not stack_of(bag, slot) then return bag, slot end
+          if not stack_of(bag, slot) and takes(bag, itemID) then return bag, slot end
         end
       end
     end
@@ -30,8 +49,9 @@ describe("BankPull", function()
     C_Container.GetContainerNumFreeSlots = function(bag)
       local free = 0
       for slot = 1, numSlots[bag] or 0 do if not stack_of(bag, slot) then free = free + 1 end end
-      return free, 0
+      return free, families[bag] or 0
     end
+    C_Item.GetItemFamily = function(itemID) return itemFamilies[itemID] or 0 end
     local use, split, pickup = C_Container.UseContainerItem, C_Container.SplitContainerItem,
       C_Container.PickupContainerItem
     C_Container.UseContainerItem = function(bag, slot)
@@ -39,19 +59,20 @@ describe("BankPull", function()
       local s = stack_of(bag, slot)
       local op = W.containerOps[#W.containerOps]
       op.itemID, op.count = s and s.itemID, s and s.stackCount
-      local toBag, toSlot = first_empty(0, 5)
-      if s and toBag then slots[toBag][toSlot] = s; slots[bag][slot] = nil end
+      local toBag, toSlot = first_empty(0, 5, s and s.itemID)
+      if s and toBag and not useRefuses then slots[toBag][toSlot] = s; slots[bag][slot] = nil end
     end
     C_Container.SplitContainerItem = function(bag, slot, count)
       split(bag, slot, count)
       local s = stack_of(bag, slot)
       W.containerOps[#W.containerOps].itemID = s and s.itemID
+      if splitFails then return end
       s.stackCount = s.stackCount - count
       cursor = { itemID = s.itemID, count = count, bag = bag, slot = slot }
     end
     C_Container.PickupContainerItem = function(bag, slot)
       pickup(bag, slot)
-      if cursor and not pickupRefuses and not stack_of(bag, slot) then
+      if cursor and not pickupRefuses and not stack_of(bag, slot) and takes(bag, cursor.itemID) then
         slots[bag][slot] = { itemID = cursor.itemID, stackCount = cursor.count }
         cursor = nil
       end
@@ -137,15 +158,27 @@ describe("BankPull", function()
     install_containers()
     spy_debounces()
     ns.FS:GetModule("Scanner").bankOpen = true
+    realBit = rawget(_G, "bit")
+    _G.bit = { band = band }
   end)
+
+  after_each(function() _G.bit = realBit end)
 
   it("is a toggleable module, and warband retrieval is on by default", function()
     assert.is_truthy(BP); assert.is_falsy(BP.coreModule); assert.is_true(BP:IsEnabled())
     assert.is_true(ns.FS:GetModule("Recipes"):GetSetting("bankPullUseWarband"))
     local option = ns.FS:GetOptionsTable().args.crafting.args.bankPullUseWarband
     assert.equals("toggle", option.type); assert.is_true(option.get())
+    local R = ns.FS:GetModule("Recipes")
+    local stamp, settingHooks = R:GetDataStamp(ME), 0
+    local hook = R.OnCraftingSettingChanged
+    R.OnCraftingSettingChanged = function(...) settingHooks = settingHooks + 1; return hook(...) end
     option.set(nil, false)
     assert.is_false(ns.FS.db.global.settings.crafting.bankPullUseWarband)
+    -- It changes no recipe result: no data stamp moves and no recipe rescan starts.
+    assert.equals(stamp, R:GetDataStamp(ME)); assert.equals(0, settingHooks)
+    assert.is_nil(pending["RecipeScan:settings"])
+    option.set(nil, true); assert.is_true(R:GetSetting("bankPullUseWarband"))
   end)
 
   describe("Plan", function()
@@ -207,6 +240,22 @@ describe("BankPull", function()
       assert.same({}, W.containerOps)
     end)
 
+    it("is closed without every call a move or its undo needs", function()
+      required(1001, 5); bank_stacks(1001, { 20 })
+      for _, name in ipairs({ "ClearCursor", "GetCursorInfo" }) do
+        local saved = _G[name]; _G[name] = nil
+        assert.same({ status = "closed" }, BP:Step(), name)
+        _G[name] = saved
+      end
+      for _, name in ipairs({ "GetContainerNumFreeSlots", "GetContainerNumSlots", "GetContainerItemInfo",
+        "UseContainerItem", "SplitContainerItem", "PickupContainerItem" }) do
+        local saved = C_Container[name]; C_Container[name] = nil
+        assert.same({ status = "closed" }, BP:Step(), name)
+        C_Container[name] = saved
+      end
+      assert.same({}, W.containerOps)
+    end)
+
     it("refuses in combat", function()
       required(1001, 5); bank_stacks(1001, { 3 })
       _G.InCombatLockdown = function() return true end
@@ -239,6 +288,17 @@ describe("BankPull", function()
       assert.equals(BANK, W.containerOps[1].bag)
     end)
 
+    it("uses the warband only while the bank has no unlocked stack of the item", function()
+      C_Bank.CanViewBank = function() return true end
+      required(1001, 5); bank_stacks(1001, { 10 }); warband_stacks(1001, { 3 })
+      assert.same({ status = "split", itemID = 1001, count = 5 }, BP:Step())   -- not the warband's 3
+      assert.equals(BANK, W.containerOps[1].bag)
+      W.advance(3); bags(1001, 0); W.containerOps = {}
+      slots[BANK][1].isLocked = true
+      assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:Step())
+      assert.equals(WARBAND, W.containerOps[1].bag)
+    end)
+
     it("skips locked stacks and says when all are locked", function()
       required(1001, 5); bank_stacks(1001, { 3 }, true); bank_stacks(1001, { 20 })
       local r = BP:Step()                                   -- the 3 is locked: the 20 is split
@@ -260,7 +320,7 @@ describe("BankPull", function()
 
     it("returns the split to its slot when no bag slot took it", function()
       required(1001, 5); bank_stacks(1001, { 20 }); pickupRefuses = true
-      assert.same({ status = "bagsFull", itemID = 1001 }, BP:Step())
+      assert.same({ status = "bagsFull", itemID = 1001, undone = true }, BP:Step())
       assert.equals(1, cleared); assert.is_nil(cursor); assert.equals(20, slots[BANK][1].stackCount)
       assert.same({ "split", "pickup" }, { W.containerOps[1].op, W.containerOps[2].op })
       assert.equals("inFlight", BP:Step().status)
@@ -291,6 +351,105 @@ describe("BankPull", function()
       assert.is_false(view().frame:IsShown())
       ns.FS:SetModuleEnabled("BankPull", true)
       assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:Step())   -- the lock went with the module
+    end)
+  end)
+
+  describe("bag families", function()
+    local HERB, CLOTH = 32, 1024
+
+    before_each(function()
+      numSlots[1], numSlots[2] = 4, 2
+      families[1] = HERB                      -- an herb bag in Bag_1, a general bag in Bag_2
+      itemFamilies[1001] = CLOTH
+      fill_bags()
+    end)
+
+    it("splits into a bag that takes the item, past a profession bag", function()
+      required(1001, 5); bank_stacks(1001, { 20 })
+      assert.same({ status = "split", itemID = 1001, count = 5 }, BP:Step())
+      assert.same({ op = "pickup", bag = 2, slot = 1 }, W.containerOps[2])
+      assert.equals(0, cleared); assert.equals(5, C_Item.GetItemCount(1001, false, false, false, false))
+    end)
+
+    it("does not count a profession bag's free slots for an item it does not take", function()
+      required(1001, 5); bank_stacks(1001, { 3 })
+      slots[2][1] = { itemID = 99999, stackCount = 1 }; slots[2][2] = { itemID = 99999, stackCount = 1 }
+      assert.same({ status = "bagsFull", itemID = 1001 }, BP:Step())
+      assert.same({}, W.containerOps)
+      itemFamilies[1001] = HERB + CLOTH     -- an item the herb bag takes
+      assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:Step())
+    end)
+
+    it("takes only general bags without the client's bit library", function()
+      _G.bit = nil
+      itemFamilies[1001] = HERB
+      required(1001, 5); bank_stacks(1001, { 20 })
+      BP:Step()
+      assert.same({ op = "pickup", bag = 2, slot = 1 }, W.containerOps[2])
+    end)
+  end)
+
+  describe("rows that cannot move", function()
+    it("tries the next reagent when the first one's stacks are all locked", function()
+      required(1001, 5); required(2002, 2)
+      bank_stacks(1001, { 3 }, true); bank_stacks(2002, { 2 })
+      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:Step())
+    end)
+
+    it("tries the next reagent when no bag that takes the first one has room", function()
+      numSlots[1], numSlots[2] = 4, 2
+      families[1], itemFamilies[1001], itemFamilies[2002] = 32, 1024, 32   -- only the herb bag has room
+      fill_bags(); slots[2][1] = { itemID = 99999, stackCount = 1 }; slots[2][2] = { itemID = 99999, stackCount = 1 }
+      required(1001, 5); required(2002, 2)
+      bank_stacks(1001, { 3 }); bank_stacks(2002, { 2 })
+      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:Step())
+    end)
+
+    it("says why the first reagent cannot move when no reagent can", function()
+      required(1001, 5); required(2002, 2)
+      bank_stacks(1001, { 3 }, true); bank_stacks(2002, { 2 }, true)
+      assert.same({ status = "locked", itemID = 1001 }, BP:Step())
+      slots[BANK][1].isLocked = nil; slots[BANK][2].isLocked = nil; fill_bags()
+      assert.same({ status = "bagsFull", itemID = 1001 }, BP:Step())
+      assert.same({}, W.containerOps)
+    end)
+
+    it("skips a reagent whose move the game did not make, and says so", function()
+      world.names[1001] = "Iron"
+      required(1001, 5); required(2002, 2); bank_stacks(1001, { 3 }); bank_stacks(2002, { 2 })
+      useRefuses = true
+      open_bank(); click()
+      assert.equals("Moving 3 Iron", view().status:GetText())
+      W.advance(3)                                         -- no bag update: the stack is still in the bank
+      assert.equals("Iron did not move; the next press tries another reagent", view().status:GetText())
+      useRefuses = false
+      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:Step())
+      W.fire("BAG_UPDATE_DELAYED")
+      assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:Step())   -- every other row tried: again
+    end)
+
+    it("skips a reagent whose split did not happen, without a pickup", function()
+      required(1001, 5); required(2002, 2); bank_stacks(1001, { 20 }); bank_stacks(2002, { 2 })
+      splitFails = true
+      assert.same({ status = "locked", itemID = 1001 }, BP:Step())
+      assert.same({ "split" }, { W.containerOps[1].op }); assert.equals(1, #W.containerOps)
+      assert.is_nil(cursor); assert.equals(0, cleared)
+      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:Step())   -- no lock: nothing moved
+    end)
+
+    it("tries the next reagent after a split the bag slot did not take", function()
+      required(1001, 5); required(2002, 2); bank_stacks(1001, { 20 }); bank_stacks(2002, { 2 })
+      pickupRefuses = true
+      assert.same({ status = "bagsFull", itemID = 1001, undone = true }, BP:Step())
+      pickupRefuses = false; W.advance(3)
+      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:Step())
+    end)
+
+    it("forgets the skipped reagents when the bank opens again", function()
+      required(1001, 5); required(2002, 2); bank_stacks(1001, { 20 }); bank_stacks(2002, { 2 })
+      splitFails = true; BP:Step(); splitFails = false
+      W.fire("BANKFRAME_CLOSED"); open_bank()
+      assert.same({ status = "split", itemID = 1001, count = 5 }, BP:Step())
     end)
   end)
 
@@ -337,6 +496,21 @@ describe("BankPull", function()
       assert.is_true(view() == nil or not view().frame:IsShown())
     end)
 
+    it("shows and redraws when the queue changes while the bank is open, and moves nothing", function()
+      bank_stacks(1001, { 3 })
+      open_bank()
+      assert.is_true(view() == nil or not view().frame:IsShown())
+      required(1001, 5)                                    -- Queue:Add sends FS_QUEUE_CHANGED
+      W.advance(0.2)
+      assert.is_true(view().frame:IsShown())
+      assert.equals("item:1001: 3 of 5 in the bank", view().lines[1]:GetText())
+      Q:SetQuantity(Q:GetEntries()[1].id, 2); W.advance(0.2)
+      assert.equals("item:1001: 3 of 10 in the bank", view().lines[1]:GetText())
+      W.fire("BANKFRAME_CLOSED"); Q:SetQuantity(Q:GetEntries()[1].id, 3); W.advance(0.2)
+      assert.is_false(view().frame:IsShown())
+      assert.same({}, W.containerOps)
+    end)
+
     it("hides on BANKFRAME_CLOSED", function()
       required(1001, 5); bank_stacks(1001, { 3 })
       open_bank(); W.fire("BANKFRAME_CLOSED")
@@ -376,12 +550,13 @@ describe("BankPull", function()
       world.names[1001] = "Iron"
       required(1001, 5); bank_stacks(1001, { 3, 20 })
       open_bank(); click()
-      assert.equals("Moved 3 Iron", view().status:GetText())
+      assert.equals("Moving 3 Iron", view().status:GetText())   -- not "Moved" until the bags show it
       assert.is_false(view().buttonEnabled)                 -- in flight
       W.fire("BAG_UPDATE_DELAYED"); W.advance(0.2)
+      assert.equals("Moved 3 Iron", view().status:GetText())
       assert.is_true(view().buttonEnabled)
       assert.equals("Iron: 2 of 2 in the bank", view().lines[1]:GetText())
-      click(); assert.equals("Moved 2 Iron", view().status:GetText())
+      click(); assert.equals("Moved 2 Iron", view().status:GetText())   -- the split is on the bag slot already
       W.fire("BAG_UPDATE_DELAYED"); W.advance(0.2)
       click(); assert.equals("Everything the queue needs is in your bags", view().status:GetText())
       assert.equals(3, #W.containerOps)                     -- one use, one split and its pickup
