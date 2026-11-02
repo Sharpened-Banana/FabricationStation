@@ -114,6 +114,14 @@ local function optionals_text(itemIDs)
   return ns.UI.JoinList(names)
 end
 
+-- The names of the entry's queued optionals that its evaluation could not place (Queue.UnplacedOptionals); "" for none
+-- and without an evaluation.
+local function unplaced_text(entry, result)
+  local queue = module("Queue")
+  if type(result) ~= "table" or not queue then return "" end
+  return optionals_text(queue.UnplacedOptionals(entry, result))
+end
+
 -- entries = Queue:GetEntries output (kept in order), costs = { [id] = copper|nil }, missing = { [id] =
 -- { [itemID] = qty } }, readyAt = { [id] = serverSeconds|nil }, now = server seconds, results|nil = { [id] =
 -- Queue:GetEntryResult } (the evaluation behind the cost: estimate, price age, stale and unreachable markers).
@@ -127,7 +135,8 @@ function Tab.BuildRows(entries, costs, missing, readyAt, now, results)
     rows[i] = {
       id = e.id, name = recipe_name(e.recipeID), charKey = e.charKey, quantity = e.quantity,
       targetQuality = e.targetQuality, concentration = e.useConcentration and "on" or "off",
-      missingText = missing_text(missing[e.id]), optionalsText = optionals_text(e.optionalItemIDs), cost = costs[e.id],
+      missingText = missing_text(missing[e.id]), optionalsText = optionals_text(e.optionalItemIDs),
+      unplacedText = unplaced_text(e, r), cost = costs[e.id],
       readyText = (type(ready) == "number" and ready > now) and L["ready in %s"]:format(Tab.FormatDuration(ready - now)) or "",
       isRestock = e.isRestock == true, orderID = e.orderID,
       estimated = flags.estimated == true, stale = flags.stalePrice == true, unreachable = flags.unreachableTarget == true,
@@ -142,6 +151,9 @@ function Tab.SecondLine(row)
   local line = row.missingText ~= "" and L["Missing: %s"]:format(row.missingText) or color(DIM, L["Reagents on hand"])
   if row.optionalsText ~= nil and row.optionalsText ~= "" then
     line = line .. DOT .. L["Optionals: %s"]:format(row.optionalsText)
+  end
+  if row.unplacedText ~= nil and row.unplacedText ~= "" then
+    line = line .. DOT .. color(WARN, L["Optional reagent no longer fits: %s"]:format(row.unplacedText))
   end
   return line
 end
@@ -179,6 +191,8 @@ function Tab.StatusText(result, professionName, charName, now)
       result.recipeName or (result.orderID ~= nil and L["order #%s"]:format(tostring(result.orderID)) or L["the order"]))
   elseif s == "missing" then
     return L["Missing reagents \226\128\148 see Shopping List"]
+  elseif s == "optional" then
+    return L["Optional reagent no longer fits: %s"]:format(optionals_text(result.unplaced))
   elseif s == "cooldown" then
     if type(result.readyAt) ~= "number" then return L["Next craft is on cooldown"] end
     return L["Next craft ready in %s"]:format(Tab.FormatDuration(result.readyAt - (now or ns.FS:Now())))

@@ -224,6 +224,21 @@ describe("Queue tab", function()
       assert.is_truthy(QT:GetView().queue.pool[1].missing:GetText():find("Optionals: Moonpetal, Sunfire Resin", 1, true))
       assert.is_falsy(QT:GetView().queue.pool[2].missing:GetText():find("Optionals", 1, true))
     end)
+    it("shows the blocker for an optional that no longer fits on the second line", function()
+      add(1, { optionalItemIDs = { 7201 } })      -- the fake evaluation places nothing
+      MW:Show("queue")
+      assert.is_truthy(flat(QT:GetView().queue.pool[1].missing:GetText()):find("Optional reagent no longer fits: item:7201", 1, true))
+      world.names[7201] = "Moonpetal"
+      local rows = Tab.BuildRows(Queue:GetEntries(), {}, {}, {}, 0, { [1] = { allocation = {}, optionalAllocation = {} } })
+      assert.equals("Moonpetal", rows[1].unplacedText)
+      local placed = Tab.BuildRows(Queue:GetEntries(), {}, {}, {}, 0,
+        { [1] = { optionalAllocation = { { slotIndex = 4, itemID = 7201, quantity = 1 } } } })
+      assert.equals("", placed[1].unplacedText)
+      assert.equals("", Tab.BuildRows(Queue:GetEntries(), {}, {}, {}, 0)[1].unplacedText)     -- no evaluation, no claim
+    end)
+    it("says which optional no longer fits in the Craft Next status", function()
+      assert.equals("Optional reagent no longer fits: item:7201", Tab.StatusText({ status = "optional", unplaced = { 7201 } }))
+    end)
     it("puts the optionals after the missing reagents on the second line", function()
       local row = { missingText = "2\195\151 item:1001", optionalsText = "Moonpetal" }
       assert.equals("Missing: 2\195\151 item:1001 \194\183 Optionals: Moonpetal", flat(Tab.SecondLine(row)))

@@ -296,8 +296,9 @@ end
 
 -- Crafts one of the first queue entry that can be crafted now: not on cooldown, on the current
 -- character, its profession window open, its crafting order (if any) claimed, nothing missing for one craft.
--- Returns a CraftNextResult: { status = "crafted"|"busy"|"open"|"order"|"missing"|"cooldown"|"empty", entryID?,
--- charKey?, skillLineID?, missing?, readyAt?, orderID? }. "busy" while the craft it started last has not finished
+-- Returns a CraftNextResult: { status = "crafted"|"busy"|"open"|"order"|"missing"|"optional"|"cooldown"|"empty", entryID?,
+-- charKey?, skillLineID?, missing?, unplaced?, readyAt?, orderID? }. "optional": a queued optional reagent no longer fits
+-- (unplaced = its itemIDs); the entry is not crafted without it and the next one is tried. "busy" while the craft it started last has not finished
 -- (see `pending`). With nothing craftable it reports the first blocker in queue order ("open" for another
 -- character or a closed/other profession window, "order" for an order entry whose order this character has not
 -- claimed (C_CraftingOrders.GetClaimedOrder), "missing"), "cooldown" with the earliest readyAt when every
@@ -328,7 +329,12 @@ function Queue:CraftNext()
         blocked = { status = "order", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID, orderID = e.orderID }
       else
         local result, missing = one_craft(e)
-        if result and next(missing) == nil then
+        -- A queued optional the evaluation cannot place any more blocks the entry: it is never crafted without it.
+        local unplaced = Queue.UnplacedOptionals(e, result)
+        if #unplaced > 0 then
+          blocked = { status = "optional", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID,
+            unplaced = unplaced }
+        elseif result and next(missing) == nil then
           local infos = scanner():ToCraftingReagentInfo(e.recipeID, result.allocation)
           -- [phase 7 Task 12] The optionals go in the slots the evaluation placed them in (the rows it scored).
           for _, extra in ipairs(scanner():OptionalReagentInfos(e.recipeID, result.optionalAllocation)) do
@@ -338,7 +344,8 @@ function Queue:CraftNext()
           start_pending(e, schematic, skillLineID)
           return { status = "crafted", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID }
         end
-        blocked = { status = "missing", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID, missing = missing }
+        blocked = blocked or { status = "missing", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID,
+          missing = missing }
       end
       blocker = blocker or blocked   -- the first blocker in queue order; later entries may still craft
     end

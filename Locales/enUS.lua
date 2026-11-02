@@ -1169,3 +1169,4 @@ L["%d skipped: no price or no known effect"] = true   -- profession side panel: 
 L["Queue with best optionals"] = true   -- profession side panel button: queues one craft with the best optionals
 L["Queued with %s"] = true   -- profession side panel, next to that button: the optional reagents' names
 L["Optionals: %s"] = true   -- Queue tab, second line of an entry: the names of its optional reagents
+L["Optional reagent no longer fits: %s"] = true   -- Queue tab: second line of an entry and the Craft Next status; the optional reagent's name (the recipe changed since it was queued)

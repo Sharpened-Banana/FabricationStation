@@ -384,6 +384,20 @@ function Queue:CraftEvaluateOpts(entry)
   }
 end
 
+-- [phase 7 Task 12] The entry's queued optional itemIDs (ascending) that the evaluation `result` did not place in a
+-- slot (RecipeResult.optionalAllocation): the schematic no longer lets them fit, so a craft would leave them out. {} for
+-- an entry without optionals or a result that is not a table. Pure: Craft Next and the Queue tab both read it.
+function Queue.UnplacedOptionals(entry, result)
+  local out = {}
+  if type(entry) ~= "table" or type(entry.optionalItemIDs) ~= "table" or type(result) ~= "table" then return out end
+  local placed = {}
+  for _, row in ipairs(result.optionalAllocation or {}) do placed[row.itemID] = true end
+  for _, itemID in ipairs(entry.optionalItemIDs) do
+    if not placed[itemID] then out[#out + 1] = itemID end
+  end
+  return out
+end
+
 -- What one craft of the entry needs: { [itemID] = qty } from the evaluated allocation, less what the
 -- customer provides. Nil when the recipe cannot be evaluated (schematic not cached). Evaluated as Craft Next
 -- does (Queue:CraftEvaluateOpts), so the allocation uses held reagents first and the shopping list does not buy
