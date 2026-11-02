@@ -25,4 +25,30 @@ describe("Math.Concentration", function()
   end)
   it("ingenuity expectation", function() assert.equals(270, C.Expected(300, 0.2, 0.5)); assert.equals(300, C.Expected(300, nil, 0.5)) end)
   it("gold per point", function() assert.equals(333, C.GoldPerPoint(120000, 30000, 270)); assert.is_nil(C.GoldPerPoint(1, 0, 0)) end)
+
+  describe("LearnLess", function()
+    it("reads the discount from what the game charged, as a whole percent", function()
+      assert.equals(0.1, C.LearnLess(MID, 280, 400, 297))
+      assert.equals(0.05, C.LearnLess(MID, 280, 400, 314))
+    end)
+    it("snaps the rounding noise of the game's whole-point cost away", function()
+      -- Logged in game: an unrounded 132.111 charged 129, an unrounded 179.166 charged 176; both are 2 %.
+      local flat = { constant = { {0,100},{1000,100} }, curve = { {0,1.32111},{1,1.32111} } }
+      assert.equals(0.02, C.LearnLess(flat, 10, 400, 129))
+      flat = { constant = { {0,100},{1000,100} }, curve = { {0,1.79166},{1,1.79166} } }
+      assert.equals(0.02, C.LearnLess(flat, 10, 400, 176))
+    end)
+    it("is nil when nothing is discounted or nothing can be learned", function()
+      assert.is_nil(C.LearnLess(MID, 280, 400, 330))    -- the full price
+      assert.is_nil(C.LearnLess(MID, 280, 400, 340))    -- above the curve: not a discount
+      assert.is_nil(C.LearnLess(MID, 280, 400, 0))      -- the game charges nothing here
+      assert.is_nil(C.LearnLess(MID, 280, 400, nil))
+      assert.is_nil(C.LearnLess(nil, 280, 400, 297))
+      assert.is_nil(C.LearnLess(MID, 400, 400, 297))    -- the curve costs nothing at the difficulty
+      assert.is_nil(C.LearnLess(MID, 280, 400, 100))    -- more than any specialization gives: a stale curve
+    end)
+    it("gives back the game's cost through Cost", function()
+      assert.equals(297, C.Cost(MID, 280, 400, { C.LearnLess(MID, 280, 400, 297) }))
+    end)
+  end)
 end)

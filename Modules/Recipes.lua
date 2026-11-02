@@ -253,7 +253,7 @@ end
 -- Whether two calibrations hold the same values (time aside).
 local function same_values(a, b)
   if a.baseSkill ~= b.baseSkill or a.baseDifficulty ~= b.baseDifficulty or a.maxReagentSkill ~= b.maxReagentSkill
-    or a.craftingDataID ~= b.craftingDataID then
+    or a.craftingDataID ~= b.craftingDataID or a.concentrationLess ~= b.concentrationLess then
     return false
   end
   for _, key in ipairs({ "stats", "thresholdFractions" }) do
@@ -292,14 +292,27 @@ function Recipes:Calibrate(recipeID)
     collect_thresholds(thresholds, top, schematic.maxQuality)
   end
 
+  local craftingDataID = empty.craftingDataID or schematic.craftingDataID
+  -- The specialization's concentration discount, from the dearest cost the recipe has (no reagents). When the game
+  -- charges nothing here (the skill alone reaches the top quality) this says nothing: what was learned stays.
+  local concentrationLess
+  if type(empty.concentrationCost) == "number" and empty.concentrationCost > 0 then
+    concentrationLess = ns.Math.Concentration.LearnLess(ns.CraftingData.Curve(ns.GameData, craftingDataID), baseSkill,
+      (empty.baseDifficulty or 0) + (empty.bonusDifficulty or 0), empty.concentrationCost)
+  else
+    local known = self:GetCalibration(ns.FS:CharKey(), recipeID)
+    concentrationLess = known and known.concentrationLess or nil
+  end
+
   local record = {
     time = ns.FS:Now(),
     baseSkill = baseSkill,
     baseDifficulty = empty.baseDifficulty,
     maxReagentSkill = maxReagentSkill,
-    craftingDataID = empty.craftingDataID or schematic.craftingDataID,
+    craftingDataID = craftingDataID,
     stats = ns.Math.Stats.ParseBonusStats(empty.bonusStats, self.STAT_NAMES),
     thresholdFractions = next(thresholds) ~= nil and thresholds or nil,
+    concentrationLess = concentrationLess,
   }
   -- Newer saved data: the record is returned but not stored, so GetCalibration will not return it.
   if not writable() then return record end

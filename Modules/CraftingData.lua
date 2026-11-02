@@ -338,7 +338,8 @@ function CraftingData.BuildInput(gd, args)
     stats = stats,
     yield = { min = schematic.quantityMin, max = schematic.quantityMax },
     outputPrices = outputPrices,
-    concentration = { curve = CraftingData.Curve(gd, craftingDataID), lessFactors = {} },
+    concentration = { curve = CraftingData.Curve(gd, craftingDataID),
+      lessFactors = calib and type(calib.concentrationLess) == "number" and { calib.concentrationLess } or {} },
     useConcentration = args.useConcentration,
     targetQuality = args.targetQuality,
   }
