@@ -600,6 +600,281 @@ describe("Queue tab", function()
     end)
   end)
 
+  describe("Lists page", function()
+    local CL
+    local LISTS_READ_ONLY = "Saved data is from a newer version of FabricationStation; the lists are read-only."
+    local function lists_view() return QT:GetView().lists end
+    local function open_lists()
+      MW:Show("queue")
+      click(QT:GetView().sections.lists)
+      return lists_view()
+    end
+    local function status() return flat(lists_view().status:GetText()) end
+    local function tooltip_lines()
+      local lines = {}
+      local saved = _G.GameTooltip
+      _G.GameTooltip = { SetOwner = function() end, SetText = function(_, t) lines[#lines + 1] = t end,
+        AddLine = function(_, t) lines[#lines + 1] = t end, Show = function() end, Hide = function() end }
+      local area = lists_view().statusArea
+      area:GetScript("OnEnter")(area)
+      _G.GameTooltip = saved
+      return lines
+    end
+
+    before_each(function() CL = ns.FS:GetModule("CraftLists") end)
+
+    it("switches to Lists and back", function()
+      MW:Show("queue")
+      local v = QT:GetView()
+      assert.same({ { "queue", "Queue" }, { "lists", "Lists" } },
+        { { Tab.SECTIONS[1].id, Tab.SECTIONS[1].label }, { Tab.SECTIONS[2].id, Tab.SECTIONS[2].label } })
+      assert.equal("queue", Tab.GetSection())
+      assert.same({ true, false }, { v.bar:IsShown(), v.lists.panel:IsShown() })
+      add(2); MW:RefreshTab("queue")
+      click(v.sections.lists)
+      assert.equal("lists", Tab.GetSection())
+      assert.same({ false, false, false, false, true }, { v.bar:IsShown(), v.headerBar:IsShown(), v.restockPanel:IsShown(),
+        v.empty:IsShown(), v.lists.panel:IsShown() })
+      click(v.sections.queue)
+      assert.equal("queue", Tab.GetSection())
+      assert.same({ true, true, true, false }, { v.bar:IsShown(), v.headerBar:IsShown(), v.restockPanel:IsShown(),
+        v.lists.panel:IsShown() })
+      assert.equal(1, #v.queue.rows)
+      assert.is_false(Tab.SetSection("nowhere")); assert.is_false(Tab.SetSection("queue"))
+      assert.is_true(Tab.SetSection("lists")); assert.equal("lists", Tab.GetSection())
+    end)
+
+    it("shows no lists yet, and a hint", function()
+      local v = open_lists()
+      assert.equal(0, #v.lists.rows)
+      assert.is_truthy(v.empty:GetText():find("No lists yet", 1, true))
+      assert.is_false(v.rules:IsShown())
+    end)
+
+    it("creates a list from the queue", function()
+      add(2); add(3, { recipeID = 9002 })
+      local v = open_lists()
+      edit(v.nameEdit, "")
+      click(v.newButton)
+      assert.equal("Enter a name for the list", status())
+      edit(v.nameEdit, "Weekly")
+      click(v.newButton)
+      assert.equal("Made the list Weekly from the queue", status())
+      local list = CL:GetLists()[1]
+      assert.equal("Weekly", list.name)
+      assert.same({ { recipeID = 9001, charKey = "Main-Realm", quantity = 2 },
+        { recipeID = 9002, charKey = "Main-Realm", quantity = 3 } }, list.recipes)
+      assert.equal(1, #v.lists.rows); assert.equal(2, #v.recipes.rows)
+      assert.is_truthy(v.lists.pool[1].name:GetText():find("Weekly", 1, true))
+      assert.equal("2", v.lists.pool[1].count:GetText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+      assert.same({ "Sample Recipe 9001", "Main", "2" }, { v.recipes.pool[1].name:GetText(),
+        flat(v.recipes.pool[1].character:GetText()), v.recipes.pool[1].quantity:GetText() })
+      assert.is_true(v.rules:IsShown())
+      edit(v.nameEdit, "weekly"); click(v.newButton)
+      assert.equal("A list with that name already exists", status())
+      assert.equal(1, #CL:GetLists())
+    end)
+
+    it("says when the queue has nothing to copy", function()
+      local v = open_lists()
+      edit(v.nameEdit, "Nothing"); click(v.newButton)
+      assert.equal("The queue has nothing to copy", status())
+      assert.equal(0, #CL:GetLists())
+    end)
+
+    it("shows a recipe made by the best crafter as such", function()
+      local id = CL:Create("Best"); CL:AddRecipe(id, 9001, nil, 1)
+      local v = open_lists()
+      assert.equal("best crafter", flat(v.recipes.pool[1].character:GetText()))
+    end)
+
+    it("renames the selected list", function()
+      local a, b = CL:Create("Alpha"), CL:Create("Beta")
+      local v = open_lists()
+      click(v.lists.pool[2])
+      edit(v.nameEdit, "Gamma"); click(v.renameButton)
+      assert.equal("Renamed to Gamma", status())
+      assert.same({ "Alpha", "Gamma" }, { CL:Get(a).name, CL:Get(b).name })
+      edit(v.nameEdit, "alpha"); click(v.renameButton)
+      assert.equal("A list with that name already exists", status())
+    end)
+
+    it("changes quantities and removes recipes", function()
+      local id = CL:Create("Q"); CL:AddRecipe(id, 9001, "Main-Realm", 2); CL:AddRecipe(id, 9002, "Alt-Realm", 1)
+      local v = open_lists()
+      click(v.recipes.pool[1].plus)
+      assert.equal(3, CL:Get(id).recipes[1].quantity)
+      click(v.recipes.pool[1].minus)
+      click(v.recipes.pool[1].minus)
+      assert.equal(1, CL:Get(id).recipes[1].quantity)
+      click(v.recipes.pool[1].minus)   -- to zero removes it
+      assert.equal(1, #CL:Get(id).recipes)
+      assert.equal(9002, CL:Get(id).recipes[1].recipeID)
+      click(v.recipes.pool[1].remove)
+      assert.equal(0, #CL:Get(id).recipes)
+      assert.is_truthy(v.empty:GetText():find("no recipes left", 1, true))
+    end)
+
+    it("edits the rules", function()
+      local id = CL:Create("R")
+      local v = open_lists()
+      edit(v.minProfitEdit, "2g 50s")
+      v.minProfitEdit:GetScript("OnEnterPressed")(v.minProfitEdit)
+      assert.equal(25000, CL:Get(id).rules.minProfit)
+      edit(v.minProfitEdit, "lots")
+      v.minProfitEdit:GetScript("OnEnterPressed")(v.minProfitEdit)
+      assert.equal("Enter the min profit in gold (for example 5 or 2g 50s), or leave it empty", status())
+      assert.equal(25000, CL:Get(id).rules.minProfit)
+      edit(v.minProfitEdit, "")
+      v.minProfitEdit:GetScript("OnEditFocusLost")(v.minProfitEdit)
+      assert.is_nil(CL:Get(id).rules.minProfit)
+      click(v.qualityPlus); click(v.qualityPlus)
+      assert.equal(2, CL:Get(id).rules.minQuality)
+      assert.equal("2", v.qualityText:GetText())
+      click(v.qualityMinus); click(v.qualityMinus); click(v.qualityMinus)
+      assert.is_nil(CL:Get(id).rules.minQuality)
+      assert.equal("any", v.qualityText:GetText())
+      for _ = 1, 7 do click(v.qualityPlus) end
+      assert.equal(5, CL:Get(id).rules.minQuality)
+      click(v.concButton); assert.equal("single", CL:Get(id).rules.concentration)
+      click(v.concButton); assert.equal("multi", CL:Get(id).rules.concentration)
+      click(v.concButton); assert.equal("off", CL:Get(id).rules.concentration)
+      v.optionalsCheck.GetChecked = function() return true end
+      click(v.optionalsCheck); assert.is_true(CL:Get(id).rules.useOptionals)
+      v.optionalsCheck.GetChecked = function() return false end
+      click(v.optionalsCheck); assert.is_false(CL:Get(id).rules.useOptionals)
+      assert.same({ "Concentration: off", "Concentration: single best", "Concentration: across recipes" },
+        { Tab.ConcentrationText("off"), Tab.ConcentrationText("single"), Tab.ConcentrationText("multi") })
+      assert.same({ "single", "multi", "off", "single" }, { Tab.NextConcentration("off"), Tab.NextConcentration("single"),
+        Tab.NextConcentration("multi"), Tab.NextConcentration(nil) })
+    end)
+
+    it("writes the min profit as text the box can read back", function()
+      assert.same({ "", "0g", "2g 50s", "5g", "1c", "1g 2s 3c", "3s" }, { Tab.MinProfitText(nil), Tab.MinProfitText(0),
+        Tab.MinProfitText(25000), Tab.MinProfitText(50000), Tab.MinProfitText(1), Tab.MinProfitText(10203),
+        Tab.MinProfitText(300) })
+      for _, copper in ipairs({ 0, 1, 99, 100, 10000, 10203, 25000, 123456789 }) do
+        assert.equal(copper, ns.UI.ParseMoney(Tab.MinProfitText(copper)))
+      end
+      local id = CL:Create("Shown"); CL:SetRules(id, { minProfit = 25000 })
+      MW:Show("queue")
+      local box = QT:GetView().lists.minProfitEdit
+      local shown
+      box.SetText = function(_, t) shown = t end
+      click(QT:GetView().sections.lists)
+      assert.equal("2g 50s", shown)
+    end)
+
+    it("queues a list and lists the skipped ones in the tooltip", function()
+      world.fakeEvaluate(9002, { allocation = {}, reagentCost = 100, profit = 5000, flags = {} })
+      local id = CL:Create("Go")
+      CL:AddRecipe(id, 9001, "Main-Realm", 2); CL:AddRecipe(id, 9002, "Main-Realm", 3)
+      CL:SetRules(id, { minProfit = 1000 })
+      local v = open_lists()
+      assert.equal(0, #Queue:GetEntries())   -- nothing is queued by showing the page
+      click(v.queueButton)
+      assert.equal("Queued 1 entries; 1 skipped", status())
+      local entries = Queue:GetEntries()
+      assert.equal(1, #entries)
+      assert.same({ 9002, 3, "Main-Realm" }, { entries[1].recipeID, entries[1].quantity, entries[1].charKey })
+      assert.same({ "Queued 1 entries; 1 skipped", "Sample Recipe 9001 (Main): profit unknown" }, tooltip_lines())
+      -- Nothing skipped: no second line.
+      CL:SetRules(id, {})
+      Queue:Clear()
+      click(v.queueButton)
+      assert.equal("Queued 2 entries; 0 skipped", status())
+    end)
+
+    it("names the reasons and caps the tooltip", function()
+      assert.same({ "no character can craft it", "the minimum quality cannot be reached", "profit unknown",
+        "profit below the minimum" }, { Tab.ReasonText("noCrafter"), Tab.ReasonText("unreachable"),
+        Tab.ReasonText("unknownProfit"), Tab.ReasonText("belowMinProfit") })
+      local skipped = {}
+      for i = 1, 25 do skipped[i] = { recipeID = 9001, reason = "unreachable" } end
+      local lines = Tab.SkippedTooltip("T", skipped, 3)
+      assert.equal(1 + 20 + 1 + 1, #lines)
+      assert.equal("and 5 more", lines[22])
+      assert.is_truthy(lines[23]:find("(3 without)", 1, true))
+    end)
+
+    it("says why a list was not queued", function()
+      local id = CL:Create("Off")
+      CL:AddRecipe(id, 9001, "Main-Realm", 1)
+      local v = open_lists()
+      Queue:Disable()
+      click(v.queueButton)
+      assert.equal("Not queued: the Queue is turned off", status())
+      Queue:Enable()
+      ns.FS.dbIsNewer = true
+      click(v.queueButton)
+      assert.equal(LISTS_READ_ONLY, status())
+      assert.equal(0, #Queue:GetEntries())
+    end)
+
+    it("deletes only on the second click", function()
+      local a, b = CL:Create("Doomed"), CL:Create("Spared")
+      local v = open_lists()   -- Doomed (by name) is selected first
+      click(v.deleteButton)
+      assert.equal("Click again to delete", status())
+      assert.is_not_nil(CL:Get(a))
+      -- The question is forgotten after five seconds.
+      W.advance(4); assert.equal("Click again to delete", status())
+      W.advance(2); assert.equal("", status())
+      click(v.deleteButton)
+      assert.is_not_nil(CL:Get(a))
+      -- Choosing another list forgets it too.
+      click(v.lists.pool[2])
+      assert.equal("", status())
+      click(v.deleteButton)
+      assert.is_not_nil(CL:Get(b))
+      click(v.lists.pool[1])
+      click(v.deleteButton)
+      assert.is_not_nil(CL:Get(a))
+      click(v.deleteButton)   -- the second click, on the same list
+      assert.is_nil(CL:Get(a)); assert.is_not_nil(CL:Get(b))
+      assert.equal("Deleted the list Doomed", status())
+      assert.equal(1, #v.lists.rows)
+    end)
+
+    it("changes nothing while the saved data is from a newer version", function()
+      local id = CL:Create("Keep"); CL:AddRecipe(id, 9001, "Main-Realm", 2)
+      add(1)
+      local v = open_lists()
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      ns.FS.dbIsNewer = true
+      edit(v.nameEdit, "Other")
+      click(v.newButton); assert.equal(LISTS_READ_ONLY, status())
+      click(v.renameButton); click(v.deleteButton); click(v.queueButton)
+      click(v.recipes.pool[1].plus); click(v.recipes.pool[1].remove); click(v.qualityPlus); click(v.concButton)
+      edit(v.minProfitEdit, "5g"); v.minProfitEdit:GetScript("OnEnterPressed")(v.minProfitEdit)
+      assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+      assert.equal(LISTS_READ_ONLY, status())
+    end)
+
+    it("says so when the lists module is off", function()
+      CL:Create("Hidden")
+      CL:Disable()
+      local v = open_lists()
+      assert.is_truthy(v.message:GetText():find("Craft lists are turned off", 1, true))
+      assert.same({ false, 0, 0 }, { v.newButton:IsShown(), #v.lists.rows, #v.recipes.rows })
+      CL:Enable()
+      MW:RefreshTab("queue")
+      assert.same({ "", true, 1 }, { v.message:GetText(), v.newButton:IsShown(), #v.lists.rows })
+    end)
+
+    it("does not refresh the queue computations while the Lists page is shown", function()
+      local calls = 0
+      local original = Queue.GetEntries
+      MW:Show("queue")
+      Queue.GetEntries = function(...) calls = calls + 1; return original(...) end
+      click(QT:GetView().sections.lists)
+      assert.equal(0, calls)
+      MW:RefreshTab("queue")
+      assert.equal(0, calls)
+      Queue.GetEntries = original
+    end)
+  end)
+
   describe("refreshing", function()
     it("refreshes after a burst of FS_QUEUE_CHANGED while the tab is shown", function()
       MW:Show("queue")

@@ -75,16 +75,17 @@ local function stub_spec(PL)
 end
 
 describe("Planner tab", function()
-  local ns, env, W, A, PL, reg, refreshed, container, added, queueAnswer, specCalls
+  local ns, env, W, A, PL, reg, refreshed, container, added, queueAnswer, specCalls, queued
 
   local function boot(opts)
     opts = opts or {}
-    refreshed, container, added, queueAnswer, specCalls = {}, nil, {}, 7, {}
+    refreshed, container, added, queueAnswer, specCalls, queued = {}, nil, {}, 7, {}, {}
     tooltip.lines = {}
     ns, env, W = phase3_env({
       files = FILES, wow = wow(opts.wow), ranked = opts.ranked or ranked(),
       recipeLines = { [1001] = 2907, [1002] = 2907 },
-      queue = { Add = function(_, entry) added[#added + 1] = entry; return queueAnswer end },
+      queue = { Add = function(_, entry) added[#added + 1] = entry; return queueAnswer end,
+        GetEntries = function() return queued end },
     })
     wrap_frames()
     A, PL = ns.FS:GetModule("Alts"), ns.FS:GetModule("Planner")
@@ -417,6 +418,105 @@ describe("Planner tab", function()
       -- Nothing is queued without a click.
       reg.planner.refresh(container)
       assert.equal(1, #added)
+    end)
+
+    describe("Queue plan", function()
+      local TWO = { { charKey = "Aria-Silvermoon", skillLineID = 2907, recipeID = 1001, crafts = 2 },
+        { charKey = "Bren-Silvermoon", skillLineID = 2912, recipeID = 1002, crafts = 3 },
+        { charKey = "Cato-Silvermoon", skillLineID = 2907, recipeID = 1003, crafts = 0 } }
+
+      it("queues every schedule row with concentration", function()
+        local T = ns.UI.PlannerTab
+        local a, already = T.QueuePlan(TWO)
+        assert.same({ 5, 0 }, { a, already })
+        assert.same({
+          { recipeID = 1001, quantity = 2, charKey = "Aria-Silvermoon", useConcentration = true },
+          { recipeID = 1002, quantity = 3, charKey = "Bren-Silvermoon", useConcentration = true } }, added)
+      end)
+
+      it("skips rows already queued", function()
+        local T = ns.UI.PlannerTab
+        queued = {
+          { id = 1, recipeID = 1001, charKey = "Aria-Silvermoon", quantity = 9, useConcentration = true },
+          -- not the same: no concentration, another character, a computed restock entry
+          { id = 2, recipeID = 1002, charKey = "Bren-Silvermoon", quantity = 1 },
+          { id = "restock:5", recipeID = 1002, charKey = "Bren-Silvermoon", quantity = 1, useConcentration = true, isRestock = true },
+          { id = 3, recipeID = 1002, charKey = "Aria-Silvermoon", quantity = 1, useConcentration = true } }
+        local a, already = T.QueuePlan(TWO)
+        assert.same({ 3, 2 }, { a, already })
+        assert.same({ { recipeID = 1002, quantity = 3, charKey = "Bren-Silvermoon", useConcentration = true } }, added)
+        -- A second press finds what the first one queued only when the Queue lists it; the same rows twice in one call
+        -- are one queue entry.
+        added = {}
+        local b, again = T.QueuePlan({ TWO[1], TWO[1] })
+        assert.same({ 0, 4 }, { b, again })
+      end)
+
+      it("does nothing when the Queue is off or the saved data is read-only", function()
+        local T = ns.UI.PlannerTab
+        ns.FS.dbIsNewer = true
+        assert.same({ 0, 0, "readonly" }, { T.QueuePlan(TWO) })
+        ns.FS.dbIsNewer = nil
+        env.queue:Disable()
+        assert.same({ 0, 0, "off" }, { T.QueuePlan(TWO) })
+        assert.same({}, added)
+      end)
+
+      it("has a footer button that queues the plan on a click and says so", function()
+        local v = open()
+        assert.is_false(v.queuePlan:IsShown())
+        select(v, "concentration")
+        assert.same({ true, "Queue plan" }, { v.queuePlan:IsShown(), v.queuePlan:GetText() })
+        assert.same({}, added)   -- nothing is queued by showing it
+        click(v.queuePlan)
+        assert.same({ { recipeID = 1001, quantity = 2, charKey = "Aria-Silvermoon", useConcentration = true } }, added)
+        assert.equal("Queued 2 crafts; 0 were already queued", plain(v.status:GetText()))
+        queued = { { id = 1, recipeID = 1001, charKey = "Aria-Silvermoon", quantity = 2, useConcentration = true } }
+        click(v.queuePlan)
+        assert.equal(1, #added)
+        assert.equal("Queued 0 crafts; 2 were already queued", plain(v.status:GetText()))
+        hover(v.queuePlan)
+        assert.same({ "Queue plan", "Add every row's crafts to the Queue, with concentration" }, tooltip.lines)
+        select(v, "knowledge")
+        assert.is_false(v.queuePlan:IsShown())
+      end)
+
+      it("hides the button without anything to queue, and says why it queued nothing", function()
+        boot({ ranked = {} })
+        local v = open()
+        select(v, "concentration")
+        assert.is_false(v.queuePlan:IsShown())
+        boot()
+        v = open()
+        select(v, "concentration")
+        ns.FS.dbIsNewer = true
+        click(v.queuePlan)
+        assert.equal("Not queued: the saved data is from a newer version (read-only)", plain(v.status:GetText()))
+        ns.FS.dbIsNewer = nil
+        env.queue:Disable()
+        click(v.queuePlan)
+        assert.equal("Not queued: the Queue is turned off", plain(v.status:GetText()))
+      end)
+
+      it("is called from the button's click only", function()
+        local click_only = require("tests.helpers.click_only")
+        local refs = click_only.references("UI/Tabs/Planner.lua", "QueuePlan")
+        local calls = 0
+        for _, r in ipairs(refs) do
+          if not r.definition then
+            calls = calls + 1
+            assert.is_truthy(r.fn and r.fn.onClick, "Tab.QueuePlan is referenced outside an OnClick handler at line " .. r.line)
+          end
+        end
+        assert.equal(1, calls)
+        for _, path in ipairs(click_only.lua_files()) do
+          if path ~= "UI/Tabs/Planner.lua" then
+            for _, r in ipairs(click_only.references(path, "QueuePlan")) do
+              assert.is_nil(r, path .. " references QueuePlan")
+            end
+          end
+        end
+      end)
     end)
 
     it("says why the Queue did not take the entry", function()

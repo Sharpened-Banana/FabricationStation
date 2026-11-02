@@ -1330,6 +1330,17 @@ optional is on the shopping list. This also checks that `CraftRecipe` accepts op
 with `dataSlotIndex` from the cached schematic; if the craft goes through without the optional, or the game rejects the
 call, report the recipe and which slot (optional or finishing) it was.
 
+P7-21. **Lists and the plan.** Queue a few crafts for one character (more than one recipe), press "New from queue" on the
+Queue tab's Lists page with a name in the box, then set Min profit and press the concentration button until it reads
+"Concentration: single best". Clear the queue (Queue page, Clear), come back to Lists and press "Queue list".
+Expected: the profitable recipes come back as queue entries, at most one recipe per concentration pool with
+concentration up to what that character has (its remaining crafts follow as a second entry without), and the status
+reads "Queued N entries; M skipped" with the skipped recipes and their reasons in its tooltip. Delete asks for a second
+click within five seconds. Then open the Planner's Concentration section and press "Queue plan": the schedule's crafts
+are queued once with concentration, and pressing it again says "Queued 0 crafts; N were already queued". Nothing is
+ever queued without pressing a button. With "Use best optionals" ticked, the entries carry the best optionals (see
+P7-20); a long list searches only some recipes per press and the tooltip says how many went without.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

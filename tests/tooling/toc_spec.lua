@@ -119,6 +119,18 @@ describe("FabricationStation.toc", function()
     assert.is_true(at["Modules/SaleLog.lua"] < at["Modules/CraftLog.lua"])
     assert.is_true(at["Modules/CraftLog.lua"] < at["UI/Util.lua"])
   end)
+  -- Phase 7 Task 13: the craft lists read Recipes, Queue, Alts and PlanCalc at call time (so only the order after
+  -- them is checked) and load before the UI.
+  it("loads Modules/CraftLists.lua after Modules/Planner.lua and before UI/Util.lua", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    assert.is_truthy(at["Modules/CraftLists.lua"])
+    for _, dep in ipairs({ "Modules/Recipes.lua", "Modules/Queue.lua", "Modules/PlanCalc.lua", "Modules/Alts.lua",
+      "Modules/Planner.lua" }) do
+      assert.is_true(at[dep] < at["Modules/CraftLists.lua"], dep)
+    end
+    assert.is_true(at["Modules/CraftLists.lua"] < at["UI/Util.lua"])
+  end)
   -- Phase 3 (Tasks 12-14): the shared view helpers before the view files, the view files before the tabs that use
   -- them, all before the Settings tab.
   it("loads the phase-3 grid, view helpers, views and tabs in order", function()

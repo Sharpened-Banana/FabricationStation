@@ -12,6 +12,13 @@ local L = ns.L
 -- when stale); an entry whose target quality cannot be reached says "[quality unreachable]". While the saved
 -- data is from a newer version every control that would change the queue says it is read-only instead.
 --
+-- A row of section buttons above all of it (Tab.SECTIONS: Queue, Lists; session only, Queue is today's layout) switches
+-- to the craft lists (phase 7, Task 13): the saved lists on the left, the selected list's recipes on the right (a
+-- character or "best crafter", a quantity stepper, Remove), its rules (min profit, min quality, concentration mode,
+-- best optionals) and the buttons New from queue, Rename, Delete (a second click within 5 s) and Queue list. Queue
+-- list adds the entries the rules allow (CraftLists:QueueList) and says how many it skipped and why; it runs only
+-- from that button's click.
+--
 -- Craft Next is a protected action: the only reference to it is inside the button's OnClick handler (the
 -- structural check in tests/queue/craft_spec.lua enforces that).
 local QueueTab = ns.FS:NewModule("QueueTab", "AceEvent-3.0")
@@ -23,11 +30,13 @@ ns.UI.QueueTab = Tab
 
 local TAB_ID = "queue"
 local REFRESH_KEY, REFRESH_DELAY = "queueTab.refresh", 0.5
+local DELETE_KEY, DELETE_SECONDS = "queueTab.delete", 5   -- how long the first Delete click waits for its second
 local ROW_HEIGHT, LINE_HEIGHT, HEADER_HEIGHT = 36, 22, 20
 local RESTOCK_ROW, RESTOCK_VISIBLE = 22, 3
 local PAD, GAP = 6, 4
 local BAR_TOP, BAR_ROW, STATUS_ROW = 4, 26, 18
-local SCROLL_TOP = BAR_TOP + BAR_ROW + STATUS_ROW + HEADER_HEIGHT + 4
+local SECTION_BAR, SECTION_BUTTON_WIDTH, SECTION_BUTTON_HEIGHT = 24, 90, 20   -- the Queue / Lists buttons above everything
+local SCROLL_TOP = SECTION_BAR + BAR_TOP + BAR_ROW + STATUS_ROW + HEADER_HEIGHT + 4
 local RESTOCK_EDITOR_TOP = 22                                   -- below the panel title
 local RESTOCK_LIST_TOP = RESTOCK_EDITOR_TOP + BAR_ROW
 local RESTOCK_HEIGHT = RESTOCK_LIST_TOP + RESTOCK_ROW * RESTOCK_VISIBLE + 6
@@ -51,7 +60,18 @@ local COLUMNS = {
   { key = "remove", label = "", width = 24 },
 }
 
+-- The page buttons. Task 15 appends "gather".
+Tab.SECTIONS = {
+  { id = "queue", label = L["Queue"] },
+  { id = "lists", label = L["Lists"] },
+}
+local DEFAULT_SECTION = "queue"
+
 local view            -- built frames and the displayed rows, nil before the tab is built
+local section = DEFAULT_SECTION   -- the page shown; session only (nothing is saved)
+local selectedList    -- the id of the craft list shown on the Lists page (session only)
+local confirmDelete   -- the id of the list whose Delete was clicked once, until the second click or DELETE_SECONDS
+local listsStatus, listsStatusTone, listsStatusLines   -- the Lists page's one line of feedback, its tone and tooltip lines
 local status, statusKind, statusTone   -- one line of feedback; statusKind "crafted" ends when the queue changes
 local linkHooked      -- true once the item-link hook is installed
 
@@ -611,11 +631,555 @@ local function bind_restock_row(row, data)
 end
 
 ---------------------------------------------------------------------------
+-- Lists page (phase 7, Task 13)
+---------------------------------------------------------------------------
+
+local LIST_ROW, LIST_WIDTH = 22, 150
+local LISTS_STATUS_TOP = BAR_TOP + BAR_ROW
+local LISTS_HEADER_TOP = LISTS_STATUS_TOP + STATUS_ROW
+local LISTS_BODY_TOP = LISTS_HEADER_TOP + HEADER_HEIGHT
+local RULES_HEIGHT = 2 * BAR_ROW + 8
+local SKIPPED_TOOLTIP_LINES = 20                    -- the skipped recipes a tooltip names before "and %d more"
+local READ_ONLY_LISTS = L["Saved data is from a newer version of FabricationStation; the lists are read-only."]
+
+local function lists_module()
+  return module("CraftLists")
+end
+
+-- A list name safe to show: a pipe is written twice so it is not read as an escape code.
+local function esc(text)
+  return (tostring(text):gsub("|", "||"))
+end
+
+local NEXT_MODE = { off = "single", single = "multi", multi = "off" }
+
+-- The concentration button's text for a mode ("off" for anything else).
+function Tab.ConcentrationText(mode)
+  if mode == "single" then return L["Concentration: single best"] end
+  if mode == "multi" then return L["Concentration: across recipes"] end
+  return L["Concentration: off"]
+end
+
+-- The mode a click on the concentration button switches to.
+function Tab.NextConcentration(mode)
+  return NEXT_MODE[mode] or "single"
+end
+
+local REASONS = {
+  noCrafter = function() return L["no character can craft it"] end,
+  unreachable = function() return L["the minimum quality cannot be reached"] end,
+  unknownProfit = function() return L["profit unknown"] end,
+  belowMinProfit = function() return L["profit below the minimum"] end,
+}
+
+-- Why Plan left a recipe out, in words.
+function Tab.ReasonText(reason)
+  local text = REASONS[reason]
+  return text and text() or tostring(reason)
+end
+
+-- The tooltip lines of the "Queued %d entries; %d skipped" status: its text, then one line per skipped recipe and its
+-- reason (the first SKIPPED_TOOLTIP_LINES), then how many optionals searches the plan left out.
+function Tab.SkippedTooltip(text, skipped, optionalsLeftOut)
+  local lines = { text }
+  for i, s in ipairs(skipped or {}) do
+    if i > SKIPPED_TOOLTIP_LINES then
+      lines[#lines + 1] = L["and %d more"]:format(#skipped - SKIPPED_TOOLTIP_LINES)
+      break
+    end
+    local name = recipe_name(s.recipeID)
+    if s.charKey then name = L["%s (%s)"]:format(name, short_name(s.charKey)) end
+    lines[#lines + 1] = L["%s: %s"]:format(name, Tab.ReasonText(s.reason))
+  end
+  if (optionalsLeftOut or 0) > 0 then
+    lines[#lines + 1] = L["Best optionals were searched for some recipes only; press Queue list again for the rest (%d without)"]
+      :format(optionalsLeftOut)
+  end
+  return lines
+end
+
+-- list = CraftLists:Get output -> rows { index, recipeID, charKey, quantity, name } in list order.
+function Tab.ListRecipeRows(list)
+  local rows = {}
+  for i, line in ipairs(type(list) == "table" and list.recipes or {}) do
+    rows[i] = { index = i, recipeID = line.recipeID, charKey = line.charKey, quantity = line.quantity,
+      name = recipe_name(line.recipeID) }
+  end
+  return rows
+end
+
+-- The text shown for a list's minimum profit box: empty without a gate, else plain "2g 50s" text that ns.UI.ParseMoney
+-- reads back (ns.UI.FormatMoney writes coin icons in the game, which the box could not parse).
+function Tab.MinProfitText(minProfit)
+  if type(minProfit) ~= "number" or minProfit ~= minProfit or minProfit < 0 then return "" end
+  local copper = math.floor(minProfit)
+  local parts = {}
+  if copper >= 10000 then parts[#parts + 1] = ("%dg"):format(math.floor(copper / 10000)) end
+  if copper % 10000 >= 100 then parts[#parts + 1] = ("%ds"):format(math.floor((copper % 10000) / 100)) end
+  if copper % 100 > 0 then parts[#parts + 1] = ("%dc"):format(copper % 100) end
+  return #parts > 0 and table.concat(parts, " ") or "0g"
+end
+
+local function show_lists_status()
+  if not view or not view.lists then return end
+  view.lists.status:SetText(listsStatus or "")
+  local tone = TONES[listsStatusTone] or TONES.plain
+  view.lists.status:SetTextColor(tone[1], tone[2], tone[3])
+end
+
+local function set_lists_status(text, tone, lines)
+  listsStatus, listsStatusTone, listsStatusLines = text, tone, lines
+  show_lists_status()
+end
+
+-- True (after saying so) while the saved data is from a newer version and the lists cannot be changed.
+local function lists_read_only()
+  if not ns.FS.dbIsNewer then return false end
+  set_lists_status(READ_ONLY_LISTS, "bad")
+  return true
+end
+
+local ERRORS = {
+  empty = function() return L["Enter a name for the list"] end,
+  duplicate = function() return L["A list with that name already exists"] end,
+  limit = function() return L["Not made: at most 50 lists, and 200 recipes in each"] end,
+  emptyQueue = function() return L["The queue has nothing to copy"] end,
+  readonly = function() return READ_ONLY_LISTS end,
+  unknown = function() return L["Select a list first"] end,
+}
+
+local function say_error(err)
+  local text = ERRORS[err]
+  set_lists_status(text and text() or tostring(err), "bad")
+end
+
+-- Selects a list (nil = none). A pending Delete is forgotten, and the min profit box gives up focus first, so a number
+-- typed for the old list is saved for the old list.
+local function select_list(id)
+  if view and view.lists and view.lists.minProfitEdit and id ~= selectedList then view.lists.minProfitEdit:ClearFocus() end
+  if confirmDelete ~= nil and listsStatus == L["Click again to delete"] then listsStatus = nil end
+  selectedList = id
+  confirmDelete = nil
+  ns.FS:CancelDebounce(DELETE_KEY)
+end
+
+-- Runs action(CraftLists) on the selected list's id unless the lists are off or the saved data is read-only, then
+-- refreshes the tab at once.
+local function edit_list(action)
+  if lists_read_only() then return false end
+  local lists = lists_module()
+  if not lists or selectedList == nil then
+    set_lists_status(L["Select a list first"], "warn")
+    return false
+  end
+  action(lists, selectedList)
+  request_refresh()
+  return true
+end
+
+local function create_list_row(list)
+  local row = CreateFrame("Button", nil, list.child)
+  row:SetHeight(LIST_ROW)
+  row.background = row:CreateTexture(nil, "BACKGROUND")
+  row.background:SetAllPoints(row)
+  row.count = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.count:SetPoint("RIGHT", row, "RIGHT", -PAD, 0)
+  row.count:SetWidth(30)
+  row.count:SetJustifyH("RIGHT")
+  row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.name:SetPoint("LEFT", row, "LEFT", PAD, 0)
+  row.name:SetPoint("RIGHT", row.count, "LEFT", -GAP, 0)
+  row.name:SetJustifyH("LEFT")
+  row.name:SetWordWrap(false)
+  row:SetScript("OnClick", ns.FS:Wrap("QueueTab:Lists", function(self)
+    if self.data then
+      select_list(self.data.id)
+      request_refresh()
+    end
+  end))
+  return row
+end
+
+local function bind_list_row(row, data)
+  local selected = data.id == selectedList
+  row.background:SetColorTexture(1, 1, 1, selected and 0.16 or 0.04)
+  row.name:SetText(esc(data.name))
+  row.count:SetText(color(DIM, tostring(data.count)))
+end
+
+local function create_recipe_row(list)
+  local row = CreateFrame("Frame", nil, list.child)
+  row:SetHeight(LIST_ROW)
+  row.background = row:CreateTexture(nil, "BACKGROUND")
+  row.background:SetAllPoints(row)
+  row.remove = create_button(row, "X", 24)
+  row.remove:SetPoint("RIGHT", row, "RIGHT", -PAD, 0)
+  local qty = CreateFrame("Frame", nil, row)
+  qty:SetSize(84, LINE_HEIGHT)
+  qty:SetPoint("RIGHT", row.remove, "LEFT", -GAP, 0)
+  row.minus = create_button(qty, "-", LINE_HEIGHT)
+  row.minus:SetPoint("LEFT", qty, "LEFT", 0, 0)
+  row.plus = create_button(qty, "+", LINE_HEIGHT)
+  row.plus:SetPoint("RIGHT", qty, "RIGHT", 0, 0)
+  row.quantity = qty:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.quantity:SetPoint("LEFT", row.minus, "RIGHT", 2, 0)
+  row.quantity:SetPoint("RIGHT", row.plus, "LEFT", -2, 0)
+  row.quantity:SetJustifyH("CENTER")
+  row.character = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.character:SetPoint("RIGHT", qty, "LEFT", -GAP, 0)
+  row.character:SetWidth(80)
+  row.character:SetJustifyH("LEFT")
+  row.character:SetWordWrap(false)
+  row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.name:SetPoint("LEFT", row, "LEFT", PAD, 0)
+  row.name:SetPoint("RIGHT", row.character, "LEFT", -GAP, 0)
+  row.name:SetJustifyH("LEFT")
+  row.name:SetWordWrap(false)
+
+  local function change(delta)
+    local d = row.data
+    if d then
+      edit_list(function(lists, id) lists:SetQuantity(id, d.index, delta == 0 and 0 or d.quantity + delta) end)
+    end
+  end
+  row.minus:SetScript("OnClick", ns.FS:Wrap("QueueTab:Lists", function() change(-1) end))
+  row.plus:SetScript("OnClick", ns.FS:Wrap("QueueTab:Lists", function() change(1) end))
+  row.remove:SetScript("OnClick", ns.FS:Wrap("QueueTab:Lists", function() change(0) end))
+  return row
+end
+
+local function bind_recipe_row(row, data, index)
+  row.background:SetColorTexture(1, 1, 1, index % 2 == 0 and 0.04 or 0)
+  row.name:SetText(data.name)
+  row.character:SetText(data.charKey and short_name(data.charKey) or color(DIM, L["best crafter"]))
+  row.quantity:SetText(tostring(data.quantity))
+end
+
+-- Fills the Lists page from the saved lists: the list rows, the selected list's recipes and rules.
+local function refresh_lists()
+  local v = view.lists
+  local lists = lists_module()
+  local on = lists ~= nil and lists:IsEnabled()
+  for _, part in ipairs(v.controls) do if on then part:Show() else part:Hide() end end
+  v.message:SetText(on and "" or color(DIM, L["Craft lists are turned off: turn them on in Settings > Modules"]))
+  if not on then
+    list_set_rows(v.lists, {})
+    list_set_rows(v.recipes, {})
+    v.empty:SetText("")
+    show_lists_status()
+    return
+  end
+  local all, rows, selected = lists:GetLists(), {}, nil
+  for _, list in ipairs(all) do
+    rows[#rows + 1] = { id = list.id, name = list.name, count = #list.recipes }
+    if list.id == selectedList then selected = list end
+  end
+  if not selected then
+    selected = all[1]
+    selectedList = selected and selected.id or nil
+  end
+  list_set_rows(v.lists, rows)
+  list_set_rows(v.recipes, Tab.ListRecipeRows(selected))
+  v.title:SetText(selected and esc(selected.name) or "")
+  if selected then
+    v.empty:SetText(#selected.recipes == 0
+      and color(DIM, L["This list has no recipes left."]) or "")
+  else
+    v.empty:SetText(color(DIM, L["No lists yet. Queue some crafts, then press New from queue."]))
+  end
+  for _, part in ipairs(v.listParts) do if selected then part:Show() else part:Hide() end end
+  if selected then
+    local rules = selected.rules
+    if not v.minProfitEdit:HasFocus() then v.minProfitEdit:SetText(Tab.MinProfitText(rules.minProfit)) end
+    v.qualityText:SetText(rules.minQuality and tostring(rules.minQuality) or L["any"])
+    v.concButton:SetText(Tab.ConcentrationText(rules.concentration))
+    v.optionalsCheck:SetChecked(rules.useOptionals)
+  end
+  show_lists_status()
+end
+
+-- Rules edits: read the list's rules, change one, save them whole.
+local function change_rules(change)
+  edit_list(function(lists, id)
+    local list = lists:Get(id)
+    if not list then return end
+    local rules = list.rules
+    if change(rules) == false then return end
+    lists:SetRules(id, rules)
+  end)
+end
+
+local function apply_min_profit()
+  if not view or not view.lists then return end
+  local text = strtrim(view.lists.minProfitEdit:GetText() or "")
+  local minProfit
+  if text ~= "" then
+    minProfit = ns.UI.ParseMoney(text)
+    if not minProfit then
+      set_lists_status(L["Enter the min profit in gold (for example 5 or 2g 50s), or leave it empty"], "bad")
+      return
+    end
+  end
+  change_rules(function(rules)
+    if rules.minProfit == minProfit then return false end
+    rules.minProfit = minProfit
+  end)
+end
+
+local function step_quality(delta)
+  change_rules(function(rules)
+    local q = math.max(0, math.min(5, (rules.minQuality or 0) + delta))
+    if q == (rules.minQuality or 0) then return false end
+    rules.minQuality = q > 0 and q or nil
+  end)
+end
+
+local function make_from_queue()
+  if lists_read_only() then return end
+  local lists = lists_module()
+  if not lists then return end
+  local name = strtrim(view.lists.nameEdit:GetText() or "")
+  local id, err = lists:FromQueue(name)
+  if not id then
+    say_error(err)
+    return
+  end
+  select_list(id)
+  view.lists.nameEdit:SetText("")
+  set_lists_status(L["Made the list %s from the queue"]:format(esc(lists:Get(id).name)), "good")
+  request_refresh()
+end
+
+local function rename_list()
+  if lists_read_only() then return end
+  local lists = lists_module()
+  if not lists or selectedList == nil then
+    set_lists_status(L["Select a list first"], "warn")
+    return
+  end
+  local ok, err = lists:Rename(selectedList, strtrim(view.lists.nameEdit:GetText() or ""))
+  if not ok then
+    say_error(err)
+    return
+  end
+  view.lists.nameEdit:SetText("")
+  set_lists_status(L["Renamed to %s"]:format(esc(lists:Get(selectedList).name)), "good")
+  request_refresh()
+end
+
+-- The first click asks (and forgets after DELETE_SECONDS); the second, on the same list, deletes.
+local function delete_list()
+  if lists_read_only() then return end
+  local lists = lists_module()
+  if not lists or selectedList == nil then
+    set_lists_status(L["Select a list first"], "warn")
+    return
+  end
+  if confirmDelete ~= selectedList then
+    confirmDelete = selectedList
+    set_lists_status(L["Click again to delete"], "warn")
+    ns.FS:Debounce(DELETE_KEY, DELETE_SECONDS, ns.FS:Wrap("QueueTab:Lists", function()
+      confirmDelete = nil
+      if listsStatus == L["Click again to delete"] then set_lists_status(nil) end
+    end))
+    return
+  end
+  local list = lists:Get(selectedList)
+  local id = selectedList
+  select_list(nil)
+  if lists:Delete(id) then
+    set_lists_status(L["Deleted the list %s"]:format(list and esc(list.name) or ""), "good")
+  end
+  request_refresh()
+end
+
+local function build_lists_page(container, created)
+  local v = { controls = {}, listParts = {} }
+  local panel = CreateFrame("Frame", nil, container)
+  panel:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -SECTION_BAR)
+  panel:SetPoint("BOTTOMRIGHT", container, "BOTTOMRIGHT", 0, 0)
+  v.panel = panel
+  local function control(frame) v.controls[#v.controls + 1] = frame; return frame end
+  local function list_part(frame) v.listParts[#v.listParts + 1] = frame; return frame end
+  local function button(x, width, label, handler)
+    local b = control(CreateFrame("Button", nil, panel, "UIPanelButtonTemplate"))
+    b:SetSize(width, BAR_ROW - 4)
+    b:SetPoint("TOPLEFT", panel, "TOPLEFT", x, -BAR_TOP)
+    b:SetText(label)
+    if handler then b:SetScript("OnClick", ns.FS:Wrap("QueueTab:Lists", handler)) end
+    return b
+  end
+
+  local x = PAD
+  v.newButton = button(x, 112, L["New from queue"], make_from_queue)
+  x = x + 112 + 8
+  v.nameEdit = control(CreateFrame("EditBox", nil, panel, "InputBoxTemplate"))
+  v.nameEdit:SetSize(120, 20)
+  v.nameEdit:SetPoint("TOPLEFT", panel, "TOPLEFT", x + 6, -(BAR_TOP + 3))
+  v.nameEdit:SetAutoFocus(false)
+  v.nameEdit:SetMaxLetters(40)
+  v.nameEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+  v.nameEdit:SetScript("OnEnterPressed", ns.FS:Wrap("QueueTab:Lists", function(self)
+    self:ClearFocus()
+    make_from_queue()
+  end))
+  x = x + 6 + 120 + 6
+  v.renameButton = button(x, 66, L["Rename"], rename_list)
+  x = x + 66 + GAP
+  v.deleteButton = button(x, 60, L["Delete"], delete_list)
+  x = x + 60 + GAP
+  -- The only reference to CraftLists:QueueList: one click, one plan queued, nothing else runs it.
+  v.queueButton = button(x, 90, L["Queue list"])
+  v.queueButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:Lists", function()
+    if lists_read_only() then return end
+    local lists = lists_module()
+    if not lists or selectedList == nil then
+      set_lists_status(L["Select a list first"], "warn")
+      return
+    end
+    local added, skipped, leftOut = lists:QueueList(selectedList)
+    if added == nil then
+      if skipped == "queueOff" then
+        set_lists_status(L["Not queued: the Queue is turned off"], "bad")
+      else
+        say_error(skipped)
+      end
+      return
+    end
+    local text = L["Queued %d entries; %d skipped"]:format(added, #skipped)
+    set_lists_status(text, #skipped == 0 and "good" or "warn", Tab.SkippedTooltip(text, skipped, leftOut))
+  end))
+
+  v.status = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  v.status:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD + 2, -(LISTS_STATUS_TOP + 2))
+  v.status:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -PAD, -(LISTS_STATUS_TOP + 2))
+  v.status:SetJustifyH("LEFT")
+  v.status:SetWordWrap(false)
+  -- The status may be cut or name skipped recipes: its own mouse area shows the whole of it.
+  v.statusArea = CreateFrame("Frame", nil, panel)
+  v.statusArea:SetPoint("TOPLEFT", v.status, "TOPLEFT", 0, 0)
+  v.statusArea:SetPoint("BOTTOMRIGHT", v.status, "BOTTOMRIGHT", 0, 0)
+  v.statusArea:EnableMouse(true)
+  v.statusArea:SetScript("OnEnter", ns.FS:Wrap("QueueTab:Tooltip", function(self)
+    local lines = listsStatusLines or (listsStatus and { listsStatus })
+    if not lines or type(GameTooltip) ~= "table" then return end
+    GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+    GameTooltip:SetText(lines[1])
+    for i = 2, #lines do GameTooltip:AddLine(lines[i], 1, 1, 1, true) end
+    GameTooltip:Show()
+  end))
+  v.statusArea:SetScript("OnLeave", function()
+    if type(GameTooltip) == "table" then GameTooltip:Hide() end
+  end)
+
+  local listsTitle = control(panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"))
+  listsTitle:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD + 2, -LISTS_HEADER_TOP)
+  listsTitle:SetText(L["Lists"])
+  v.title = control(panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"))
+  v.title:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD + LIST_WIDTH + GAP + 2, -LISTS_HEADER_TOP)
+  v.title:SetWordWrap(false)
+
+  v.lists = new_list(panel, LIST_ROW, LIST_ROW * 8, create_list_row, bind_list_row, "QueueTab:Scroll")
+  v.lists.scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD, -LISTS_BODY_TOP)
+  v.lists.scroll:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", PAD, RULES_HEIGHT + GAP)
+  v.lists.scroll:SetWidth(LIST_WIDTH)
+  control(v.lists.scroll)
+  v.recipes = new_list(panel, LIST_ROW, LIST_ROW * 8, create_recipe_row, bind_recipe_row, "QueueTab:Scroll")
+  v.recipes.scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD + LIST_WIDTH + GAP, -LISTS_BODY_TOP)
+  v.recipes.scroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", 0, RULES_HEIGHT + GAP)
+  list_part(v.recipes.scroll)
+
+  v.empty = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  v.empty:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD + 4, -(LISTS_BODY_TOP + 8))
+  v.empty:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -PAD - 4, -(LISTS_BODY_TOP + 8))
+  v.empty:SetJustifyH("LEFT")
+  v.message = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  v.message:SetPoint("TOPLEFT", panel, "TOPLEFT", PAD + 4, -(LISTS_HEADER_TOP + 4))
+  v.message:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -PAD - 4, -(LISTS_HEADER_TOP + 4))
+  v.message:SetJustifyH("LEFT")
+
+  -- Rules of the selected list.
+  local rules = list_part(CreateFrame("Frame", nil, panel))
+  rules:SetHeight(RULES_HEIGHT)
+  rules:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 0)
+  rules:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", 0, 0)
+  v.rules = rules
+  local function label(parent, px, py, text)
+    local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fs:SetPoint("TOPLEFT", parent, "TOPLEFT", px, py)
+    fs:SetText(text)
+    return fs
+  end
+  local row1, row2 = -6, -(6 + BAR_ROW)
+  label(rules, PAD + 8, row1 - 4, L["Min profit (gold)"])
+  v.minProfitEdit = CreateFrame("EditBox", nil, rules, "InputBoxTemplate")
+  v.minProfitEdit:SetSize(84, 20)
+  v.minProfitEdit:SetPoint("TOPLEFT", rules, "TOPLEFT", PAD + 8 + 112, row1 + 1)
+  v.minProfitEdit:SetAutoFocus(false)
+  v.minProfitEdit:SetMaxLetters(16)
+  v.minProfitEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+  v.minProfitEdit:SetScript("OnEnterPressed", ns.FS:Wrap("QueueTab:Lists", function(self)
+    self:ClearFocus()
+    apply_min_profit()
+  end))
+  v.minProfitEdit:SetScript("OnEditFocusLost", ns.FS:Wrap("QueueTab:Lists", apply_min_profit))
+
+  local qx = PAD + 8 + 112 + 84 + 24
+  label(rules, qx, row1 - 4, L["Min quality"])
+  v.qualityMinus = create_button(rules, "-", LINE_HEIGHT)
+  v.qualityMinus:SetPoint("TOPLEFT", rules, "TOPLEFT", qx + 76, row1)
+  v.qualityText = rules:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  v.qualityText:SetPoint("LEFT", v.qualityMinus, "RIGHT", 2, 0)
+  v.qualityText:SetWidth(34)
+  v.qualityText:SetJustifyH("CENTER")
+  v.qualityPlus = create_button(rules, "+", LINE_HEIGHT)
+  v.qualityPlus:SetPoint("LEFT", v.qualityText, "RIGHT", 2, 0)
+  v.qualityMinus:SetScript("OnClick", ns.FS:Wrap("QueueTab:Lists", function() step_quality(-1) end))
+  v.qualityPlus:SetScript("OnClick", ns.FS:Wrap("QueueTab:Lists", function() step_quality(1) end))
+
+  v.concButton = create_button(rules, Tab.ConcentrationText(), 220)
+  v.concButton:SetPoint("TOPLEFT", rules, "TOPLEFT", PAD + 8, row2)
+  v.concButton:SetScript("OnClick", ns.FS:Wrap("QueueTab:Lists", function()
+    change_rules(function(r) r.concentration = Tab.NextConcentration(r.concentration) end)
+  end))
+  v.optionalsCheck = CreateFrame("CheckButton", nil, rules, "UICheckButtonTemplate")
+  v.optionalsCheck:SetSize(24, 24)
+  v.optionalsCheck:SetPoint("TOPLEFT", rules, "TOPLEFT", PAD + 8 + 220 + 12, row2 + 2)
+  v.optionalsCheck:SetScript("OnClick", ns.FS:Wrap("QueueTab:Lists", function(self)
+    local wanted = self:GetChecked() and true or false
+    change_rules(function(r) r.useOptionals = wanted end)
+  end))
+  local optionalsLabel = rules:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  optionalsLabel:SetPoint("LEFT", v.optionalsCheck, "RIGHT", 2, 0)
+  optionalsLabel:SetText(L["Use best optionals"])
+
+  panel:Hide()
+  created.lists = v
+  return panel
+end
+
+---------------------------------------------------------------------------
 -- Refresh
 ---------------------------------------------------------------------------
 
+-- Shows the page that is current: its parts, its button lit.
+local function apply_section()
+  local queuePage = section == "queue"
+  for _, part in ipairs(view.queueParts) do if queuePage then part:Show() else part:Hide() end end
+  if not queuePage then view.empty:Hide() end
+  if queuePage then view.lists.panel:Hide() else view.lists.panel:Show() end
+  for id, b in pairs(view.sections) do
+    if id == section then b:LockHighlight() else b:UnlockHighlight() end
+  end
+end
+
 local function refresh()
   if not view then return end
+  apply_section()
+  if section == "lists" then
+    refresh_lists()
+    return
+  end
   local queue = module("Queue")
   local entries = queue and queue:GetEntries() or {}
   local costs, missing, readyAt, results = {}, {}, {}, {}
@@ -643,6 +1207,22 @@ local function refresh()
   end
   list_set_rows(view.restock, Tab.BuildRestockRows(targets, statuses))
   show_status()
+end
+
+local PAGE_IDS = {}
+for _, sec in ipairs(Tab.SECTIONS) do PAGE_IDS[sec.id] = true end
+
+function Tab.GetSection()
+  return section
+end
+
+-- Shows the page `id` (one of Tab.SECTIONS); an unknown id or the page already shown changes nothing. The choice is
+-- session only.
+function Tab.SetSection(id)
+  if not PAGE_IDS[id] or id == section then return false end
+  section = id
+  if view then refresh() end
+  return true
 end
 
 ---------------------------------------------------------------------------
@@ -731,7 +1311,7 @@ end
 local function create_headers(container)
   local bar = CreateFrame("Frame", nil, container)
   bar:SetHeight(HEADER_HEIGHT)
-  local y = -(BAR_TOP + BAR_ROW + STATUS_ROW)
+  local y = -(SECTION_BAR + BAR_TOP + BAR_ROW + STATUS_ROW)
   bar:SetPoint("TOPLEFT", container, "TOPLEFT", 0, y)
   bar:SetPoint("TOPRIGHT", container, "TOPRIGHT", 0, y)
   local headers = {}
@@ -743,7 +1323,7 @@ local function create_headers(container)
     headers[i] = text
   end
   place(bar, headers)
-  return headers
+  return headers, bar
 end
 
 local function create_edit(parent, x, width)
@@ -798,10 +1378,27 @@ end
 local function build(container)
   local created = { container = container }
 
+  local sectionBar = CreateFrame("Frame", nil, container)
+  sectionBar:SetPoint("TOPLEFT", container, "TOPLEFT", PAD, 0)
+  sectionBar:SetPoint("TOPRIGHT", container, "TOPRIGHT", -PAD, 0)
+  sectionBar:SetHeight(SECTION_BAR)
+  created.sectionBar, created.sections = sectionBar, {}
+  local sx = 0
+  for _, sec in ipairs(Tab.SECTIONS) do
+    local b = CreateFrame("Button", nil, sectionBar, "UIPanelButtonTemplate")
+    b:SetSize(SECTION_BUTTON_WIDTH, SECTION_BUTTON_HEIGHT)
+    b:SetPoint("TOPLEFT", sectionBar, "TOPLEFT", sx, -2)
+    b:SetText(sec.label)
+    b:SetScript("OnClick", ns.FS:Wrap("QueueTab:Section", function() Tab.SetSection(sec.id) end))
+    created.sections[sec.id] = b
+    sx = sx + SECTION_BUTTON_WIDTH + GAP
+  end
+
   local bar = CreateFrame("Frame", nil, container)
-  bar:SetPoint("TOPLEFT", container, "TOPLEFT", PAD, 0)
-  bar:SetPoint("TOPRIGHT", container, "TOPRIGHT", -PAD, 0)
+  bar:SetPoint("TOPLEFT", container, "TOPLEFT", PAD, -SECTION_BAR)
+  bar:SetPoint("TOPRIGHT", container, "TOPRIGHT", -PAD, -SECTION_BAR)
   bar:SetHeight(BAR_TOP + BAR_ROW + STATUS_ROW)
+  created.bar = bar
   local function bar_button(x, width, label)
     local button = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
     button:SetSize(width, BAR_ROW - 4)
@@ -828,7 +1425,7 @@ local function build(container)
   created.status:SetPoint("TOPRIGHT", bar, "TOPRIGHT", 0, -(BAR_TOP + BAR_ROW + 2))
   created.status:SetJustifyH("LEFT")
 
-  created.headers = create_headers(container)
+  created.headers, created.headerBar = create_headers(container)
 
   created.queue = new_list(container, ROW_HEIGHT, DEFAULT_VIEW_HEIGHT, create_queue_row, bind_queue_row, "QueueTab:Scroll")
   created.queue.scroll:SetPoint("TOPLEFT", container, "TOPLEFT", 0, -SCROLL_TOP)
@@ -840,7 +1437,10 @@ local function build(container)
   created.empty:SetJustifyH("LEFT")
   created.empty:Hide()
 
-  build_restock_panel(container, created)
+  created.restockPanel = build_restock_panel(container, created)
+  -- What the Queue page shows and the Lists page hides.
+  created.queueParts = { created.bar, created.headerBar, created.queue.scroll, created.restockPanel }
+  build_lists_page(container, created)
   view = created
 end
 
@@ -879,4 +1479,6 @@ end
 function QueueTab:OnDisable()
   self:UnregisterAllMessages()
   ns.FS:CancelDebounce(REFRESH_KEY)
+  ns.FS:CancelDebounce(DELETE_KEY)
+  confirmDelete = nil
 end

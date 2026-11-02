@@ -16,7 +16,9 @@ local L = ns.L
 --                    character, profession, recipe, crafts, concentration used, expected gain (compact; the full value
 --                    in the tooltip), gold per concentration point and the time to full. Each schedule row has a
 --                    "Queue" button: a click adds the crafts with concentration through Queue:Add (nothing is ever
---                    queued without a click) and the status line says what happened.
+--                    queued without a click) and the status line says what happened. The footer's "Queue plan" button
+--                    (Tab.QueuePlan) does the same for every row at once, skipping the crafts a real queue entry already
+--                    covers (same recipe, character and concentration).
 --   Spec advice      Planner:GetSpecAdvice for the character and profession picked with two cycle buttons (as the
 --                    Recipes tab's filters): path, rank, points to the next step, gain, gain per point and an
 --                    "Affordable" tag. The advice is computed only while this section is shown, only for the picked
@@ -65,6 +67,7 @@ local GRID_BOTTOM = FOOTER_HEIGHT + 2 * FOOTER_BOTTOM                           
 -- The outdated-data marker ("Old data"): its own fixed region at the start of the footer, so a narrow window can cut
 -- only the footer text's tail, never the marker (Task 13 rule).
 local MARKER_WIDTH, MARKER_GAP = 70, 6
+local PLAN_BUTTON_WIDTH, PLAN_BUTTON_HEIGHT = 96, 16   -- the footer's "Queue plan" button
 -- A message under rows (e.g. an empty plan under the cap warnings) gets its own line above the footer, so a list that
 -- overflows the view never scrolls it away.
 local MESSAGE_LINE = 20
@@ -383,6 +386,34 @@ local function queue_row(grow)
   refresh()
 end
 
+-- Queues the whole schedule (Planner:GetSchedule rows) with concentration: each row with crafts > 0 is skipped when a
+-- real queue entry (not a computed restock one) has the same recipeID, charKey and useConcentration, else it is added
+-- with Queue:Add. Returns added (crafts queued now), already (crafts of the skipped rows) and, when nothing could be
+-- queued, "off" (the Queue is turned off) or "readonly" (the saved data is from a newer version). Called from the
+-- footer button's click only (tests/ui/planner_tab_spec.lua pins that).
+function Tab.QueuePlan(rows)
+  local Q = enabled("Queue")
+  if not Q or type(Q.Add) ~= "function" then return 0, 0, "off" end
+  if ns.FS.dbIsNewer then return 0, 0, "readonly" end
+  local queued = {}
+  for _, e in ipairs(type(Q.GetEntries) == "function" and Q:GetEntries() or {}) do
+    if not e.isRestock and e.useConcentration == true then queued[tostring(e.recipeID) .. ":" .. tostring(e.charKey)] = true end
+  end
+  local added, already = 0, 0
+  for _, r in ipairs(type(rows) == "table" and rows or {}) do
+    if finite(r.crafts) and r.crafts > 0 and r.recipeID ~= nil and r.charKey ~= nil then
+      local key = tostring(r.recipeID) .. ":" .. tostring(r.charKey)
+      if queued[key] then
+        already = already + r.crafts
+      elseif Q:Add({ recipeID = r.recipeID, quantity = r.crafts, charKey = r.charKey, useConcentration = true }) ~= nil then
+        queued[key] = true
+        added = added + r.crafts
+      end
+    end
+  end
+  return added, already
+end
+
 ---------------------------------------------------------------------------
 -- Pickers (Spec advice, Missing recipes)
 ---------------------------------------------------------------------------
@@ -508,6 +539,7 @@ local function concentration_section(P)
     parts[#parts + 1] = L["Soon: %d"]:format(soon)
     out.status = table.concat(parts, DOT)
   end
+  out.canQueuePlan = crafts > 0
   return out
 end
 
@@ -664,13 +696,14 @@ local function apply_layout()
   view.status:ClearAllPoints()
   view.status:SetPoint("TOPLEFT", view.bar, "TOPLEFT", left, -ROW2_TOP)
   local offset = view.marker:IsShown() and (MARKER_WIDTH + MARKER_GAP) or 0
+  local reserved = view.queuePlan:IsShown() and (PLAN_BUTTON_WIDTH + MARKER_GAP) or 0   -- the button sits at the right
   view.footer:ClearAllPoints()
   view.footer:SetPoint("TOPLEFT", view.footerBar, "TOPLEFT", offset, 0)
   local width = view.container:GetWidth()
   if type(width) ~= "number" or width <= 0 then return end
   local inner = width - 2 * PAD
   view.status:SetWidth(math.max(0, inner - left))
-  view.footer:SetWidth(math.max(0, inner - offset))
+  view.footer:SetWidth(math.max(0, inner - offset - reserved))
 end
 
 local function set_marker(marker)
@@ -744,6 +777,7 @@ function refresh()
     set_marker(nil)
     view.status:SetText(""); view.statusTooltip = nil
     view.footer:SetText(""); view.footerTooltip = nil
+    view.queuePlan:Hide()
     ns.FS:CancelDebounce(TICK_KEY)
     show_empty(view.grids[section],
       L["%s: turn it on in Settings > Modules to see the plan"]:format(PV().StatusText("plannerOff")))
@@ -763,6 +797,7 @@ function refresh()
   view.statusTooltip = notice and { notice } or out.statusTooltip or (status ~= "" and { status } or nil)
   view.footer:SetText(out.footer or "")
   view.footerTooltip = out.footerTooltip or (out.footer and { out.footer } or nil)
+  if section == "concentration" and out.canQueuePlan then view.queuePlan:Show() else view.queuePlan:Hide() end
   show_empty(grid, out.empty, #out.rows)
   apply_layout()
   -- The next tick (reset and fill times; Knowledge and Concentration only) while the tab stays shown; RefreshTab does
@@ -855,6 +890,32 @@ local function build_footer(container, created)
   footer:SetWordWrap(false)
   created.footer = footer
   created.footerHit = hover_area(footerBar, footer, function() return view and view.footerTooltip end)
+
+  -- Queue plan (Concentration section): every schedule row at once. The only caller of Tab.QueuePlan, and only on a
+  -- click: nothing is queued otherwise.
+  local queuePlan = CreateFrame("Button", nil, footerBar, "UIPanelButtonTemplate")
+  queuePlan:SetSize(PLAN_BUTTON_WIDTH, PLAN_BUTTON_HEIGHT)
+  queuePlan:SetPoint("RIGHT", footerBar, "RIGHT", 0, 0)
+  queuePlan:SetText(L["Queue plan"])
+  queuePlan:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
+    local P = enabled("Planner")
+    if not P then return end
+    local added, already, problem = Tab.QueuePlan((P:GetSchedule(ns.FS:Now())))
+    if problem == "off" then
+      notice = L["Not queued: the Queue is turned off"]
+    elseif problem == "readonly" then
+      notice = L["Not queued: the saved data is from a newer version (read-only)"]
+    else
+      notice = L["Queued %d crafts; %d were already queued"]:format(added, already)
+    end
+    refresh()
+  end))
+  queuePlan:SetScript("OnEnter", ns.FS:Wrap(SOURCE, function(self)
+    show_lines(self, { L["Queue plan"], L["Add every row's crafts to the Queue, with concentration"] })
+  end))
+  queuePlan:SetScript("OnLeave", hide_tooltip)
+  queuePlan:Hide()
+  created.queuePlan = queuePlan
 end
 
 local function new_grid(container, columns, hideOrder)

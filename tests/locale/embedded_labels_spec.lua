@@ -84,6 +84,10 @@ local PAIRS = {
   { "Source: Guild query, the game's guild recipe list (no quality)", "Guild query" },
   { "Source: Addon, the guildmate's own FabricationStation data", "Addon" },
   { "See which guildmates can craft what. Sharing is set on the Guild and chat step.", "Guild and chat" },
+  { "Craft lists are turned off: turn them on in Settings > Modules", "Settings" },
+  { "Craft lists are turned off: turn them on in Settings > Modules", "Modules" },
+  { "Best optionals were searched for some recipes only; press Queue list again for the rest (%d without)", "Queue list" },
+  { "No lists yet. Queue some crafts, then press New from queue.", "New from queue" },
 }
 
 -- Keys that contain a known label as a whole word without quoting it. Each is the label's own text with something added,
