@@ -435,6 +435,7 @@ L["Worth %s at your best gold per concentration"] = true   -- order row concentr
 L["You already have a claimed order"] = true
 L["You have every reagent this order needs from you"] = true   -- order row Reagents cover tooltip, over the green check
 L["You have %d"] = true   -- order row concentration cell tooltip: the concentration you have now
+L["You have %d of a different rank (quality may differ)"] = true   -- order row Reagents cover tooltip, under a reagent you own only in another rank
 L["You have not learned this recipe"] = true   -- order row tooltip over the red cross of a recipe you have not learned
 L["estimate"] = true
 L["never"] = true

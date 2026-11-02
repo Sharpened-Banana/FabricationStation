@@ -15,7 +15,8 @@ local L = ns.L
 --                     tooltip of the row lists the rewards too), and a cover over Blizzard's Reagents
 --                     cell that replaces its "Some" / "None" / "All" with the reagents the crafter must supply (the
 --                     allocation minus what the customer provides) that the character is short of: 20 px icons with
---                     the count needed in red (white when the owned count is unknown; a reagent already owned gets no
+--                     the count needed in red (owned counts every rank the slot lists; white when the owned count is
+--                     unknown; a reagent already owned gets no
 --                     icon), a green check when the customer provides every reagent or the character owns them all,
 --                     or "?" when they are not known (a recraft, no result). Both have tooltips, the cover's listing
 --                     every reagent (setting Orders.showRowIcons turns them off).
@@ -599,10 +600,15 @@ function M.RewardEntries(view)
 end
 
 -- OrderView + owned(itemID) -> count|nil (nil: not asked) -> the reagents the crafter must supply:
--- { kind = "reagent", itemID, count = still to supply, have = owned|nil }, one per itemID: the result's allocation
--- summed by itemID minus what the customer provides (view.input.provided), positive remainders only, in the order the
--- allocation names them. An empty list: nothing to supply (also when the order's reagent state is "all"). nil: not
--- known (a recraft, an order without a result).
+-- { kind = "reagent", itemID, count = still to supply, have = owned|nil, otherRank = n|nil }, one per schematic slot of
+-- the result's allocation: its quantities summed minus what the customer provides of any rank the slot lists
+-- (view.input.provided), positive remainders only, in the order the allocation names them; itemID is the rank the plan
+-- uses (its first row). Any rank fills the order's slot (the rank changes only the quality), so `have` is what you own
+-- across every rank the slot lists (nil when no rank's count is known), and otherRank is what you own of the other ranks
+-- when the planned rank alone falls short (the tooltip's grey line). The slot is the cached schematic's, found by the
+-- allocation row's slotIndex through CraftingData.SlotResolver (never by dataSlotIndex alone); a row whose slot is not
+-- known counts its own itemID only. An empty list: nothing to supply (also when the order's reagent state is "all").
+-- nil: not known (a recraft, an order without a result).
 function M.ReagentEntries(view, owned)
   if type(view) ~= "table" then return nil end
   local input = type(view.input) == "table" and view.input or {}
@@ -611,17 +617,46 @@ function M.ReagentEntries(view, owned)
   if input.reagentState == "all" then return {} end   -- Blizzard's own word for it: the customer provides everything
   if not (result and type(result.allocation) == "table") then return nil end
   local provided = type(input.provided) == "table" and input.provided or {}
-  local need, order, out = {}, {}, {}
-  for _, slot in ipairs(result.allocation) do
-    if type(slot) == "table" and type(slot.itemID) == "number" then
-      if need[slot.itemID] == nil then order[#order + 1] = slot.itemID end
-      need[slot.itemID] = (need[slot.itemID] or 0) + (type(slot.quantity) == "number" and slot.quantity or 0)
+  local slotFor
+  local scanner, CD = ns.FS:GetModule("Scanner", true), ns.CraftingData
+  if scanner and type(scanner.GetSchematic) == "function" and CD and type(CD.SlotResolver) == "function" then
+    local ok, schematic = pcall(scanner.GetSchematic, scanner, view.recipeID)
+    if ok and type(schematic) == "table" then slotFor = CD.SlotResolver(schematic) end
+  end
+  local groups, order = {}, {}
+  for _, row in ipairs(result.allocation) do
+    if type(row) == "table" and type(row.itemID) == "number" then
+      local slot = slotFor and row.slotIndex ~= nil and slotFor({ slotIndex = row.slotIndex }) or nil
+      local ranks = slot and type(slot.reagents) == "table" and #slot.reagents > 0 and slot.reagents or nil
+      local key = ranks and ("s" .. tostring(slot.slotIndex)) or ("i" .. row.itemID)
+      local g = groups[key]
+      if not g then
+        g = { itemID = row.itemID, need = 0, planned = {}, ranks = ranks or { row.itemID } }
+        groups[key] = g
+        order[#order + 1] = g
+      end
+      g.need = g.need + (type(row.quantity) == "number" and row.quantity or 0)
+      g.planned[row.itemID] = true
     end
   end
-  for _, itemID in ipairs(order) do
-    local count = need[itemID] - (type(provided[itemID]) == "number" and provided[itemID] or 0)
+  local out = {}
+  for _, g in ipairs(order) do
+    local count = g.need
+    for _, itemID in ipairs(g.ranks) do
+      count = count - (type(provided[itemID]) == "number" and provided[itemID] or 0)
+    end
     if count > 0 then
-      out[#out + 1] = { kind = "reagent", itemID = itemID, count = count, have = owned and owned(itemID) or nil }
+      local have, plannedHave
+      for _, itemID in ipairs(g.ranks) do
+        local n = owned and owned(itemID) or nil
+        if type(n) == "number" then
+          have = (have or 0) + n
+          if g.planned[itemID] then plannedHave = (plannedHave or 0) + n end
+        end
+      end
+      local other = have and have - (plannedHave or 0) or 0
+      out[#out + 1] = { kind = "reagent", itemID = g.itemID, count = count, have = have,
+        otherRank = (other > 0 and (plannedHave or 0) < count) and other or nil }
     end
   end
   return out
@@ -736,6 +771,10 @@ local function icon_lines(entries)
       else
         lines[#lines + 1] = { text = L["%s: need %d, have %d"]:format(name, entry.count, have),
           color = have < entry.count and TEXT_COLORS.red or TEXT_COLORS.white }
+        if entry.otherRank then
+          lines[#lines + 1] = { text = L["You have %d of a different rank (quality may differ)"]:format(entry.otherRank),
+            color = TEXT_COLORS.grey }
+        end
       end
     end
   end

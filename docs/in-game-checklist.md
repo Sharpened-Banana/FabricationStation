@@ -1351,7 +1351,9 @@ reagents are on hand".
 P7-23. **Socket slots and unlearned patron orders.** On the Engineering patron board, find an order for a recipe with a
 socket slot that you know (Evercore Wrist Latch, Quel'dorei Leather Optics, Quel'dorei Silken Cuffs). Expected: the
 Reagents cover shows only what Blizzard's order view asks you for (Wrist Latch: Evercore x1), a green check when you own
-it, never a red question-mark icon, and the row shows a profit instead of "?" when those reagents have prices.
+it, never a red question-mark icon, and the row shows a profit instead of "?" when those reagents have prices. Own the
+reagent only in the other rank (quality): still the check, and the cover's tooltip adds the grey line "You have N of a
+different rank (quality may differ)".
 Then find an order for a recipe you have not learned, ideally one with a long name (Thalassian Competitor's Mail
 Links): the row shows a red "×" where the profit goes, with the red risk count beside it, even when the name leaves no
 room for the other cells; hover the "×": "You have not learned this recipe", then where to get it. Craft Next on a
