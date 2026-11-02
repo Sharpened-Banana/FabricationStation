@@ -130,3 +130,4 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     - An order for a recipe you have not learned keeps its red × even when a long item name leaves no room for more.
     - An order whose patron reagents land above its minimum quality no longer reads as unreachable, or as needing
       concentration.
+    - While Blizzard's Crafting Results window is open, the profession panel moves below it and hides its reagent table.

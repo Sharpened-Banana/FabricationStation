@@ -662,3 +662,76 @@ describe("fake_professions_frame", function()
     assert.same({ nil, nil, nil, nil }, { _G.ProfessionsFrame, _G.Professions, _G.ProfessionsRecipeSchematicFormMixin, _G.ScrollBoxListMixin })
   end)
 end)
+
+-- Blizzard's Crafting Results window opens over the top of the panel (its strata is DIALOG, anchored 20 px right of the
+-- page), and it is not ours to move. While it shows the panel's content starts below it and gives up the reagent table.
+describe("ProfessionPanel under the Crafting Results window", function()
+  local ns, W, form, P, log, view
+  local function fake_log()
+    local hooks = {}
+    local l = { shown = false }
+    function l:HookScript(event, fn) hooks[event] = fn end
+    function l:IsShown() return self.shown end
+    function l:GetBottom() return self.bottom end
+    function l:open(bottom) self.shown, self.bottom = true, bottom; hooks.OnShow(self) end
+    function l:close() self.shown = false; hooks.OnHide(self) end
+    return l
+  end
+  local function title_offset()
+    local _, _, _, _, y = view.title:GetPoint(1)
+    return y
+  end
+  local function boot(withoutLog)
+    ns, W = make_world({ last = "UI/ProfessionPanel.lua" })
+    form = fake_professions_frame()
+    log = fake_log()
+    if not withoutLog then form.raw(_G.ProfessionsFrame.CraftingPage).CraftingOutputLog = log end
+    for i = #form.assignedFields, 1, -1 do form.assignedFields[i] = nil end   -- that was the spec playing Blizzard
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    form.selectRecipe({ recipeID = 9001 })
+    P = ns.FS:GetModule("ProfessionPanel")
+    view = P:GetView()
+    view.frame.GetTop = function() return 800 end
+  end
+  after_each(function() fake_professions_frame.reset() end)
+
+  it("starts at the top of the panel while the window is closed", function()
+    boot()
+    assert.equals(-10, title_offset())
+    assert.is_true(view.qualityHeader:IsShown())
+  end)
+  it("moves the content below the window while it is open, and back", function()
+    boot()
+    log:open(450)                -- the window ends 350 below the panel's top
+    assert.equals(-(10 + 350 + 6), title_offset())
+    log:close()
+    assert.equals(-10, title_offset())
+  end)
+  it("gives up the reagent table while it is open, and shows it again after", function()
+    boot()
+    view.qualityRows[1]:Show()
+    log:open(450)
+    assert.is_false(view.qualityHeader:IsShown()); assert.is_false(view.applyNote:IsShown())
+    for _, row in ipairs(view.qualityRows) do assert.is_false(row:IsShown()) end
+    local _, relativeTo = view.breakdownHeader:GetPoint(1)
+    assert.equal(view.flags, relativeTo)
+    log:close()
+    assert.is_true(view.qualityHeader:IsShown())
+    assert.is_true(view.qualityRows[1]:IsShown())
+  end)
+  it("leaves room for the window's own height when it cannot be measured", function()
+    boot()
+    log:open(nil)
+    assert.is_true(title_offset() <= -300)
+  end)
+  it("does nothing on a client without the window", function()
+    boot(true)
+    assert.equals(-10, title_offset())
+    assert.is_true(view.qualityHeader:IsShown())
+  end)
+  it("writes nothing on Blizzard's frames", function()
+    boot()
+    log:open(450); log:close()
+    assert.same({}, form.assignedFields)
+  end)
+end)

@@ -14,6 +14,10 @@ local L = ns.L
 --
 -- The panel shows while ProfessionsFrame and its CraftingPage (the Recipes tab) are both shown.
 --
+-- Blizzard's Crafting Results window (CraftingPage.CraftingOutputLog) opens over the top of the panel and is not ours to
+-- move. While it shows, the panel's content starts below it and gives up the reagent-per-quality table (Apply is not
+-- what you reach for mid-craft), so the numbers stay readable. It is read and post-hooked only.
+--
 -- Attachment: AttachIfReady() runs from ADDON_LOADED("Blizzard_Professions") and from OnEnable when the addon is
 -- already loaded; `attached` makes it register once. Every hook body runs in ns.FS:SafeCall("ProfessionPanel", ...),
 -- so an error turns off this module only (1a's rule for toggleable modules) and never reaches Blizzard's code.
@@ -43,6 +47,7 @@ local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 300, 10, 14, 22, 24
 local PROVIDER_RIGHT_WIDTH = 120   -- the right-hand column of a provider line; longer texts go to the row tooltip
 local ACTION_BUTTON_WIDTH = 90     -- an action's button; its status line takes the rest of the row
 local MAX_QUALITY_ROWS = 5
+local RESULTS_GAP, RESULTS_HEIGHT = 6, 300   -- below the results window; its height when it cannot be measured
 local SECONDS_PER_DAY = 86400
 local EM_DASH, TIMES = "\226\128\148", "\195\151"
 local READ_ONLY = L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
@@ -595,9 +600,44 @@ function render_actions()
   if #specs > 0 then section.frame:Show() else section.frame:Hide() end
 end
 
+-- The results window's CraftingPage field, or nil on a client without it.
+local function results_log()
+  local frame = ProfessionsFrame
+  local page = type(frame) == "table" and frame.CraftingPage or nil
+  local log = type(page) == "table" and page.CraftingOutputLog or nil
+  return type(log) == "table" and log or nil
+end
+
+-- A frame's getter as a number, or nil (only getters are called on Blizzard's window).
+local function read_edge(frame, method)
+  if type(frame[method]) ~= "function" then return nil end
+  local ok, value = pcall(frame[method], frame)
+  return ok and type(value) == "number" and value or nil
+end
+
+-- How far below the panel's top the results window ends, in the panel's units; 0 while it is closed.
+local function results_clearance()
+  local log = results_log()
+  if not (log and type(log.IsShown) == "function" and log:IsShown()) then return 0 end
+  local top, bottom = read_edge(view.frame, "GetTop"), read_edge(log, "GetBottom")
+  if not (top and bottom) then return RESULTS_HEIGHT + RESULTS_GAP end
+  local scale = (read_edge(log, "GetEffectiveScale") or 1) / (read_edge(view.frame, "GetEffectiveScale") or 1)
+  return math.max(0, top - bottom * scale) + RESULTS_GAP
+end
+
+-- Starts the content below the results window while it is open; true then (the condensed layout).
+local function place_content()
+  local clearance = results_clearance()
+  view.title:ClearAllPoints()
+  view.title:SetPoint("TOPLEFT", view.frame, "TOPLEFT", PAD, -(PAD + clearance))
+  view.title:SetPoint("TOPRIGHT", view.frame, "TOPRIGHT", -PAD, -(PAD + clearance))
+  return clearance > 0
+end
+
 local function render()
   if not view then return end
   view.applyEnabled = apply_allowed()
+  local condensed = place_content()
   if not recipeID then
     model = nil
     view.title:SetText("FabricationStation")
@@ -621,14 +661,16 @@ local function render()
   view.flags:SetText(model.flagsText)
   set_tone(view.flags, model.flagsTone)
   view.qualityHeader:SetText(model.qualityHeaderText)
+  if condensed then view.qualityHeader:Hide() else view.qualityHeader:Show() end
   if view.applyEnabled then view.applyNote:SetText(""); view.applyNote:Hide()
   else view.applyNote:SetText(M.APPLY_OFF_NOTE); view.applyNote:Show() end
+  if condensed then view.applyNote:Hide() end
 
-  local previous = view.applyNote
+  local previous = condensed and view.flags or view.applyNote
   for i = 1, MAX_QUALITY_ROWS do
     local row, data = view.qualityRows[i], model.perQualityRows[i]
     row.data = data
-    if data then
+    if data and not condensed then
       row.label:SetText(L["Q%d"]:format(math.floor(data.quality)))
       row.cost:SetText(data.costText)
       set_tone(row.cost, data.costTone)
@@ -759,6 +801,7 @@ local on_allocations_changed = guarded(function()
 end)
 local on_frame_show = guarded(sync_visibility)
 local on_frame_hide = guarded(function() if view then view.frame:Hide() end end)
+local on_results_window = guarded(function() if view then render() end end)
 local on_data_changed = guarded(function()
   if recipeID and shown() then
     ns.FS:Debounce(REFRESH_KEY, REFRESH_DELAY, guarded(evaluate))
@@ -1118,6 +1161,11 @@ function Panel:AttachIfReady()
     ProfessionsFrame:HookScript("OnHide", on_frame_hide)
     ProfessionsFrame.CraftingPage:HookScript("OnShow", on_frame_show)
     ProfessionsFrame.CraftingPage:HookScript("OnHide", on_frame_hide)
+    local log = results_log()
+    if log and type(log.HookScript) == "function" then
+      log:HookScript("OnShow", on_results_window)
+      log:HookScript("OnHide", on_results_window)
+    end
     hooked = true
   end
   EventRegistry:RegisterCallback(RECIPE_SELECTED, on_recipe_selected, self)

@@ -1481,6 +1481,12 @@ P7-41. **Patron reagents above the minimum.** Find a patron order that provides 
 minimum quality (Skinner's Cap on a leatherworker). Expected: no "minimum quality cannot be reached" risk, no concentration
 cell (none is needed), and Blizzard's bar in the order view lands at or above the minimum.
 
+P7-42. **Panel under Crafting Results.** Craft something so Blizzard's Crafting Results window opens over the panel.
+Expected: the recipe name, quality, skill and profit lines move below that window, the "Cheapest reagents per quality" table
+hides, and nothing overlaps the Use concentration / Add to Queue / Craft Next buttons at the bottom (with many provider
+lines, report any overlap). Close the window: the content goes back to the top and the table returns. A Lua error here
+turns off only the panel.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in
