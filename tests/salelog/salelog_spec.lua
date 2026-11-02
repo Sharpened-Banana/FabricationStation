@@ -265,6 +265,24 @@ describe("SaleLog", function()
       assert.equals(1, #ns.FS.db.global.auctionLog.events)
     end)
 
+    it("reads only the first count of GetInboxNumItems (shown, total): a big total is not a tonumber base", function()
+      W.now = 1000000
+      expired_mail(300, 5, 29.5)
+      -- the client returns (shown, total); with 120 mails in total, tonumber(shown, 120) raised "base out of range"
+      _G.GetInboxNumItems = function() return #mails, 120 end
+      mailbox_open()
+      assert.equals(1, #events())
+      assert.is_true(ns.FS:GetModule("SaleLog"):IsEnabled())
+    end)
+
+    it("reads only the first count of GetNumOwnedAuctions", function()
+      owned[1] = { auctionID = 1, itemKey = { itemID = 300 }, quantity = 5, status = 0 }
+      _G.C_AuctionHouse.GetNumOwnedAuctions = function() return #owned, 99 end
+      W.fire("OWNED_AUCTIONS_UPDATED")
+      assert.equals(5, log().listings[ME].items[300])
+      assert.is_true(ns.FS:GetModule("SaleLog"):IsEnabled())
+    end)
+
     it("counts another mail for the same item and count that arrived at another time", function()
       W.now = 1000000
       expired_mail(300, 5, 29.5)

@@ -291,7 +291,7 @@ function SaleLog:OnOwnedAuctionsUpdated()
   end
   local active = type(Enum) == "table" and type(Enum.AuctionStatus) == "table" and Enum.AuctionStatus.Active or 0
   local items = {}
-  for i = 1, tonumber(count()) or 0 do
+  for i = 1, tonumber((count())) or 0 do   -- one value: a second return would be read as a base
     local owned = info(i)
     local key = type(owned) == "table" and owned.itemKey
     local itemID = type(key) == "table" and key.itemID
@@ -329,7 +329,8 @@ function SaleLog:ScanMail()
   if not writable() then return false end
   local pattern, now = expired_subject_pattern(), ns.FS:Now()
   local found = {}   -- { signature, itemID, count } of every expired-auction mail in the box
-  for i = 1, tonumber(GetInboxNumItems()) or 0 do
+  -- GetInboxNumItems returns (shown, total): keep only the first, or tonumber reads the total as a base.
+  for i = 1, tonumber((GetInboxNumItems())) or 0 do
     local _, _, _, subject, _, _, daysLeft, hasItem = GetInboxHeaderInfo(i)
     if hasItem and type(subject) == "string" and is_finite(daysLeft) and subject:match(pattern) then
       local _, itemID, _, count = GetInboxItem(i, 1)
