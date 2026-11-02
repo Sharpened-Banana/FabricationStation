@@ -99,7 +99,8 @@ local function schematic_reagents(recipeID)
   local schematic = scanner():GetSchematic(recipeID)
   local out = {}
   for _, slot in ipairs(schematic and schematic.reagentSlots or {}) do
-    if slot.kind == "basic" or slot.kind == nil then
+    -- A not-required basic slot (the Automatic socket slot) is never crafted for: leave its items out.
+    if (slot.kind == "basic" or slot.kind == nil) and slot.required ~= false then
       for _, itemID in ipairs(type(slot.reagents) == "table" and slot.reagents or {}) do out[#out + 1] = itemID end
     end
   end

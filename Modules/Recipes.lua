@@ -204,7 +204,7 @@ local function top_rank_allocation(schematic)
   local allocation = {}
   for _, slot in ipairs(schematic.reagentSlots or {}) do
     local reagents = slot.reagents or {}
-    if slot.kind == "basic" and #reagents >= 2 then
+    if slot.kind == "basic" and #reagents >= 2 and ns.CraftingData.IsAllocated(slot) then
       allocation[#allocation + 1] = { slotIndex = slot.slotIndex, itemID = reagents[#reagents], quantity = slot.quantity }
     end
   end

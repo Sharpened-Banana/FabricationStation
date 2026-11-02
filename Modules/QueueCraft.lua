@@ -55,7 +55,7 @@ local function reagent_tiers(entries)
     local schematic = scanner():GetSchematic(e.recipeID)
     for _, slot in ipairs(schematic and schematic.reagentSlots or {}) do
       local reagents = type(slot.reagents) == "table" and slot.reagents or {}
-      if slot.kind == "basic" and #reagents >= 2 then
+      if slot.kind == "basic" and #reagents >= 2 and slot.required ~= false then
         for i, itemID in ipairs(reagents) do
           if tiers[itemID] == nil then tiers[itemID] = i end
         end
