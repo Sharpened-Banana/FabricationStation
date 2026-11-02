@@ -402,7 +402,7 @@ describe("phase 3 integration", function()
       -- button's OnClick handler (tests/queue/craft_spec.lua). The claim key names neither ClaimBest nor ClaimOrder:
       -- it clicks the claim button (OrdersPanel.ClickClaim).
       ["UI/Bindings.lua"] = { CraftNext = 2 },
-      -- BankPull (phase 7 Task 16): the feature test and the one call of each move, all inside BankPull:Step, pinned
+      -- BankPull (phase 7 Task 16): the feature test and the one call of each move, all inside BankPull:RetrieveOne, pinned
       -- by tests/ui/bank_pull_click_only_spec.lua.
       ["UI/BankPull.lua"] = { UseContainerItem = 2, PickupContainerItem = 2 },
       -- MerchantBuy (phase 7 Task 17): the feature test and the one call, both inside MerchantBuy:Buy, pinned by

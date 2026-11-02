@@ -196,26 +196,26 @@ describe("BankPull", function()
     end)
   end)
 
-  describe("Step", function()
+  describe("RetrieveOne", function()
     before_each(open_bank)                                 -- the bank is open: BankPull's own flag
 
     it("never moves more than the shortfall over repeated presses", function()
       required(1001, 5); bank_stacks(1001, { 3, 20 }); bags(1001, 0)
-      assert.equals("moved", BP:Step().status)            -- the stack of 3
+      assert.equals("moved", BP:RetrieveOne().status)            -- the stack of 3
       W.fire("BAG_UPDATE_DELAYED"); bags(1001, 3)
-      local r = BP:Step(); assert.equals("split", r.status); assert.equals(2, r.count)
+      local r = BP:RetrieveOne(); assert.equals("split", r.status); assert.equals(2, r.count)
       W.fire("BAG_UPDATE_DELAYED"); bags(1001, 5)
-      assert.equals("done", BP:Step().status)
+      assert.equals("done", BP:RetrieveOne().status)
       assert.equals(5, moved_total(W.containerOps, 1001))
     end)
 
     it("moves the largest stack that fits, and splits the smallest one when none fits", function()
       required(1001, 10); bank_stacks(1001, { 4, 7, 30, 12 })
-      local r = BP:Step()
+      local r = BP:RetrieveOne()
       assert.same({ status = "moved", itemID = 1001, count = 7 }, r)
       assert.same({ op = "use", bag = BANK, slot = 2, itemID = 1001, count = 7 }, W.containerOps[1])
       W.fire("BAG_UPDATE_DELAYED")
-      r = BP:Step()                                         -- need 3: no stack fits, the 4 is the smallest
+      r = BP:RetrieveOne()                                         -- need 3: no stack fits, the 4 is the smallest
       assert.same({ status = "split", itemID = 1001, count = 3 }, r)
       assert.same({ op = "split", bag = BANK, slot = 1, count = 3, itemID = 1001 }, W.containerOps[2])
       assert.same({ op = "pickup", bag = BACKPACK, slot = 2 }, W.containerOps[3])
@@ -224,20 +224,20 @@ describe("BankPull", function()
 
     it("moves nothing while the last move is in flight", function()
       required(1001, 5); bank_stacks(1001, { 3, 20 })
-      BP:Step(); assert.equals("inFlight", BP:Step().status); assert.equals(1, #W.containerOps)
+      BP:RetrieveOne(); assert.equals("inFlight", BP:RetrieveOne().status); assert.equals(1, #W.containerOps)
     end)
 
     it("refuses while the cursor holds an item", function()
       required(1001, 5); bank_stacks(1001, { 3, 20 })
       cursor = { itemID = 4242, count = 1, bag = BANK, slot = 8 }
-      assert.same({ status = "cursorBusy" }, BP:Step())
+      assert.same({ status = "cursorBusy" }, BP:RetrieveOne())
       assert.same({}, W.containerOps); assert.equals(0, cleared)
     end)
 
     it("is closed without the bank", function()
       required(1001, 5); bank_stacks(1001, { 3 })
       W.fire("BANKFRAME_CLOSED")
-      assert.same({ status = "closed" }, BP:Step())
+      assert.same({ status = "closed" }, BP:RetrieveOne())
       assert.same({}, W.containerOps)
     end)
 
@@ -245,13 +245,13 @@ describe("BankPull", function()
       required(1001, 5); bank_stacks(1001, { 20 })
       for _, name in ipairs({ "ClearCursor", "GetCursorInfo" }) do
         local saved = _G[name]; _G[name] = nil
-        assert.same({ status = "closed" }, BP:Step(), name)
+        assert.same({ status = "closed" }, BP:RetrieveOne(), name)
         _G[name] = saved
       end
       for _, name in ipairs({ "GetContainerNumFreeSlots", "GetContainerNumSlots", "GetContainerItemInfo",
         "UseContainerItem", "SplitContainerItem", "PickupContainerItem" }) do
         local saved = C_Container[name]; C_Container[name] = nil
-        assert.same({ status = "closed" }, BP:Step(), name)
+        assert.same({ status = "closed" }, BP:RetrieveOne(), name)
         C_Container[name] = saved
       end
       assert.same({}, W.containerOps)
@@ -260,101 +260,101 @@ describe("BankPull", function()
     it("refuses in combat", function()
       required(1001, 5); bank_stacks(1001, { 3 })
       _G.InCombatLockdown = function() return true end
-      assert.same({ status = "combat" }, BP:Step())
+      assert.same({ status = "combat" }, BP:RetrieveOne())
       assert.same({}, W.containerOps)
     end)
 
     it("says done when the bags hold what the queue needs", function()
       required(1001, 5); bank_stacks(1001, { 3 }); bags(1001, 5)
-      assert.same({ status = "done" }, BP:Step())
+      assert.same({ status = "done" }, BP:RetrieveOne())
       assert.same({}, W.containerOps)
     end)
 
     it("uses the warband only with bankPullUseWarband and a viewable warband bank", function()
       required(1001, 5); warband_stacks(1001, { 4 })
-      assert.equals("done", BP:Step().status)              -- the warband bank cannot be viewed
+      assert.equals("done", BP:RetrieveOne().status)              -- the warband bank cannot be viewed
       C_Bank.CanViewBank = function(bankType) return bankType == Enum.BankType.Account end
       assert.same({ { itemID = 1001, need = 5, bags = 0, inBank = 0, inWarband = 4 } }, BP:Plan())
       crafting({ bankPullUseWarband = false })
-      assert.same({}, BP:Plan()); assert.equals("done", BP:Step().status)
+      assert.same({}, BP:Plan()); assert.equals("done", BP:RetrieveOne().status)
       crafting({ bankPullUseWarband = true })
-      assert.same({ status = "moved", itemID = 1001, count = 4 }, BP:Step())
+      assert.same({ status = "moved", itemID = 1001, count = 4 }, BP:RetrieveOne())
       assert.equals(WARBAND, W.containerOps[1].bag)
     end)
 
     it("takes the bank's stacks before the warband's", function()
       C_Bank.CanViewBank = function() return true end
       required(1001, 5); warband_stacks(1001, { 2 }); bank_stacks(1001, { 2 })
-      BP:Step()
+      BP:RetrieveOne()
       assert.equals(BANK, W.containerOps[1].bag)
     end)
 
     it("uses the warband only while the bank has no unlocked stack of the item", function()
       C_Bank.CanViewBank = function() return true end
       required(1001, 5); bank_stacks(1001, { 10 }); warband_stacks(1001, { 3 })
-      assert.same({ status = "split", itemID = 1001, count = 5 }, BP:Step())   -- not the warband's 3
+      assert.same({ status = "split", itemID = 1001, count = 5 }, BP:RetrieveOne())   -- not the warband's 3
       assert.equals(BANK, W.containerOps[1].bag)
       W.advance(3); bags(1001, 0); W.containerOps = {}
       slots[BANK][1].isLocked = true
-      assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:Step())
+      assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:RetrieveOne())
       assert.equals(WARBAND, W.containerOps[1].bag)
     end)
 
     it("skips locked stacks and says when all are locked", function()
       required(1001, 5); bank_stacks(1001, { 3 }, true); bank_stacks(1001, { 20 })
-      local r = BP:Step()                                   -- the 3 is locked: the 20 is split
+      local r = BP:RetrieveOne()                                   -- the 3 is locked: the 20 is split
       assert.same({ status = "split", itemID = 1001, count = 5 }, r)
       assert.equals(2, W.containerOps[1].slot)
       W.containerOps = {}; W.advance(3); bags(1001, 0)
       slots[BANK][2].isLocked = true
-      assert.same({ status = "locked", itemID = 1001 }, BP:Step())
+      assert.same({ status = "locked", itemID = 1001 }, BP:RetrieveOne())
       assert.same({}, W.containerOps)
     end)
 
     it("needs a free bag slot to move or split", function()
       required(1001, 5); bank_stacks(1001, { 3, 20 }); fill_bags()
-      assert.same({ status = "bagsFull", itemID = 1001 }, BP:Step())
+      assert.same({ status = "bagsFull", itemID = 1001 }, BP:RetrieveOne())
       bank_stacks(1001, {}); slots[BANK][1] = nil         -- only the 20 is left: a split, and still no slot
-      assert.same({ status = "bagsFull", itemID = 1001 }, BP:Step())
+      assert.same({ status = "bagsFull", itemID = 1001 }, BP:RetrieveOne())
       assert.same({}, W.containerOps)
     end)
 
     it("returns the split to its slot when no bag slot took it", function()
       required(1001, 5); bank_stacks(1001, { 20 }); pickupRefuses = true
-      assert.same({ status = "bagsFull", itemID = 1001, undone = true }, BP:Step())
+      assert.same({ status = "bagsFull", itemID = 1001, undone = true }, BP:RetrieveOne())
       assert.equals(1, cleared); assert.is_nil(cursor); assert.equals(20, slots[BANK][1].stackCount)
       assert.same({ "split", "pickup" }, { W.containerOps[1].op, W.containerOps[2].op })
-      assert.equals("inFlight", BP:Step().status)
+      assert.equals("inFlight", BP:RetrieveOne().status)
     end)
 
     it("leaves the in-flight state after 3 s", function()
       required(1001, 5); bank_stacks(1001, { 3, 20 })
-      BP:Step()
-      W.advance(2.9); assert.equals("inFlight", BP:Step().status)
-      W.advance(0.2); assert.equals("split", BP:Step().status)
+      BP:RetrieveOne()
+      W.advance(2.9); assert.equals("inFlight", BP:RetrieveOne().status)
+      W.advance(0.2); assert.equals("split", BP:RetrieveOne().status)
       assert.equals(2, moved_total(W.containerOps, 1001) - 3)
     end)
 
     it("leaves the in-flight state on the next BAG_UPDATE_DELAYED", function()
       required(1001, 5); bank_stacks(1001, { 3, 20 })
-      BP:Step(); assert.is_true(pending["bankPull.flight"])
+      BP:RetrieveOne(); assert.is_true(pending["bankPull.flight"])
       W.fire("BAG_UPDATE_DELAYED")
       assert.is_nil(pending["bankPull.flight"])
-      assert.equals("split", BP:Step().status)
+      assert.equals("split", BP:RetrieveOne().status)
     end)
 
     it("cancels its debounce keys on disable", function()
       required(1001, 50); bank_stacks(1001, { 3, 20, 10 })
-      open_bank(); BP:Step(); W.fire("BAG_UPDATE_DELAYED"); BP:Step()   -- the 20, then the 10
+      open_bank(); BP:RetrieveOne(); W.fire("BAG_UPDATE_DELAYED"); BP:RetrieveOne()   -- the 20, then the 10
       assert.is_true(pending["bankPull.flight"]); assert.is_true(pending["bankPull.refresh"])
       ns.FS:SetModuleEnabled("BankPull", false)
       for key in pairs(pending) do assert.is_nil(key:match("^bankPull%."), key) end
       assert.is_false(view().frame:IsShown())
       ns.FS:SetModuleEnabled("BankPull", true)
       -- The open flag went with the module too (as MerchantBuy's): the module saw no BANKFRAME_OPENED since.
-      assert.same({ status = "closed" }, BP:Step())
+      assert.same({ status = "closed" }, BP:RetrieveOne())
       open_bank()
-      assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:Step())   -- the lock went with the module
+      assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:RetrieveOne())   -- the lock went with the module
     end)
   end)
 
@@ -372,7 +372,7 @@ describe("BankPull", function()
 
     it("splits into a bag that takes the item, past a profession bag", function()
       required(1001, 5); bank_stacks(1001, { 20 })
-      assert.same({ status = "split", itemID = 1001, count = 5 }, BP:Step())
+      assert.same({ status = "split", itemID = 1001, count = 5 }, BP:RetrieveOne())
       assert.same({ op = "pickup", bag = 2, slot = 1 }, W.containerOps[2])
       assert.equals(0, cleared); assert.equals(5, C_Item.GetItemCount(1001, false, false, false, false))
     end)
@@ -380,17 +380,17 @@ describe("BankPull", function()
     it("does not count a profession bag's free slots for an item it does not take", function()
       required(1001, 5); bank_stacks(1001, { 3 })
       slots[2][1] = { itemID = 99999, stackCount = 1 }; slots[2][2] = { itemID = 99999, stackCount = 1 }
-      assert.same({ status = "bagsFull", itemID = 1001 }, BP:Step())
+      assert.same({ status = "bagsFull", itemID = 1001 }, BP:RetrieveOne())
       assert.same({}, W.containerOps)
       itemFamilies[1001] = HERB + CLOTH     -- an item the herb bag takes
-      assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:Step())
+      assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:RetrieveOne())
     end)
 
     it("takes only general bags without the client's bit library", function()
       _G.bit = nil
       itemFamilies[1001] = HERB
       required(1001, 5); bank_stacks(1001, { 20 })
-      BP:Step()
+      BP:RetrieveOne()
       assert.same({ op = "pickup", bag = 2, slot = 1 }, W.containerOps[2])
     end)
   end)
@@ -401,7 +401,7 @@ describe("BankPull", function()
     it("tries the next reagent when the first one's stacks are all locked", function()
       required(1001, 5); required(2002, 2)
       bank_stacks(1001, { 3 }, true); bank_stacks(2002, { 2 })
-      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:Step())
+      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:RetrieveOne())
     end)
 
     it("tries the next reagent when no bag that takes the first one has room", function()
@@ -410,15 +410,15 @@ describe("BankPull", function()
       fill_bags(); slots[2][1] = { itemID = 99999, stackCount = 1 }; slots[2][2] = { itemID = 99999, stackCount = 1 }
       required(1001, 5); required(2002, 2)
       bank_stacks(1001, { 3 }); bank_stacks(2002, { 2 })
-      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:Step())
+      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:RetrieveOne())
     end)
 
     it("says why the first reagent cannot move when no reagent can", function()
       required(1001, 5); required(2002, 2)
       bank_stacks(1001, { 3 }, true); bank_stacks(2002, { 2 }, true)
-      assert.same({ status = "locked", itemID = 1001 }, BP:Step())
+      assert.same({ status = "locked", itemID = 1001 }, BP:RetrieveOne())
       slots[BANK][1].isLocked = nil; slots[BANK][2].isLocked = nil; fill_bags()
-      assert.same({ status = "bagsFull", itemID = 1001 }, BP:Step())
+      assert.same({ status = "bagsFull", itemID = 1001 }, BP:RetrieveOne())
       assert.same({}, W.containerOps)
     end)
 
@@ -431,33 +431,33 @@ describe("BankPull", function()
       W.advance(3)                                         -- no bag update: the stack is still in the bank
       assert.equals("Iron did not move; the next press tries another reagent", view().status:GetText())
       useRefuses = false
-      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:Step())
+      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:RetrieveOne())
       W.fire("BAG_UPDATE_DELAYED")
-      assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:Step())   -- every other row tried: again
+      assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:RetrieveOne())   -- every other row tried: again
     end)
 
     it("skips a reagent whose split did not happen, without a pickup", function()
       required(1001, 5); required(2002, 2); bank_stacks(1001, { 20 }); bank_stacks(2002, { 2 })
       splitFails = true
-      assert.same({ status = "locked", itemID = 1001 }, BP:Step())
+      assert.same({ status = "locked", itemID = 1001 }, BP:RetrieveOne())
       assert.same({ "split" }, { W.containerOps[1].op }); assert.equals(1, #W.containerOps)
       assert.is_nil(cursor); assert.equals(0, cleared)
-      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:Step())   -- no lock: nothing moved
+      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:RetrieveOne())   -- no lock: nothing moved
     end)
 
     it("tries the next reagent after a split the bag slot did not take", function()
       required(1001, 5); required(2002, 2); bank_stacks(1001, { 20 }); bank_stacks(2002, { 2 })
       pickupRefuses = true
-      assert.same({ status = "bagsFull", itemID = 1001, undone = true }, BP:Step())
+      assert.same({ status = "bagsFull", itemID = 1001, undone = true }, BP:RetrieveOne())
       pickupRefuses = false; W.advance(3)
-      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:Step())
+      assert.same({ status = "moved", itemID = 2002, count = 2 }, BP:RetrieveOne())
     end)
 
     it("forgets the skipped reagents when the bank opens again", function()
       required(1001, 5); required(2002, 2); bank_stacks(1001, { 20 }); bank_stacks(2002, { 2 })
-      splitFails = true; BP:Step(); splitFails = false
+      splitFails = true; BP:RetrieveOne(); splitFails = false
       W.fire("BANKFRAME_CLOSED"); open_bank()
-      assert.same({ status = "split", itemID = 1001, count = 5 }, BP:Step())
+      assert.same({ status = "split", itemID = 1001, count = 5 }, BP:RetrieveOne())
     end)
   end)
 

@@ -1,27 +1,19 @@
 -- Structural rule (design rule 3, no automation): the three item moves (C_Container.UseContainerItem,
--- SplitContainerItem, PickupContainerItem) are referenced only inside `function BankPull:Step` in UI/BankPull.lua,
--- directly (never in a closure nested in it), and BankPull:Step is referenced only in UI/BankPull.lua, as a `:Step(`
--- call directly inside the Retrieve button's SetScript("OnClick", function ... end) handler: never in a closure
--- nested in it (a timer, pcall), never passed on as a value, so nothing moves on BANKFRAME_OPENED or any other
--- event. The scan and its rules are tests/helpers/click_only.lua's.
+-- SplitContainerItem, PickupContainerItem) are referenced only inside `function BankPull:RetrieveOne` in
+-- UI/BankPull.lua, directly (never in a closure nested in it), and BankPull:RetrieveOne is referenced only in
+-- UI/BankPull.lua, as a `:RetrieveOne(` call directly inside the Retrieve button's SetScript("OnClick", function ...
+-- end) handler: never in a closure nested in it (a timer, pcall), never passed on as a value, so nothing moves on
+-- BANKFRAME_OPENED or any other event. The scan and its rules are tests/helpers/click_only.lua's. Every Lua file is
+-- scanned (review M5: the method was named Step, whose token clashed with the onboarding wizard's "Step %d of %d"
+-- string and left that file out; RetrieveOne is a distinct token).
 local click_only = require("tests.helpers.click_only")
 
 local PATH = "UI/BankPull.lua"
-local STEP = "function BankPull:Step("
--- The only other "Step" in the addon is the onboarding wizard's "Step %d of %d" string (string contents match as
--- substrings); that file is checked on its own below.
+local STEP = "function BankPull:RetrieveOne("
 local WIZARD = "UI/OnboardingWizard.lua"
 
-local function files_but_wizard()
-  local out = {}
-  for _, path in ipairs(click_only.lua_files()) do
-    if path ~= WIZARD then out[#out + 1] = path end
-  end
-  return out
-end
-
 describe("click-only bank pull", function()
-  it("calls the container moves only inside BankPull:Step", function()
+  it("calls the container moves only inside BankPull:RetrieveOne", function()
     for _, token in ipairs({ "UseContainerItem", "SplitContainerItem", "PickupContainerItem" }) do
       local ok, message, hits = click_only.only_inside(token, PATH, STEP)
       assert.is_true(ok, message)
@@ -31,12 +23,12 @@ describe("click-only bank pull", function()
     end
   end)
 
-  it("calls ClearCursor only inside BankPull:Step, to undo its own split", function()
+  it("calls ClearCursor only inside BankPull:RetrieveOne, to undo its own split", function()
     local ok, message = click_only.only_inside("ClearCursor", PATH, STEP, { files = { PATH } })
     assert.is_true(ok, message)
   end)
 
-  -- The game calls UI/BankPull.lua may make. Step and its helpers: the plan's list (Decisions, "Bank pull"), plus
+  -- The game calls UI/BankPull.lua may make. RetrieveOne and its helpers: the plan's list (Decisions, "Bank pull"), plus
   -- C_Item.GetItemFamily (fix round 1, review I1: a profession bag's free slots count only for an item its family takes;
   -- a read). The panel adds only frame creation and the item name of its lines.
   local ALLOWED = {
@@ -63,7 +55,7 @@ describe("click-only bank pull", function()
     return out
   end
 
-  it("makes only the allowed game calls, Step only the plan's list", function()
+  it("makes only the allowed game calls, RetrieveOne only the plan's list", function()
     for call in pairs(game_calls(click_only.read(PATH))) do
       assert.is_true(ALLOWED[call] or PANEL_ONLY[call] or false, call)
     end
@@ -72,24 +64,21 @@ describe("click-only bank pull", function()
     end
   end)
 
-  it("references BankPull:Step only from an OnClick handler", function()
-    local ok, message, calls = click_only.referenced_only_from_onclick("Step", { PATH },
-      { definedIn = PATH, files = files_but_wizard() })
+  it("references BankPull:RetrieveOne only from an OnClick handler, in every Lua file", function()
+    local ok, message, calls = click_only.referenced_only_from_onclick("RetrieveOne", { PATH }, { definedIn = PATH })
     assert.is_true(ok, message)
-    assert.equal(1, #calls, "expected exactly one :Step( call, got: " .. table.concat(calls, ", "))
+    assert.equal(1, #calls, "expected exactly one :RetrieveOne( call, got: " .. table.concat(calls, ", "))
     assert.truthy(calls[1]:find("^UI/BankPull%.lua:"))
   end)
 
-  it("finds Step in the onboarding wizard only inside its \"Step %d of %d\" text", function()
-    local text = click_only.read(WIZARD)
-    local refs = click_only.references(WIZARD, "Step")
-    assert.is_true(#refs >= 1)
-    for _, r in ipairs(refs) do
-      assert.equal('"Step %d of %d"', text:sub(r.pos, r.pos + #'"Step %d of %d"' - 1), WIZARD .. ":" .. r.line)
-    end
+  it("scans the onboarding wizard too (review M5)", function()
+    local scanned = false
+    for _, path in ipairs(click_only.lua_files()) do scanned = scanned or path == WIZARD end
+    assert.is_true(scanned)
+    assert.same({}, (click_only.references(WIZARD, "RetrieveOne")))
   end)
 
-  it("defines BankPull:Step in UI/BankPull.lua", function()
+  it("defines BankPull:RetrieveOne in UI/BankPull.lua", function()
     assert.truthy(click_only.body_of(PATH, STEP))
   end)
 end)

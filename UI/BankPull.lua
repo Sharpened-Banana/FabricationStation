@@ -5,11 +5,11 @@ local L = ns.L
 -- bags that the bank (and, with settings.crafting.bankPullUseWarband and a viewable warband bank, the warband bank)
 -- holds, and a Retrieve button that moves one stack, or splits one, into the bags per press.
 --
--- No automation (design rule 3): BankPull:Step is the only caller of C_Container.UseContainerItem, SplitContainerItem
+-- No automation (design rule 3): BankPull:RetrieveOne is the only caller of C_Container.UseContainerItem, SplitContainerItem
 -- and PickupContainerItem, and it is called only from the Retrieve button's OnClick handler
 -- (tests/ui/bank_pull_click_only_spec.lua). One press makes at most one move; after it nothing moves until the next
 -- BAG_UPDATE_DELAYED or 3 s (the in-flight lock). Opening the bank, a bag update or a queue change only shows or
--- redraws the panel. Besides the three moves Step reads only GetContainerNumSlots, GetContainerItemInfo,
+-- redraws the panel. Besides the three moves RetrieveOne reads only GetContainerNumSlots, GetContainerItemInfo,
 -- GetContainerNumFreeSlots, C_Item.GetItemCount, C_Item.GetItemFamily, C_Bank.CanViewBank(Enum.BankType.Account),
 -- GetCursorInfo and InCombatLockdown, and calls ClearCursor only to put back its own split when no bag slot took it.
 --
@@ -74,7 +74,7 @@ local WARBAND_NAMES = { "AccountBankTab_1", "AccountBankTab_2", "AccountBankTab_
 -- never reads Scanner.bankOpen: AceEvent runs one event's handlers in an unspecified order (review I1).
 local function bank_open() return bankOpen end
 
--- The container reads Plan and Step use exist (the three moves, the cursor calls and ClearCursor are checked in Step).
+-- The container reads Plan and RetrieveOne use exist (the three moves, the cursor calls and ClearCursor are checked in RetrieveOne).
 local function reads_ready()
   return type(C_Container) == "table" and type(C_Container.GetContainerNumSlots) == "function"
     and type(C_Container.GetContainerItemInfo) == "function"
@@ -189,7 +189,7 @@ local function choose(row)
 end
 
 ---------------------------------------------------------------------------
--- Plan and Step
+-- Plan and RetrieveOne
 ---------------------------------------------------------------------------
 
 -- { { itemID, need, bags, inBank, inWarband } } for the logged-in character, by itemID: need = what the queue needs
@@ -264,7 +264,7 @@ end
 --          pickup, the row is skipped, "locked". Else PickupContainerItem(toBag, toSlot) -> "split", count = need; an
 --          item still on the cursor is our split, put back with ClearCursor: the row is skipped, "bagsFull", undone.
 -- Any move starts the in-flight lock. At most one move per call. Called only from the Retrieve button's OnClick.
-function BankPull:Step()
+function BankPull:RetrieveOne()
   if not bank_open() or not reads_ready() or type(C_Container.UseContainerItem) ~= "function"
     or type(C_Container.SplitContainerItem) ~= "function" or type(C_Container.PickupContainerItem) ~= "function"
     or type(GetCursorInfo) ~= "function" or type(ClearCursor) ~= "function" then
@@ -366,11 +366,11 @@ local function build_view()
   v.button = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   v.button:SetSize(WIDTH - 2 * PAD, 22)
   v.button:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -(PAD + 26 + MAX_LINES * LINE_HEIGHT))
-  -- The only caller of BankPull:Step, directly in this click handler (design rule 3;
+  -- The only caller of BankPull:RetrieveOne, directly in this click handler (design rule 3;
   -- tests/ui/bank_pull_click_only_spec.lua enforces it). Nothing retrieves by itself.
   v.button:SetScript("OnClick", ns.FS:Wrap(MODULE, function()
     if not BankPull:IsEnabled() then return end
-    local result = BankPull:Step()
+    local result = BankPull:RetrieveOne()
     on_step(result)
     refresh()
   end))
