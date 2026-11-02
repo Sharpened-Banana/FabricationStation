@@ -127,3 +127,4 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     - Reagent skill counts in whole points and leaves empty slots out, as the game does.
     - The math check no longer reports a difficulty on recipes that have no quality.
     - Hovering the Reagents and Commission columns shows our tooltip, not Blizzard's box of the patron's reagents.
+    - An order for a recipe you have not learned keeps its red × even when a long item name leaves no room for more.

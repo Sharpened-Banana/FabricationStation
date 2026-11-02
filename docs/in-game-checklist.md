@@ -1472,6 +1472,11 @@ column, then the Commission column. Expected: FabricationStation's text tooltip 
 cells still opens the order and right-click still shows its menu (they rely on `SetMouseClickEnabled(false)`, not
 verified here), and the whole row stays lit while the pointer is on them.
 
+P7-40. **The × on a long name.** Find a not-learned order with a long name and quality pips ("Thalassian Competitor's Mail
+Links"). Expected: the big red × shows right of the name, without covering it, and its tooltip says the recipe is not
+learned; the risk count drops out if there is no room for it. Widen the window: it comes back. (A not-learned order
+never has a +: it cannot be queued.)
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

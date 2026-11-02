@@ -93,7 +93,8 @@ local WARN_SLOT, PROFIT_SLOT = WARN_SIZE + CELL_GAP, CELL_WIDTH + CELL_GAP
 local STRIP_WIDTH = CORE_WIDTH + WARN_SLOT + PROFIT_SLOT
 -- A recipe the character has not learned (the notLearned risk) shows a red cross in the score cell's slot, right of
 -- [conc], in place of the profit and the score (both hidden). When the core has no room, the "minimal" tier keeps only
--- [risk] [+] and, for such a recipe, the cross beside them: MINIMAL_WIDTH (+ LEARN_SLOT).
+-- [risk] [+] and, for such a recipe, the cross beside them: MINIMAL_WIDTH (+ LEARN_SLOT). With no room for that either,
+-- such a recipe keeps the cross alone ("cross": LEARN_WIDTH): it is the one thing the row must say.
 -- (One table: the main chunk is at Lua 5.1's 200-locals limit.)
 local LEARN = { WIDTH = 24, SLOT = 24 + CELL_GAP, MINIMAL = ADD_SIZE + CELL_GAP + RISK_WIDTH, FONT_SIZE = 26 }
 local PAD, GAP = 6, 4
@@ -102,7 +103,7 @@ M.ICON_SIZE, M.ICON_GAP, M.MORE_WIDTH = ICON_SIZE, ICON_GAP, MORE_WIDTH   -- rea
 -- The strip's measures, read-only (the specs derive their geometry from them).
 M.LAYOUT = { CORE_WIDTH = CORE_WIDTH, SCORE_CORE = SCORE_CORE, CONC_SLOT = CONC_SLOT, WARN_SLOT = WARN_SLOT,
   PROFIT_SLOT = PROFIT_SLOT, STRIP_WIDTH = STRIP_WIDTH, PAD = PAD, GAP = GAP, CELL_GAP = CELL_GAP, FIXED_COLUMNS = FIXED_COLUMNS,
-  MINIMAL_WIDTH = LEARN.MINIMAL, LEARN_SLOT = LEARN.SLOT }
+  MINIMAL_WIDTH = LEARN.MINIMAL, LEARN_SLOT = LEARN.SLOT, LEARN_WIDTH = LEARN.WIDTH }
 local TOOLTIP_ICON = 14                               -- the inline icon in a tooltip line (keeps the line height)
 local UNKNOWN_ICON = 134400                           -- the question mark, for an icon the client cannot give
 -- The Reagents cover's padding inside Blizzard's cell.
@@ -1233,10 +1234,11 @@ end
 -- makes it give way to Blizzard's item name (hotfix H1-6 rule: our cells never cover the name). With room for
 -- everything: "all"; else without the profit cell (score, risk and the warning icon stay): "noProfit"; else, when the
 -- row has a minimal tier (`minimal`: its width, nil for none), only [risk] [+] (and a not-learned recipe's cross):
--- "minimal"; else no strip at all: "none" (the side panel and the Orders tab still carry the numbers). A row that
+-- "minimal"; else, when the row has a cross-only tier (`crossOnly`: its width, nil for none), only the cross: "cross";
+-- else no strip at all: "none" (the side panel and the Orders tab still carry the numbers). A row that
 -- cannot be measured keeps everything. Also returns the space reserved right of the item-name column. Only getters
 -- are called on Blizzard's row, its item-name cell and that cell's Text.
-local function fit(c, row, warn, minimal)
+local function fit(c, row, warn, minimal, crossOnly)
   local itemCell = type(row.cells) == "table" and child(row.cells, 1) or nil
   local reserve = FIXED_COLUMNS
   local rowRight, cellRight = read_number(row, "GetRight"), read_number(itemCell, "GetRight")
@@ -1255,6 +1257,7 @@ local function fit(c, row, warn, minimal)
   if fits(core + PROFIT_SLOT) then return "all", reserve end
   if fits(core) then return "noProfit", reserve end
   if minimal and fits(minimal) then return "minimal", reserve end
+  if crossOnly and fits(crossOnly) then return "cross", reserve end
   return "none", reserve
 end
 
@@ -1436,7 +1439,7 @@ end
 function apply_fit(c, row)
   -- The minimal tier exists for a row with something to say: its risk / info cell, or a not-learned recipe's cross.
   local minimal = (c.riskShown or c.notLearned) and LEARN.MINIMAL + (c.notLearned and LEARN.SLOT or 0) or nil
-  c.fit = fit(c, row, c.blocked, minimal)
+  c.fit = fit(c, row, c.blocked, minimal, c.notLearned and LEARN.WIDTH or nil)
   local core = c.fit == "all" or c.fit == "noProfit"
   c.warnShown = c.blocked == true and core
   set_shown(c.warn, c.warnShown)
@@ -1452,6 +1455,11 @@ function apply_fit(c, row)
   -- A not-learned recipe's cross takes the score cell's slot, in every tier that shows a strip.
   set_shown(c.score, core and not c.notLearned)
   set_shown(c.learn, c.notLearned == true and c.fit ~= "none")
+  local crossAlone = c.fit == "cross"
+  c.learn:ClearAllPoints()
+  c.learn:SetPoint("RIGHT", c.strip, "RIGHT", crossAlone and 0 or -(ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP), 0)
+  set_shown(c.risk, c.riskShown and not crossAlone)
+  set_shown(c.add, c.addShown and not crossAlone)
   set_shown(c.strip, c.fit ~= "none")
   render_tip_cover(c, row)
   render_cover(c, row)
@@ -1589,7 +1597,7 @@ local function show_row(row, elementData)
   for _, risk in ipairs(type(view.risks) == "table" and view.risks or {}) do
     if risk == "notLearned" then c.notLearned = true end
   end
-  set_shown(c.add, M.QueueEntry(view) ~= nil and ns.FS:GetModule("Queue", true) ~= nil)
+  c.addShown = M.QueueEntry(view) ~= nil and ns.FS:GetModule("Queue", true) ~= nil
 
   c.blocked = model.highlight == "blocked"
   apply_fit(c, row)
