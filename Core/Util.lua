@@ -37,10 +37,13 @@ function Util.PushCapped(list, item, cap)
   return list
 end
 
--- A settings accessor for db.global.settings[key]: get(defaults, fill) returns that table, created on first use, after
--- fill(target, defaults) (the module's own repair rules) has run on it. While there is no writable saved data (before
--- InitDB, or ns.FS.dbIsNewer) it returns a session-only copy of the stored table instead, made once per accessor, so
--- callers can always read and set it and nothing is written to db.global.
+-- A settings accessor for db.global.settings[key]: get(defaults, fill) returns that table, after fill(target, defaults)
+-- (the module's own repair rules) has run on it. The exception to "saved tables are created only on write": settings
+-- groups are created with their defaults on first use (a read counts) when the saved data is writable, because a
+-- non-creating accessor would hand out a detached table and a setter or nested in-place edit through it would be lost.
+-- Every other saved table is created only on write, and nothing is created while ns.FS.dbIsNewer: with no writable saved
+-- data (before InitDB, or dbIsNewer) it returns a session-only copy of the stored table instead, made once per accessor,
+-- so callers can always read and set it and nothing is written to db.global.
 function Util.SettingsAccessor(key)
   local session
   return function(defaults, fill)

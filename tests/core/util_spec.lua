@@ -57,6 +57,20 @@ describe("Util", function()
       assert.equals(5, get(DEFAULTS, fill).a)
       assert.is_not.equals(DEFAULTS.nested, s.nested)
     end)
+    -- Phase 7 follow-up F4 (review M1): the one exception to "saved tables are created only on write" is a settings
+    -- group, created with its defaults on first use when the saved data is writable. Under dbIsNewer a read creates nothing.
+    it("creates the settings group on a plain read when writable, and nothing under dbIsNewer", function()
+      local g = {}
+      fs(g)
+      ns.Util.SettingsAccessor("alerts")(DEFAULTS, fill)             -- a read, no setter
+      assert.same({ a = 1, nested = { b = true } }, g.settings.alerts)
+      local newer = {}
+      fs(newer, true)
+      local get = ns.Util.SettingsAccessor("alerts")
+      assert.same({ a = 1, nested = { b = true } }, get(DEFAULTS, fill))   -- a session copy with the defaults
+      assert.is_nil(newer.settings)
+      assert.same({}, newer)
+    end)
     it("repairs a settings or settings[key] that is not a table, keeping stored values", function()
       local g = { settings = "junk" }
       fs(g)
