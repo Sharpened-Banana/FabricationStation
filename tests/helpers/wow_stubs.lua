@@ -131,6 +131,8 @@ local function install(overrides)
     -- phase 7 Task 16: C_Container.UseContainerItem / SplitContainerItem / PickupContainerItem calls, in order:
     -- { op = "use"|"split"|"pickup", bag, slot, count? (split only) }. Nothing moves.
     containerOps = {},
+    -- phase 7 Task 17: BuyMerchantItem calls, in order: { index, quantity }. Nothing is bought.
+    bought = {},
   }
 
   ---------------------------------------------------------------------------
@@ -871,6 +873,13 @@ local function install(overrides)
     },
     GetCursorInfo = retNil,   -- an empty cursor
     ClearCursor = noop,
+    -- phase 7 Task 17 (preflight row 15): an empty merchant; BuyMerchantItem only records (W.bought).
+    GetMerchantNumItems = retZero, GetMerchantItemID = retNil, GetMerchantItemInfo = retNil,
+    GetMerchantItemMaxStack = retZero,
+    C_MerchantFrame = { GetItemInfo = retNil },
+    BuyMerchantItem = function(index, quantity)
+      W.bought[#W.bought + 1] = { index = index, quantity = quantity }
+    end,
     -- phase 7 Task 6 (preflight row 15): inert. The sale log only post-hooks these; nothing here answers or records.
     C_AuctionHouse = {
       GetNumOwnedAuctions = retZero, GetOwnedAuctionInfo = retNil,

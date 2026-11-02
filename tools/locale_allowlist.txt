@@ -5,6 +5,7 @@
 Core/Core.lua:FabricationStation
 UI/Launcher.lua:FabricationStation
 UI/BankPull.lua:FabricationStation
+UI/MerchantBuy.lua:FabricationStation
 UI/OrdersPanel.lua:FabricationStation
 UI/ProfessionPanel.lua:FabricationStation
 

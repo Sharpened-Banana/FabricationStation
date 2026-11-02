@@ -1256,3 +1256,12 @@ L["Everything the queue needs is in your bags"] = true   -- bank panel status: n
 L["That stack is locked; try again"] = true   -- bank panel status: the bank stack is still being moved by the game
 L["Moving %d %s"] = true   -- bank panel status: the last press asked the game to move this many of the item into the bags; shown until the bags show it
 L["%s did not move; the next press tries another reagent"] = true   -- bank panel status: the game did not move the item (no room it accepts, or the stack was busy); the next press skips it
+
+-- Merchant buy (phase 7, Task 17)
+L["%s: %d for %s"] = true   -- merchant panel: a reagent the queue needs, how many the button buys, and what they cost
+L["Buy %d reagents for %s"] = true   -- merchant panel: button that buys the queue's missing vendor reagents; how many items, the total price
+L["Not enough gold"] = true   -- merchant panel: tooltip and status when the total price is more than the gold on hand
+L["Buying %d reagents for %s"] = true   -- merchant panel status right after a click: how many items were asked for and their price
+L["Bought %d reagents for %s"] = true   -- merchant panel status: how many items reached the bags and what they cost
+L["No reagents have arrived in your bags yet"] = true   -- merchant panel status: the bags updated but none of the items asked for are in them
+L["Nothing to buy here"] = true   -- merchant panel status: this merchant sells nothing the queue still needs

@@ -97,3 +97,4 @@ UI\OnboardingWizard.lua
 UI\ReadyAlerts.lua
 UI\FeatureLines.lua
 UI\BankPull.lua
+UI\MerchantBuy.lua

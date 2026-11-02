@@ -17,7 +17,9 @@ stds.wow = {
     "IsInGuild", "GetGuildRecipeInfoPostQuery", "GetGuildRecipeMember", "GetNumGuildMembers", "Ambiguate",
     "issecretvalue", "ChatFrameUtil", "ChatEdit_InsertLink", "C_FriendList", "IsInInstance", "InCombatLockdown", "GetTime", "GetItemIcon",
     "FlashClientIcon", "C_FunctionContainers", "C_AuctionHouse", "GetInboxNumItems", "GetInboxItem",
-    "AUCTION_EXPIRED_MAIL_SUBJECT", "ATTACHMENTS_MAX_RECEIVE", "GetCursorInfo", "ClearCursor", "BankFrame" },
+    "AUCTION_EXPIRED_MAIL_SUBJECT", "ATTACHMENTS_MAX_RECEIVE", "GetCursorInfo", "ClearCursor", "BankFrame",
+    "GetMerchantNumItems", "GetMerchantItemID", "GetMerchantItemInfo", "C_MerchantFrame", "GetMerchantItemMaxStack",
+    "BuyMerchantItem", "MerchantFrame" },
 }
 files["Math/"] = { std = "lua51" }
 files["Data/"] = { std = "lua51" }

@@ -1398,6 +1398,19 @@ the panel sits next to the bank window (its top left at the window's top right) 
 If it sits at the top of the screen instead, `BankFrame` is not the 12.x bank window: report the bank window's frame
 name (`/fstack`).
 
+P7-26. **Buy at a merchant.** Queue a craft that needs a vendor reagent sold in stacks (for example 5 per purchase) and
+one sold singly, with none of either in your bags, bank or warband bank; then visit the vendor. Expected: a
+FabricationStation panel next to the merchant window lists both ("<reagent>: <n> for <price>", the stacked one rounded up
+to whole stacks) and a button "Buy <n> reagents for <total>"; nothing is bought on opening the window. Click once: exactly
+the missing count (rounded up to the stack) of each is bought, the status reads "Buying ..." and then "Bought <n> reagents
+for <price>" when the bags update, and the panel empties out. Clicking again while the purchase is still landing does
+nothing. With too little gold the button is disabled and its tooltip reads "Not enough gold"; in combat it is disabled.
+Also report: does `C_MerchantFrame.GetItemInfo` exist (`/dump C_MerchantFrame.GetItemInfo(1)`; if it is nil the panel is
+using `GetMerchantItemInfo`); did `BuyMerchantItem`'s quantity count items or stacks (a reagent sold 5 per purchase, need
+7: it should buy 10 items; if it bought 50, the quantity counts stacks and MerchantBuy must pass `buy / stack`); does
+`GetMerchantItemMaxStack` give the most items one call may buy; and is `MerchantFrame` the merchant window (if the panel
+sits at the top of the screen instead, report the window's frame name with `/fstack`).
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

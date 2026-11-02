@@ -382,7 +382,7 @@ describe("phase 3 integration", function()
       "PostItem", "PostCommodity", "PlaceBid", "PlaceAuction", "StartCommoditiesPurchase", "ConfirmCommoditiesPurchase",
       "CastSpell", "CastSpellByName", "CastSpellByID", "UseItemByName", "UseContainerItem", "PickupContainerItem",
       "RunMacroText", "PurchaseRank", "RefundRank", "CommitConfig", "SendChatMessage", "SetAttribute",
-      "TakeInboxMoney", "AutoLootMailItem", "TakeInboxItem",
+      "TakeInboxMoney", "AutoLootMailItem", "TakeInboxItem", "BuyMerchantItem",
     }
     local ALLOWED = {
       ["Modules/Orders.lua"] = { ClaimBest = 1, ClaimOrder = 1, FulfillOrder = 1 },
@@ -401,6 +401,9 @@ describe("phase 3 integration", function()
       -- BankPull (phase 7 Task 16): the feature test and the one call of each move, all inside BankPull:Step, pinned
       -- by tests/ui/bank_pull_click_only_spec.lua.
       ["UI/BankPull.lua"] = { UseContainerItem = 2, PickupContainerItem = 2 },
+      -- MerchantBuy (phase 7 Task 17): the feature test and the one call, both inside MerchantBuy:Buy, pinned by
+      -- tests/ui/merchant_click_only_spec.lua.
+      ["UI/MerchantBuy.lua"] = { BuyMerchantItem = 2 },
       ["UI/ProfessionPanel.lua"] = { CraftNext = 1 },
       ["UI/Tabs/Queue.lua"] = { CraftNext = 2 },
     }
