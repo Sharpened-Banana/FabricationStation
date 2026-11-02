@@ -36,8 +36,10 @@ describe("Queue tab", function()
   local function add(quantity, opts)
     opts = opts or {}
     return Queue:Add({ recipeID = opts.recipeID or 9001, quantity = quantity or 1, charKey = opts.charKey or "Main-Realm",
-      targetQuality = opts.targetQuality, useConcentration = opts.useConcentration })
+      targetQuality = opts.targetQuality, useConcentration = opts.useConcentration, optionalItemIDs = opts.optionalItemIDs })
   end
+  -- A line without colour codes and with single spaces.
+  local function flat(text) return (text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("  +", " ")) end
   local function edit(box, text) box.GetText = function() return text end end
 
   before_each(function()
@@ -209,6 +211,22 @@ describe("Queue tab", function()
       assert.is_truthy(fs_text(row, "cost"):find(ns.UI.FormatMoney(2700), 1, true))
       assert.is_truthy(row.missing:GetText():find("6× item:1001", 1, true))
       assert.equals("", view.empty:GetText())
+    end)
+    it("names an entry's optionals", function()
+      world.names[7201], world.names[7202] = "Moonpetal", "Sunfire Resin"
+      add(1, { optionalItemIDs = { 7202, 7201 } }); add(1)
+      local rows = Tab.BuildRows(Queue:GetEntries(), {}, {}, {}, 0)
+      assert.equals("Moonpetal, Sunfire Resin", rows[1].optionalsText)
+      assert.equals("", rows[2].optionalsText)
+      assert.equals("Reagents on hand \194\183 Optionals: Moonpetal, Sunfire Resin", flat(Tab.SecondLine(rows[1])))
+      assert.equals("Reagents on hand", flat(Tab.SecondLine(rows[2])))
+      MW:Show("queue")
+      assert.is_truthy(QT:GetView().queue.pool[1].missing:GetText():find("Optionals: Moonpetal, Sunfire Resin", 1, true))
+      assert.is_falsy(QT:GetView().queue.pool[2].missing:GetText():find("Optionals", 1, true))
+    end)
+    it("puts the optionals after the missing reagents on the second line", function()
+      local row = { missingText = "2\195\151 item:1001", optionalsText = "Moonpetal" }
+      assert.equals("Missing: 2\195\151 item:1001 \194\183 Optionals: Moonpetal", flat(Tab.SecondLine(row)))
     end)
     it("shows the estimate marker and price age of the entry's evaluation", function()
       world.fakeEvaluate(9001, { allocation = {}, reagentCost = 900, priceAgeDays = 3, flags = { estimated = true } })

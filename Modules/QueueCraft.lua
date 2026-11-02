@@ -233,6 +233,10 @@ local function one_craft(entry)
   for _, a in ipairs(result.allocation or {}) do
     need[a.itemID] = (need[a.itemID] or 0) + (a.quantity or 0)
   end
+  -- [phase 7 Task 12] The optionals placed in their slots are needed like any reagent (a missing one blocks the entry).
+  for _, a in ipairs(result.optionalAllocation or {}) do
+    need[a.itemID] = (need[a.itemID] or 0) + (a.quantity or 0)
+  end
   for itemID, n in pairs(entry.providedReagents or {}) do
     if need[itemID] then need[itemID] = need[itemID] - n end
   end
@@ -325,8 +329,12 @@ function Queue:CraftNext()
       else
         local result, missing = one_craft(e)
         if result and next(missing) == nil then
-          C_TradeSkillUI.CraftRecipe(e.recipeID, 1, scanner():ToCraftingReagentInfo(e.recipeID, result.allocation),
-            nil, e.orderID, e.useConcentration and true or false)
+          local infos = scanner():ToCraftingReagentInfo(e.recipeID, result.allocation)
+          -- [phase 7 Task 12] The optionals go in the slots the evaluation placed them in (the rows it scored).
+          for _, extra in ipairs(scanner():OptionalReagentInfos(e.recipeID, result.optionalAllocation)) do
+            infos[#infos + 1] = extra
+          end
+          C_TradeSkillUI.CraftRecipe(e.recipeID, 1, infos, nil, e.orderID, e.useConcentration and true or false)
           start_pending(e, schematic, skillLineID)
           return { status = "crafted", entryID = e.id, charKey = e.charKey, skillLineID = skillLineID }
         end

@@ -67,6 +67,54 @@ describe("Queue", function()
       e.quantity = 99; e.providedReagents[1001] = 99
       assert.equals(1, Q:GetEntries()[1].quantity); assert.equals(2, Q:GetEntries()[1].providedReagents[1001])
     end)
+    it("stores sorted optional IDs on an entry", function()
+      local id = Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", optionalItemIDs = { 7203, 7201, 7203, "x", 7202 } })
+      local e = Q:GetEntries()[1]
+      assert.same({ 7201, 7202, 7203 }, e.optionalItemIDs)
+      e.optionalItemIDs[1] = 1                                  -- a copy
+      assert.same({ 7201, 7202, 7203 }, Q:GetEntries()[1].optionalItemIDs)
+      assert.same({ 7201, 7202, 7203 }, ns.FS.db.global.queue.entries[1].optionalItemIDs)
+      assert.is_number(id)
+    end)
+    it("stores optional IDs only when there are some, and at most 8", function()
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", optionalItemIDs = {} })
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", optionalItemIDs = { "x", false } })
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", optionalItemIDs = "junk" })
+      for i = 1, 3 do assert.is_nil(ns.FS.db.global.queue.entries[i].optionalItemIDs) end
+      local ids = {}
+      for i = 12, 1, -1 do ids[#ids + 1] = 7200 + i end
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", optionalItemIDs = ids })
+      assert.same({ 7201, 7202, 7203, 7204, 7205, 7206, 7207, 7208 }, ns.FS.db.global.queue.entries[4].optionalItemIDs)
+    end)
+    it("plans an entry with its optionals", function()
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", optionalItemIDs = { 7202, 7201 }, targetQuality = 2 })
+      local opts = Q:CraftEvaluateOpts(Q:GetEntries()[1])
+      assert.same({ 7201, 7202 }, opts.optionalItemIDs); assert.equals(2, opts.targetQuality)
+      assert.is_nil(Q:CraftEvaluateOpts({ recipeID = 9001, quantity = 1 }).optionalItemIDs)
+    end)
+    it("counts optional reagents in the missing reagents", function()
+      world.fakeEvaluate(9001, function(_, opts)
+        local result = { allocation = { {slotIndex=1,itemID=1001,quantity=2} }, reagentCost = 900, flags = {},
+          optionalAllocation = {} }
+        if opts.optionalItemIDs then result.optionalAllocation = { { slotIndex = 4, itemID = 7201, quantity = 2 } } end
+        return result
+      end)
+      local plain = Q:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm" })
+      assert.same({ [1001] = 6 }, Q:GetMissingReagents(nil))
+      Q:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm", optionalItemIDs = { 7201 } })
+      assert.same({ [1001] = 12, [7201] = 6 }, Q:GetMissingReagents(nil))
+      world.items["Main-Realm"][7201] = { bags = 4, bank = 0, reagentBank = 0 }
+      assert.same({ [1001] = 12, [7201] = 2 }, Q:GetMissingReagents("Main-Realm"))
+      assert.same({ [1001] = 6 }, Q:GetEntryMissing(plain))
+    end)
+    it("costs an entry with its optionals", function()
+      world.fakeEvaluate(9001, function(_, opts)
+        return { allocation = {}, reagentCost = opts.optionalItemIDs and 1100 or 900, flags = {} }
+      end)
+      local plain = Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      local with = Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm", optionalItemIDs = { 7201 } })
+      assert.same({ 1800, 2200 }, { Q:GetEntryCost(plain), Q:GetEntryCost(with) })
+    end)
     it("changes the quantity and removes at zero", function()
       local id = Q:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm" })
       Q:SetQuantity(id, 5); assert.equals(5, Q:GetEntries()[1].quantity)

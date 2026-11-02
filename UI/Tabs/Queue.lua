@@ -37,6 +37,7 @@ local DIM, WARN, BAD = "|cff9d9d9d", "|cffffd100", "|cffff4040"
 local TONES = { good = { 0.25, 1, 0.25 }, bad = { 1, 0.25, 0.25 }, warn = { 1, 0.82, 0 }, plain = { 1, 1, 1 } }
 local READ_ONLY = L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
 local DAY, HOUR, MINUTE = 86400, 3600, 60
+local DOT = "  \194\183  "   -- between the parts of a row's second line
 
 -- Left to right; the flexible recipe column takes the width the fixed ones leave over. Missing reagents
 -- and the cooldown wait are a second line under each row.
@@ -106,6 +107,13 @@ local function missing_text(missing)
   return ns.UI.JoinList(parts)
 end
 
+-- The item names of an entry's optional reagents, a comma list; "" for none.
+local function optionals_text(itemIDs)
+  local names = {}
+  for _, itemID in ipairs(type(itemIDs) == "table" and itemIDs or {}) do names[#names + 1] = item_name(itemID) end
+  return ns.UI.JoinList(names)
+end
+
 -- entries = Queue:GetEntries output (kept in order), costs = { [id] = copper|nil }, missing = { [id] =
 -- { [itemID] = qty } }, readyAt = { [id] = serverSeconds|nil }, now = server seconds, results|nil = { [id] =
 -- Queue:GetEntryResult } (the evaluation behind the cost: estimate, price age, stale and unreachable markers).
@@ -119,7 +127,7 @@ function Tab.BuildRows(entries, costs, missing, readyAt, now, results)
     rows[i] = {
       id = e.id, name = recipe_name(e.recipeID), charKey = e.charKey, quantity = e.quantity,
       targetQuality = e.targetQuality, concentration = e.useConcentration and "on" or "off",
-      missingText = missing_text(missing[e.id]), cost = costs[e.id],
+      missingText = missing_text(missing[e.id]), optionalsText = optionals_text(e.optionalItemIDs), cost = costs[e.id],
       readyText = (type(ready) == "number" and ready > now) and L["ready in %s"]:format(Tab.FormatDuration(ready - now)) or "",
       isRestock = e.isRestock == true, orderID = e.orderID,
       estimated = flags.estimated == true, stale = flags.stalePrice == true, unreachable = flags.unreachableTarget == true,
@@ -127,6 +135,15 @@ function Tab.BuildRows(entries, costs, missing, readyAt, now, results)
     }
   end
   return rows
+end
+
+-- The second line under a row: what is missing (or that the reagents are on hand), then its optionals when it has any.
+function Tab.SecondLine(row)
+  local line = row.missingText ~= "" and L["Missing: %s"]:format(row.missingText) or color(DIM, L["Reagents on hand"])
+  if row.optionalsText ~= nil and row.optionalsText ~= "" then
+    line = line .. DOT .. L["Optionals: %s"]:format(row.optionalsText)
+  end
+  return line
 end
 
 -- The display text of one row's cells, by column key.
@@ -523,7 +540,7 @@ local function bind_queue_row(row, data, index)
   row.background:SetColorTexture(1, 1, 1, index % 2 == 0 and 0.04 or 0)
   local texts = Tab.CellTexts(data)
   for key, cell in pairs(row.cells) do cell:SetText(texts[key]) end
-  row.missing:SetText(data.missingText ~= "" and L["Missing: %s"]:format(data.missingText) or color(DIM, L["Reagents on hand"]))
+  row.missing:SetText(Tab.SecondLine(data))
   row.ready:SetText(data.readyText ~= "" and color("|cffffd100", data.readyText) or "")
   local editable = not data.isRestock
   for _, control in ipairs({ row.minus, row.plus, row.remove }) do

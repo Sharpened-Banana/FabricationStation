@@ -507,27 +507,50 @@ function Scanner:ToCraftingReagentInfo(recipeID, allocation)
   return out
 end
 
--- Reagent infos for optional/finishing itemIDs (not part of the allocation): each goes into the first not yet used
--- optional or finishing slot of the schematic that lists it, with that slot's quantity. Unknown items are skipped.
-local function optional_infos(schematic, optionalItemIDs)
-  local out, used = {}, {}
-  for _, itemID in ipairs(optionalItemIDs or {}) do
-    for _, slot in ipairs(schematic.reagentSlots or {}) do
-      if not used[slot] and (slot.kind == "optional" or slot.kind == "finishing") and slot.required ~= true
-        and slot.dataSlotIndex ~= nil then
-        local listed = false
-        for _, id in ipairs(type(slot.reagents) == "table" and slot.reagents or {}) do
-          if id == itemID then listed = true end
-        end
-        if listed then
-          used[slot] = true
-          out[#out + 1] = { reagent = { itemID = itemID }, dataSlotIndex = slot.dataSlotIndex, quantity = slot.quantity or 1 }
-          break
-        end
+-- [phase 7 Task 12] Reagent infos for optional/finishing reagents, from RecipeResult.optionalAllocation rows
+-- { slotIndex, itemID, quantity } (Math.Optionals.Place's output, so what the game is given is what was scored). Each
+-- row goes into the schematic's optional or finishing slot of that slotIndex with that slot's dataSlotIndex; a row whose
+-- slot does not exist, is not an optional or finishing slot, does not list the item or has no dataSlotIndex is skipped.
+-- The quantity is the row's, else the slot's. Returns { { reagent = { itemID }, dataSlotIndex, quantity } } in row
+-- order, {} without a cached schematic.
+function Scanner:OptionalReagentInfos(recipeID, optionalAllocation)
+  local out = {}
+  local schematic = self:GetSchematic(recipeID)
+  if not schematic then return out end
+  local bySlot = {}
+  for _, slot in ipairs(schematic.reagentSlots or {}) do
+    if slot.slotIndex ~= nil then bySlot[slot.slotIndex] = slot end
+  end
+  for _, row in ipairs(type(optionalAllocation) == "table" and optionalAllocation or {}) do
+    local slot = type(row) == "table" and row.itemID ~= nil and bySlot[row.slotIndex] or nil
+    if slot and (slot.kind == "optional" or slot.kind == "finishing") and slot.dataSlotIndex ~= nil then
+      local listed = false
+      for _, id in ipairs(type(slot.reagents) == "table" and slot.reagents or {}) do
+        if id == row.itemID then listed = true; break end
+      end
+      if listed then
+        out[#out + 1] = { reagent = { itemID = row.itemID }, dataSlotIndex = slot.dataSlotIndex,
+          quantity = row.quantity or slot.quantity or 1 }
       end
     end
   end
   return out
+end
+
+-- Placement rows for optional/finishing itemIDs: Math.Optionals.Place over the schematic's optional slots (the rule the
+-- evaluation uses), listed in the order the itemIDs were given. Items no slot can take are left out.
+local function place_optionals(schematic, optionalItemIDs)
+  local crafting = ns.CraftingData
+  if not (crafting and crafting.OptionalSlots) or type(optionalItemIDs) ~= "table" or #optionalItemIDs == 0 then
+    return {}
+  end
+  local rows = ns.Math.Optionals.Place(crafting.OptionalSlots(schematic), optionalItemIDs)
+  local position = {}
+  for i, itemID in ipairs(optionalItemIDs) do
+    if position[itemID] == nil then position[itemID] = i end
+  end
+  table.sort(rows, function(a, b) return position[a.itemID] < position[b.itemID] end)
+  return rows
 end
 
 -- The game's CraftingOperationInfo for `allocation` (plus the optional/finishing itemIDs, when given) on the current
@@ -539,7 +562,9 @@ function Scanner:GetLiveOperationInfo(recipeID, allocation, applyConcentration, 
   if not schematic then return nil end
   local ok, info = pcall(function()
     local infos = self:ToCraftingReagentInfo(recipeID, allocation)
-    for _, extra in ipairs(optional_infos(schematic, optionalItemIDs)) do infos[#infos + 1] = extra end
+    for _, extra in ipairs(self:OptionalReagentInfos(recipeID, place_optionals(schematic, optionalItemIDs))) do
+      infos[#infos + 1] = extra
+    end
     return C_TradeSkillUI.GetCraftingOperationInfo(recipeID, infos, nil, applyConcentration and true or false)
   end)
   if ok then return info end

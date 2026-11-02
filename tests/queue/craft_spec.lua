@@ -389,6 +389,63 @@ describe("Queue craft actions", function()
     end)
   end)
 
+  -- Phase 7 Task 12: optional reagents go to CraftRecipe from the evaluation's own placement.
+  describe("optional reagents, real evaluation", function()
+    local function optional_slot(slotIndex, dataSlotIndex, reagents)
+      return { slotIndex = slotIndex, required = false, quantity = 1, reagents = reagents, kind = "optional",
+        dataSlotIndex = dataSlotIndex, dataSlotType = 2 }
+    end
+    before_each(function()
+      ns, W, world = make_world({ last = "Modules/QueueCraft.lua", calibrate = { ["Main-Realm"] = { 9001 } } })
+      Q = ns.FS:GetModule("Queue")
+      api = world.recordAuctionatorTerms()
+      table.insert(world.schematics[9001].reagentSlots, optional_slot(4, 14, { 7201, 7202 }))
+      table.insert(world.schematics[9001].reagentSlots, optional_slot(5, 15, { 7201 }))
+      world.prices[7201] = { value = 4000, source = "auction", ageDays = 1 }
+      world.prices[7202] = { value = 5000, source = "auction", ageDays = 1 }
+      world.openProfession(2906)
+    end)
+    it("sends the optional reagent infos to CraftRecipe", function()
+      world.haveAll("Main-Realm")
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", optionalItemIDs = { 7202 } })
+      assert.equals("crafted", Q:CraftNext().status)
+      local infos = world.crafts[1][3]
+      assert.equals(3, #infos)
+      assert.same({ reagent = { itemID = 7202 }, dataSlotIndex = 14, quantity = 1 }, infos[#infos])
+      assert.same({ 11, 12 }, { infos[1].dataSlotIndex, infos[2].dataSlotIndex })   -- the allocation, then the optional
+    end)
+    it("sends what was scored: each item in the slot the evaluation placed it in", function()
+      world.haveAll("Main-Realm")
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", optionalItemIDs = { 7201, 7202 } })
+      assert.equals("crafted", Q:CraftNext().status)
+      local infos = world.crafts[1][3]
+      -- 7201 fits both slots, 7202 only slot 4: placing 7201 first-come would leave 7202 out.
+      assert.same({ { reagent = { itemID = 7202 }, dataSlotIndex = 14, quantity = 1 },
+        { reagent = { itemID = 7201 }, dataSlotIndex = 15, quantity = 1 } }, { infos[#infos - 1], infos[#infos] })
+    end)
+    it("sends no optional for an entry without any", function()
+      world.haveAll("Main-Realm")
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      assert.equals("crafted", Q:CraftNext().status)
+      assert.equals(2, #world.crafts[1][3])
+    end)
+    it("reports a missing optional reagent as the blocker", function()
+      world.haveAll("Main-Realm"); world.items["Main-Realm"][7202] = nil
+      Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm", optionalItemIDs = { 7202 } })
+      local r = Q:CraftNext()
+      assert.equals("missing", r.status); assert.same({ [7202] = 1 }, r.missing)
+      assert.equals(0, #world.crafts)
+    end)
+    it("counts the optionals on the shopping list", function()
+      world.haveAll("Main-Realm"); world.items["Main-Realm"][7202] = nil
+      world.names[7202] = "Moonpetal"
+      Q:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm", optionalItemIDs = { 7202 } })
+      assert.same({ [7202] = 3 }, Q:GetMissingReagents(nil))
+      assert.is_true((Q:ExportShoppingList()))
+      assert.same({ searchString = "Moonpetal", isExact = true, quantity = 3 }, api.terms[#api.terms])
+    end)
+  end)
+
   -- Phase 2 Task 0 (N2): with queueUseWarband off, the plan must not rely on warband reagents Craft Next won't count.
   describe("warband reagents with queueUseWarband off, real evaluation", function()
     before_each(function()

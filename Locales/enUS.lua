@@ -1028,7 +1028,7 @@ L["Reagent cost: %s  %s"] = true   -- Dashboard queue widget: cost, then its pri
 L["(%s)"] = true   -- a qualifier in brackets: a price age (Dashboard), who an order was for (customer history)
 L["%s/%s (+%s)"] = true   -- specialization points: spent/total (+unspent)
 L["[%s]"] = true   -- Recipes tab: a recipe's flags in brackets after its name
-L["%s (+%s)"] = true   -- Customers tab: a customer and the number of linked alts
+L["%s (+%s)"] = true   -- Customers tab: a customer and the number of linked alts; profession panel "Best optionals": names and the gain
 L["Public"] = true   -- order type (Orders tab Type cell, customer history)
 L["Personal"] = true   -- order type (Orders tab Type cell, customer history)
 L["NPC"] = true   -- order type (Orders tab Type cell, customer history)
@@ -1161,3 +1161,11 @@ L["All expansions"] = true   -- Dashboard "Top crafts by profit": the expansion 
 L["Expansion %d"] = true   -- Dashboard "Top crafts by profit": an expansion the client gave no name for ("Expansion 9")
 L["Show top crafts from one expansion"] = true   -- tooltip of the expansion filter button
 L["No profitable crafts in %s"] = true   -- Dashboard "Top crafts by profit": the chosen expansion has no result; the expansion name
+
+-- Optionals in the side panel, the queue and Craft Next (phase 7, Task 12)
+L["Best optionals"] = true   -- profession side panel: the row naming the optional/finishing reagents that add the most profit
+L["none adds profit"] = true   -- profession side panel, "Best optionals" row: no optional reagent adds profit
+L["%d skipped: no price or no known effect"] = true   -- profession side panel: a count of optional reagents left out of the search
+L["Queue with best optionals"] = true   -- profession side panel button: queues one craft with the best optionals
+L["Queued with %s"] = true   -- profession side panel, next to that button: the optional reagents' names
+L["Optionals: %s"] = true   -- Queue tab, second line of an entry: the names of its optional reagents

@@ -1319,6 +1319,17 @@ game's own ("Midnight", "The War Within"; "Expansion 9" if the game gave none). 
 expansion, then lower its prices until nothing there is profitable: the widget shows the usual empty line plus "No
 profitable crafts in <expansion>", and the button keeps that expansion.
 
+P7-20. **Craft Next with an optional.** Select a recipe with an optional or finishing reagent slot in a profession
+window with prices scanned. The side panel shows "Best optionals" (the names and "+<gain>") or "none adds profit", and
+"<n> skipped: no price or no known effect" when some had no price or no modelled effect. Press "Queue with best
+optionals": the status reads "Queued with <names>" and the Queue tab shows the entry with "Optionals: <names>" on its
+second line (the cost includes them). Put the optional in your bags and press Craft Next with that profession open.
+Expected: the craft uses it (the result shows its effect, e.g. the quality or Multicraft the item gives; the bag count of
+the optional drops by the slot's quantity). With none of it in the bags Craft Next reports the entry as missing and the
+optional is on the shopping list. This also checks that `CraftRecipe` accepts optional and finishing reagent infos built
+with `dataSlotIndex` from the cached schematic; if the craft goes through without the optional, or the game rejects the
+call, report the recipe and which slot (optional or finishing) it was.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

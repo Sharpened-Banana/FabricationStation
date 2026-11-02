@@ -6,7 +6,8 @@ describe("Scanner professions", function()
   local function scan() W.fire("TRADE_SKILL_LIST_UPDATE"); W.advance(0.5) end
 
   before_each(function()
-    W = install_wow_stubs(fixture()); ns = load_addon({}, "Modules/Scanner.lua"); W.boot()
+    -- CraftingData too: the live operation info places optionals over its OptionalSlots.
+    W = install_wow_stubs(fixture()); ns = load_addon({}, "Modules/CraftingData.lua"); W.boot()
     Scanner = ns.FS:GetModule("Scanner")
   end)
 
@@ -76,6 +77,44 @@ describe("Scanner professions", function()
     assert.same({ { reagent = { itemID = 2002 }, dataSlotIndex = 1, quantity = 5 },
       { reagent = { itemID = 5001 }, dataSlotIndex = 3, quantity = 1 },
       { reagent = { itemID = 4001 }, dataSlotIndex = 2, quantity = 1 } }, got)
+  end)
+  it("OptionalReagentInfos maps items to their slot's dataSlotIndex", function()
+    assert.same({ { reagent = { itemID = 5001 }, dataSlotIndex = 3, quantity = 1 },
+      { reagent = { itemID = 4001 }, dataSlotIndex = 2, quantity = 1 } },
+      Scanner:OptionalReagentInfos(1001, { { slotIndex = 3, itemID = 5001, quantity = 1 },
+        { slotIndex = 2, itemID = 4001, quantity = 1 } }))
+  end)
+  it("OptionalReagentInfos skips an item its slot does not list, an unknown slot, a basic slot and bad rows", function()
+    assert.same({ { reagent = { itemID = 4001 }, dataSlotIndex = 2, quantity = 1 } },
+      Scanner:OptionalReagentInfos(1001, { { slotIndex = 3, itemID = 4001, quantity = 1 },   -- slot 3 lists 5001 only
+        { slotIndex = 99, itemID = 4001, quantity = 1 }, { slotIndex = 1, itemID = 2002, quantity = 5 },
+        { itemID = 4001, quantity = 1 }, "junk", { slotIndex = 2, itemID = 4001, quantity = 1 } }))
+    assert.same({}, Scanner:OptionalReagentInfos(1001, nil))
+    assert.same({}, Scanner:OptionalReagentInfos(9999, { { slotIndex = 2, itemID = 4001, quantity = 1 } }))
+  end)
+  it("OptionalReagentInfos sends the row's quantity, else the slot's", function()
+    local infos = Scanner:OptionalReagentInfos(1001, { { slotIndex = 2, itemID = 4001, quantity = 3 },
+      { slotIndex = 3, itemID = 5001 } })
+    assert.same({ 3, 1 }, { infos[1].quantity, infos[2].quantity })
+  end)
+  it("places the selected optionals by the one matching rule, in the order given", function()
+    -- Slot 2 offers 4001 and 4002, slot 6 only 4001: placing 4001 first-come would leave 4002 without a slot.
+    local fetch = C_TradeSkillUI.GetRecipeSchematic
+    C_TradeSkillUI.GetRecipeSchematic = function(id)
+      local raw = fetch(id)
+      if raw then
+        raw.reagentSlotSchematics[2].reagents = { { itemID = 4001 }, { itemID = 4002 } }
+        local extra = {}
+        for k, v in pairs(raw.reagentSlotSchematics[2]) do extra[k] = v end
+        extra.slotIndex, extra.dataSlotIndex, extra.reagents = 6, 6, { { itemID = 4001 } }
+        raw.reagentSlotSchematics[6] = extra
+      end
+      return raw
+    end
+    local got; C_TradeSkillUI.GetCraftingOperationInfo = function(_, r) got = r; return { quality = 1 } end
+    Scanner:GetLiveOperationInfo(1001, {}, false, { 4001, 4002 })
+    assert.same({ { reagent = { itemID = 4001 }, dataSlotIndex = 6, quantity = 1 },
+      { reagent = { itemID = 4002 }, dataSlotIndex = 2, quantity = 1 } }, got)
   end)
   it("records character basics on login", function()
     local c = Scanner:GetCharacter(K); assert.equals("MAGE", c.class); assert.equals(W.now, c.lastSeen); assert.same({ K }, Scanner:GetCharacters())

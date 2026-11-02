@@ -201,6 +201,29 @@ function CraftingData.AllocationFromReagentInfo(schematic, infos)
   return allocation, optionalItemIDs
 end
 
+-- The row of an optional or finishing slot that can take a chosen item: { slotIndex, kind, quantity, itemIDs }, or nil
+-- for any other slot (basic, allocated - IsAllocated: a required spark - or without reagents). The one rule behind
+-- BuildInput's optionalSlots and OptionalSlots.
+local function optional_slot_row(slot)
+  if type(slot) ~= "table" or (slot.kind ~= "optional" and slot.kind ~= "finishing") then return nil end
+  if CraftingData.IsAllocated(slot) then return nil end
+  local itemIDs = {}
+  for i, itemID in ipairs(type(slot.reagents) == "table" and slot.reagents or EMPTY) do itemIDs[i] = itemID end
+  if #itemIDs == 0 then return nil end
+  return { slotIndex = slot.slotIndex, kind = slot.kind, quantity = slot.quantity or 1, itemIDs = itemIDs }
+end
+
+-- [phase 7 Task 12] The slots of a cached schematic that can take an optional or finishing reagent, in schematic order:
+-- the optionalSlots BuildInput gives Math.Optionals (Place and Best), so every place that puts items into slots
+-- (the evaluation, the live operation info, Craft Next) matches them by the same list.
+function CraftingData.OptionalSlots(schematic)
+  local out = {}
+  for _, slot in ipairs(schematic and schematic.reagentSlots or EMPTY) do
+    out[#out + 1] = optional_slot_row(slot)
+  end
+  return out
+end
+
 -- Price of an optional reagent: the copies the slot needs beyond owned + provided at `price` each,
 -- 0 when none must be bought, nil when some must and the price is unknown.
 local function optional_price(price, quantity, owned, provided)
@@ -273,12 +296,7 @@ function CraftingData.BuildInput(gd, args)
       slots[#slots + 1] = { slotIndex = slot.slotIndex, quantity = slot.quantity or 0, weight = weight, items = items,
         noResourcefulness = (not basic) or nil, singleItem = (not basic) or nil }
     elseif optionalSlots and (slot.kind == "optional" or slot.kind == "finishing") then
-      local itemIDs = {}
-      for i, itemID in ipairs(reagents) do itemIDs[i] = itemID end
-      if #itemIDs > 0 then
-        optionalSlots[#optionalSlots + 1] = { slotIndex = slot.slotIndex, kind = slot.kind, quantity = slot.quantity or 1,
-          itemIDs = itemIDs }
-      end
+      optionalSlots[#optionalSlots + 1] = optional_slot_row(slot)
       for _, itemID in ipairs(reagents) do
         if not seen[itemID] then
           seen[itemID] = true

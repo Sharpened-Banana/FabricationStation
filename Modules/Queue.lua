@@ -65,6 +65,28 @@ local function copy_entry(e)
   local out = {}
   for k, v in pairs(e) do out[k] = v end
   if type(e.providedReagents) == "table" then out.providedReagents = copy_map(e.providedReagents) end
+  if type(e.optionalItemIDs) == "table" then
+    out.optionalItemIDs = {}
+    for i, itemID in ipairs(e.optionalItemIDs) do out.optionalItemIDs[i] = itemID end
+  end
+  return out
+end
+
+-- [phase 7 Task 12] The optional/finishing itemIDs an entry carries: number IDs, each once, ascending, at most
+-- MAX_OPTIONALS (the lowest); nil when none are left.
+local MAX_OPTIONALS = 8
+local function clean_optionals(list)
+  if type(list) ~= "table" then return nil end
+  local out, seen = {}, {}
+  for _, itemID in ipairs(list) do
+    if type(itemID) == "number" and itemID == itemID and not seen[itemID] then
+      seen[itemID] = true
+      out[#out + 1] = itemID
+    end
+  end
+  if #out == 0 then return nil end
+  table.sort(out)
+  while #out > MAX_OPTIONALS do out[#out] = nil end
   return out
 end
 
@@ -160,7 +182,9 @@ end
 ---------------------------------------------------------------------------
 
 -- Adds a craft. entry = { recipeID, quantity (>= 1), charKey (default: current), targetQuality?,
--- useConcentration?, orderID?, providedReagents? = { [itemID] = qty } }. Returns the new id, or nil
+-- useConcentration?, orderID?, providedReagents? = { [itemID] = qty }, optionalItemIDs? = { itemID } (optional and
+-- finishing reagents to craft with: number IDs, each once, sorted, at most 8; stored only when any are left) }.
+-- Returns the new id, or nil
 -- for an invalid entry or while the saved data is read-only. An entry with an orderID belongs to that crafting
 -- order: Craft Next crafts it only while the order is claimed, and FS_ORDER_FULFILLED removes it.
 function Queue:Add(entry)
@@ -180,6 +204,7 @@ function Queue:Add(entry)
     id = nextID, recipeID = entry.recipeID, quantity = quantity, charKey = entry.charKey or ns.FS:CharKey(),
     targetQuality = entry.targetQuality, useConcentration = entry.useConcentration, orderID = entry.orderID,
     providedReagents = type(entry.providedReagents) == "table" and copy_map(entry.providedReagents) or nil,
+    optionalItemIDs = clean_optionals(entry.optionalItemIDs),
   }
   changed(self)
   return nextID
@@ -355,6 +380,7 @@ function Queue:CraftEvaluateOpts(entry)
     targetQuality = entry.targetQuality, useConcentration = entry.useConcentration,
     providedReagents = entry.providedReagents, ownedReagentsFree = true,
     excludeWarband = not recipes():GetSetting("queueUseWarband"),
+    optionalItemIDs = entry.optionalItemIDs,
   }
 end
 
@@ -367,6 +393,10 @@ local function per_craft(entry)
   if not result then return nil end
   local need = {}
   for _, a in ipairs(result.allocation or {}) do
+    need[a.itemID] = (need[a.itemID] or 0) + (a.quantity or 0)
+  end
+  -- [phase 7 Task 12] The optionals the evaluation placed (RecipeResult.optionalAllocation) are needed too.
+  for _, a in ipairs(result.optionalAllocation or {}) do
     need[a.itemID] = (need[a.itemID] or 0) + (a.quantity or 0)
   end
   for itemID, n in pairs(entry.providedReagents or {}) do
@@ -453,6 +483,7 @@ function Queue:GetEntryResult(id)
   if not e then return nil end
   return recipes():Evaluate(e.recipeID, e.charKey, {
     targetQuality = e.targetQuality, useConcentration = e.useConcentration, providedReagents = e.providedReagents,
+    optionalItemIDs = e.optionalItemIDs,
   }), e
 end
 
