@@ -197,6 +197,76 @@ describe("MerchantBuy", function()
           unitPrice = plan.rows[1].unitPrice, cost = plan.rows[1].cost })
     end)
 
+    -- Never assume gold-only or a stack of 1: a listing whose info lacks either is not bought.
+    local function info_of(fields)
+      return function(index)
+        local l = listings[index]
+        if not l then return nil end
+        local info = { price = l.price, stackCount = l.stack or 1, numAvailable = l.available or -1,
+          isPurchasable = true, hasExtendedCost = false }
+        for k, v in pairs(fields) do
+          if v == "nil" then info[k] = nil else info[k] = v end
+        end
+        return info
+      end
+    end
+
+    it("skips a listing whose hasExtendedCost is missing or true", function()
+      required(1001, 3); sell(1001, 5)
+      C_MerchantFrame.GetItemInfo = info_of({ hasExtendedCost = "nil" })
+      assert.same({}, MB:Plan().rows)
+      C_MerchantFrame.GetItemInfo = info_of({ hasExtendedCost = true })
+      assert.same({}, MB:Plan().rows)
+      C_MerchantFrame.GetItemInfo = info_of({ hasExtendedCost = false })
+      assert.equals(1, #MB:Plan().rows)
+      open()
+      C_MerchantFrame.GetItemInfo = info_of({ hasExtendedCost = "nil" })
+      assert.same({ status = "nothing" }, MB:Buy())
+      assert.same({}, W.bought)
+    end)
+
+    it("skips a listing whose stackCount is not a positive whole number", function()
+      required(1001, 3); sell(1001, 5)
+      for _, bad in ipairs({ "nil", 0, -1, 2.5, "5", 0 / 0 }) do
+        C_MerchantFrame.GetItemInfo = info_of({ stackCount = bad })
+        assert.same({}, MB:Plan().rows, tostring(bad))
+      end
+      C_MerchantFrame.GetItemInfo = info_of({ stackCount = 1 })
+      assert.equals(1, #MB:Plan().rows)
+      open()
+      C_MerchantFrame.GetItemInfo = info_of({ stackCount = "nil" })
+      assert.same({ status = "nothing" }, MB:Buy())
+      assert.same({}, W.bought)
+    end)
+
+    it("skips a GetMerchantItemInfo listing whose extended-cost or quantity return is missing", function()
+      required(1001, 3); sell(1001, 5)
+      _G.C_MerchantFrame = nil
+      local ext, qty = false, 1
+      _G.GetMerchantItemInfo = function() return "name", "texture", 5, qty, -1, true, true, ext end
+      assert.equals(1, #MB:Plan().rows)
+      ext = nil; assert.same({}, MB:Plan().rows)
+      ext, qty = false, nil; assert.same({}, MB:Plan().rows)
+      ext, qty = true, 1; assert.same({}, MB:Plan().rows)
+    end)
+
+    it("never buys the not-required socket slot", function()
+      ns, W, world = make_world({ last = "UI/MerchantBuy.lua", intermediates = true, calibrate = { [ME] = { 9100 } } })
+      MB, Q, requiredItems = ns.FS:GetModule("MerchantBuy"), ns.FS:GetModule("Queue"), {}
+      install_merchant(); spy_debounces()
+      local slot = world.schematics[9100].reagentSlots[1]
+      world.schematics[9100].reagentSlots[2] = { slotIndex = 2, required = false, automatic = true, quantity = 1,
+        reagents = { 4001 }, kind = "basic", dataSlotIndex = 22, dataSlotType = 1, hidden = false }
+      assert.equals(1101, slot.reagents[1])
+      ns.FS:SendMessage("FS_RECIPES_CHANGED")
+      Q:Add({ recipeID = 9100, quantity = 3, charKey = ME })
+      sell(4001, 5); local ok = sell(1101, 7)
+      local plan = MB:Plan()
+      assert.equals(1, #plan.rows); assert.equals(ok, plan.rows[1].index); assert.equals(6, plan.rows[1].need)
+      open(); MB:Buy()
+      assert.equals(0, bought_total(4001)); assert.equals(6, bought_total(1101))
+    end)
+
     it("is empty without the merchant listing calls", function()
       required(1001, 3); sell(1001, 5)
       _G.GetMerchantItemID = nil
@@ -389,6 +459,24 @@ describe("MerchantBuy", function()
       assert.equals(1, #W.bought)
     end)
 
+    it("treats a count that was unknown at the buy as not arrived, without raising", function()
+      required(1001, 7); sell(1001, 5); deliver = false
+      local count, unknown = C_Item.GetItemCount, false
+      C_Item.GetItemCount = function(itemID, ...)
+        if unknown and itemID == 1001 then return nil end
+        return count(itemID, ...)
+      end
+      _G.GetMerchantItemMaxStack = function() unknown = true; return 20 end   -- after the plan, before the count read
+      open()
+      assert.equals("bought", MB:Buy().status)
+      unknown = false; held(1001, 7)
+      W.fire("BAG_UPDATE_DELAYED")
+      assert.same({ status = "inFlight" }, MB:Buy())     -- not confirmed: held until the timeout
+      W.advance(3.1)
+      assert.same({}, W.errors); assert.is_true(MB:IsEnabled())
+      assert.equals("No reagents have arrived in your bags yet", view().status:GetText())
+    end)
+
     it("buys nothing and leaves no lock when the first call raises", function()
       required(1001, 7); sell(1001, 5)
       local real = _G.BuyMerchantItem
@@ -516,15 +604,50 @@ describe("MerchantBuy", function()
       assert.equals(2, #view().lines)
     end)
 
-    it("hides on MERCHANT_CLOSED and starts fresh on the next visit", function()
+    it("hides on MERCHANT_CLOSED, and a visit with nothing in flight starts fresh", function()
+      required(1001, 7); sell(1001, 5)
+      open()
+      W.fire("MERCHANT_CLOSED")
+      assert.is_false(view().frame:IsShown())
+      assert.is_nil(pending["merchantBuy.refresh"])
+      open()
+      assert.is_true(view().frame:IsShown()); assert.equals("", view().status:GetText())
+      assert.equals("bought", MB:Buy().status)
+    end)
+
+    it("keeps the lock across a close and a reopen while the items are still arriving", function()
       required(1001, 7); sell(1001, 5); deliver = false
       open(); click()
       W.fire("MERCHANT_CLOSED")
       assert.is_false(view().frame:IsShown())
-      assert.is_nil(pending["merchantBuy.flight"]); assert.is_nil(pending["merchantBuy.refresh"])
+      assert.is_true(pending["merchantBuy.flight"])      -- the lock's timer runs on
       open()
-      assert.is_true(view().frame:IsShown()); assert.equals("", view().status:GetText())
-      assert.equals("bought", MB:Buy().status)       -- the lock went with the visit
+      assert.is_false(view().buttonEnabled)
+      click()
+      assert.same({ status = "closed" }, (function() W.fire("MERCHANT_CLOSED"); return MB:Buy() end)())
+      open()
+      assert.same({ status = "inFlight" }, MB:Buy())
+      assert.equals(1, #W.bought)
+    end)
+
+    it("ends the lock by arrival while the merchant is closed", function()
+      required(1001, 7); sell(1001, 5); deliver = false
+      open(); click()
+      W.fire("MERCHANT_CLOSED")
+      held(1001, 7); W.fire("BAG_UPDATE_DELAYED")
+      assert.is_nil(pending["merchantBuy.flight"])
+      open()
+      assert.same({ status = "nothing" }, MB:Buy())
+      assert.equals(1, #W.bought)
+    end)
+
+    it("ends the lock at 3 s even when the merchant was closed and reopened", function()
+      required(1001, 7); sell(1001, 5); deliver = false
+      open(); click()
+      W.advance(1); W.fire("MERCHANT_CLOSED"); W.advance(1); open()
+      assert.same({ status = "inFlight" }, MB:Buy())
+      W.advance(1.1)
+      assert.equals("bought", MB:Buy().status)
     end)
 
     it("cancels its debounce keys, hides and drops its state on disable", function()

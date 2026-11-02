@@ -10,11 +10,12 @@ local L = ns.L
 -- nothing is bought until every count asked for has reached the bags or 3 s have passed (the in-flight lock).
 --
 -- Spend: the shortfall is the Queue's own (Queue:GetGatheringPlan(me): what the queue needs less what the character
--- holds, bank and warband included, and less what queued crafts will make; the not-required socket slot is never in
--- it), rounded up to the vendor's stack and never past what the vendor has. The character's own count must be the
+-- holds in bags, bank and reagent bank (and, while queueUseWarband is on, the warband bank), and less what queued
+-- crafts will make; the not-required socket slot is never in it), rounded up to the vendor's stack and never past what the vendor has. The character's own count must be the
 -- game's (Scanner:GetLiveOwnedCount, as on the order rows: unknown is nil, never a snapshot or 0): an item whose count
--- the game cannot give is not bought. A listing with an extended cost, not purchasable, sold out or without a positive
--- gold price is skipped.
+-- the game cannot give is not bought. A listing is skipped unless the game says it is purchasable and has no extended
+-- cost (hasExtendedCost == false; a missing field is not "gold only") and gives a whole stack size of 1 or more (a
+-- missing one is not 1); sold-out listings and those without a positive gold price are skipped too.
 --
 -- Own frames only (rules 2 and 7): the panel is FabricationStationMerchantBuy, parented to UIParent and anchored to
 -- MerchantFrame's right edge (read-only; nothing of MerchantFrame is written). Unverified in game: P7-26 (whether
@@ -85,6 +86,9 @@ local function money()
   return ok and is_number(n) and n or nil
 end
 
+-- Whether v is a whole number of 1 or more.
+local function whole_count(v) return is_number(v) and v >= 1 and v == math.floor(v) end
+
 -- The game's own count of itemID (bags, bank, reagent bank; the order rows' rule), or nil when it cannot answer.
 local function live_count(itemID)
   local S = ns.FS:GetModule("Scanner", true)
@@ -134,9 +138,10 @@ local function build()
     local itemID = GetMerchantItemID(index)
     local want = itemID ~= nil and not seen[itemID] and need[itemID] or nil
     local info = want and item_info(index) or nil
-    if info and info.isPurchasable == true and not info.hasExtendedCost and info.numAvailable ~= 0
-      and is_number(info.price) and info.price > 0 and live_count(itemID) ~= nil then
-      local s = is_number(info.stackCount) and math.max(1, math.floor(info.stackCount)) or 1
+    if info and info.isPurchasable == true and info.hasExtendedCost == false and info.numAvailable ~= 0
+      and is_number(info.price) and info.price > 0 and whole_count(info.stackCount)
+      and live_count(itemID) ~= nil then
+      local s = info.stackCount
       local buy = math.ceil(want / s) * s
       if is_number(info.numAvailable) and info.numAvailable > 0 then buy = math.min(buy, info.numAvailable * s) end
       seen[itemID] = true
@@ -173,7 +178,7 @@ local function arrived(f)
   local got, cost, complete = 0, 0, true
   for _, row in ipairs(f) do
     local now = live_count(row.itemID)
-    local gained = now and math.max(0, math.min(row.asked, now - row.before)) or 0
+    local gained = now and row.before and math.max(0, math.min(row.asked, now - row.before)) or 0
     got = got + gained
     cost = cost + math.floor(gained * row.unitPrice + 0.5)
     if gained < row.asked then complete = false end
@@ -393,22 +398,17 @@ local function schedule_update()
   if merchantOpen then ns.FS:Debounce(REFRESH_KEY, REFRESH_DELAY, ns.FS:Wrap(MODULE, function() update() end)) end
 end
 
-local function reset_flight()
-  ns.FS:CancelDebounce(FLIGHT_KEY)
-  inFlight, flight = false, nil
-end
-
--- MERCHANT_SHOW: a new visit (no lock), and the panel when the merchant sells something the queue needs.
+-- MERCHANT_SHOW: a new visit, and the panel when the merchant sells something the queue needs. A lock from an earlier
+-- visit stays: items bought just before closing may still be arriving, and a click must not buy them again.
 local function on_merchant_shown()
   merchantOpen = true
-  reset_flight()
   if MerchantBuy.view then MerchantBuy.view.frame:Hide() end
   update()
 end
 
+-- MERCHANT_CLOSED: the panel goes; a pending lock and its expected counts stay until arrival or the 3 s timeout.
 local function on_merchant_closed()
   merchantOpen = false
-  reset_flight()
   ns.FS:CancelDebounce(REFRESH_KEY)
   if MerchantBuy.view then MerchantBuy.view.frame:Hide() end
 end
@@ -435,6 +435,8 @@ function MerchantBuy:OnEnable()
   self:RegisterMessage(ns.Msg.QUEUE_CHANGED, wrap(schedule_update))
 end
 
+-- The lock ends here without waiting (it is the module's own timer and state); arrival and the 3 s timeout end it
+-- otherwise, and closing the merchant does not.
 function MerchantBuy:OnDisable()
   ns.FS:CancelDebounce(FLIGHT_KEY)
   ns.FS:CancelDebounce(REFRESH_KEY)

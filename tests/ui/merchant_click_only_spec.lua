@@ -21,20 +21,31 @@ describe("click-only merchant buy", function()
     assert.truthy(click_only.body_of(PATH, BUY))
   end)
 
-  -- "Buy" is also a substring of strings all over the addon ("Buy %d reagents for %s", "merchantBuy.flight", the
-  -- Craft / Buy choice), and the shared scan counts a string containing the name as a reference. This rule is about
-  -- the method, so string tokens are left out here: a reference counts when its first character is not a quote or a
-  -- long-bracket opener (tests/helpers/click_only.lua gives string tokens the position of their opening delimiter).
-  local function method_refs(path)
-    local text = click_only.read(path)
+  -- "Buy" is also a substring of strings all over the addon ("Buy %d reagents for %s", "merchantBuy.flight", the module
+  -- and frame names), and the shared scan counts any string containing the name as a reference. Only the strings that
+  -- cannot hide a call are left out here: locale keys (L["..."]) and the plain literals longer than "Buy" (Debounce
+  -- keys, names, titles). A bracketed key (t["Buy"](t)) and a string that is exactly "Buy" (rawget(t, "Buy")) stay
+  -- references, so they fail the "only from OnClick" rule like any other.
+  local function method_refs_in(text)
     local out = {}
-    local refs, depth = click_only.references(path, "Buy")
-    assert.equal(0, depth, path .. ": scanner out of step")
+    local refs, depth = click_only.references_in(text, "Buy")
+    assert.equal(0, depth, "scanner out of step")
+    local tokens, at = click_only.tokens(text), {}
+    for k, t in ipairs(tokens) do at[t.pos] = k end
     for _, r in ipairs(refs) do
-      local first = text:sub(r.pos, r.pos)
-      if first ~= '"' and first ~= "'" and first ~= "[" then out[#out + 1] = r end
+      local k, keep = at[r.pos], true
+      if tokens[k] and tokens[k].kind == "string" then
+        local bracketed = tokens[k - 1] and tokens[k - 1].text == "["
+        local locale = bracketed and tokens[k - 2] and tokens[k - 2].kind == "name" and tokens[k - 2].text == "L"
+        keep = not locale and (tokens[k].text == "Buy" or bracketed)
+      end
+      if keep then out[#out + 1] = r end
     end
     return out
+  end
+
+  local function method_refs(path)
+    return method_refs_in(click_only.read(path))
   end
 
   it("references MerchantBuy:Buy only from an OnClick handler", function()
@@ -54,6 +65,17 @@ describe("click-only merchant buy", function()
     assert.same({}, bad)
     assert.equal(1, #calls, "expected exactly one :Buy( call, got: " .. table.concat(calls, ", "))
     assert.truthy(calls[1]:find("^UI/MerchantBuy%.lua:"))
+  end)
+
+  it("catches a string-keyed Buy call but not locale keys, Debounce keys or names", function()
+    assert.equal(1, #method_refs_in('local x = t["Buy"](t)'))
+    assert.equal(1, #method_refs_in('x:SetScript("OnClick", function() t["Buy"](t) end)'))
+    assert.equal(1, #method_refs_in('local f = rawget(t, "Buy")'))
+    assert.equal(0, #method_refs_in('local s = L["Buy %d reagents for %s"]'))
+    assert.equal(0, #method_refs_in('local s = L["Buy"]'))       -- the Craft / Buy choice label
+    assert.equal(0, #method_refs_in('FS:Debounce("merchantBuy.flight", 3, fn); local m = "MerchantBuy"'))
+    local refs = method_refs_in('x:SetScript("OnClick", function() t["Buy"](t) end)')
+    assert.is_false(refs[1].call)       -- so the OnClick rule rejects it
   end)
 
   it("sees a Buy call outside an OnClick handler as a violation (the scan is not vacuous)", function()
