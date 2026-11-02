@@ -17,10 +17,11 @@ local _, ns = ...
 -- skipped when reading.
 --
 -- Optionals: Recipes:BestOptionals is synchronous and can make up to 64 evaluations for one recipe, so a list may not
--- search it for every recipe in one frame. Plan searches at most OPTIONAL_SEARCH_LIMIT (12) recipe/crafter/concentration
--- combinations per call and leaves the other entries without optionals (plan.optionalsLeftOut counts them). A combination
--- searched earlier this session is answered by BestOptionals' memo and does not use the budget again, so each further
--- click on "Queue list" reaches a few more recipes; the memory of what was searched is dropped when the prices change.
+-- search it for every recipe in one frame. Plan spends a budget of OPTIONAL_SEARCH_LIMIT (4) real searches per call on
+-- the recipe/crafter/concentration combinations and leaves the other entries without optionals (plan.optionalsLeftOut
+-- counts them). Recipes:HasBestOptionals says whether a call would be served from BestOptionals' own memo (or needs no
+-- search at all, with optionalMode "off"); only a call it answers false for uses budget, so each further click on
+-- "Queue list" reaches a few more recipes and no data change or new day can make one click search more than the budget.
 -- There is no timer: nothing in this module runs unless a caller asks.
 local CraftLists = ns.FS:NewModule("CraftLists")
 
@@ -28,7 +29,7 @@ CraftLists.MAX_LISTS = 50
 CraftLists.MAX_RECIPES = 200
 CraftLists.MAX_NAME = 40
 CraftLists.MAX_QUANTITY = 9999
-CraftLists.OPTIONAL_SEARCH_LIMIT = 12
+CraftLists.OPTIONAL_SEARCH_LIMIT = 4
 CraftLists.MODES = { "off", "single", "multi" }
 
 local MODE_OK = { off = true, single = true, multi = true }
@@ -324,13 +325,6 @@ end
 -- Planning
 ---------------------------------------------------------------------------
 
-local searched, searchedVersion = {}, nil   -- BestOptionals searches made this session, until the prices change
-
-local function prices_version()
-  local prices = module("Prices")
-  return prices and prices.GetVersion and prices:GetVersion() or nil
-end
-
 local function profit_of(result)
   if type(result) ~= "table" or (type(result.flags) == "table" and result.flags.noPrice) then return nil end
   return is_finite(result.profit) and result.profit or nil
@@ -485,22 +479,20 @@ local function split_multi(jobs, pools)
   end
 end
 
--- The BestOptionals pick for a job's entry (a copy of the itemIDs), or nil. state.budget counts the searches this call
--- may still start; state.leftOut counts the entries that got none for want of it.
+-- The BestOptionals pick for a job's entry (a copy of the itemIDs), or nil. A search Recipes would really make costs one
+-- of state.budget (the searches this call may still start); a call its memo answers costs nothing. state.leftOut counts
+-- the entries that got no search for want of budget.
 local function pick_optionals(recipes, job, withConcentration, rules, state)
   if not rules.useOptionals then return nil end
-  local key = table.concat({ tostring(job.recipeID), tostring(job.crafter), withConcentration and "c" or "p",
-    tostring(rules.minQuality) }, ":")
-  if not searched[key] then
+  local opts = { targetQuality = rules.minQuality, useConcentration = withConcentration }
+  if not recipes:HasBestOptionals(job.recipeID, job.crafter, opts) then
     if state.budget <= 0 then
       state.leftOut = state.leftOut + 1
       return nil
     end
     state.budget = state.budget - 1
-    searched[key] = true
   end
-  local best = recipes:BestOptionals(job.recipeID, job.crafter,
-    { targetQuality = rules.minQuality, useConcentration = withConcentration })
+  local best = recipes:BestOptionals(job.recipeID, job.crafter, opts)
   if type(best) ~= "table" or type(best.itemIDs) ~= "table" or #best.itemIDs == 0 then return nil end
   local out = {}
   for i, itemID in ipairs(best.itemIDs) do out[i] = itemID end
@@ -567,8 +559,6 @@ function CraftLists:Plan(id, now)
     if rules.concentration == "single" then split_single(jobs, pools) else split_multi(jobs, pools) end
   end
 
-  local version = prices_version()
-  if version ~= searchedVersion then searched, searchedVersion = {}, version end
   local state = { budget = CraftLists.OPTIONAL_SEARCH_LIMIT, leftOut = 0 }
   local function add_entry(job, quantity, withConcentration)
     if quantity < 1 then return end

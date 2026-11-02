@@ -626,6 +626,36 @@ function Recipes:FromCraftingReagentInfo(recipeID, infos)
   return ns.CraftingData.AllocationFromReagentInfo(scanner():GetSchematic(recipeID), infos)
 end
 
+-- The memo key and validity data BestOptionals and HasBestOptionals share: nil when the call needs no search at all
+-- (search off, or no cached schematic); else key, o (the cached opts), stamp, itemStamp, day, schematic.
+local function best_lookup(self, recipeID, charKey, opts)
+  local mode = self:GetSetting("optionalMode")
+  if mode == "off" then return nil end
+  local schematic = scanner():GetSchematic(recipeID)
+  if not schematic then return nil end
+  local o = full_opts(opts)
+  o.optionalItemIDs = nil
+  local key = tostring(recipeID) .. "|" .. tostring(charKey) .. "|" .. serialize(o) .. "|" .. tostring(mode)
+  local itemStamp = o.ownedReagentsFree and ((itemStamps[charKey] or 0) + warbandStamp) or nil
+  return key, o, self:GetDataStamp(charKey), itemStamp, math.floor(ns.FS:Now() / DAY), schematic, mode
+end
+
+local function best_entry_valid(entry, stamp, itemStamp, day, schematic)
+  return entry and entry.stamp == stamp and entry.itemStamp == itemStamp and entry.day == day
+    and entry.schematic == schematic and entry.build == schematic.build and entry.time == schematic.time
+end
+
+-- [phase 7 Task 13] True when BestOptionals(recipeID, charKey, opts) would cost no search: it is answered from its
+-- memo (same validity test: price version, data stamp, owned-free item stamp, day and schematic), or it returns nil at
+-- once (optionalMode "off", no cached schematic). False means the call would search. Read-only: it changes no cache.
+function Recipes:HasBestOptionals(recipeID, charKey, opts)
+  charKey = charKey or ns.FS:CharKey()
+  local key, _, stamp, itemStamp, day, schematic = best_lookup(self, recipeID, charKey, opts)
+  if not key then return true end
+  if prices():GetVersion() ~= bestPriceVersion then return false end
+  return best_entry_valid(bestCache[key], stamp, itemStamp, day, schematic) and true or false
+end
+
 -- [phase 7 Task 11] The optional and finishing reagents that add the most profit to recipeID on charKey, with
 -- opts as for Evaluate (the cached keys; opts.optionalItemIDs is ignored). Returns { itemIDs (sorted), result =
 -- RecipeResult with them, base = RecipeResult without, gain = copper|nil (result.profit - base.profit when both are
@@ -634,25 +664,16 @@ end
 -- data stamp (and, as for Evaluate, the schematic, the day and owned-free item counts) are unchanged: treat it as
 -- read-only. On demand only; the recipe scan ranks plain results.
 function Recipes:BestOptionals(recipeID, charKey, opts)
-  local mode = self:GetSetting("optionalMode")
-  if mode == "off" then return nil end
   charKey = charKey or ns.FS:CharKey()
-  local schematic = scanner():GetSchematic(recipeID)
-  if not schematic then return nil end
-  local o = full_opts(opts)
-  o.optionalItemIDs = nil
+  local key, o, stamp, itemStamp, day, schematic, mode = best_lookup(self, recipeID, charKey, opts)
+  if not key then return nil end
 
   local version = prices():GetVersion()
   if version ~= bestPriceVersion then
     bestCache, bestPriceVersion = {}, version
   end
-  local key = tostring(recipeID) .. "|" .. tostring(charKey) .. "|" .. serialize(o) .. "|" .. tostring(mode)
-  local stamp = self:GetDataStamp(charKey)
-  local itemStamp = o.ownedReagentsFree and ((itemStamps[charKey] or 0) + warbandStamp) or nil
-  local day = math.floor(ns.FS:Now() / DAY)
   local entry = bestCache[key]
-  if entry and entry.stamp == stamp and entry.itemStamp == itemStamp and entry.day == day
-    and entry.schematic == schematic and entry.build == schematic.build and entry.time == schematic.time then
+  if best_entry_valid(entry, stamp, itemStamp, day, schematic) then
     return entry.best or nil
   end
   local function remember(best)

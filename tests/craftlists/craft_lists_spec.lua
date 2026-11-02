@@ -361,33 +361,82 @@ describe("CraftLists", function()
         assert.same({ 7001, 7002 }, plan.entries[2].optionalItemIDs)
       end)
 
-      it("searches at most twelve combinations per plan, the rest on the next one", function()
-        boot(15)
-        calls = {}
-        Recipes.BestOptionals = function(_, recipeID)
-          calls[#calls + 1] = recipeID
-          return { itemIDs = { 7001 } }
+      -- The real BestOptionals memo: six recipes with an optional slot, Math.Optionals.Best counts the real searches.
+      describe("with the real search", function()
+        local searches
+        local function setup_optionals()
+          boot(6)
+          ns.GameData.Define("OptionalReagents", 70575, {
+            [7001] = { categoryID = 60, effects = { { type = "skill", amount = 40 } } },
+          })
+          for id = 9001, 9006 do
+            local slots = world.schematics[id].reagentSlots
+            slots[#slots + 1] = { slotIndex = 4, quantity = 1, reagents = { 7001 }, kind = "optional", dataSlotIndex = 14,
+              dataSlotType = 2 }
+          end
+          world.prices[7001] = { value = 10, source = "auction", ageDays = 1 }
+          world.bumpPriceVersion()
+          searches = 0
+          local best = ns.Math.Optionals.Best
+          ns.Math.Optionals.Best = function(...) searches = searches + 1; return best(...) end
         end
-        local lines = {}
-        for i = 1, 15 do
-          lines[i] = { 9000 + i, MAIN, 1 }
-          fake(9000 + i, function() return result(100) end)
+        local function six()
+          local lines = {}
+          for i = 1, 6 do lines[i] = { 9000 + i, MAIN, 1 } end
+          return list({ useOptionals = true }, lines)
         end
-        local id = list({ useOptionals = true }, lines)
-        local first = CL:Plan(id)
-        assert.equal(12, #calls)
-        assert.equal(3, first.optionalsLeftOut)
-        assert.same({ 7001 }, first.entries[12].optionalItemIDs)
-        assert.is_nil(first.entries[13].optionalItemIDs)
-        local second = CL:Plan(id)
-        assert.equal(0, second.optionalsLeftOut)
-        for i = 1, 15 do assert.same({ 7001 }, second.entries[i].optionalItemIDs) end
-        -- A price change forgets what was searched: the budget applies again.
-        world.bumpPriceVersion()
-        calls = {}
-        local third = CL:Plan(id)
-        assert.equal(12, #calls)
-        assert.equal(3, third.optionalsLeftOut)
+
+        it("searches at most four combinations per plan; cached ones cost no budget", function()
+          setup_optionals()
+          assert.equal(4, CL.OPTIONAL_SEARCH_LIMIT)
+          local id = six()
+          local first = CL:Plan(id)
+          assert.same({ 4, 2 }, { searches, first.optionalsLeftOut })
+          assert.equal(6, #first.entries)
+          local second = CL:Plan(id)   -- the four searched are served from the memo; the two left get the budget
+          assert.same({ 6, 0 }, { searches, second.optionalsLeftOut })
+          CL:Plan(id)
+          assert.equal(6, searches)
+        end)
+
+        it("a data-stamp bump does not let one click exceed four real searches", function()
+          setup_optionals()
+          local id = six()
+          CL:Plan(id); CL:Plan(id)
+          assert.equal(6, searches)
+          ns.FS:SendMessage("FS_DATA_CHANGED", MAIN, "spec")
+          searches = 0
+          local plan = CL:Plan(id)
+          assert.same({ 4, 2 }, { searches, plan.optionalsLeftOut })
+        end)
+
+        it("a day rollover does not let one click exceed four real searches", function()
+          setup_optionals()
+          local id = six()
+          CL:Plan(id); CL:Plan(id)
+          W.advance(86400 + 1)
+          searches = 0
+          local plan = CL:Plan(id)
+          assert.same({ 4, 2 }, { searches, plan.optionalsLeftOut })
+        end)
+
+        it("a price change does not let one click exceed four real searches", function()
+          setup_optionals()
+          local id = six()
+          CL:Plan(id); CL:Plan(id)
+          world.bumpPriceVersion()
+          searches = 0
+          local plan = CL:Plan(id)
+          assert.same({ 4, 2 }, { searches, plan.optionalsLeftOut })
+        end)
+
+        it("spends no budget and reports nothing left out with the search turned off", function()
+          setup_optionals()
+          ns.FS:GetOptionsTable().args.crafting.args.optionalMode.set(nil, "off")
+          local plan = CL:Plan(six())
+          assert.same({ 0, 0, 6 }, { searches, plan.optionalsLeftOut, #plan.entries })
+          assert.is_nil(plan.entries[1].optionalItemIDs)
+        end)
       end)
     end)
   end)

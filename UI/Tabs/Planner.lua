@@ -906,7 +906,8 @@ local function build_footer(container, created)
     elseif problem == "readonly" then
       notice = L["Not queued: the saved data is from a newer version (read-only)"]
     else
-      notice = L["Queued %d crafts; %d were already queued"]:format(added, already)
+      notice = added == 1 and L["Queued 1 craft; %d were already queued"]:format(already)
+        or L["Queued %d crafts; %d were already queued"]:format(added, already)
     end
     refresh()
   end))

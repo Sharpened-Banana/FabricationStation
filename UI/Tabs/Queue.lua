@@ -863,6 +863,8 @@ local function refresh_lists()
   for _, part in ipairs(v.controls) do if on then part:Show() else part:Hide() end end
   v.message:SetText(on and "" or color(DIM, L["Craft lists are turned off: turn them on in Settings > Modules"]))
   if not on then
+    -- Nothing live under the note: the recipes pane and the rules row go too (the API still answers while off).
+    for _, part in ipairs(v.listParts) do part:Hide() end
     list_set_rows(v.lists, {})
     list_set_rows(v.recipes, {})
     v.empty:SetText("")
@@ -1046,7 +1048,8 @@ local function build_lists_page(container, created)
       end
       return
     end
-    local text = L["Queued %d entries; %d skipped"]:format(added, #skipped)
+    local text = added == 1 and L["Queued 1 entry; %d skipped"]:format(#skipped)
+      or L["Queued %d entries; %d skipped"]:format(added, #skipped)
     set_lists_status(text, #skipped == 0 and "good" or "warn", Tab.SkippedTooltip(text, skipped, leftOut))
   end))
 

@@ -307,6 +307,37 @@ describe("Recipes:Evaluate", function()
       ns.FS:SendMessage("FS_DATA_CHANGED", "Main-Realm", "spec")
       assert.are_not.equal(b, R:BestOptionals(9001, "Main-Realm", {}))
     end)
+    it("HasBestOptionals agrees with BestOptionals about what is memoised", function()
+      local function has(opts) return R:HasBestOptionals(9001, "Main-Realm", opts or {}) end
+      assert.is_false(has())
+      local a = R:BestOptionals(9001, "Main-Realm", {})
+      assert.is_true(has())
+      assert.equals(a, R:BestOptionals(9001, "Main-Realm", {}))          -- the probe changed nothing
+      assert.is_false(has({ targetQuality = 1 }))
+      assert.is_true(R:HasBestOptionals(9001, nil, {}) == (R:HasBestOptionals(9001, "Main-Realm", {})))
+      -- Every reason the memo is dropped makes the probe say false again, exactly when BestOptionals searches again.
+      ns.FS:SendMessage("FS_DATA_CHANGED", "Main-Realm", "spec")            -- the data stamp
+      assert.is_false(has())
+      local b = R:BestOptionals(9001, "Main-Realm", {})
+      assert.is_true(has()); assert.are_not.equal(a, b)
+      W.advance(86400 + 1)                                                   -- the day rolls over
+      assert.is_false(has())
+      local c = R:BestOptionals(9001, "Main-Realm", {})
+      assert.is_true(has()); assert.are_not.equal(b, c)
+      world.bumpPriceVersion()                                               -- the prices
+      assert.is_false(has())
+      local d = R:BestOptionals(9001, "Main-Realm", {})
+      assert.is_true(has()); assert.are_not.equal(c, d)
+      world.schematics[9001].build = 70601                                   -- the schematic
+      assert.is_false(has())
+    end)
+    it("HasBestOptionals is true when BestOptionals needs no search", function()
+      local option = ns.FS:GetOptionsTable().args.crafting.args.optionalMode
+      option.set(nil, "off")
+      assert.is_true(R:HasBestOptionals(9001, "Main-Realm", {}))             -- optionalMode off: nil at once
+      option.set(nil, "simple")
+      assert.is_true(R:HasBestOptionals(424242, "Main-Realm", {}))           -- no cached schematic: nil at once
+    end)
     it("BestOptionals never writes while the saved data is newer", function()
       ns.FS.dbIsNewer = true
       local before = ns.Util.DeepCopy(ns.FS.db.global, 30)

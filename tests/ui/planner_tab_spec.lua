@@ -434,6 +434,19 @@ describe("Planner tab", function()
           { recipeID = 1002, quantity = 3, charKey = "Bren-Silvermoon", useConcentration = true } }, added)
       end)
 
+      it("says craft for one and crafts for more", function()
+        local v = open()
+        select(v, "concentration")
+        ns.FS:GetModule("Planner").GetSchedule = function()
+          return { { charKey = "Aria-Silvermoon", skillLineID = 2907, recipeID = 1001, crafts = 1 } }, "ok"
+        end
+        click(v.queuePlan)
+        assert.equal("Queued 1 craft; 0 were already queued", plain(v.status:GetText()))
+        queued = { { id = 1, recipeID = 1001, charKey = "Aria-Silvermoon", quantity = 1, useConcentration = true } }
+        click(v.queuePlan)
+        assert.equal("Queued 0 crafts; 1 were already queued", plain(v.status:GetText()))
+      end)
+
       it("skips rows already queued", function()
         local T = ns.UI.PlannerTab
         queued = {
