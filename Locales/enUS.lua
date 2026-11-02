@@ -1302,3 +1302,10 @@ L["Open or close FabricationStation"] = true   -- Key Bindings screen: the bindi
 L["Reply to the latest chat request"] = true   -- Key Bindings screen: the binding that opens the chat box on a whisper to the newest open request (nothing is sent)
 L["Open the crafting orders board to claim an order"] = true   -- chat line when the Claim Best Order key is pressed and the orders board is not open
 L["No open chat request"] = true   -- chat line when the reply key is pressed and no request is waiting for an answer
+-- Mail gold (phase 7, Task 21)
+L["Took %s from the mail"] = true   -- chat line after you take gold from the mailbox; %s is the amount with coin icons
+L["Mail total this visit: %s"] = true   -- chat line when the mailbox closes after more than one "Took ..." line; %s is the total gold taken
+L["Mail gold"] = true   -- options tab name
+L["Show the gold you take from the mailbox in chat"] = true   -- Settings > Mail gold: switch for the module
+L["Show a total when you close the mailbox"] = true   -- Settings > Mail gold
+L["Adds one line with all the gold you took during the visit, when you took gold more than once."] = true

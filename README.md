@@ -54,6 +54,7 @@ come out at, how much concentration it takes, what it earns, and what your other
   costs and profit. The Ledger's Crafts page shows the profit made this session, and an Auctions page shows your own
   posts, cancels, expiries and sales (from your own events and mail), with a sale rate and last sale price per item
   in item tooltips.
+- When you take gold from the mailbox, a chat line tells you how much, and a total when you close it. Only you see it.
 - The header shows gold in your pocket, gold this session and crafting profit this expansion. The Dashboard's "Top
   crafts by profit" has an expansion filter.
 

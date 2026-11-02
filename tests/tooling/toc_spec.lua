@@ -111,6 +111,15 @@ describe("FabricationStation.toc", function()
     assert.is_true(at["Modules/Ledger.lua"] < at["Modules/SaleLog.lua"])
     assert.is_true(at["Modules/SaleLog.lua"] < at["UI/Util.lua"])
   end)
+  -- Phase 7 Task 21: MailGold reads events and GetMoney only and formats money through ns.UI.FormatMoney at call time,
+  -- so it loads with the other modules, right after SaleLog, before the UI.
+  it("loads Modules/MailGold.lua after Modules/SaleLog.lua and before UI/Util.lua", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    assert.is_truthy(at["Modules/MailGold.lua"])
+    assert.is_true(at["Modules/SaleLog.lua"] < at["Modules/MailGold.lua"])
+    assert.is_true(at["Modules/MailGold.lua"] < at["UI/Util.lua"])
+  end)
   -- Phase 7 Task 9: the craft log reads Recipes and Scanner at call time; it loads after the sale log and before the UI.
   it("loads Modules/CraftLog.lua after Modules/SaleLog.lua and before UI/Util.lua", function()
     local at = {}

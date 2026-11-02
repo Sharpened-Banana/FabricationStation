@@ -117,3 +117,4 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     - The empty socket slot is no longer listed as a missing reagent.
     - Orders with a long item name keep a minimal set of cells instead of losing all of them.
     - Fixed: the SaleLog error after winning an auction.
+    - Taking gold from the mailbox prints how much in chat, with a total when you close it. It can be turned off.

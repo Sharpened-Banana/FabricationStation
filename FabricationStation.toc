@@ -43,6 +43,7 @@ Modules\Customers.lua
 Modules\Orders.lua
 Modules\Ledger.lua
 Modules\SaleLog.lua
+Modules\MailGold.lua
 Modules\CraftLog.lua
 Modules\PlanCalc.lua
 Modules\Alts.lua

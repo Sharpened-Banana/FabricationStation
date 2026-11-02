@@ -1449,6 +1449,16 @@ cancel an auction, craft a Multicraft recipe, queue a list, queue sub-crafts, re
 reply to a chat request with the key. Expected: no Lua error (`/console scriptErrors 1`), nothing in Settings >
 Diagnostics, and each step does what its P7 line says.
 
+P7-37. **Mail gold in chat.** Open a mailbox with two auction-sale mails and one COD mail. Take the first gold mail with
+a click, wait two seconds, then take the rest with Open All (or by clicking each). Expected: one chat line "Took <amount>
+from the mail" per burst of pickups, printed about 1.5 seconds after the last one, each with the right amount (the coin
+icons like the header gold); paying the COD shows no line and takes nothing off the next one; on closing the mailbox one
+"Mail total this visit: <amount>" line equal to the gold gained (no total when only one line was printed, or with
+Settings > Mail gold > "Show a total when you close the mailbox" off). Gold gained with the mailbox closed (a quest, a
+vendor sale) prints nothing, and nothing is ever sent to other players. Report whether `MAIL_CLOSED` closes the visit
+(else `PLAYER_INTERACTION_MANAGER_FRAME_HIDE` for the mailbox does) and whether Open All style addons fire one
+`PLAYER_MONEY` per mail.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in
