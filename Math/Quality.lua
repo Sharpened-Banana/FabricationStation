@@ -81,7 +81,8 @@ function Quality.ReagentSkill(slots, allocation, maxReagentSkill)
       local numRanks = #slot.items
       local rankOf = {}
       for _, item in ipairs(slot.items) do rankOf[item.itemID] = item.rank end
-      denominator = denominator + weight * (slot.quantity or 0)
+      -- A slot with nothing in it is left out, as the game does: it only happens while a window is being filled.
+      if bySlot[slot.slotIndex] then denominator = denominator + weight * (slot.quantity or 0) end
       for _, row in ipairs(bySlot[slot.slotIndex] or {}) do
         local rank = rankOf[row.itemID]
         if rank then
@@ -91,5 +92,6 @@ function Quality.ReagentSkill(slots, allocation, maxReagentSkill)
     end
   end
   if denominator <= 0 then return 0 end
-  return (maxReagentSkill or 0) * numerator / denominator
+  -- The game adds whole points, rounded: logged 26.667 -> 27, 135.692 -> 136, 45.231 -> 45, 149.423 -> 149.
+  return Math.Round((maxReagentSkill or 0) * numerator / denominator)
 end

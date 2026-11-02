@@ -33,6 +33,11 @@ describe("Math.Optimizer", function()
     assert.same({ {slotIndex=1,itemID=1001,quantity=3}, {slotIndex=1,itemID=1002,quantity=7},
                   {slotIndex=2,itemID=2001,quantity=1}, {slotIndex=2,itemID=2002,quantity=4} }, per[2].allocation)
   end)
+  it("reaches a quality on the whole skill points the game rounds to", function()
+    -- 2 of 3 at the top rank are 186.67 points, which the game counts as 187: 513 + 187 reaches 700.
+    local per = O.CheapestByQuality(input(513, { slot(1, 3, 1, {100, 300}) }))
+    assert.equals(700, per[2].skill); assert.equals(700, per[2].reagentCost)
+  end)
   it("unreachable quality is absent", function()
     assert.is_nil(O.CheapestByQuality(input(400, { slot(1, 10, 48, {100, 300}), slot(2, 5, 32, {200, 300}) }))[2])
   end)
