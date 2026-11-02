@@ -65,6 +65,7 @@ Modules\Social\GuildDirectory.lua
 Modules\Social\GuildOptions.lua
 Modules\Social\ChatMatcher.lua
 Modules\Social\ChatScan.lua
+Modules\Social\ChatInbox.lua
 Modules\Onboarding.lua
 UI\Util.lua
 UI\MainWindow.lua
@@ -81,6 +82,7 @@ UI\Tabs\PlannerView.lua
 UI\Tabs\Characters.lua
 UI\Tabs\Planner.lua
 UI\Tabs\Guild.lua
+UI\Tabs\Requests.lua
 UI\Tabs\Settings.lua
 UI\Launcher.lua
 UI\ProfessionPanel.lua

@@ -48,3 +48,4 @@ Modules/Social/GuildOptions.lua:build failed
 Modules/Planner.lua:unknown
 UI/OrdersPanel.lua:none
 UI/ProfessionPanel.lua:estimate
+Modules/Social/ChatInbox.lua:expired

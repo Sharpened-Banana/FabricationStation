@@ -916,7 +916,7 @@ describe("Planner tab in a full load", function()
     W.boot()
     local ids = {}
     for _, t in ipairs(ns.FS:GetModule("MainWindow"):GetTabs()) do ids[#ids + 1] = t.id end
-    assert.same({ "dashboard", "recipes", "queue", "orders", "customers", "ledger", "characters", "planner", "guild", "settings" },
+    assert.same({ "dashboard", "recipes", "queue", "orders", "customers", "ledger", "characters", "planner", "guild", "requests", "settings" },
       ids)
     assert.is_true(ns.FS:GetModule("PlannerTab"):IsEnabled())
     assert.is_nil(ns.FS:GetOptionsTable().args.modules.args.PlannerTab)

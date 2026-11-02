@@ -1414,6 +1414,17 @@ reagent sold 5 per purchase, need 7: it should buy 10 items; if it bought 50, th
 must pass `buy / stack`); does `GetMerchantItemMaxStack` give the most items one call may buy; and is `MerchantFrame`
 the merchant window (if the panel sits at the top of the screen instead, report the window's frame name with `/fstack`).
 
+P7-27. **Request inbox.** Let a trade-chat request match (ask for something one of your characters can craft from a
+second account or alt, with ChatScan and ChatInbox on) and open the Requests tab. Expected: a row with the sender, the
+recipe, the status "open" and your character's short name under "Seen on". Select the row, press Reply, then Enter
+in the chat box (Reply only fills it). Get an answer. Expected: the entry turns "replied" and its detail shows both
+lines ("<age> ago, you: ..." and "<age> ago, they: ..."); another character of the account sees the same entry with "Seen
+on" naming the first. Leave a request unanswered: after 30 minutes (the default) it reads "expired" and drops out of
+"Show: open". Also report: does `CHAT_MSG_WHISPER_INFORM` name the target as `Name-Realm` (if the reply stays "open" and
+shows no "you" line, it does not: report the target text with a `/dump` in a `CHAT_MSG_WHISPER_INFORM` listener), and
+does a whisper in an instance (where the text is a secret value) leave everything unchanged without an error
+(`/fs settings > Diagnostics` shows none).
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

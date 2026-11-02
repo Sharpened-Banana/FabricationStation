@@ -157,6 +157,20 @@ describe("FabricationStation.toc", function()
     assert.is_true(at["UI/Util.lua"] < at["UI/MerchantBuy.lua"])
     assert.equals("UI/MerchantBuy.lua", toc.files[#toc.files])
   end)
+  -- Phase 7 Task 18: the chat inbox loads after ChatScan (it reads its whisper template at call time) and before the UI;
+  -- the Requests tab after the Guild tab and the grid, before the Settings tab.
+  it("loads Modules/Social/ChatInbox.lua after ChatScan and UI/Tabs/Requests.lua after the grid and the Guild tab", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    assert.is_truthy(at["Modules/Social/ChatInbox.lua"])
+    assert.is_true(at["Modules/Social/Util.lua"] < at["Modules/Social/ChatInbox.lua"])
+    assert.is_true(at["Modules/Social/ChatScan.lua"] < at["Modules/Social/ChatInbox.lua"])
+    assert.is_true(at["Modules/Social/ChatInbox.lua"] < at["UI/Util.lua"])
+    assert.is_truthy(at["UI/Tabs/Requests.lua"])
+    assert.is_true(at["UI/Widgets/ExpandGrid.lua"] < at["UI/Tabs/Requests.lua"])
+    assert.is_true(at["UI/Tabs/Guild.lua"] < at["UI/Tabs/Requests.lua"])
+    assert.is_true(at["UI/Tabs/Requests.lua"] < at["UI/Tabs/Settings.lua"])
+  end)
   -- Phase 3 (Tasks 12-14): the shared view helpers before the view files, the view files before the tabs that use
   -- them, all before the Settings tab.
   it("loads the phase-3 grid, view helpers, views and tabs in order", function()

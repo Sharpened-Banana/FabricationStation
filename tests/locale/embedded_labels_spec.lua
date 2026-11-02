@@ -86,6 +86,10 @@ local PAIRS = {
   { "See which guildmates can craft what. Sharing is set on the Guild and chat step.", "Guild and chat" },
   { "Craft lists are turned off: turn them on in Settings > Modules", "Settings" },
   { "Craft lists are turned off: turn them on in Settings > Modules", "Modules" },
+  { "Chat requests are off: turn on ChatScan and ChatInbox in Settings > Modules", "Settings" },
+  { "Chat requests are off: turn on ChatScan and ChatInbox in Settings > Modules", "Modules" },
+  { "Keeps the chat requests you were matched with in the Requests tab, so you can whisper back later. Nothing is ever "
+    .. "sent for you: answering a request only opens the chat box. Turn the whole feature off under Modules.", "Modules" },
   { "Best optionals were searched for some recipes only; press Queue list again for the rest (%d without)", "Queue list" },
   { "No lists yet. Queue some crafts, then press New from queue.", "New from queue" },
 }

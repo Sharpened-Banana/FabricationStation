@@ -23,4 +23,5 @@ ns.Msg = {
   ORDERS_NEW = "FS_ORDERS_NEW",   -- (sent by Orders) charKey, count, orderTypeName: new matching orders on a scope seen before
   SALELOG_CHANGED = "FS_SALELOG_CHANGED",   -- (sent by SaleLog) no payload: the auction log or a listing changed
   CRAFTLOG_CHANGED = "FS_CRAFTLOG_CHANGED",   -- (sent by CraftLog) no payload: a craft was logged or got an extra
+  INBOX_CHANGED = "FS_INBOX_CHANGED",   -- (sent by ChatInbox) no payload: a chat request was added, merged, answered, dismissed or expired
 }

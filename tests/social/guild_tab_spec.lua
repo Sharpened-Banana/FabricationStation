@@ -1444,7 +1444,7 @@ describe("Guild tab in a full load", function()
     local ids = {}
     for _, t in ipairs(ns.FS:GetModule("MainWindow"):GetTabs()) do ids[#ids + 1] = t.id end
     assert.same({ "dashboard", "recipes", "queue", "orders", "customers", "ledger", "characters", "planner", "guild",
-      "settings" }, ids)
+      "requests", "settings" }, ids)
     assert.is_true(ns.FS:GetModule("GuildTab"):IsEnabled())
     assert.is_nil(ns.FS:GetOptionsTable().args.modules.args.GuildTab)
     assert.is_table(ns.FS:GetOptionsTable().args.guild)

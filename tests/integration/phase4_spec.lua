@@ -347,7 +347,7 @@ describe("phase 4 integration", function()
       "Modules/Social/ProfileStore.lua", "Modules/Social/Comm.lua", "Modules/Social/ItemIndex.lua", "Modules/Social/RecipeIndex.lua",
       "Modules/Social/Guild.lua",
       "Modules/Social/GuildNative.lua", "Modules/Social/GuildDirectory.lua", "Modules/Social/GuildOptions.lua",
-      "Modules/Social/ChatMatcher.lua", "Modules/Social/ChatScan.lua", "Modules/Onboarding.lua", "UI/Tabs/Guild.lua",
+      "Modules/Social/ChatMatcher.lua", "Modules/Social/ChatScan.lua", "Modules/Social/ChatInbox.lua", "Modules/Onboarding.lua", "UI/Tabs/Guild.lua",
       "UI/ChatToast.lua", "UI/OnboardingWizard.lua",
     }
 
