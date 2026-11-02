@@ -17,10 +17,13 @@ local PADDING, LINES_TOP, LINE_HEIGHT, GAP = 8, 28, 16, 8
 local SCROLL_STEP = 40
 local SECONDS_PER_DAY = 86400
 local DIM, WARN, GOOD, BAD = "|cff9d9d9d", "|cffffd100", "|cff40ff40", "|cffff4040"
+local EXPANSION_ALL = "all"            -- the top-crafts expansion filter's "no filter" value
+local EXPANSION_BUTTON = { width = 96, height = 18, top = 6 }   -- the filter button in the widget's header corner
 
 local widgets = {}        -- registered widgets in registration order: { id, def, seq }
 local widgetsById = {}
 local seq = 0
+local settingsTable = ns.Util.SettingsAccessor("dashboard")   -- a session-only copy while the saved data is read-only
 local grid                -- the built grid: { scroll, child, frames = { [id] = frame } }, nil before BuildAll
 
 ---------------------------------------------------------------------------
@@ -288,6 +291,33 @@ function Dashboard.TopCraftsModel(results, n)
   return rows
 end
 
+-- The top-crafts expansion filter. `expansionOf(recipeID)` -> expansionID or nil (unknown). Returns the results of
+-- `choice` (EXPANSION_ALL keeps every result, the unknown ones too; an expansionID keeps only that expansion's) in their
+-- order, and the cycle options: EXPANSION_ALL, then every expansion with at least one of the results, newest first.
+function Dashboard.ExpansionFilter(results, expansionOf, choice)
+  local shown, seen, ids = {}, {}, {}
+  for _, r in ipairs(results) do
+    local id = expansionOf(r.recipeID)
+    if id ~= nil and not seen[id] then
+      seen[id] = true
+      ids[#ids + 1] = id
+    end
+    if choice == EXPANSION_ALL or id == choice then shown[#shown + 1] = r end
+  end
+  table.sort(ids, function(a, b) return a > b end)
+  local options = { EXPANSION_ALL }
+  for _, id in ipairs(ids) do options[#options + 1] = id end
+  return shown, options
+end
+
+-- The option after `current` (the first one again after the last, and for a value that is not among them).
+function Dashboard.NextExpansion(options, current)
+  for i, option in ipairs(options) do
+    if option == current then return options[i + 1] or options[1] end
+  end
+  return options[1]
+end
+
 -- entries = queue entries, costs = { [entryID] = copper|nil } (an entry's whole cost), missing =
 -- { [itemID] = qty }. totalCost is nil as soon as one entry's cost is unknown.
 function Dashboard.QueueSummaryModel(entries, costs, missing)
@@ -359,10 +389,49 @@ local function top_craft_line(row)
   return table.concat(parts, "  ")
 end
 
+-- The expansion of a ranked recipe: the expansionID of its skill line, from the schematic already cached (never fetched
+-- here: this runs over every ranked result). nil when the schematic, its line or the line's data is unknown.
+local function recipe_expansion(recipeID)
+  local scanner = module("Scanner")
+  local schematic = scanner and scanner.GetCachedSchematic and scanner:GetCachedSchematic(recipeID)
+  return type(schematic) == "table" and ns.UI.ExpansionOfSkillLine(schematic.skillLineID) or nil
+end
+
+local function expansion_label(choice)
+  if choice == EXPANSION_ALL then return L["All expansions"] end
+  return ns.UI.ExpansionName(choice) or L["Expansion %d"]:format(choice)
+end
+
+-- The saved choice: EXPANSION_ALL or an expansionID; anything else reads as all. Reading never creates the saved table
+-- (only picking does); while the saved data is read-only the choice lives in the accessor's session copy.
+local function saved_expansion()
+  local fs = ns.FS
+  local g = fs.db and fs.db.global
+  local value
+  if g == nil or fs.dbIsNewer then
+    value = settingsTable(nil, function(target) return target end).topCraftsExpansion
+  else
+    local dashboard = type(g.settings) == "table" and g.settings.dashboard
+    value = type(dashboard) == "table" and dashboard.topCraftsExpansion or nil
+  end
+  if type(value) == "number" and value >= 1 and value == math.floor(value) then return value end
+  return EXPANSION_ALL
+end
+
+local function save_expansion(choice)
+  settingsTable(nil, function(target) return target end).topCraftsExpansion = choice
+end
+
 local function refresh_top_crafts(frame)
   local recipes = module("Recipes")
   local results = recipes and recipes:GetRanked({ sortBy = "profit", onlyProfitable = true }) or {}
-  local rows = Dashboard.TopCraftsModel(results, TOP_CRAFTS)
+  local choice = saved_expansion()
+  local shown, options = Dashboard.ExpansionFilter(results, recipe_expansion, choice)
+  frame.expansionOptions, frame.expansionChoice = options, choice
+  frame.expansionLabel = expansion_label(choice)
+  if frame.expansionButton then frame.expansionButton:SetText(frame.expansionLabel) end
+  -- The filter runs before the top n, so a chosen expansion still shows up to n.
+  local rows = Dashboard.TopCraftsModel(shown, TOP_CRAFTS)
   local lines = {}
   for i, row in ipairs(rows) do lines[i] = top_craft_line(row) end
   if #lines == 0 then
@@ -371,8 +440,56 @@ local function refresh_top_crafts(frame)
     else
       lines[1] = color(DIM, L["No profitable crafts right now \226\128\148 check prices (Auctionator scan) or wait for the next scan."])
     end
+    if choice ~= EXPANSION_ALL then
+      lines[2] = color(DIM, L["No profitable crafts in %s"]:format(frame.expansionLabel))
+    end
   end
   Dashboard.SetLines(frame, lines)
+end
+
+local function cycle_expansion(frame)
+  save_expansion(Dashboard.NextExpansion(frame.expansionOptions or { EXPANSION_ALL }, frame.expansionChoice))
+  local entry = widgetsById.topCrafts
+  if entry then
+    refresh_widget(entry)
+    layout()
+  end
+end
+
+local function show_expansion_tooltip(frame)
+  if type(GameTooltip) ~= "table" then return end
+  GameTooltip:SetOwner(frame.expansionButton, "ANCHOR_RIGHT")
+  GameTooltip:SetText(L["Top crafts by profit"], 1, 0.82, 0)
+  GameTooltip:AddLine(L["Show top crafts from one expansion"], 1, 1, 1, true)
+  -- The button's text is cut to its width; the tooltip has the whole name.
+  GameTooltip:AddLine(frame.expansionLabel or expansion_label(EXPANSION_ALL), 1, 1, 1, true)
+  GameTooltip:Show()
+end
+
+local function hide_expansion_tooltip()
+  if type(GameTooltip) == "table" then GameTooltip:Hide() end
+end
+
+-- The widget's header holds a small button that cycles the expansion filter. The title is cut at the button (the
+-- narrowest window, 516 px, has no room for both); the tooltip names the widget again.
+local function build_top_crafts(frame)
+  Dashboard.SetLines(frame, {})
+  local button = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  button:SetSize(EXPANSION_BUTTON.width, EXPANSION_BUTTON.height)
+  button:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -PADDING, -EXPANSION_BUTTON.top)
+  if _G.GameFontNormalSmall then button:SetNormalFontObject(_G.GameFontNormalSmall) end
+  local text = button:GetFontString()
+  if text then
+    text:SetWidth(EXPANSION_BUTTON.width - 12)
+    text:SetWordWrap(false)
+  end
+  button:SetText(L["All expansions"])
+  button:SetScript("OnClick", ns.FS:Wrap("Dashboard:topCrafts", function() cycle_expansion(frame) end))
+  button:SetScript("OnEnter", ns.FS:Wrap("Dashboard:topCrafts", function() show_expansion_tooltip(frame) end))
+  button:SetScript("OnLeave", ns.FS:Wrap("Dashboard:topCrafts", hide_expansion_tooltip))
+  frame.expansionButton = button
+  frame.title:SetPoint("TOPRIGHT", button, "TOPLEFT", -4, -(PADDING - EXPANSION_BUTTON.top))
+  frame.title:SetWordWrap(false)
 end
 
 local function prices_age_text()
@@ -477,7 +594,7 @@ local function empty_build(frame)
   Dashboard.SetLines(frame, {})
 end
 
-Dashboard:RegisterWidget("topCrafts", { order = 10, title = L["Top crafts by profit"], build = empty_build, refresh = refresh_top_crafts })
+Dashboard:RegisterWidget("topCrafts", { order = 10, title = L["Top crafts by profit"], build = build_top_crafts, refresh = refresh_top_crafts })
 Dashboard:RegisterWidget("queueSummary", { order = 20, title = L["Queue"], build = empty_build, refresh = refresh_queue_summary })
 Dashboard:RegisterWidget("concentration", { order = 30, title = L["Concentration"], build = empty_build, refresh = refresh_concentration })
 

@@ -709,10 +709,9 @@ function Tab.SessionSummary(craftLog, ledger, since)
 end
 
 -- The current expansion, from the generated data: the highest expansionID in ProfessionLines and its skill lines.
--- -> { id, name, lines = { [skillLineID] = true } } or nil without that data. The name is what the client told the
--- Scanner for one of those lines (a profession record's expansionName); without one it is the known name of the ID
--- (Midnight is 11) or the generic "This expansion".
-local EXPANSION_NAMES = { [11] = L["Midnight"] }
+-- -> { id, name, lines = { [skillLineID] = true } } or nil without that data. The name is ns.UI.ExpansionName (the
+-- client's name for it, as the Scanner recorded it, else the client's own, else the known name of the ID: Midnight is
+-- 11) or the generic "This expansion".
 function Tab.CurrentExpansion()
   local GD = ns.GameData
   local lines = GD and type(GD.Get) == "function" and GD.Get("ProfessionLines") or nil
@@ -724,32 +723,11 @@ function Tab.CurrentExpansion()
     end
   end
   if id == nil then return nil end
-  local set, ids = {}, {}
+  local set = {}
   for skillLine, info in pairs(lines) do
-    if type(skillLine) == "number" and type(info) == "table" and info.expansionID == id then
-      set[skillLine] = true
-      ids[#ids + 1] = skillLine
-    end
+    if type(skillLine) == "number" and type(info) == "table" and info.expansionID == id then set[skillLine] = true end
   end
-  table.sort(ids)
-  local name
-  local scanner = module("Scanner")
-  if scanner and scanner.GetCharacters and scanner.GetCharacter then
-    for _, charKey in ipairs(scanner:GetCharacters() or {}) do
-      local record = scanner:GetCharacter(charKey)
-      local professions = type(record) == "table" and record.professions
-      if type(professions) == "table" then
-        for _, skillLine in ipairs(ids) do
-          local p = professions[skillLine]
-          if not name and type(p) == "table" and not p.dropped and type(p.expansionName) == "string"
-            and p.expansionName ~= "" then
-            name = p.expansionName
-          end
-        end
-      end
-    end
-  end
-  return { id = id, name = name or EXPANSION_NAMES[id] or L["This expansion"], lines = set }
+  return { id = id, name = ns.UI.ExpansionName(id) or L["This expansion"], lines = set }
 end
 
 -- The recipes of the expansion's skill lines as a function: the generated RecipeSources of those lines plus the

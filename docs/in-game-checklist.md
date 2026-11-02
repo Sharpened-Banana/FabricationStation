@@ -1308,6 +1308,17 @@ name should be the game's own ("Midnight"). Make the window as narrow as it goes
 expansion part goes first, then the session part; the left (character) and right (prices) texts stay whole, and the
 tooltip still shows everything. Drag the window by the centre of the header: it still moves.
 
+P7-19c. **Dashboard: top crafts by expansion.** Open the Dashboard with prices scanned and at least two expansions' recipes
+on your characters. Expected: a small button in the corner of the "Top crafts by profit" widget reads "All expansions"
+(the title is cut short next to it rather than overlapping; at the narrowest window, a 516 px content area, nothing
+overlaps and the button text is cut with "..." if the name is long). Hover it: the widget title, "Show top crafts from
+one expansion" and the full name of the current choice. Click: it goes to the newest expansion that has a profitable
+craft ("Midnight"), then older ones, then back to "All expansions", skipping an expansion with no profitable craft. With
+an expansion chosen the widget lists up to ten of its crafts (not the ones left of the overall top ten). Names should be the
+game's own ("Midnight", "The War Within"; "Expansion 9" if the game gave none). `/reload`: the choice is kept. Choose an
+expansion, then lower its prices until nothing there is profitable: the widget shows the usual empty line plus "No
+profitable crafts in <expansion>", and the button keeps that expansion.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

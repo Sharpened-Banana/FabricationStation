@@ -79,6 +79,55 @@ function UI.JoinList(parts)
   return table.concat(parts, ns.L[", "])
 end
 
+-- The generated skill lines { [skillLineID] = { expansionID, ... } }, or nil without that data.
+local function profession_lines()
+  local GD = ns.GameData
+  local lines = GD and type(GD.Get) == "function" and GD.Get("ProfessionLines") or nil
+  return type(lines) == "table" and lines or nil
+end
+
+-- The expansionID of a skill line (generated ProfessionLines); nil for an unknown line or without that data.
+function UI.ExpansionOfSkillLine(skillLineID)
+  local lines = profession_lines()
+  local info = lines and skillLineID ~= nil and lines[skillLineID]
+  return type(info) == "table" and type(info.expansionID) == "number" and info.expansionID or nil
+end
+
+-- The display name of an expansion, shared by every place that names one (the header's profit, the Dashboard filter):
+-- what the client told the Scanner for one of its skill lines (a profession record's expansionName), else the client's
+-- own EXPANSION_NAME<id> when it is a string, else the known name of the ID (Midnight is 11). nil when none is known;
+-- the caller picks its own last resort.
+function UI.ExpansionName(expansionID)
+  if type(expansionID) ~= "number" then return nil end
+  local lines = profession_lines()
+  local ids = {}
+  for skillLine, info in pairs(lines or {}) do
+    if type(skillLine) == "number" and type(info) == "table" and info.expansionID == expansionID then
+      ids[#ids + 1] = skillLine
+    end
+  end
+  table.sort(ids)
+  local scanner = ns.FS:GetModule("Scanner", true)
+  if scanner and scanner.GetCharacters and scanner.GetCharacter then
+    for _, charKey in ipairs(scanner:GetCharacters() or {}) do
+      local record = scanner:GetCharacter(charKey)
+      local professions = type(record) == "table" and record.professions
+      if type(professions) == "table" then
+        for _, skillLine in ipairs(ids) do
+          local p = professions[skillLine]
+          if type(p) == "table" and not p.dropped and type(p.expansionName) == "string" and p.expansionName ~= "" then
+            return p.expansionName
+          end
+        end
+      end
+    end
+  end
+  local client = _G["EXPANSION_NAME" .. expansionID]   -- locale: joined (a client global name)
+  if type(client) == "string" and client ~= "" then return client end
+  if expansionID == 11 then return L["Midnight"] end
+  return nil
+end
+
 -- A coarse age: "never" for nil, then "<1m", "Nm", "Nh", "Nd" (each unit letter is a key).
 function UI.FormatAge(seconds)
   if type(seconds) ~= "number" then return L["never"] end

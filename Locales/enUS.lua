@@ -1157,3 +1157,7 @@ L["Crafting profit in %s: %s"] = true   -- header tooltip: the expansion name, t
 L["%s (%s): %s"] = true   -- header tooltip: a character, the kind (Order commission, Auction sale), its profit
 L["Counted since FabricationStation recorded it."] = true   -- header tooltip, under the expansion profit
 L["No crafting profit recorded this expansion yet"] = true   -- header tooltip
+L["All expansions"] = true   -- Dashboard "Top crafts by profit": the expansion filter button, no filter
+L["Expansion %d"] = true   -- Dashboard "Top crafts by profit": an expansion the client gave no name for ("Expansion 9")
+L["Show top crafts from one expansion"] = true   -- tooltip of the expansion filter button
+L["No profitable crafts in %s"] = true   -- Dashboard "Top crafts by profit": the chosen expansion has no result; the expansion name
