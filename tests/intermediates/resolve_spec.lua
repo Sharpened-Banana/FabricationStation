@@ -286,6 +286,20 @@ describe("Intermediates", function()
       assert.equals(9101, world.crafts[1][1])
     end)
 
+    -- Review I2's probe: the Shopping List takes its counts from the Gather plan, so the 1001 the sub-crafts make is
+    -- not bought, and the sub-crafts' own 1101 is.
+    it("leaves what the sub-crafts make out of the Shopping List export", function()
+      local rec = world.recordAuctionatorTerms()
+      world.names[1001], world.names[1101] = "Bright Ore", "Raw Ore"
+      I:QueueSubCrafts({ recipeID = 9001, quantity = 1, charKey = ME })
+      assert.same({ "9100", "9001" }, recipe_order(Q:GetEntries()))
+      assert.is_true((Q:ExportShoppingList()))
+      local exported = {}
+      for _, term in ipairs(rec.terms) do exported[term.searchString] = term.quantity end
+      assert.is_nil(exported["Bright Ore"])
+      assert.equals(6, exported["Raw Ore"])
+    end)
+
     it("queues nothing for a reagent already held", function()
       world.items[ME][1001] = { bags = 3, bank = 0, reagentBank = 0 }
       assert.same({ nil, "nothing" }, { I:QueueSubCrafts({ recipeID = 9001, quantity = 1, charKey = ME }) })

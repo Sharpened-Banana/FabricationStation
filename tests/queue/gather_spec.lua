@@ -191,7 +191,7 @@ describe("Queue gathering plan", function()
       assert.is_nil(row_of(plan, 1001))
       -- ... and the sub-craft's own reagents are still to gather.
       assert.same({ 1101, 6 }, { row_of(plan, 1101).itemID, row_of(plan, 1101).need })
-      -- The shopping list is untouched: Queue:GetMissingReagents still lists 1001.
+      -- Queue:GetMissingReagents, the raw shortfall, still lists 1001 (the Shopping List uses this plan: review I2).
       assert.equals(3, Q:GetMissingReagents()[1001])
     end)
 

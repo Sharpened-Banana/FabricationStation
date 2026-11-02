@@ -82,7 +82,8 @@ local function on_item_info(_, itemID)
   if w.onRetry then w.onRetry(ok, info) end
 end
 
--- Sends the queue's missing reagents (every character) to Auctionator as the list "FabricationStation". With
+-- Sends the queue's missing reagents (every character; Queue:GetGatheringPlan(nil)'s need, so less what queued crafts
+-- make) to Auctionator as the list "FabricationStation". With
 -- opts = { entries?, listName? } the missing reagents and the quality tiers come from opts.entries instead
 -- (Queue:GetMissingForEntries; the stored queue is not read) and the list is named opts.listName (default
 -- "FabricationStation"); the retry after item names arrive uses the same opts.
@@ -99,6 +100,15 @@ function Queue:ExportShoppingList(onRetry, opts)
   return export(true, onRetry, opts)
 end
 
+-- The stored queue's shortfall as the Gather page shows it: Queue:GetGatheringPlan(nil)'s need per reagent, so a
+-- reagent that queued sub-crafts make is not bought as well (review I2). One rule for the Gather page, MerchantBuy and
+-- this list. { [itemID] = need }.
+local function gathering_need()
+  local out = {}
+  for _, row in ipairs(Queue:GetGatheringPlan(nil)) do out[row.itemID] = row.need end
+  return out
+end
+
 export = function(wait, onRetry, opts)
   local api = prices():AuctionatorAPI()
   if not (api and type(api.ConvertToSearchString) == "function" and type(api.CreateShoppingList) == "function") then
@@ -106,7 +116,7 @@ export = function(wait, onRetry, opts)
   end
   local given = type(opts) == "table" and type(opts.entries) == "table" and opts.entries or nil
   local listName = type(opts) == "table" and type(opts.listName) == "string" and opts.listName or LIST_NAME
-  local missing = given and Queue:GetMissingForEntries(given) or Queue:GetMissingReagents(nil)
+  local missing = given and Queue:GetMissingForEntries(given) or gathering_need()
   local itemIDs = {}
   for itemID, n in pairs(missing) do
     if n > 0 then itemIDs[#itemIDs + 1] = itemID end

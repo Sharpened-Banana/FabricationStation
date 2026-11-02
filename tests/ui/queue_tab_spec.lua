@@ -1136,6 +1136,33 @@ describe("Queue tab", function()
       assert.equals("Shopping list updated (2 items)", gather_status())
     end)
 
+    -- Review I2: after "Queue with sub-crafts" the queue crafts reagent 1001 itself, so neither Shopping List button
+    -- (this page's and the Queue page's) lists it; the sub-craft's own reagent 1101 is still to buy.
+    it("leaves out of the shopping list what queued sub-crafts make, on both pages", function()
+      local api = world.recordAuctionatorTerms()
+      world.names[1101] = "Raw Ore"
+      local subCrafts
+      for _, spec in ipairs(ns.FS:GetModule("ProfessionPanel"):CollectActions(9001, "Main-Realm")) do
+        if spec.text == "Queue with sub-crafts" then subCrafts = spec end
+      end
+      subCrafts.onClick()
+      assert.same({ 9100, 9001 }, { Queue:GetEntries()[1].recipeID, Queue:GetEntries()[2].recipeID })
+      local g = open_gather()
+      assert.is_nil(row_data(1001))
+      assert.equals(4, row_data(1101).need)
+      local function exported()
+        local out = {}
+        for _, term in ipairs(api.terms) do out[term.searchString] = term.quantity end
+        api.terms = {}
+        return out
+      end
+      click(g.shoppingButton)
+      assert.same({ ["Raw Ore"] = 4, ["Glimmer Dust"] = 1 }, exported())
+      click(QT:GetView().sections.queue)
+      click(QT:GetView().shoppingButton)
+      assert.same({ ["Raw Ore"] = 4, ["Glimmer Dust"] = 1 }, exported())
+    end)
+
     it("says the queue is read-only and changes nothing when the saved data is from a newer version", function()
       add(1)
       local I = ns.FS:GetModule("Intermediates")
