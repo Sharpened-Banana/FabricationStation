@@ -122,3 +122,7 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     - The Dashboard's queue summary no longer counts a reagent that your queued sub-crafts make as missing.
     - Removing a queue entry, or filling its order, also removes the sub-crafts queued for it, and a chat line says
       how many.
+    - Concentration costs include your specialization's discount on each recipe, learned from the game's own number,
+      so costs and the reagents-or-concentration choice match what the game charges.
+    - Reagent skill counts in whole points and leaves empty slots out, as the game does.
+    - The math check no longer reports a difficulty on recipes that have no quality.

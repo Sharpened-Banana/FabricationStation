@@ -1461,6 +1461,13 @@ vendor sale) prints nothing, and nothing is ever sent to other players. Report w
 (else `PLAYER_INTERACTION_MANAGER_FRAME_HIDE` for the mailbox does) and whether Open All style addons fire one
 `PLAYER_MONEY` per mail.
 
+P7-38. **Math check after the mismatch fixes.** In Settings > Diagnostics clear the logged mismatches, `/reload`, then
+open each profession once so its recipes calibrate again. Pick a recipe on each crafting character that can use
+concentration, try it with no reagents, with a mix of ranks and with one slot left empty. Expected: the panel's check
+line says "Math check: OK", the concentration cost matches Blizzard's number exactly (flasks and potions on an
+alchemist with the discount nodes included), and recipes with no quality log no difficulty line. Report any new line in
+Diagnostics with its recipe; a discount can only be learned where the game charges concentration with no reagents.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in
