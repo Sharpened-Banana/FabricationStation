@@ -7,7 +7,18 @@ local TOGGLEABLE = { "SaleLog", "CraftLog", "CraftLists", "Intermediates", "Chat
   "BankPull", "MailGold" }
 local CORE = { "FeatureLines", "RequestsTab", "Bindings" }
 
--- Debounce key prefixes each toggleable module owns (a module without a timer owns none).
+-- Every debounce key a toggleable module cancels in OnDisable (grep CancelDebounce in the module). The disable test
+-- starts each one before it turns the module off, so removing a cancel from an OnDisable fails the spec. A module
+-- without a timer owns none. MailGold cancels its key through reset_visit.
+local OWNED_KEYS = {
+  SaleLog = { "saleLog.mail" },
+  ReadyAlerts = { "readyAlerts.login", "readyAlerts.next", "readyAlerts.schedule" },
+  MerchantBuy = { "merchantBuy.flight", "merchantBuy.refresh" },
+  BankPull = { "bankPull.flight", "bankPull.refresh" },
+  MailGold = { "mailGold.print" },
+}
+
+-- The prefixes of those keys, for "nothing of this module ran while it was off".
 local OWNED_PREFIXES = {
   SaleLog = { "saleLog." },
   ReadyAlerts = { "readyAlerts." },
@@ -50,11 +61,31 @@ local EMPTY = { events = {}, messages = {} }
 describe("phase 7 integration", function()
   local W, ns, spy
   local purse   -- GetMoney(), for MailGold
+  local owned, mails   -- the player's own auctions and mailbox, for SaleLog
 
   before_each(function()
     _G.FabricationStationDB = nil
     purse = 1000000
-    W = install_wow_stubs({ GetMoney = function() return purse end })
+    owned, mails = {}, {}
+    W = install_wow_stubs({
+      GetMoney = function() return purse end,
+      C_Item = { GetItemID = function(location) return type(location) == "table" and location.itemID or nil end },
+      C_AuctionHouse = {
+        GetNumOwnedAuctions = function() return #owned end,
+        GetOwnedAuctionInfo = function(i) return owned[i] end,
+      },
+      AUCTION_EXPIRED_MAIL_SUBJECT = "Auction expired: %s",
+      GetInboxNumItems = function() return #mails end,
+      GetInboxHeaderInfo = function(i)
+        local m = mails[i]
+        if not m then return nil end
+        return "icon", "stationery", "Auction House", m.subject, 0, 0, m.daysLeft, 1
+      end,
+      GetInboxItem = function(i, j)
+        local m = mails[i]
+        if m and j == 1 then return "Item", m.itemID, "tex", m.count end
+      end,
+    })
     ns = load_addon({})
     spy = spy_debounces(ns)
     W.boot()
@@ -103,24 +134,20 @@ describe("phase 7 integration", function()
         local module = ns.FS:GetModule(name)
         local registrations = W.registrations(module)
         for _ = 1, 2 do   -- twice: a second cycle must not accumulate anything
-          -- Work pending in the module's own timers, where it has any.
-          if name == "ReadyAlerts" then
-            module:SendMessage("FS_DATA_CHANGED", "Me-Realm", "recipes")
-            assert.is_true(#owned_pending(name) > 0, "no readyAlerts key was pending")
-          elseif name == "SaleLog" then
-            W.fire("MAIL_INBOX_UPDATE")
-            assert.is_true(#owned_pending(name) > 0, "no saleLog key was pending")
-          elseif name == "MailGold" then
-            W.fire("MAIL_SHOW")
-            purse = purse + 10000
-            W.fire("PLAYER_MONEY")   -- a pickup waiting for its 1.5 s print
-            assert.is_true(#owned_pending(name) > 0, "no mailGold key was pending")
+          -- Work pending in every timer the module owns: each real key is started here (what starts it in game is the
+          -- module's own business; this test is about OnDisable cancelling it).
+          local ranWhileOff = {}
+          for _, key in ipairs(OWNED_KEYS[name] or {}) do
+            ns.FS:Debounce(key, 5, function() ranWhileOff[#ranWhileOff + 1] = key end)
           end
+          assert.equal(#(OWNED_KEYS[name] or {}), #owned_pending(name), name .. ": a key was not pending")
 
           ns.FS:SetModuleEnabled(name, false)
           assert.is_false(module:IsEnabled())
           assert.same(EMPTY, W.registrations(module))
           assert.same({}, owned_pending(name))
+          settle(10)
+          assert.same({}, ranWhileOff)
 
           spy.fired = {}
           W.fire("PLAYER_ENTERING_WORLD"); W.fire("MAIL_INBOX_UPDATE"); W.fire("BAG_UPDATE_DELAYED")
@@ -142,6 +169,16 @@ describe("phase 7 integration", function()
         assert.same({}, W.errors)
       end)
     end
+
+    it("SaleLog's post-hook stays installed but records nothing while the module is off", function()
+      ns.FS:SetModuleEnabled("SaleLog", false)
+      settle(5)   -- other modules create their lazy settings first
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      C_AuctionHouse.PostItem({ itemID = 100 }, 2, 1, nil, 500)
+      W.fire("AUCTION_HOUSE_AUCTION_CREATED", 1)
+      settle(5)
+      assert.same(before, ns.FS.db.global)
+    end)
 
     it("all nine off at once, then on again, leave the same registrations", function()
       local before = {}
@@ -176,42 +213,106 @@ describe("phase 7 integration", function()
         recipes = { { recipeID = 100, itemID = 212345, link = link, name = "Everforged Gloves",
           best = { charKey = "Me-Realm", expectedQuality = 3, profit = 123456, noPrice = false } } } }
     end
-    local function fire_every_source(n)
-      W.fire("OWNED_AUCTIONS_UPDATED")
-      W.fire("AUCTION_HOUSE_AUCTION_CREATED", n)
-      W.fire("MAIL_INBOX_UPDATE")
-      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, quantity = n, operationID = 11 + n })
-      ns.FS:SendMessage("FS_CHATSCAN_MATCH", chat_match("Buyer" .. n .. "-Realm"))
-      W.fire("CHAT_MSG_WHISPER_INFORM", "hi", "Buyer" .. n .. "-Realm")
-      W.fire("MAIL_SHOW")
-      purse = purse + n * 10000
-      W.fire("PLAYER_MONEY")               -- MailGold: gold taken from the open mailbox
-      settle(5)
-      W.fire("MAIL_CLOSED")
+    local reagents = { { reagent = { itemID = 1002 }, quantity = 10, dataSlotIndex = 11 } }
+    -- A craft the CraftRecipe post-hook can pair with a result: the schematic of recipe 9001 makes item 5002.
+    local function craft()
+      ns.FS.db.global.schematics[9001] = { build = "1", outputItemIDs = { 5002 }, quantityMin = 1, quantityMax = 1 }
+      C_TradeSkillUI.CraftRecipe(9001, 1, reagents, nil, nil, false)
     end
 
-    it("a chat request is stored when the saved data is writable (the control for the test below)", function()
-      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
-      ns.FS:SendMessage("FS_CHATSCAN_MATCH", chat_match("Buyer-Realm"))
-      assert.not_same(before, ns.FS.db.global)
-    end)
+    -- Every phase 7 event source that can write to db.global. `prepare` runs while the data is writable and gives
+    -- the event something to write (a pending post, a mail, a pending craft, a request to answer); `fire` is the event.
+    -- Each source gets two checks: with writable data the event changes db.global (so the check below it can fail),
+    -- and with dbIsNewer set after `prepare` the same event leaves db.global unchanged.
+    local SOURCES = {
+      { name = "OWNED_AUCTIONS_UPDATED",
+        prepare = function() owned[1] = { auctionID = 1, itemKey = { itemID = 100 }, quantity = 3, status = 0 } end,
+        fire = function() W.fire("OWNED_AUCTIONS_UPDATED") end },
+      { name = "AUCTION_HOUSE_AUCTION_CREATED",
+        prepare = function() C_AuctionHouse.PostItem({ itemID = 100 }, 2, 1, nil, 500) end,
+        fire = function() W.fire("AUCTION_HOUSE_AUCTION_CREATED", 1) end },
+      { name = "MAIL_INBOX_UPDATE",
+        prepare = function()
+          mails[1] = { subject = "Auction expired: Potion", daysLeft = 29.5, itemID = 300, count = 5 }
+        end,
+        fire = function() W.fire("MAIL_INBOX_UPDATE") end },
+      { name = "TRADE_SKILL_ITEM_CRAFTED_RESULT (a new cast)",
+        prepare = craft,
+        fire = function()
+          W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, quantity = 1, operationID = 11 })
+        end },
+      { name = "TRADE_SKILL_ITEM_CRAFTED_RESULT (a Multicraft extra)",
+        prepare = function()
+          craft()
+          W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, quantity = 1, operationID = 11 })
+        end,
+        fire = function()
+          W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = 5002, quantity = 2, operationID = 11 })
+        end },
+      { name = "FS_CHATSCAN_MATCH",
+        prepare = function() end,
+        fire = function() ns.FS:SendMessage("FS_CHATSCAN_MATCH", chat_match("Buyer-Realm")) end },
+      { name = "CHAT_MSG_WHISPER_INFORM",
+        prepare = function() ns.FS:SendMessage("FS_CHATSCAN_MATCH", chat_match("Buyer-Realm")) end,
+        fire = function() W.fire("CHAT_MSG_WHISPER_INFORM", "hi", "Buyer-Realm") end },
+    }
 
-    it("OWNED_AUCTIONS_UPDATED, AUCTION_HOUSE_AUCTION_CREATED, MAIL_INBOX_UPDATE, TRADE_SKILL_ITEM_CRAFTED_RESULT, "
-      .. "FS_CHATSCAN_MATCH, CHAT_MSG_WHISPER_INFORM and PLAYER_MONEY (mailbox open) leave db.global unchanged",
-    function()
-      fire_every_source(1)                 -- writable first: the sources have state to lose
+    for _, source in ipairs(SOURCES) do
+      it(source.name .. " changes db.global when the data is writable", function()
+        source.prepare()
+        settle(1)
+        local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+        source.fire()
+        settle(5)
+        assert.not_same(before, ns.FS.db.global)
+      end)
+
+      it(source.name .. " leaves db.global unchanged while the saved data is from a newer version", function()
+        source.prepare()
+        settle(1)
+        ns.FS.dbIsNewer = true
+        local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+        source.fire()
+        settle(5)
+        W.advance(40 * DAY)
+        assert.same(before, ns.FS.db.global)
+        assert.same({}, ns.FS.failedModules)
+      end)
+    end
+
+    -- MailGold's PLAYER_MONEY (mailbox open) writes nothing itself: it prints a chat line and keeps its state in
+    -- memory, and its only setting is written by its options. So it has no writable control of its own (with
+    -- writable data db.global does change on PLAYER_MONEY, but that is the character's gold, recorded by Scanner).
+    -- Read-only: the line still prints and db.global stays unchanged.
+    it("PLAYER_MONEY with the mailbox open prints its line and leaves db.global unchanged while read-only", function()
       ns.FS.dbIsNewer = true
       local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
-      fire_every_source(2)
-      W.advance(40 * DAY)
+      W.printed = {}
+      W.fire("MAIL_SHOW")
+      purse = purse + 10000
+      W.fire("PLAYER_MONEY")
+      settle(5)
+      W.fire("MAIL_CLOSED")
+      assert.is_true(#W.printed > 0, "no line was printed")
       assert.same(before, ns.FS.db.global)
-      assert.same({}, ns.FS.failedModules)
     end)
 
-    it("the same sources write nothing on a read-only start either", function()
+    it("turning SaleLog off and on prunes nothing while the saved data is from a newer version", function()
+      ns.FS.db.global.auctionLog = { events = { { time = W.now - 400 * DAY, kind = "post", itemID = 5, quantity = 1,
+        charKey = "Me-Realm" } }, listings = {}, seenMail = {} }
       ns.FS.dbIsNewer = true
       local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
-      fire_every_source(1)
+      ns.FS:SetModuleEnabled("SaleLog", false); ns.FS:SetModuleEnabled("SaleLog", true)
+      assert.same(before, ns.FS.db.global)
+    end)
+
+    it("the sources that need no preparation write nothing on a read-only start either", function()
+      ns.FS.dbIsNewer = true
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      W.fire("OWNED_AUCTIONS_UPDATED"); W.fire("MAIL_INBOX_UPDATE")
+      ns.FS:SendMessage("FS_CHATSCAN_MATCH", chat_match("Buyer-Realm"))
+      W.fire("CHAT_MSG_WHISPER_INFORM", "hi", "Buyer-Realm")
+      settle(5)
       assert.same(before, ns.FS.db.global)
     end)
   end)

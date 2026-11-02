@@ -48,8 +48,8 @@ come out at, how much concentration it takes, what it earns, and what your other
 - A big red cross marks orders for recipes you have not learned. An order with a long item name keeps a minimal set
   of cells.
 - Optional, off by default and only in the game: ready alerts for full concentration, Moxie over an amount, a cooldown
-  that is ready, and a taskbar flash on new orders that match your filters. A Refresh button on the board asks for it
-  once per click.
+  that is ready, and a taskbar flash (`newOrdersFlash`) on new orders that match your filters and another
+  (`personalOrderFlash`) when a personal order arrives. A Refresh button on the board asks for it once per click.
 - A Customers tab (notes, tags, alt links, CSV export) built from the orders you fulfil, and a Ledger tab for income,
   costs and profit. The Ledger's Crafts page shows the profit made this session, and an Auctions page shows your own
   posts, cancels, expiries and sales (from your own events and mail), with a sale rate and last sale price per item
@@ -79,7 +79,8 @@ come out at, how much concentration it takes, what it earns, and what your other
 - A chat scanner that points out public requests you could fill. See [Chat scanner](#chat-scanner).
 - A Requests tab keeps those chat requests across characters, with reply status, whisper history and auto-dismiss.
   Replying fills the chat box and sends nothing.
-- Key bindings (Key Bindings > AddOns > FabricationStation) for Craft Next, Claim Best Order, opening
+- Key bindings (in the Key Bindings window, under AddOns > FabricationStation; see P7-28 in
+  [`docs/in-game-checklist.md`](docs/in-game-checklist.md)) for Craft Next, Claim Best Order, opening
   FabricationStation and replying to the latest request. Each key press does what its button does, once.
 - A first-run setup guide.
 
@@ -125,14 +126,15 @@ come out at, how much concentration it takes, what it earns, and what your other
 | `/fs help` | List the commands. |
 
 Tab ids: `dashboard`, `recipes`, `queue`, `orders`, `customers`, `ledger`, `characters`, `planner`, `guild`,
-`requests`, `settings`. Settings sections: General, Prices, Crafting, Orders & Ledger, Characters, Planner, Ready
-alerts, Guild, Chat requests, Request inbox, Modules, Diagnostics.
+`requests`, `settings`. Settings sections: General, Prices, Crafting, Orders & Ledger, Mail gold, Characters, Planner,
+Ready alerts, Guild, Chat requests, Request inbox, Modules, Diagnostics.
 
 ## What it never does
 
 FabricationStation never crafts, claims, posts, buys, sends chat or moves items for you: each of those happens only
 when you click a button or press a key bound to one, and one click or key press does one thing. It never refreshes the
-order board on a timer. It sends no notifications outside the game.
+order board on a timer. It sends no notifications outside the game, apart from the optional taskbar flash of the Ready
+alerts options (`newOrdersFlash` and `personalOrderFlash`, both off by default).
 
 ## Guild sync and privacy
 

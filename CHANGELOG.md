@@ -86,8 +86,9 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     too much per knowledge point or Moxie gets a risk, and the orders you tick become one Auctionator shopping list
     of their missing reagents.
   - Ready alerts: off by default and only in the game. Concentration full, Moxie over an amount you choose, a
-    cooldown ready, and a taskbar flash on new orders that match your filters. A Refresh button on the order board
-    asks for the board once per click; the board never refreshes on a timer.
+    cooldown ready, and a taskbar flash on new orders that match your filters or when a personal order arrives
+    (the options `newOrdersFlash` and `personalOrderFlash`). A Refresh button on the order board asks for the board
+    once per click; the board never refreshes on a timer.
   - Sales and stock: your own auction posts, cancels, expiries and sales are logged from your own events and mail,
     with a sale rate and last sale price per item in a Ledger view and in item tooltips. Restock targets get a
     minimum profit per craft and count your own auction listings and mail as held.
