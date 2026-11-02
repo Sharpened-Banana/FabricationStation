@@ -432,6 +432,7 @@ end
 function Queue:CraftEvaluateOpts(entry)
   return {
     targetQuality = entry.targetQuality, useConcentration = entry.useConcentration,
+    atLeastTarget = entry.orderID ~= nil and true or nil,   -- an order's quality is a minimum
     providedReagents = entry.providedReagents, ownedReagentsFree = true,
     excludeWarband = not recipes():GetSetting("queueUseWarband"),
     optionalItemIDs = entry.optionalItemIDs,
@@ -568,6 +569,7 @@ function Queue:GetEntryResult(id)
   if not e then return nil end
   return recipes():Evaluate(e.recipeID, e.charKey, {
     targetQuality = e.targetQuality, useConcentration = e.useConcentration, providedReagents = e.providedReagents,
+    atLeastTarget = e.orderID ~= nil and true or nil,
     optionalItemIDs = e.optionalItemIDs,
   }), e
 end

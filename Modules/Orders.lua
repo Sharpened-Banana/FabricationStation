@@ -476,7 +476,8 @@ function Orders:ScoreInput(input, ctx)
   local function evaluate(useConcentration)
     if not (recipes and recipes.Evaluate) then return nil end
     return recipes:Evaluate(input.recipeID, ctx.charKey,
-      { targetQuality = target, providedReagents = provided, useConcentration = useConcentration })
+      { targetQuality = target, atLeastTarget = target ~= nil and true or nil, providedReagents = provided,
+        useConcentration = useConcentration })
   end
   local function short_of_target(result)
     return target ~= nil and ((result.flags or {}).unreachableTarget == true or (result.expectedQuality or 0) < target)

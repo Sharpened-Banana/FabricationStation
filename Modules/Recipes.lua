@@ -447,6 +447,8 @@ local function full_opts(opts)
   ownedFree = ownedFree and true or false
   return {
     targetQuality = opts.targetQuality,
+    -- A crafting order's minimum quality: a plan above it will do (Math.Profit). Nil, not false: one cache entry.
+    atLeastTarget = opts.atLeastTarget and true or nil,
     useConcentration = opts.useConcentration and true or false,
     providedReagents = provided,
     ownedReagentsFree = ownedFree,
@@ -497,7 +499,7 @@ local function build(recipeID, charKey, o, optionalItemIDs, schematic, reagentPr
     schematic = schematic, calib = calib,
     professionSkill = prof and (prof.skill or 0) + (prof.skillModifier or 0) or 0,
     prices = values, owned = owned, provided = o.providedReagents, optionalItemIDs = optionalItemIDs,
-    useConcentration = o.useConcentration, targetQuality = o.targetQuality,
+    useConcentration = o.useConcentration, targetQuality = o.targetQuality, atLeastTarget = o.atLeastTarget,
   })
   return input, {
     schematic = schematic, calib = calib, known = known, results = results, owned = owned or {},

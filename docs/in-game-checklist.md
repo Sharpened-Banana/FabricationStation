@@ -1477,6 +1477,10 @@ Links"). Expected: the big red × shows right of the name, without covering it, 
 learned; the risk count drops out if there is no room for it. Widen the window: it comes back. Every × on the board is in
 one column, where other orders have their + (a not-learned order never has a +: it cannot be queued).
 
+P7-41. **Patron reagents above the minimum.** Find a patron order that provides all its reagents and asks for a low
+minimum quality (Skinner's Cap on a leatherworker). Expected: no "minimum quality cannot be reached" risk, no concentration
+cell (none is needed), and Blizzard's bar in the order view lands at or above the minimum.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

@@ -342,5 +342,6 @@ function CraftingData.BuildInput(gd, args)
       lessFactors = calib and type(calib.concentrationLess) == "number" and { calib.concentrationLess } or {} },
     useConcentration = args.useConcentration,
     targetQuality = args.targetQuality,
+    atLeastTarget = args.atLeastTarget,
   }
 end

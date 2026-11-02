@@ -128,3 +128,5 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     - The math check no longer reports a difficulty on recipes that have no quality.
     - Hovering the Reagents and Commission columns shows our tooltip, not Blizzard's box of the patron's reagents.
     - An order for a recipe you have not learned keeps its red × even when a long item name leaves no room for more.
+    - An order whose patron reagents land above its minimum quality no longer reads as unreachable, or as needing
+      concentration.

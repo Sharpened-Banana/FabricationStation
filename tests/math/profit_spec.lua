@@ -76,6 +76,49 @@ describe("Math.Profit", function()
     assert.equals(2, r3.expectedQuality); assert.is_nil(r3.flags.unreachableTarget)  -- concentration reaches it
     assert.is_nil(P.EvaluateCraft(scenario({ targetQuality = 2 })).flags.unreachableTarget)
   end)
+  describe("atLeastTarget: an order's minimum quality", function()
+    -- Seen in game: Skinner's Cap, minimum quality 2 of 5, the patron providing top-rank reagents. Base 70 + 80 = 150
+    -- against 200 is quality 3 with nothing to choose, so no plan lands on 2 exactly; the row said "cannot be reached,
+    -- even with concentration" and charged concentration it did not need.
+    local TIERS = { 0.2, 0.5, 0.8, 1 }
+    local function provided_top(over)
+      local a, b = slot(1, 40, 10, { 100, 300 }), slot(2, 20, 10, { 100, 300 })
+      a.items[2].provided, b.items[2].provided = 40, 20
+      local t = { maxQuality = 5, baseDifficulty = 200, baseSkill = 70, maxReagentSkill = 80, thresholdFractions = TIERS,
+        slots = { a, b }, stats = {}, outputPrices = { 1000, 2000, 3000, 4000, 5000 }, targetQuality = 2, atLeastTarget = true }
+      for k, v in pairs(over or {}) do t[k] = v end
+      return t
+    end
+    it("takes a plan above the minimum when none lands on it", function()
+      local r = P.EvaluateCraft(provided_top())
+      assert.equals(3, r.expectedQuality); assert.is_nil(r.flags.unreachableTarget)
+      assert.is_false(r.concentrated)
+    end)
+    it("needs no concentration for it either, when asked with concentration", function()
+      local r = P.EvaluateCraft(provided_top({ useConcentration = true }))
+      assert.equals(3, r.expectedQuality); assert.is_nil(r.flags.unreachableTarget)
+      assert.is_false(r.concentrated)
+    end)
+    it("takes the lowest quality above the minimum: the cheapest reagents, not the best", function()
+      local inp = scenario({ maxQuality = 5, baseDifficulty = 200, baseSkill = 110, maxReagentSkill = 80,
+        thresholdFractions = TIERS, outputPrices = { 1000, 2000, 3000, 4000, 5000 }, targetQuality = 2, atLeastTarget = true })
+      local r = P.EvaluateCraft(inp)
+      assert.equals(3, r.expectedQuality); assert.is_nil(r.flags.unreachableTarget)
+      assert.equals(r.perQuality[3].reagentCost, r.reagentCost)
+    end)
+    it("still takes the plan on the minimum when there is one", function()
+      local r = P.EvaluateCraft(scenario({ targetQuality = 1, atLeastTarget = true }))
+      assert.equals(1, r.expectedQuality); assert.is_nil(r.flags.unreachableTarget)
+    end)
+    it("is still unreachable when nothing reaches the minimum", function()
+      local r = P.EvaluateCraft(provided_top({ targetQuality = 4 }))
+      assert.equals(3, r.expectedQuality); assert.is_true(r.flags.unreachableTarget)
+    end)
+    it("leaves an exact target as it was: an item of that quality is not another quality's item", function()
+      local r = P.EvaluateCraft(provided_top({ atLeastTarget = false }))
+      assert.equals(3, r.expectedQuality); assert.is_true(r.flags.unreachableTarget)
+    end)
+  end)
   it("targetQuality with concentration takes that quality's concentration plan", function()
     local r = P.EvaluateCraft(scenario({ targetQuality = 2, useConcentration = true }))
     assert.equals(2, r.expectedQuality); assert.equals(3000, r.reagentCost); assert.equals(121675, r.profit)
