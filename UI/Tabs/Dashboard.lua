@@ -389,14 +389,6 @@ local function top_craft_line(row)
   return table.concat(parts, "  ")
 end
 
--- The expansion of a ranked recipe: the expansionID of its skill line, from the schematic already cached (never fetched
--- here: this runs over every ranked result). nil when the schematic, its line or the line's data is unknown.
-local function recipe_expansion(recipeID)
-  local scanner = module("Scanner")
-  local schematic = scanner and scanner.GetCachedSchematic and scanner:GetCachedSchematic(recipeID)
-  return type(schematic) == "table" and ns.UI.ExpansionOfSkillLine(schematic.skillLineID) or nil
-end
-
 local function expansion_label(choice)
   if choice == EXPANSION_ALL then return L["All expansions"] end
   return ns.UI.ExpansionName(choice) or L["Expansion %d"]:format(choice)
@@ -426,7 +418,7 @@ local function refresh_top_crafts(frame)
   local recipes = module("Recipes")
   local results = recipes and recipes:GetRanked({ sortBy = "profit", onlyProfitable = true }) or {}
   local choice = saved_expansion()
-  local shown, options = Dashboard.ExpansionFilter(results, recipe_expansion, choice)
+  local shown, options = Dashboard.ExpansionFilter(results, ns.UI.ExpansionOfRecipe, choice)
   frame.expansionOptions, frame.expansionChoice = options, choice
   frame.expansionLabel = expansion_label(choice)
   if frame.expansionButton then frame.expansionButton:SetText(frame.expansionLabel) end

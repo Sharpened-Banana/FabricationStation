@@ -730,35 +730,11 @@ function Tab.CurrentExpansion()
   return { id = id, name = ns.UI.ExpansionName(id) or L["This expansion"], lines = set }
 end
 
--- The recipes of the expansion's skill lines as a function: the generated RecipeSources of those lines plus the
--- recipes any scanned character knows on them.
+-- The recipes of the expansion as a function: a recipe counts when ns.UI.ExpansionOfRecipe (the one rule the Dashboard's
+-- filter shares: RecipeSources, then the cached schematic, then what a scanned character knows) says it is the
+-- expansion's. A recipe that rule cannot place is not counted.
 local function expansion_recipes(expansion)
-  local known = {}
-  local sources = ns.GameData and ns.GameData.Get("RecipeSources")
-  local by = type(sources) == "table" and sources.bySkillLine
-  if type(by) == "table" then
-    for skillLine in pairs(expansion.lines) do
-      if type(by[skillLine]) == "table" then
-        for recipeID in pairs(by[skillLine]) do known[recipeID] = true end
-      end
-    end
-  end
-  local scanner = module("Scanner")
-  if scanner and scanner.GetCharacters and scanner.GetCharacter then
-    for _, charKey in ipairs(scanner:GetCharacters() or {}) do
-      local record = scanner:GetCharacter(charKey)
-      local professions = type(record) == "table" and record.professions
-      if type(professions) == "table" then
-        for skillLine in pairs(expansion.lines) do
-          local p = professions[skillLine]
-          if type(p) == "table" and not p.dropped and type(p.recipes) == "table" then
-            for recipeID in pairs(p.recipes) do known[recipeID] = true end
-          end
-        end
-      end
-    end
-  end
-  return function(recipeID) return known[recipeID] == true end
+  return function(recipeID) return ns.UI.ExpansionOfRecipe(recipeID) == expansion.id end
 end
 
 -- The crafting profit this expansion, for every character: the Ledger's own rule (profit_kinds) over the sales and

@@ -93,6 +93,63 @@ function UI.ExpansionOfSkillLine(skillLineID)
   return type(info) == "table" and type(info.expansionID) == "number" and info.expansionID or nil
 end
 
+-- recipeID -> skillLineID from the generated RecipeSources (bySkillLine), built once per RecipeSources table (specs and
+-- a data update may define another). Only lines with a known expansion count; a recipe on several lines takes the lowest.
+local recipeLineIndex = { source = nil, map = nil }
+local function recipe_line(recipeID)
+  local GD = ns.GameData
+  local sources = GD and type(GD.Get) == "function" and GD.Get("RecipeSources") or nil
+  local by = type(sources) == "table" and sources.bySkillLine
+  if type(by) ~= "table" then return nil end
+  if recipeLineIndex.source ~= by then
+    local lines, map = {}, {}
+    for skillLine in pairs(by) do
+      if type(skillLine) == "number" and UI.ExpansionOfSkillLine(skillLine) then lines[#lines + 1] = skillLine end
+    end
+    table.sort(lines)
+    for i = #lines, 1, -1 do   -- the lowest line is written last, so it wins
+      if type(by[lines[i]]) == "table" then
+        for id in pairs(by[lines[i]]) do map[id] = lines[i] end
+      end
+    end
+    recipeLineIndex.source, recipeLineIndex.map = by, map
+  end
+  return recipeLineIndex.map[recipeID]
+end
+
+-- The expansionID a recipe belongs to: the one rule behind every view that sorts recipes by expansion (the Dashboard's
+-- "Top crafts by profit" filter, the Ledger's and the header's expansion profit). In order: the generated RecipeSources
+-- skill line of the recipe (static; no scan needed); only when that has no entry, the skill line of the schematic
+-- already cached (never fetched here: this runs over every ranked result); only then a profession record of a scanned
+-- character that lists the recipe on a line of a known expansion. nil when none of these knows it: such a recipe is in
+-- no expansion's filter and counted nowhere, never guessed.
+function UI.ExpansionOfRecipe(recipeID)
+  if recipeID == nil then return nil end
+  local line = recipe_line(recipeID)
+  if line then return UI.ExpansionOfSkillLine(line) end
+  local scanner = ns.FS:GetModule("Scanner", true)
+  if scanner and scanner.GetCachedSchematic then
+    local schematic = scanner:GetCachedSchematic(recipeID)
+    local expansion = type(schematic) == "table" and UI.ExpansionOfSkillLine(schematic.skillLineID) or nil
+    if expansion then return expansion end
+  end
+  if scanner and scanner.GetCharacters and scanner.GetCharacter then
+    for _, charKey in ipairs(scanner:GetCharacters() or {}) do
+      local record = scanner:GetCharacter(charKey)
+      local professions = type(record) == "table" and record.professions
+      if type(professions) == "table" then
+        for skillLine, p in pairs(professions) do
+          if type(p) == "table" and not p.dropped and type(p.recipes) == "table" and p.recipes[recipeID] then
+            local expansion = UI.ExpansionOfSkillLine(skillLine)
+            if expansion then return expansion end
+          end
+        end
+      end
+    end
+  end
+  return nil
+end
+
 -- The display name of an expansion, shared by every place that names one (the header's profit, the Dashboard filter):
 -- what the client told the Scanner for one of its skill lines (a profession record's expansionName), else the client's
 -- own EXPANSION_NAME<id> when it is a string, else the known name of the ID (Midnight is 11). nil when none is known;
