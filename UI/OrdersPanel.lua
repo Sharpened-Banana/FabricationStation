@@ -1952,7 +1952,9 @@ function refresh_side()
   side.refreshEnabled = state ~= "busy"
   side.refresh:SetEnabled(side.refreshEnabled)
   local fresh = O and O.GetRefreshFresh and O:GetRefreshFresh() or nil
-  side.fresh:SetText(fresh and L["%d new matching orders: press Search on the board to see them"]:format(fresh) or "")
+  local freshText = fresh == 1 and L["%d new matching order: press Search on the board to see it"]
+    or L["%d new matching orders: press Search on the board to see them"]
+  side.fresh:SetText(fresh and freshText:format(fresh) or "")
   set_shown(side.fresh, fresh ~= nil)
 end
 

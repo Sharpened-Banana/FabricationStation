@@ -444,7 +444,14 @@ describe("Planner tab", function()
         assert.equal("Queued 1 craft; 0 were already queued", plain(v.status:GetText()))
         queued = { { id = 1, recipeID = 1001, charKey = "Aria-Silvermoon", quantity = 1, useConcentration = true } }
         click(v.queuePlan)
-        assert.equal("Queued 0 crafts; 1 were already queued", plain(v.status:GetText()))
+        assert.equal("Queued 0 crafts; 1 was already queued", plain(v.status:GetText()))   -- review M2
+        queued[#queued + 1] = { id = 2, recipeID = 1002, charKey = "Aria-Silvermoon", quantity = 1, useConcentration = true }
+        ns.FS:GetModule("Planner").GetSchedule = function()
+          return { { charKey = "Aria-Silvermoon", skillLineID = 2907, recipeID = 1001, crafts = 1 },
+            { charKey = "Aria-Silvermoon", skillLineID = 2907, recipeID = 1003, crafts = 1 } }, "ok"
+        end
+        click(v.queuePlan)
+        assert.equal("Queued 1 craft; 1 was already queued", plain(v.status:GetText()))
       end)
 
       it("skips rows already queued", function()

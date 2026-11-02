@@ -194,7 +194,8 @@ local function end_flight()
   if not f then return end
   local got, cost = arrived(f)
   if got > 0 then
-    set_status(L["Bought %d reagents for %s"]:format(got, format_money(cost)))
+    set_status((got == 1 and L["Bought %d reagent for %s"] or L["Bought %d reagents for %s"]):format(got,
+      format_money(cost)))
   else
     set_status(L["No reagents have arrived in your bags yet"])
   end
@@ -265,7 +266,9 @@ end
 local function on_buy(result)
   if type(result) ~= "table" then return end
   if result.status == "bought" then
-    set_status(L["Buying %d reagents for %s"]:format(result.count or 0, format_money(result.cost)))
+    local n = result.count or 0
+    set_status((n == 1 and L["Buying %d reagent for %s"] or L["Buying %d reagents for %s"]):format(n,
+      format_money(result.cost)))
   else
     set_status(STATUS_TEXT[result.status])
   end
@@ -371,7 +374,7 @@ refresh = function(plan)
   for _, row in ipairs(plan.rows) do items = items + row.buy end
   v.poor = #plan.rows > 0 and not plan.affordable
   set_button(v, #plan.rows > 0 and plan.affordable and not inFlight and not in_combat(),
-    L["Buy %d reagents for %s"]:format(items, format_money(plan.total)))
+    (items == 1 and L["Buy %d reagent for %s"] or L["Buy %d reagents for %s"]):format(items, format_money(plan.total)))
 end
 
 ---------------------------------------------------------------------------

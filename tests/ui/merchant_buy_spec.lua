@@ -566,6 +566,16 @@ describe("MerchantBuy", function()
       assert.is_false(view().buttonEnabled)         -- nothing is left to buy
     end)
 
+    it("says one reagent in the singular (review M2)", function()
+      required(1001, 1); sell(1001, 500)
+      open()
+      assert.equals("Buy 1 reagent for " .. ns.UI.FormatMoney(500), view().buttonText)
+      click()
+      assert.equals("Buying 1 reagent for " .. ns.UI.FormatMoney(500), view().status:GetText())
+      W.fire("BAG_UPDATE_DELAYED")
+      assert.equals("Bought 1 reagent for " .. ns.UI.FormatMoney(500), view().status:GetText())
+    end)
+
     it("does not say bought when nothing reached the bags", function()
       required(1001, 7); sell(1001, 500, { stack = 5 }); deliver = false
       open(); click()

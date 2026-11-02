@@ -955,8 +955,9 @@ function Tab.TooltipLines(item)
       is_money(data.actualExtra) and tostring(data.actualExtra) or "?",
       is_money(data.expectedExtra) and string.format("%.1f", data.expectedExtra) or "?"))
     if count(data.multicraftReported) < count(data.crafts) then
-      lines[#lines + 1] = line((L["Multicraft reported for %d of %d crafts"]):format(count(data.multicraftReported),
-        count(data.crafts)), GOLD)
+      local reported = count(data.crafts) == 1 and L["Multicraft reported for %d of %d craft"]
+        or L["Multicraft reported for %d of %d crafts"]
+      lines[#lines + 1] = line(reported:format(count(data.multicraftReported), count(data.crafts)), GOLD)
     end
     lines[#lines + 1] = line((L["Resourcefulness: %s"]):format((resourcefulness_text(data))))
     if is_money(data.concentrationSpent) and is_money(data.concentrationPredicted) then

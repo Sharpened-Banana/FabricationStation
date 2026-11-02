@@ -1070,6 +1070,7 @@ L["Pays %s per Moxie"] = true   -- order row tooltip (%s is money): what the ord
 L["Refresh"] = true   -- side panel button on the crafting orders board: asks the server for the order list again
 L["Still waiting for the order list"] = true
 L["Nothing refreshed (%s)"] = true
+L["%d new matching order: press Search on the board to see it"] = true   -- side panel: a Refresh found exactly one new order
 L["%d new matching orders: press Search on the board to see them"] = true
 L["%s %s: Moxie is %d"] = true   -- character, profession, Moxie amount
 L["%s: %s is ready"] = true   -- cooldown alert: character, recipe name
@@ -1141,6 +1142,7 @@ L["Quality: %d of %d as predicted, %d above, %d below"] = true   -- Crafts row t
 L["Quality: no craft has both a prediction and a result yet"] = true
 L["The game's own prediction matched the result in %d"] = true   -- Crafts row tooltip (a count of crafts)
 L["Multicraft: %s extra items seen, %s expected"] = true   -- Crafts row tooltip (numbers, or ? when unknown)
+L["Multicraft reported for %d of %d craft"] = true   -- Crafts row tooltip: the same line when there is exactly one craft
 L["Multicraft reported for %d of %d crafts"] = true   -- Crafts row tooltip: some crafts left the game's number out
 L["Resourcefulness: %s"] = true   -- Crafts row tooltip (a proc count)
 L["Concentration: %s spent, %s predicted"] = true   -- Crafts row tooltip
@@ -1211,6 +1213,8 @@ L["This list has no recipes left."] = true   -- Queue tab, Lists page: the selec
 L["Queue plan"] = true   -- Planner tab, Concentration section: button that adds every row of the schedule to the queue
 L["Add every row's crafts to the Queue, with concentration"] = true   -- Planner tab: tooltip of Queue plan
 L["Queued 1 craft; %d were already queued"] = true   -- Planner tab: the same status when exactly one craft was added
+L["Queued 1 craft; %d was already queued"] = true   -- Planner tab: one craft added, exactly one row was already in the queue
+L["Queued %d crafts; %d was already queued"] = true   -- Planner tab: crafts added, exactly one row was already in the queue
 L["Queued %d crafts; %d were already queued"] = true   -- Planner tab: status after Queue plan; crafts added, crafts of rows that were already in the queue
 
 -- Intermediate crafts (phase 7, Task 14)
@@ -1259,9 +1263,12 @@ L["%s did not move; the next press tries another reagent"] = true   -- bank pane
 
 -- Merchant buy (phase 7, Task 17)
 L["%s: %d for %s"] = true   -- merchant panel: a reagent the queue needs, how many the button buys, and what they cost
+L["Buy %d reagent for %s"] = true   -- merchant panel: the same button when it buys exactly one item
 L["Buy %d reagents for %s"] = true   -- merchant panel: button that buys the queue's missing vendor reagents; how many items, the total price
 L["Not enough gold"] = true   -- merchant panel: tooltip and status when the total price is more than the gold on hand
+L["Buying %d reagent for %s"] = true   -- merchant panel status: the same, for exactly one item
 L["Buying %d reagents for %s"] = true   -- merchant panel status right after a click: how many items were asked for and their price
+L["Bought %d reagent for %s"] = true   -- merchant panel status: the same, for exactly one item
 L["Bought %d reagents for %s"] = true   -- merchant panel status: how many items reached the bags and what they cost
 L["No reagents have arrived in your bags yet"] = true   -- merchant panel status: the bags updated but none of the items asked for are in them
 L["Nothing to buy here"] = true   -- merchant panel status: this merchant sells nothing the queue still needs
