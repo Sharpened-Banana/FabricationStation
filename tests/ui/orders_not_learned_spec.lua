@@ -49,7 +49,7 @@ describe("OrdersPanel: a recipe you have not learned", function()
   local function w_short() return room_for(LY().CORE_WIDTH + LY().PROFIT_SLOT) - 20 end     -- everything fits
   local function w_medium() return room_for(LY().CORE_WIDTH + LY().PROFIT_SLOT) + 10 end    -- no room for the profit
   local function w_long() return room_for(LY().CORE_WIDTH) + 10 end                          -- no room for the core
-  local function w_huge() return room_for(LY().MINIMAL_WIDTH + LY().LEARN_SLOT) + 2 end     -- room for the × alone
+  local function w_huge() return room_for(LY().MINIMAL_WIDTH) + 2 end                       -- room for the × alone
   local function geometry(textWidth)
     return { left = 100, width = 760, itemRight = 400, textLeft = 122, textWidth = textWidth }
   end
@@ -93,6 +93,26 @@ describe("OrdersPanel: a recipe you have not learned", function()
     assert.is_false(c.conc:IsShown()); assert.is_false(c.profit:IsShown()); assert.is_false(c.score:IsShown())
   end)
 
+  it("puts the × in the same column on every row, where a queueable order has its +", function()
+    boot()
+    local xs = {}
+    for _, width in ipairs({ w_short(), w_medium(), w_long(), w_huge() }) do
+      local c = show(width)
+      local point, relativeTo, relativePoint, x = c.learn:GetPoint(1)
+      assert.same({ "RIGHT", c.strip, "RIGHT" }, { point, relativeTo, relativePoint })
+      assert.is_true(c.learn:IsShown())
+      xs[#xs + 1] = x
+    end
+    assert.same({ 0, 0, 0, 0 }, xs)
+  end)
+
+  it("keeps the risk count beside the × for as long as it fits, in its own column", function()
+    boot()
+    local c = show(room_for(LY().MINIMAL_WIDTH) - 2)
+    assert.equal("minimal", c.fit)
+    assert.is_true(c.risk:IsShown())
+  end)
+
   it("keeps the × alone when not even the risk count and the + fit beside it", function()
     -- Seen in game: "Thalassian Competitor's Mail Links" with its pips left too little for [×] [risk] [+], and the row
     -- showed nothing.
@@ -114,8 +134,6 @@ describe("OrdersPanel: a recipe you have not learned", function()
     local again = show(w_long())
     assert.equal("minimal", again.fit)
     assert.is_true(again.risk:IsShown())
-    local _, _, _, x = again.learn:GetPoint(1)
-    assert.is_true(x < 0)
   end)
 
   it("gives way only when not even the × fits", function()

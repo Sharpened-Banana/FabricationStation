@@ -1474,8 +1474,8 @@ verified here), and the whole row stays lit while the pointer is on them.
 
 P7-40. **The × on a long name.** Find a not-learned order with a long name and quality pips ("Thalassian Competitor's Mail
 Links"). Expected: the big red × shows right of the name, without covering it, and its tooltip says the recipe is not
-learned; the risk count drops out if there is no room for it. Widen the window: it comes back. (A not-learned order
-never has a +: it cannot be queued.)
+learned; the risk count drops out if there is no room for it. Widen the window: it comes back. Every × on the board is in
+one column, where other orders have their + (a not-learned order never has a +: it cannot be queued).
 
 ## Not done here
 

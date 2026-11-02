@@ -91,19 +91,19 @@ local CONC_SLOT = CONC_WIDTH + CELL_GAP
 local CORE_WIDTH = SCORE_CORE + CONC_SLOT
 local WARN_SLOT, PROFIT_SLOT = WARN_SIZE + CELL_GAP, CELL_WIDTH + CELL_GAP
 local STRIP_WIDTH = CORE_WIDTH + WARN_SLOT + PROFIT_SLOT
--- A recipe the character has not learned (the notLearned risk) shows a red cross in the score cell's slot, right of
--- [conc], in place of the profit and the score (both hidden). When the core has no room, the "minimal" tier keeps only
--- [risk] [+] and, for such a recipe, the cross beside them: MINIMAL_WIDTH (+ LEARN_SLOT). With no room for that either,
--- such a recipe keeps the cross alone ("cross": LEARN_WIDTH): it is the one thing the row must say.
+-- A recipe the character has not learned (the notLearned risk) shows a red cross in the [+] slot (such an order cannot be
+-- queued, so it never has a +), in the same column on every row, in place of the profit and the score (both hidden).
+-- When the core has no room, the "minimal" tier keeps only [risk] [+], or [risk] and the cross: MINIMAL_WIDTH. With no
+-- room for that either, such a recipe keeps the cross alone ("cross": LEARN_WIDTH): it is the one thing the row must say.
 -- (One table: the main chunk is at Lua 5.1's 200-locals limit.)
-local LEARN = { WIDTH = 24, SLOT = 24 + CELL_GAP, MINIMAL = ADD_SIZE + CELL_GAP + RISK_WIDTH, FONT_SIZE = 26 }
+local LEARN = { WIDTH = 24, MINIMAL = ADD_SIZE + CELL_GAP + RISK_WIDTH, FONT_SIZE = 26 }
 local PAD, GAP = 6, 4
 local ICON_SIZE, ICON_GAP, MORE_WIDTH = 20, 2, 24   -- row icons: 20 px, 2 px apart; the "+N" slot has a width of its own
 M.ICON_SIZE, M.ICON_GAP, M.MORE_WIDTH = ICON_SIZE, ICON_GAP, MORE_WIDTH   -- read-only (the specs derive their geometry)
 -- The strip's measures, read-only (the specs derive their geometry from them).
 M.LAYOUT = { CORE_WIDTH = CORE_WIDTH, SCORE_CORE = SCORE_CORE, CONC_SLOT = CONC_SLOT, WARN_SLOT = WARN_SLOT,
   PROFIT_SLOT = PROFIT_SLOT, STRIP_WIDTH = STRIP_WIDTH, PAD = PAD, GAP = GAP, CELL_GAP = CELL_GAP, FIXED_COLUMNS = FIXED_COLUMNS,
-  MINIMAL_WIDTH = LEARN.MINIMAL, LEARN_SLOT = LEARN.SLOT, LEARN_WIDTH = LEARN.WIDTH }
+  MINIMAL_WIDTH = LEARN.MINIMAL, LEARN_WIDTH = LEARN.WIDTH }
 local TOOLTIP_ICON = 14                               -- the inline icon in a tooltip line (keeps the line height)
 local UNKNOWN_ICON = 134400                           -- the question mark, for an icon the client cannot give
 -- The Reagents cover's padding inside Blizzard's cell.
@@ -1089,10 +1089,10 @@ local function new_cells(row)
   c.conc:SetScript("OnEnter", function() M.Guard(ROWS, conc_tooltip, c) end)
   c.conc:SetScript("OnLeave", function() M.Guard(ROWS, hide_tooltip) end)
 
-  -- The cross of a recipe the character has not learned, in the score cell's slot (right-aligned beside [risk]).
+  -- The cross of a recipe the character has not learned, right-aligned in the [+] slot (one column on every row).
   c.learn = CreateFrame("Frame", nil, strip)
   c.learn:SetSize(LEARN.WIDTH, STRIP_HEIGHT)
-  c.learn:SetPoint("RIGHT", strip, "RIGHT", -(ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP), 0)
+  c.learn:SetPoint("RIGHT", strip, "RIGHT", 0, 0)
   c.learn:EnableMouse(true)
   -- A large cross (the user asked for it to be much bigger than the cell text): a big outlined font when the client
   -- takes SetFont, else the largest standard font object.
@@ -1438,7 +1438,7 @@ end
 -- Fits a row's strip to Blizzard's item name as it is now (see fit) and shows the parts that have room.
 function apply_fit(c, row)
   -- The minimal tier exists for a row with something to say: its risk / info cell, or a not-learned recipe's cross.
-  local minimal = (c.riskShown or c.notLearned) and LEARN.MINIMAL + (c.notLearned and LEARN.SLOT or 0) or nil
+  local minimal = (c.riskShown or c.notLearned) and LEARN.MINIMAL or nil
   c.fit = fit(c, row, c.blocked, minimal, c.notLearned and LEARN.WIDTH or nil)
   local core = c.fit == "all" or c.fit == "noProfit"
   c.warnShown = c.blocked == true and core
@@ -1452,14 +1452,11 @@ function apply_fit(c, row)
   -- The score cell repeats the profit when no concentration is charged: blank it (it keeps its slot) while the profit
   -- cell is shown beside it with the same text. Otherwise it keeps its text, the only number left once the profit gives way.
   c.score:SetText(c.fit == "all" and c.scoreText == c.profitText and "" or c.scoreText)
-  -- A not-learned recipe's cross takes the score cell's slot, in every tier that shows a strip.
+  -- A not-learned recipe has no score, and its cross shows in every tier that shows a strip.
   set_shown(c.score, core and not c.notLearned)
   set_shown(c.learn, c.notLearned == true and c.fit ~= "none")
-  local crossAlone = c.fit == "cross"
-  c.learn:ClearAllPoints()
-  c.learn:SetPoint("RIGHT", c.strip, "RIGHT", crossAlone and 0 or -(ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP), 0)
-  set_shown(c.risk, c.riskShown and not crossAlone)
-  set_shown(c.add, c.addShown and not crossAlone)
+  set_shown(c.risk, c.riskShown and c.fit ~= "cross")
+  set_shown(c.add, c.addShown and not c.notLearned)
   set_shown(c.strip, c.fit ~= "none")
   render_tip_cover(c, row)
   render_cover(c, row)
