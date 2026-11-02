@@ -79,7 +79,7 @@ FabricationStationDB = {
     queue = { entries = { {recipeID, quantity, charKey, targetQuality, useConcentration} } , restock = { [itemID] = target } },
     customers = { [nameRealm] = {orders = {...}, tips, notes, tags, linkedTo} },
     ledger = { entries = { {time, type, itemID, amount, charKey, ref} } },
-    ordersSnapshot = { time, orders = {...} },
+    ordersSnapshot = { time, orders = {...} },  -- phase 7: replaced by orderBoards[charKey] (migration 3)
     diagnostics = { mismatches = {...} },
     captures = { ... },  -- /fs capture fixtures
   },

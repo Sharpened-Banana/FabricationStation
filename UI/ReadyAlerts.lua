@@ -20,12 +20,15 @@ local L = ns.L
 -- until it resets. A cooldown that is ready at the first check of the session is remembered without an alert (only a
 -- cooldown that comes off alerts, and one that is ready while the alert is off is never announced later).
 --
--- Timing: the first PLAYER_ENTERING_WORLD that is not a /reload schedules the login check 12 s later (Scanner's login
--- data is in by then; a /reload, or a module switched on later, has no login check: its first check only records what
--- is true as the baseline, so nothing is announced twice); it alerts the concentration and Moxie states already true, at most 5 lines and then "+N more",
--- and skips concentration while the Planner is on with capWarnChat (the Planner announces those). No other check
--- runs before it. After every check one Debounce key times the next one for the soonest pool that fills or cooldown
--- that comes off (5 s to 6 h); data and alt changes ask for a check 1 s later. All timers are Debounce keys,
+-- Timing: the first loading screen (PLAYER_ENTERING_WORLD) this module sees that is not a /reload schedules the login
+-- check 12 s later (Scanner's login data is in by then). That is the first loading screen of the session when the
+-- module is on from the start, and the next one after it when the module is turned on later in the session, so a
+-- module turned on later gets a login check too. A /reload has none, and neither has a module that is turned off and on
+-- again after it has seen that loading screen: its first check only records what is true as the baseline, so nothing
+-- is announced twice. The login check alerts the concentration and Moxie states already true, at most 5 lines and then
+-- "+N more", and skips concentration while the Planner is on with capWarnChat (the Planner announces those). No other
+-- check runs before it. After every check one Debounce key times the next one for the soonest pool that fills or
+-- cooldown that comes off (5 s to 6 h); data and alt changes ask for a check 1 s later. All timers are Debounce keys,
 -- cancelled in OnDisable; no ticker. Every handler runs through ns.FS:Wrap("ReadyAlerts", ...), so a failure turns
 -- off only this module. Nothing is written while the saved data is from a newer version (Settings() is a
 -- session-only copy then).

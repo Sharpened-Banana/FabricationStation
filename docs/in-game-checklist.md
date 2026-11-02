@@ -376,8 +376,10 @@ P2-16. **Guild orders and the public claim limit.** Note `/dump C_CraftingOrders
     claim and fulfil a guild order, then dump it again. Report whether `claimsRemaining` dropped (the addon treats
     only public orders as using a claim).
 P2-17. **Snapshot count.** `/reload`, open the orders page, visit the Personal and Patron tabs, then run
-    `/run local n=0 for _ in pairs(FabricationStationDB.global.ordersSnapshot.orders) do n=n+1 end print(n)`.
-    Expected: the number of orders you saw on those tabs (plus any public orders you drilled into).
+    `/run local b=FabricationStationDB.global.orderBoards[UnitName("player").."-"..GetNormalizedRealmName()] local n=0 for _ in pairs(b and b.orders or {}) do n=n+1 end print(n)`.
+    (Since phase 7 each character keeps its own board in `orderBoards[<Name-Realm>]`; the old single `ordersSnapshot`
+    is gone after the first login of the update.) Expected: the number of orders you saw on those tabs (plus any
+    public orders you drilled into).
 P2-18. **Personal counts at login.** Log in with a personal order waiting. Run
     `/dump FabricationStationDB.global.ordersState` right after login (before visiting a table). Expected: a
     `personalCounts` entry for that profession, which shows `CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS` fired at
@@ -1034,8 +1036,10 @@ reads "+N" and stays inside the panel. A long item name no longer
 takes room from the reward icons (they are in another column); it only costs the profit cell, then the strip. Dimmed rows (orders your filters hide) show both faded like
 the cells.
 
-P5-12. **The tooltips and the mouse.** Hover the reward icons: a "Rewards" header with "<icon> <name> x<count>" lines.
-Hover the Reagents panel: a "Reagents to supply" header with every reagent you supply, owned ones included, as
+P5-12. **The tooltips and the mouse.** Hover the Commission panel (the amount and the reward icons): "Tip: ...",
+"Consortium cut: ...", "Commission: ...", then a "Rewards" header with "<icon> <name> x<count>" lines, then a "Pays ...
+per knowledge point" or "per Moxie" line where the order has one (the row's info cell shows the same rewards). Hover the
+Reagents panel: a "Reagents to supply" header with every reagent you supply, owned ones included, as
 "<name>: need N, have M" (just "need N" when your count is unknown; red while M < N), or "The customer provides every reagent" over the check, or "Reagents unknown for this order"
 over the "?". An item the client has not cached reads "item:<id>" and becomes its name within a moment while the tooltip
 stays open (if not, note whether `/dump C_Item.RequestLoadItemDataByID` exists). Clicking an order row where the icons or
@@ -1047,9 +1051,10 @@ must go. Put a reagent in your bags (or use
 one up) with the list open: the red/white counts update within a moment.
 
 P5-13. **The icons setting.** Settings > Orders & Ledger > Crafting-orders window: "Show reward and reagent icons on order
-rows" is on by default. Turn it off: the reward icons and the Reagents panel disappear from the rows on screen at once
-(the cells stay, and Blizzard's "Some" / "None" / "All" shows again) and stay off after `/reload`; turn it on again and
-they return.
+rows" is on by default. Turn it off: the Commission panel (the amount and the reward icons) and the Reagents panel
+disappear from the rows on screen at once (the cells stay, and Blizzard's gold amount in the Commission column and its
+"Some" / "None" / "All" in the Reagents column show again) and stay off after `/reload`; turn it on again and they
+return.
 
 P5-14. **The concentration cell on the order rows.** In the strip of cells on each order row there is now a small icon
 and a number between the profit and the score: the concentration the order needs to reach its minimum quality. White when
@@ -1159,7 +1164,7 @@ Expected: Auctionator has a list "FabricationStation Orders" with each missing r
 "FabricationStation" list is unchanged. A ticked recraft order is counted on the status line ("1 order skipped"), and at
 the 516 px window width the tick boxes stay while Character, Customer and Type are hidden.
 
-P7-6. **Taskbar flash.** In Settings > Alerts turn on "Flash the taskbar on new orders", alt-tab out with the crafting
+P7-6. **Taskbar flash.** In Settings > Ready alerts turn on "Flash the taskbar on new orders", alt-tab out with the crafting
 order board open on the public tab, and have a new public order appear (press Refresh or Search). Expected: the WoW
 icon flashes. `/run print(type(FlashClientIcon))` prints `function`.
 
@@ -1177,7 +1182,7 @@ Also: press Refresh while Blizzard's spinner is showing (right after Search or a
 the list is there. And after a Refresh on a list longer than one page, scroll to the bottom: rows must neither repeat
 nor go missing, the spinner must clear, and no "new matching orders" line may appear for orders you had already seen.
 
-P7-8. **Ready alerts.** In Settings > Alerts turn on concentration, Moxie (threshold just above your amount) and
+P7-8. **Ready alerts.** In Settings > Ready alerts turn on concentration, Moxie (threshold just above your amount) and
 cooldown alerts. Expected: one chat line (and a toast with OrderAlert on) when concentration fills during play, when
 Moxie reaches the threshold, and when a cooldown comes off; none repeat until the state resets, and a /reload with a
 full pool or Moxie above the threshold says nothing. At login, 12 s after
@@ -1250,7 +1255,7 @@ reported, never loosened. The Ledger tab's Crafts page (the Crafts button above 
 recipe: "Quality: 3 of 4 as predicted", "Multicraft: +2 (expected +1.4)" (a "?" when the game left a number out, never 0),
 Resourcefulness procs and Concentration spent against predicted. Check it against what you made.
 
-P7-18b. **Cheaper route to an order's minimum quality.** On the Orders page's Patron tab, find orders with a minimum
+P7-30. **Cheaper route to an order's minimum quality.** On the Orders page's Patron tab, find orders with a minimum
 quality (the gold pip) that the game says need concentration (the user's: Flask of the Shattered Sun, Potion of
 Devoured Dreams, Composite Flora). Hover each row's concentration cell, then its net and score. Expected: each shows
 either the concentration it will spend (white, or red when you have too little; the score is then below the net) or,
@@ -1261,7 +1266,7 @@ score cell is blank because it equals the net). Before your best gold per concen
 Queue: it crafts without concentration. Compare A with the reagent prices in Auctionator: A should be the higher-quality
 reagents' cost.
 
-P7-18c. **Orders for recipes you have not learned.** On the Orders page, find an order (a patron order is easiest) for a
+P7-31. **Orders for recipes you have not learned.** On the Orders page, find an order (a patron order is easiest) for a
 recipe your character has not learned, whose recipe the game has shown you before (open that profession's recipe list
 once so its details are cached). Expected: its row's risk count is red and the risk tooltip lists a red "Recipe not
 learned" line followed by a grey source line as the game words it (e.g. "Vendor: Naynar Zone: Harandar"); the score
@@ -1270,7 +1275,7 @@ dims or hides such orders; Claim Best Order never picks one (Orders options > cl
 order for a recipe the game has not told the addon about yet shows no red flag. If the source line is missing for a
 recipe you know the game gives a source for, report the recipe name.
 
-P7-18d. **Profit this session.** Open the Ledger tab and press Crafts. Expected: the first line above the recipe rows
+P7-32. **Profit this session.** Open the Ledger tab and press Crafts. Expected: the first line above the recipe rows
 reads "This session: N crafts, profit X" (or "no profit recorded yet" before your first sale or commission since you
 logged in). Craft something, then collect an order commission or an auction sale from the mail and keep the tab open:
 within a second the line should count the craft and add the sale's profit (income minus cost). It should count every
@@ -1285,7 +1290,7 @@ Expected: the side panel's "Best optionals" (Task 12) matches what the game show
 the optional reagent effect amounts in `OptionalReagents` are the units `Stats.ApplyOptionals` expects (skill points;
 ratings for Multicraft, Resourcefulness and Ingenuity).
 
-P7-19. **The Commission cover.** On the crafting-orders board (Patron tab, and a Public tab with tips): in each row the
+P7-33. **The Commission cover.** On the crafting-orders board (Patron tab, and a Public tab with tips): in each row the
 Commission column shows a dark panel instead of Blizzard's gold, with the compact commission at its left ("45g") and, on
 patron orders, the reward icons after it. Expected: no gold digits show through; the amount equals the tip less the
 consortium's cut; "?" when the commission is unknown. Hover the panel: "Tip: ...", "Consortium cut: ...",
@@ -1294,7 +1299,7 @@ the order has one. Tinted rows (VIP, repeat, blocked) tint the panel too, hoveri
 panel is darker with fainter icons. Turn off Settings > Orders & Ledger > "Show reward and reagent icons on order rows":
 both panels go and Blizzard's Commission and Reagents columns show as normal.
 
-P7-19b. **Header gold: pocket, session, expansion.** Open the main window. Expected: the centre of the header reads
+P7-34. **Header gold: pocket, session, expansion.** Open the main window. Expected: the centre of the header reads
 "<gold in your pocket> · session +412g · Midnight profit 1,234g", the session part being your gold now minus your gold when you
 logged in (or reloaded), signed ("+0g" before anything changed), and the last part the crafting profit of every
 character this expansion (the Ledger's own profit: sales and commissions minus their known costs). Earn or spend gold
@@ -1308,7 +1313,7 @@ name should be the game's own ("Midnight"). Make the window as narrow as it goes
 expansion part goes first, then the session part; the left (character) and right (prices) texts stay whole, and the
 tooltip still shows everything. Drag the window by the centre of the header: it still moves.
 
-P7-19c. **Dashboard: top crafts by expansion.** Open the Dashboard with prices scanned and at least two expansions' recipes
+P7-35. **Dashboard: top crafts by expansion.** Open the Dashboard with prices scanned and at least two expansions' recipes
 on your characters. Expected: a small button in the corner of the "Top crafts by profit" widget reads "All expansions"
 (the title is cut short next to it rather than overlapping; at the narrowest window, a 516 px content area, nothing
 overlaps and the button text is cut with "..." if the name is long). Hover it: the widget title, "Show top crafts from
@@ -1359,7 +1364,7 @@ Links): the row shows a red "×" where the profit goes, with the red risk count 
 room for the other cells; hover the "×": "You have not learned this recipe", then where to get it. Craft Next on a
 socket recipe crafts without a socket (none is put in, none is used).
 
-P7-23b. **Where to get reagents.** (Numbered 23b because the socket-slot check above already took 23.) Queue a craft that
+P7-36. **Where to get reagents.** Queue a craft that
 is short of three reagents: one sitting in an alt's bags (that alt seen in this session), one that a character you have
 can craft (and Intermediates is on), and one that only the auction house sells. Open Queue > Gather. Expected: one row
 per missing reagent, the name and how many are needed, and under it the sources in this order: the alt row reads
@@ -1438,6 +1443,11 @@ count as the hardware event the craft and the claim need (an "action blocked" or
 either one means it does not, and the buttons need a real mouse click). Also report: with Blizzard's "fill this order
 with your own reagents" dialog open, does pressing Enter confirm it by itself? FabricationStation has no key for it (a key
 would have to click or call a Blizzard frame, which the addon never does).
+
+P7-29. **Phase 7 smoke.** On two characters: open both boards, price a patron order, shop two selected orders, post and
+cancel an auction, craft a Multicraft recipe, queue a list, queue sub-crafts, retrieve at the bank, buy at a vendor,
+reply to a chat request with the key. Expected: no Lua error (`/console scriptErrors 1`), nothing in Settings >
+Diagnostics, and each step does what its P7 line says.
 
 ## Not done here
 

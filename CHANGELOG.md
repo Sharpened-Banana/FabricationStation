@@ -17,7 +17,7 @@ All notable changes to FabricationStation are listed here. The format follows
 
 ## [Unreleased]
 
-First public release candidate. The addon is feature-complete for phases 1 to 6 and passes its automated tests, but
+First public release candidate. The addon is feature-complete for phases 1 to 7 and passes its automated tests, but
 it has not yet been verified in the game client; see `docs/in-game-checklist.md` for the checks still open.
 
 ### Added
@@ -68,9 +68,9 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     finishes it); hiding it any other way keeps it for later, and guild sharing says when it waits for the guide.
     Its step counter sits between the navigation buttons, and a cut-off line in the scan list shows its full text in
     a tooltip.
-  - Crafting-order rows show the commission and a patron order's rewards as icons in place of the Commission
-    column's gold, and the reagents you still lack in the Reagents column, or a green check when you have them all
-    or the customer provides them.
+  - Crafting-order rows cover the Commission column with a panel that shows the compact commission and, on a
+    patron order, its reward icons, and the Reagents column with the reagents you still lack, or a green check when
+    you have them all or the customer provides them.
   - Crafting-order rows have a concentration cell: the concentration the order needs, in red when you have too
     little, and a red cross when the quality it asks for cannot be reached.
   - The score cell on a crafting-order row is left blank when it would only repeat the profit beside it (no
@@ -78,3 +78,42 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
   - Your concentration is shown above the order list, on a black backdrop.
   - A setting turns the icons on the order rows off (Settings > Orders & Ledger).
   - Display text is built from whole-sentence keys for translators.
+- Phase 7, competitive features:
+  - Orders across characters: each character keeps its own last order board (your saved data is moved over on the
+    first login), so alts with the same profession no longer overwrite each other. The Orders tab lists every
+    character's orders in one list, with the age of each board, expiry, sorting and filters. Patron rewards are priced
+    (knowledge points, Moxie and reagents by value, any other reward at a value you give it), an order that costs
+    too much per knowledge point or Moxie gets a risk, and the orders you tick become one Auctionator shopping list
+    of their missing reagents.
+  - Ready alerts: off by default and only in the game. Concentration full, Moxie over an amount you choose, a
+    cooldown ready, and a taskbar flash on new orders that match your filters. A Refresh button on the order board
+    asks for the board once per click; the board never refreshes on a timer.
+  - Sales and stock: your own auction posts, cancels, expiries and sales are logged from your own events and mail,
+    with a sale rate and last sale price per item in a Ledger view and in item tooltips. Restock targets get a
+    minimum profit per craft and count your own auction listings and mail as held.
+  - Craft log: every craft's real result (quality, Multicraft extra items, Resourcefulness returns, concentration
+    spent) next to the prediction, per recipe over time, and an exporter that turns logged crafts and `/fs capture`
+    records into test fixtures.
+  - Better crafting choices: a finishing and optional reagent optimizer whose pick shows in the side panel and is
+    used by Craft Next; saved craft lists with rules, queued with one click, and a Queue plan button for the Planner's
+    concentration schedule; for reagents you can craft, craft cost against buy price, your choice per reagent, and
+    the sub-crafts queued ahead of the craft that needs them.
+  - Getting reagents: a gathering plan per missing reagent (alts' bags and banks, mail, crafting it, vendor, auction
+    house). At the bank a button moves what the queue still needs from the bank or warband bank into your bags, one
+    move per click; at a merchant a button buys the queue's vendor reagents, one click per batch. Nothing moves or is
+    bought when a window opens.
+  - Chat requests and key bindings: chat requests are kept in a list across characters with reply status, whisper
+    history and auto-dismiss, and replying fills the chat box and sends nothing. Key bindings for Craft Next, Claim
+    Best Order, opening FabricationStation and replying to the latest request, each a key press that does what its
+    button does.
+  - Added from player feedback during phase 7:
+    - An order compares the reagent route with the concentration route to its minimum quality and takes the cheaper.
+    - Every reagent the patron supplies counts as provided.
+    - A big red cross marks orders for recipes you have not learned.
+    - The Ledger's Crafts page shows the profit made this session.
+    - The Commission column shows the compact amount plus the reward item icons.
+    - The header shows gold in your pocket, gold this session and crafting profit this expansion.
+    - The Dashboard's "Top crafts by profit" has an expansion filter.
+    - The empty socket slot is no longer listed as a missing reagent.
+    - Orders with a long item name keep a minimal set of cells instead of losing all of them.
+    - Fixed: the SaleLog error after winning an auction.

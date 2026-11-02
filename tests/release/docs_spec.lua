@@ -89,6 +89,30 @@ describe("public docs and release metadata", function()
     end
   end)
 
+  -- Task 20: the phase 7 features are in the CHANGELOG and the README, and the README keeps the no-automation rule.
+  it("lists the phase 7 features in the CHANGELOG and the README", function()
+    local c, r = read("CHANGELOG.md"):gsub("%s+", " "), read("README.md"):gsub("%s+", " ")
+    assert.truthy(c:find("Phase 7, competitive features", 1, true))
+    for _, s in ipairs({ "Orders across characters", "Ready alerts", "Sales and stock", "Craft log",
+      "Better crafting choices", "Getting reagents", "Chat requests and key bindings",
+      "compares the reagent route with the concentration route", "Every reagent the patron supplies counts as provided",
+      "big red cross", "profit made this session", "compact amount plus the reward item icons",
+      "gold in your pocket, gold this session and crafting profit this expansion", "expansion filter",
+      "empty socket slot", "long item name", "SaleLog error after winning an auction" }) do
+      assert.truthy(c:find(s, 1, true), "CHANGELOG: " .. s)
+    end
+    for _, s in ipairs({ "Getting reagents", "Requests tab", "Key bindings", "compares the reagent route",
+      "big red cross", "expansion filter", "Ready alerts" }) do
+      assert.truthy(r:find(s, 1, true), "README: " .. s)
+    end
+  end)
+
+  it("keeps the never-automate rule in the README and adds the board timer", function()
+    local r = read("README.md"):gsub("%s+", " ")
+    assert.truthy(r:find("never crafts, claims, posts, buys, sends chat or moves items for you", 1, true))
+    assert.truthy(r:find("never refreshes the order board on a timer", 1, true))
+  end)
+
   it("says Auctionator is optional and where prices come from", function()
     local r = read("README.md")
     assert.truthy(r:find("Auctionator", 1, true))

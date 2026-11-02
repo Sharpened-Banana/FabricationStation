@@ -195,6 +195,21 @@ describe("ReadyAlerts", function()
     end)
   end)
 
+  it("runs the login check at the next loading screen when the module is turned on later in the session", function()
+    ns.FS:SetModuleEnabled("ReadyAlerts", false)
+    W.fire("PLAYER_ENTERING_WORLD", true, false)     -- the session's first loading screen, with the module off
+    ns.FS:SetModuleEnabled("ReadyAlerts", true)
+    RA:Settings().concentrationFull = true
+    W.printed = {}
+    local logins = 0
+    local check = RA.Check
+    RA.Check = function(self, now, atLogin) if atLogin then logins = logins + 1 end return check(self, now, atLogin) end
+    W.fire("PLAYER_ENTERING_WORLD", false, false)    -- the next loading screen
+    W.advance(30)
+    assert.equal(1, logins)
+    assert.same({ prefixed("Bren-Silvermoon Herbalism: concentration is full") }, W.printed)
+  end)
+
   describe("at login", function()
     local function login() W.fire("PLAYER_ENTERING_WORLD", true, false); W.advance(12) end
 

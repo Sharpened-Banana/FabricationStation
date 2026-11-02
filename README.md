@@ -20,19 +20,49 @@ come out at, how much concentration it takes, what it earns, and what your other
 - Scans every profession, recipe and reagent of each character, so it can rank recipes and answer questions about
   characters that are not logged in. Data for the game's crafting systems is generated for client build 12.1.5.70688.
 - A craft queue with restock targets. It exports the missing reagents as an Auctionator shopping list and has a
-  Craft Next button; it crafts only when you click it.
+  Craft Next button; it crafts only when you click it. Restock targets can need a minimum profit per craft and count
+  your own auction listings and mail as held.
+- Finishing and optional reagents: the side panel shows the best pick, and Craft Next uses it.
+- Saved craft lists with rules (minimum profit, minimum quality, concentration use), queued with one click, and a
+  Queue plan button for the Planner's concentration schedule.
+- For reagents you can craft yourself: craft cost against buy price, your choice per reagent, and the sub-crafts
+  queued ahead of the craft that needs them.
+- A craft log of every craft's real result (quality, Multicraft extras, Resourcefulness returns, concentration spent)
+  next to the prediction, with an exporter that turns logged crafts into test fixtures.
 
 **Crafting orders**
 
 - Scores the crafting orders on the board and values NPC patron rewards. It adds profit, concentration needed, score
-  and risk cells to the board's rows, the commission and a patron order's rewards as icons in place of the Commission
-  column's gold (the rewards are in the row's info tooltip too), the reagents you still lack in place of the Reagents
-  column's word (a green check when you have them all or the customer provides them; Settings > Orders & Ledger turns
-  the icons off), a side panel with risk filters and a Claim Best Order button (it claims only when you click), your
-  concentration above the order list, and a warning line for blocked or VIP customers. It plays a sound and shows a
-  toast when a personal order arrives.
+  and risk cells to the board's rows, a Commission cover with the compact commission and a patron order's reward
+  icons in place of the column's gold (the rewards are in the row's info tooltip too), the reagents you still lack in
+  place of the Reagents column's word (a green check when you have them all or the customer provides them; Settings >
+  Orders & Ledger turns the covers off), a side panel with risk filters and a Claim Best Order button (it claims only
+  when you click), your concentration above the order list, and a warning line for blocked or VIP customers. It plays
+  a sound and shows a toast when a personal order arrives.
+- Each character keeps its own last order board, and the Orders tab lists every character's orders in one list with
+  each board's age, expiry, sorting and filters. Patron rewards are priced (knowledge points, Moxie and reagents by
+  value, other rewards at a value you set), an order that costs too much per knowledge point or Moxie gets a risk, and
+  the orders you tick become one Auctionator shopping list of their missing reagents.
+- An order compares the reagent route with the concentration route to its minimum quality and takes the cheaper one.
+  Every reagent the patron supplies counts as provided, and the empty socket slot is not shown as a missing reagent.
+- A big red cross marks orders for recipes you have not learned. An order with a long item name keeps a minimal set
+  of cells.
+- Optional, off by default and only in the game: ready alerts for full concentration, Moxie over an amount, a cooldown
+  that is ready, and a taskbar flash on new orders that match your filters. A Refresh button on the board asks for it
+  once per click.
 - A Customers tab (notes, tags, alt links, CSV export) built from the orders you fulfil, and a Ledger tab for income,
-  costs and profit.
+  costs and profit. The Ledger's Crafts page shows the profit made this session, and an Auctions page shows your own
+  posts, cancels, expiries and sales (from your own events and mail), with a sale rate and last sale price per item
+  in item tooltips.
+- The header shows gold in your pocket, gold this session and crafting profit this expansion. The Dashboard's "Top
+  crafts by profit" has an expansion filter.
+
+**Getting reagents**
+
+- A gathering plan per missing reagent: alts' bags and banks, mail, crafting it, vendor or auction house.
+- At the bank, a button moves exactly what the queue still needs from the bank or warband bank into your bags, one
+  move per click. At a merchant, a button buys the queue's vendor reagents, one click per batch. Nothing moves or is
+  bought when a window opens.
 
 **Characters and planning**
 
@@ -46,6 +76,10 @@ come out at, how much concentration it takes, what it earns, and what your other
 - Guild sharing: guildmates who run FabricationStation see what your characters can craft, and you see theirs, in a
   Guild tab, in item tooltips and in the profession window. See [Guild sync and privacy](#guild-sync-and-privacy).
 - A chat scanner that points out public requests you could fill. See [Chat scanner](#chat-scanner).
+- A Requests tab keeps those chat requests across characters, with reply status, whisper history and auto-dismiss.
+  Replying fills the chat box and sends nothing.
+- Key bindings (Key Bindings > AddOns > FabricationStation) for Craft Next, Claim Best Order, opening
+  FabricationStation and replying to the latest request. Each key press does what its button does, once.
 - A first-run setup guide.
 
 ## Requirements
@@ -90,8 +124,14 @@ come out at, how much concentration it takes, what it earns, and what your other
 | `/fs help` | List the commands. |
 
 Tab ids: `dashboard`, `recipes`, `queue`, `orders`, `customers`, `ledger`, `characters`, `planner`, `guild`,
-`settings`. Settings sections: General, Prices, Crafting, Orders & Ledger, Characters, Planner, Guild, Chat requests,
-Modules, Diagnostics.
+`requests`, `settings`. Settings sections: General, Prices, Crafting, Orders & Ledger, Characters, Planner, Ready
+alerts, Guild, Chat requests, Request inbox, Modules, Diagnostics.
+
+## What it never does
+
+FabricationStation never crafts, claims, posts, buys, sends chat or moves items for you: each of those happens only
+when you click a button or press a key bound to one, and one click or key press does one thing. It never refreshes the
+order board on a timer. It sends no notifications outside the game.
 
 ## Guild sync and privacy
 
