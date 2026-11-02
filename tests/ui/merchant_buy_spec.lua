@@ -7,10 +7,15 @@
 describe("MerchantBuy", function()
   local ns, W, world, MB, Q
   local ME, ALT = "Main-Realm", "Alt-Realm"
-  local listings, gold, deliver, requiredItems, pending, tooltip
+  local listings, gold, deliver, requiredItems, pending, tooltip, bags
 
   local function install_merchant()
-    listings, gold, deliver = {}, 1000000, true
+    listings, gold, deliver, bags = {}, 1000000, true, {}
+    -- The game's own count: the bags below (not world.items, which the Scanner's bag scan rewrites from the empty
+    -- containers) plus the warband bank when asked.
+    C_Item.GetItemCount = function(itemID, _, _, _, includeAccountBank)
+      return (bags[itemID] or 0) + (includeAccountBank and (world.warband[itemID] or 0) or 0)
+    end
     _G.GetMerchantNumItems = function() return #listings end
     _G.GetMerchantItemID = function(index) return listings[index] and listings[index].itemID end
     C_MerchantFrame.GetItemInfo = function(index)
@@ -25,11 +30,7 @@ describe("MerchantBuy", function()
     _G.BuyMerchantItem = function(index, quantity)
       record(index, quantity)
       local l = listings[index]
-      if deliver and l then
-        local held = world.items[ME][l.itemID] or { bags = 0, bank = 0, reagentBank = 0 }
-        held.bags = held.bags + quantity
-        world.items[ME][l.itemID] = held
-      end
+      if deliver and l then bags[l.itemID] = (bags[l.itemID] or 0) + quantity end
     end
   end
 
@@ -47,7 +48,7 @@ describe("MerchantBuy", function()
     world.fakeEvaluate(9001, { allocation = requiredItems, reagentCost = 100, flags = {} })
     if #Q:GetEntries() == 0 then Q:Add({ recipeID = 9001, quantity = 1, charKey = ME }) end
   end
-  local function held(itemID, n) world.items[ME][itemID] = { bags = n, bank = 0, reagentBank = 0 } end
+  local function held(itemID, n) bags[itemID] = n end
   local function bought_total(itemID)
     local n = 0
     for _, call in ipairs(W.bought) do
@@ -245,6 +246,15 @@ describe("MerchantBuy", function()
       assert.same({ status = "nothing" }, MB:Buy())
     end)
 
+    it("shows what arrived once the lock is released, by bag update or by timeout", function()
+      required(1001, 6); sell(1001, 10, { maxStack = 3 }); deliver = false
+      open(); click()
+      held(1001, 3); W.fire("BAG_UPDATE_DELAYED")
+      assert.is_false(view().buttonEnabled)            -- still locked
+      held(1001, 6); W.fire("BAG_UPDATE_DELAYED")
+      assert.equals("Bought 6 reagents for " .. ns.UI.FormatMoney(60), view().status:GetText())
+    end)
+
     it("buys only the shortfall, over repeated clicks", function()
       required(1001, 12); held(1001, 4); sell(1001, 3, { maxStack = 5 })
       open()
@@ -276,16 +286,64 @@ describe("MerchantBuy", function()
       assert.same({ status = "inFlight" }, MB:Buy())
       assert.equals(1, #W.bought)
       assert.is_true(pending["merchantBuy.flight"])
+      held(1001, 7)                                   -- everything asked for has arrived
       W.fire("BAG_UPDATE_DELAYED")
       assert.is_nil(pending["merchantBuy.flight"])
-      assert.equals("bought", MB:Buy().status)
+      assert.same({ status = "nothing" }, MB:Buy())    -- and the shortfall is met
     end)
 
-    it("leaves the in-flight state after 3 s", function()
+    it("keeps the lock while the bags update without the items asked for", function()
+      required(1001, 7); sell(1001, 5); deliver = false
+      open(); MB:Buy()
+      W.fire("BAG_UPDATE_DELAYED")                     -- some other bag change
+      assert.same({ status = "inFlight" }, MB:Buy())
+      assert.equals(1, #W.bought)
+    end)
+
+    it("keeps the lock until purchases that arrive across two bag updates have both landed", function()
+      required(1001, 10); sell(1001, 5, { maxStack = 5 }); required(2002, 4); sell(2002, 5); deliver = false
+      open()
+      assert.same({ status = "bought", count = 14, cost = 70 }, MB:Buy())
+      assert.equals(3, #W.bought)
+      held(1001, 5)
+      W.fire("BAG_UPDATE_DELAYED")                     -- the first call has landed
+      assert.same({ status = "inFlight" }, MB:Buy())
+      held(1001, 10)
+      W.fire("BAG_UPDATE_DELAYED")                     -- the second call, but not the other reagent
+      assert.same({ status = "inFlight" }, MB:Buy())
+      held(2002, 4)
+      W.fire("BAG_UPDATE_DELAYED")                     -- all of it
+      assert.is_nil(pending["merchantBuy.flight"])
+      assert.equals(3, #W.bought)
+      assert.same({ status = "nothing" }, MB:Buy())
+      assert.equals(3, #W.bought)
+    end)
+
+    it("never buys what is still arriving a second time", function()
+      required(1001, 10); sell(1001, 5, { maxStack = 5 }); deliver = false
+      open(); click()
+      held(1001, 5); W.fire("BAG_UPDATE_DELAYED")
+      click()
+      assert.equals(2, #W.bought)
+      assert.equals(10, bought_total(1001))
+    end)
+
+    it("leaves the in-flight state after 3 s, even when nothing arrived", function()
       required(1001, 7); sell(1001, 5); deliver = false
       open(); MB:Buy()
       W.advance(2.9); assert.equals("inFlight", MB:Buy().status)
       W.advance(0.2); assert.equals("bought", MB:Buy().status)
+    end)
+
+    it("releases the lock at 3 s after a partial arrival", function()
+      required(1001, 10); sell(1001, 5, { maxStack = 5 }); deliver = false
+      open(); MB:Buy()
+      held(1001, 5); W.fire("BAG_UPDATE_DELAYED")
+      assert.equals("inFlight", MB:Buy().status)
+      W.advance(3.1)
+      assert.is_nil(pending["merchantBuy.flight"])
+      assert.equals("bought", MB:Buy().status)         -- the shortfall is now 5
+      assert.equals(5, W.bought[#W.bought].quantity)
     end)
 
     it("is closed without a merchant", function()
@@ -342,7 +400,7 @@ describe("MerchantBuy", function()
     end)
 
     it("changes no saved data", function()
-      required(1001, 7); sell(1001, 5); deliver = false    -- the delivery fake writes world.items, which is saved data
+      required(1001, 7); sell(1001, 5); deliver = false
       local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
       open(); click(); W.fire("BAG_UPDATE_DELAYED"); W.fire("MERCHANT_CLOSED")
       assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
@@ -413,6 +471,7 @@ describe("MerchantBuy", function()
       click()
       assert.same({ { index = 1, quantity = 10 } }, W.bought)
       assert.equals("Buying 10 reagents for " .. ns.UI.FormatMoney(1000), view().status:GetText())
+      assert.equals("Buying 10 reagents for " .. ns.UI.FormatMoney(1000), view().status:GetText())
       W.fire("BAG_UPDATE_DELAYED")
       assert.equals("Bought 10 reagents for " .. ns.UI.FormatMoney(1000), view().status:GetText())
       W.advance(0.3)
@@ -423,8 +482,8 @@ describe("MerchantBuy", function()
       required(1001, 7); sell(1001, 500, { stack = 5 }); deliver = false
       open(); click()
       W.fire("BAG_UPDATE_DELAYED")
-      assert.equals("No reagents have arrived in your bags yet", view().status:GetText())
-      open(); click(); W.advance(3.1)
+      assert.equals("Buying 10 reagents for " .. ns.UI.FormatMoney(1000), view().status:GetText())   -- still waiting
+      W.advance(3.1)
       assert.equals("No reagents have arrived in your bags yet", view().status:GetText())
     end)
 
@@ -433,6 +492,8 @@ describe("MerchantBuy", function()
       open(); click()
       held(1001, 5)
       W.fire("BAG_UPDATE_DELAYED")
+      assert.equals("Buying 10 reagents for " .. ns.UI.FormatMoney(100), view().status:GetText())   -- 5 still to come
+      W.advance(3.1)
       assert.equals("Bought 5 reagents for " .. ns.UI.FormatMoney(50), view().status:GetText())
     end)
 

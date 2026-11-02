@@ -7,7 +7,7 @@ local L = ns.L
 -- No automation (design rule 3): MerchantBuy:Buy is the only caller of BuyMerchantItem, and it is called only from the
 -- panel button's OnClick handler (tests/ui/merchant_click_only_spec.lua). Opening the merchant, a merchant or bag
 -- update and a queue change only show or redraw the panel. One click buys at most MAX_CALLS calls' worth; after it
--- nothing is bought until the next BAG_UPDATE_DELAYED or 3 s (the in-flight lock).
+-- nothing is bought until every count asked for has reached the bags or 3 s have passed (the in-flight lock).
 --
 -- Spend: the shortfall is the Queue's own (Queue:GetGatheringPlan(me): what the queue needs less what the character
 -- holds, bank and warband included, and less what queued crafts will make; the not-required socket slot is never in
@@ -42,7 +42,7 @@ local STATUS_TEXT = {
 }
 
 local merchantOpen = false   -- MERCHANT_SHOW seen and no MERCHANT_CLOSED since
-local inFlight = false       -- a buy was made and the bags have not updated since (at most FLIGHT_SECONDS)
+local inFlight = false       -- a buy was made and not all of it is in the bags yet (at most FLIGHT_SECONDS)
 local flight                 -- the last buy: { { itemID, before, asked, unitPrice } }, until the lock ends
 
 ---------------------------------------------------------------------------
@@ -167,20 +167,27 @@ local function set_status(line)
   if MerchantBuy.view and line then MerchantBuy.view.status:SetText(line) end
 end
 
--- The lock ends (the next bag update, or 3 s). What the bags now hold over what they held at the buy is what arrived:
--- the status says that, never what was asked for.
-local function end_flight()
-  inFlight = false
-  local f = flight
-  flight = nil
-  if not f then return end
-  local got, cost = 0, 0
+-- What has reached the bags of the last buy: what they now hold over what they held at the buy, per item, at most what
+-- was asked for. -> items, copper, complete (every count asked for is in; an item the game cannot count is not).
+local function arrived(f)
+  local got, cost, complete = 0, 0, true
   for _, row in ipairs(f) do
     local now = live_count(row.itemID)
     local gained = now and math.max(0, math.min(row.asked, now - row.before)) or 0
     got = got + gained
     cost = cost + math.floor(gained * row.unitPrice + 0.5)
+    if gained < row.asked then complete = false end
   end
+  return got, cost, complete
+end
+
+-- The lock ends (every count asked for has arrived, or 3 s). The status says what arrived, never what was asked for.
+local function end_flight()
+  inFlight = false
+  local f = flight
+  flight = nil
+  if not f then return end
+  local got, cost = arrived(f)
   if got > 0 then
     set_status(L["Bought %d reagents for %s"]:format(got, format_money(cost)))
   else
@@ -406,9 +413,11 @@ local function on_merchant_closed()
   if MerchantBuy.view then MerchantBuy.view.frame:Hide() end
 end
 
--- BAG_UPDATE_DELAYED: the last buy has landed (the lock ends), and the panel is redrawn 0.2 s after a burst.
+-- BAG_UPDATE_DELAYED: the lock ends only when every count the last buy asked for is in the bags (purchases can land
+-- across several updates; until then a click would buy them again), else at the 3 s timeout. The panel is redrawn
+-- 0.2 s after a burst.
 local function on_bags_updated()
-  if inFlight then
+  if inFlight and (flight == nil or select(3, arrived(flight))) then
     ns.FS:CancelDebounce(FLIGHT_KEY)
     end_flight()
   end

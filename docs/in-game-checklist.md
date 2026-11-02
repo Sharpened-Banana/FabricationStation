@@ -1404,7 +1404,7 @@ FabricationStation panel next to the merchant window lists both ("<reagent>: <n>
 to whole stacks) and a button "Buy <n> reagents for <total>"; nothing is bought on opening the window. Click once: exactly
 the missing count (rounded up to the stack) of each is bought, the status reads "Buying ..." and then "Bought <n> reagents
 for <price>" when the bags update, and the panel empties out. Clicking again while the purchase is still landing does
-nothing. With too little gold the button is disabled and its tooltip reads "Not enough gold"; in combat it is disabled.
+nothing (the button stays disabled until everything bought is in your bags, or 3 s). With too little gold the button is disabled and its tooltip reads "Not enough gold"; in combat it is disabled.
 Also report: does `C_MerchantFrame.GetItemInfo` exist (`/dump C_MerchantFrame.GetItemInfo(1)`; if it is nil the panel is
 using `GetMerchantItemInfo`); did `BuyMerchantItem`'s quantity count items or stacks (a reagent sold 5 per purchase, need
 7: it should buy 10 items; if it bought 50, the quantity counts stacks and MerchantBuy must pass `buy / stack`); does
