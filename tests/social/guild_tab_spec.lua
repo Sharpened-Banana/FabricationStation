@@ -1,0 +1,1456 @@
+-- Guild tab, guild settings group and /fs guild (phase 4 Task 9): the user-facing surface of the guild crafter
+-- directory. Boots 1a's real MainWindow (last = "UI/MainWindow.lua") so the tab registers with it and the options land in
+-- the real GetOptionsTable(); Scanner and Recipes are p4.fake_module overrides (the real modules exist, only the methods
+-- the specs need are replaced), the roster, the native query, AceComm and the encoding are the phase-4 harness fakes.
+local FILES = { "Modules/Social/GuildOptions.lua", "UI/Widgets/ExpandGrid.lua", "UI/Tabs/Guild.lua",
+  "Modules/Social/ChatMatcher.lua" }
+
+local NAMES = { [100] = "Everforged Mace", [101] = "Everforged Axe", [200] = "Silk Bandage", [300] = "Midnight Flask",
+  [700] = "Everforged Helm" }
+local DIM = "|cff9d9d9d"
+local EM_DASH = "\226\128\148"
+
+local function plain(text)
+  return (tostring(text):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+end
+local function point(region, i) return { region:GetPoint(i or 1) } end
+local function map(list, key)
+  local out = {}
+  for i, v in ipairs(list) do out[i] = v[key] end
+  return out
+end
+local function contains(list, value)
+  for _, v in ipairs(list) do if v == value then return true end end
+  return false
+end
+local function uniq(list)
+  local out, seen = {}, {}
+  for _, v in ipairs(list) do
+    if not seen[v] then seen[v] = true; out[#out + 1] = v end
+  end
+  return out
+end
+
+-- Edit boxes, check buttons and buttons that keep their text, and buttons that keep their enabled state (the shared
+-- stubs make them no-ops).
+local function wrap_frames()
+  local real = _G.CreateFrame
+  _G.CreateFrame = function(frameType, name, parent, template)
+    local f = real(frameType, name, parent, template)
+    if frameType == "EditBox" or frameType == "CheckButton" or frameType == "Button" then
+      local text, checked, enabled = "", false, true
+      function f:SetText(t) text = t end
+      function f:GetText() return text end
+      function f:Type(t) text = t; local s = self:GetScript("OnTextChanged"); if s then s(self, true) end end
+      function f:HasFocus() return self.focused == true end                -- a spec flag
+      function f:SetMaxLetters(n) self.maxLetters = n end
+      function f:Insert(t) text = text .. t; local s = self:GetScript("OnTextChanged"); if s then s(self, true) end end
+      function f:SetChecked(v) checked = v and true or false end
+      function f:GetChecked() return checked end
+      function f:SetEnabled(v) enabled = v and true or false end
+      function f:Enable() enabled = true end
+      function f:Disable() enabled = false end
+      function f:IsEnabled() return enabled end
+      if template == "SearchBoxTemplate" then f.Instructions = f:CreateFontString() end
+    end
+    return f
+  end
+end
+
+describe("Guild tab, settings and diagnostics", function()
+  local ns, W, p4, Guild, Protocol, settings, chars, tooltip
+  local MW
+
+  local function fixture_chars()
+    return {
+      ["Me-Realm"] = { professions = {
+        [2907] = { name = "Blacksmithing", skill = 50, maxSkill = 100, recipes = { [101] = true, [100] = true },
+          concentration = { value = 1, max = 1000 } },
+      } },
+      ["Alt-Realm"] = { professions = {
+        [2906] = { name = "Alchemy", skill = 10, maxSkill = 100, recipes = { [300] = true }, concentration = {} },
+      } },
+    }
+  end
+
+  local function dir() return Guild:GetDirectory() end
+  local function now() return ns.FS:Now() end
+
+  -- A stored peer profile in the compact shape (Modules/Social/ProfileStore.lua): one skill line with the given
+  -- recipes (id -> { q, qc } or true), packed from the DATA it would have come in, with that DATA's hash.
+  local function store(charKey, owner, opts)
+    opts = opts or {}
+    local lv = opts.lv or "q"
+    local recipes = opts.recipes or { [100] = { 3, 5 } }
+    local ids = {}
+    for id in pairs(recipes) do ids[#ids + 1] = id end
+    table.sort(ids)
+    local flat = {}
+    for _, id in ipairs(ids) do
+      flat[#flat + 1] = id
+      if lv == "q" then
+        flat[#flat + 1] = recipes[id][1]
+        flat[#flat + 1] = recipes[id][2]
+      end
+    end
+    local data = { lv = lv, pr = { { s = opts.line or 2907, k = opts.k or 50, m = 100, r = flat } } }
+    dir().profiles[charKey] = { c = charKey, ts = 1, lv = lv, h = ns.Social.Protocol.HashProfile(data), owner = owner,
+      verified = opts.verified ~= false, rt = opts.rt or now(), pr = ns.Social.ProfileStore.FromData(data) }
+    -- Every real write to profiles calls Guild's changed(), which bumps directoryVersion (the recipe index's staleness
+    -- check) and queues FS_GUILD_CHANGED. This helper only needs the first: the tab's own refreshes are driven by hand.
+    Guild.directoryVersion = Guild.directoryVersion + 1
+  end
+  local function native_members(recipeID, members, skillLineID)
+    dir().native[recipeID] = { time = now(), skillLineID = skillLineID or 2907, members = members }
+  end
+  local NATIVE_B = { name = "B-Realm", classFile = "MAGE", online = false }
+  local NATIVE_D = { name = "D-Realm", classFile = "ROGUE", online = true }
+
+  -- B: Axe (q2/qc4) and Mace (q3/qc5); C: Mace, recipes only; E: Flask (Alchemy); D and B: Silk Bandage (native).
+  local function seed()
+    store("B-Realm", "Peer-Realm", { recipes = { [100] = { 3, 5 }, [101] = { 2, 4 } }, k = 80 })
+    store("C-Realm", "Peer2-Realm", { lv = "r", recipes = { [100] = true } })
+    store("E-Realm", "Peer3-Realm", { recipes = { [300] = { 1, 2 } }, line = 2906 })
+    native_members(200, { NATIVE_D, NATIVE_B })
+    dir().members["Peer-Realm"] = { addonVersion = "1.0.0", proto = 1, lastSeen = now(), chars = {} }
+    dir().members["Peer2-Realm"] = { addonVersion = "1.0.0", proto = 1, lastSeen = now(), chars = {} }
+  end
+
+  local function sent_msgs()
+    local out = {}
+    for _, s in ipairs(p4.comm.sent) do out[#out + 1] = (Protocol.Unwire(s.text)) end
+    return out
+  end
+  local function last_sent_msg() local l = sent_msgs(); return l[#l] end
+  local function clear_sent() for i = #p4.comm.sent, 1, -1 do p4.comm.sent[i] = nil end end
+
+  local function registered_options(key) return ns.FS:GetOptionsTable().args[key] end
+  local function registered_tab(id)
+    for _, t in ipairs(MW:GetTabs()) do if t.id == id then return t.def end end
+  end
+  local function printed() return W.printed[#W.printed] end
+
+  local function boot(opts)
+    opts = opts or {}
+    ns, W, p4 = boot_phase4(FILES, { last = "UI/MainWindow.lua", stubs = {
+      C_Spell = { GetSpellName = function(id) return NAMES[id] end },
+      GameTooltip = {
+        SetOwner = function(_, owner) tooltip.owner = owner; tooltip.lines = {} end,
+        SetText = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+        AddLine = function(_, t) tooltip.lines[#tooltip.lines + 1] = t end,
+        Show = function() tooltip.shown = true end,
+        Hide = function() tooltip.shown = false end,
+      },
+    } })
+    wrap_frames()
+    -- The generated recipe list holds a recipe nobody on the account or in the guild knows (700 "Everforged Helm").
+    ns.GameData.Define("RecipeSources", nil, { bySkillLine = { [2907] = { [700] = { kind = "auto" } } } })
+    Protocol = ns.Social.Protocol
+    chars = fixture_chars()
+    p4.fake_module(ns, "Scanner", {
+      GetCharacters = function() return { "Alt-Realm", "Me-Realm" } end,
+      GetCharacter = function(_, key) return chars[key] end,
+      GetProfession = function(_, key, sl) return chars[key] and chars[key].professions[sl] end,
+      GetCachedSchematic = function() return nil end,
+    })
+    p4.fake_module(ns, "Recipes", {
+      Evaluate = function(_, _, _, o) return { expectedQuality = o.useConcentration and 5 or 3 } end,
+    })
+    Guild = ns.FS:GetModule("Guild")
+    MW = ns.FS:GetModule("MainWindow")
+    settings = Guild:Settings()
+    if opts.guild ~= false then
+      p4.guild.key = { "G", "Realm" }
+      p4.guild.members = { { name = "Peer-Realm", online = true } }      -- a loaded (non-empty) roster
+      Guild:OnEnteringWorld()
+      p4.advance(21)                                                     -- the login refresh and HELLO
+      clear_sent()
+      seed()
+    end
+  end
+
+  before_each(function()
+    tooltip = { lines = {} }
+    boot()
+  end)
+
+  ---------------------------------------------------------------------------
+  -- Tab rows
+  ---------------------------------------------------------------------------
+
+  describe("BuildTabRows", function()
+    it("lists one row per recipe and crafter, sorted by recipe name then crafter order", function()
+      local rows = Guild:BuildTabRows({})
+      local seen = {}
+      for i, r in ipairs(rows) do seen[i] = r.recipeName .. "/" .. r.crafter.name end
+      assert.are.same({ "Everforged Axe/B-Realm", "Everforged Mace/B-Realm", "Everforged Mace/C-Realm",
+        "Midnight Flask/E-Realm", "Silk Bandage/D-Realm", "Silk Bandage/B-Realm" }, seen)
+      assert.are.same({ 101, 100, 100, 300, 200, 200 }, map(rows, "recipeID"))
+      assert.are.same({ 2907, 2907, 2907, 2906, 2907, 2907 }, map(rows, "skillLineID"))
+      assert.are.equal("addon", rows[1].crafter.source)
+      assert.are.equal("native", rows[5].crafter.source)
+    end)
+
+    it("takes the crafters from GetCrafters unchanged", function()
+      for _, r in ipairs(Guild:BuildTabRows({})) do
+        if r.recipeID == 100 then
+          local ids = {}
+          for _, c in ipairs(Guild:GetCrafters(100)) do ids[#ids + 1] = c.name end
+          assert.are.same({ "B-Realm", "C-Realm" }, ids)
+          break
+        end
+      end
+    end)
+
+    it("filters by text on the recipe name or the crafter name, case-insensitively, as a plain substring", function()
+      assert.are.same({ "Everforged Mace" }, uniq(map(Guild:BuildTabRows({ text = "mace" }), "recipeName")))
+      assert.are.equal(2, #Guild:BuildTabRows({ text = "MACE" }))            -- both crafters of a matching recipe
+      assert.are.same({ "B-Realm" }, uniq(map(map(Guild:BuildTabRows({ text = "b-real" }), "crafter"), "name")))
+      assert.are.equal(3, #Guild:BuildTabRows({ text = "b-real" }))          -- B's three recipes, not their other crafters
+      assert.are.equal(0, #Guild:BuildTabRows({ text = "%" }))
+      assert.are.equal(0, #Guild:BuildTabRows({ text = "." }))
+      assert.are.equal(6, #Guild:BuildTabRows({ text = "" }))
+      assert.are.equal(6, #Guild:BuildTabRows({ text = nil }))
+    end)
+
+    it("filters by profession", function()
+      assert.are.same({ "Midnight Flask" }, map(Guild:BuildTabRows({ skillLineID = 2906 }), "recipeName"))
+      assert.are.equal(5, #Guild:BuildTabRows({ skillLineID = 2907 }))
+      assert.are.equal(0, #Guild:BuildTabRows({ skillLineID = 999 }))
+      assert.are.equal(1, #Guild:BuildTabRows({ skillLineID = 2907, text = "axe" }))
+    end)
+
+    it("names a recipe the client has no name for", function()
+      store("B-Realm", "Peer-Realm", { recipes = { [100] = { 3, 5 }, [555] = { 1, 1 } } })
+      local names = uniq(map(Guild:BuildTabRows({}), "recipeName"))
+      assert.is_true(contains(names, "Recipe 555"))
+    end)
+
+    it("leaves out the account's own characters and contested ones, and answers empty with Guild off", function()
+      store("Me-Realm", "Peer-Realm", { recipes = { [100] = { 3, 5 } } })
+      dir().contested["C-Realm"] = now()
+      local rows = Guild:BuildTabRows({ text = "mace" })
+      assert.are.same({ "B-Realm" }, map(map(rows, "crafter"), "name"))
+      Guild:Disable()
+      assert.are.same({}, Guild:BuildTabRows({}))
+    end)
+
+    it("reads only: no directory is created and nothing is written", function()
+      local before = ns.Util.DeepCopy(ns.FS.db.global.guildDirectory)
+      Guild:BuildTabRows({ text = "mace" })
+      assert.are.same(before, ns.FS.db.global.guildDirectory)
+      p4.guild.key = nil
+      Guild:OnGuildUpdate()
+      assert.are.same({}, Guild:BuildTabRows({}))
+    end)
+
+    it("builds the tab model from one walk over the profiles, without searching a profile per recipe", function()
+      local PS = ns.Social.ProfileStore
+      local base, finds = PS.Find, 0
+      PS.Find = function(...) finds = finds + 1; return base(...) end
+      finally(function() PS.Find = base end)
+      Guild:BuildTabRows({})
+      Guild:BuildTabRows({ text = "mace" })
+      Guild:BuildTabRows({ skillLineID = 2907 })
+      Guild:TabSkillLines()
+      assert.are.equal(0, finds)
+    end)
+
+    it("gives every recipe the same crafter rows as GetCrafters, the first line that lists it included", function()
+      -- Two lines that both list 100: the first one (by skill line) gives the skill and the quality, as Find does.
+      local data = { lv = "q", pr = { { s = 2907, k = 50, m = 100, r = { 100, 1, 2, 101, 2, 2 } },
+        { s = 2910, k = 70, m = 100, r = { 100, 4, 4, 102, 3, 3 } } } }
+      dir().profiles["J-Realm"] = { c = "J-Realm", ts = 1, lv = "q", h = Protocol.HashProfile(data),
+        owner = "Peer-Realm", verified = true, rt = now(), pr = ns.Social.ProfileStore.FromData(data) }
+      Guild.directoryVersion = Guild.directoryVersion + 1
+      local byRecipe = {}
+      for _, r in ipairs(Guild:BuildTabRows({})) do
+        byRecipe[r.recipeID] = byRecipe[r.recipeID] or {}
+        table.insert(byRecipe[r.recipeID], r.crafter)
+      end
+      for _, id in ipairs({ 100, 101, 102, 200, 300 }) do
+        assert.are.same(Guild:GetCrafters(id), byRecipe[id], tostring(id))
+      end
+      local j
+      for _, c in ipairs(byRecipe[100]) do if c.name == "J-Realm" then j = c end end
+      assert.are.same({ 50, 1, 2 }, { j.skill, j.expectedQuality, j.concentrationQuality })
+    end)
+
+    it("lists the profession lines of the stored profiles and the native cache", function()
+      assert.are.same({ 2906, 2907 }, Guild:TabSkillLines())
+      native_members(777, { NATIVE_D }, 2910)
+      assert.are.same({ 2906, 2907, 2910 }, Guild:TabSkillLines())
+    end)
+
+    it("lists only lines that would produce a row under the current settings", function()
+      native_members(777, { NATIVE_D }, 2910)
+      settings.useNative = false
+      assert.are.same({ 2906, 2907 }, Guild:TabSkillLines())              -- the native-only line is out
+      store("Me-Realm", "Peer-Realm", { recipes = { [900] = { 3, 5 } }, line = 2955 })     -- an own character
+      store("F-Realm", "Peer4-Realm", { recipes = { [901] = { 3, 5 } }, line = 2956 })
+      dir().contested["F-Realm"] = now()                                  -- contested: no addon row
+      p4.guild.exists["Peer5-Realm"] = false
+      store("G2-Realm", "Peer5-Realm", { recipes = { [902] = { 3, 5 } }, line = 2957 })   -- its owner left the guild
+      assert.are.same({ 2906, 2907 }, Guild:TabSkillLines())
+      store("H-Realm", "Peer6-Realm", { recipes = { [903] = { 3, 5 } }, line = 2958 })
+      assert.are.same({ 2906, 2907, 2958 }, Guild:TabSkillLines())
+    end)
+  end)
+
+  ---------------------------------------------------------------------------
+  -- Status and self-test
+  ---------------------------------------------------------------------------
+
+  describe("Status", function()
+    it("summarises the directory, the gate and the queue", function()
+      local s = Guild:Status()
+      assert.are.equal("G-Realm", s.guildKey)
+      assert.are.equal(2, s.addonMembers)
+      assert.are.equal(3, s.profiles)
+      assert.are.equal(1, s.nativeCached)
+      assert.is_false(s.gateLocked)
+      assert.is_nil(s.gateReason)
+      assert.are.equal(0, s.queue)
+      assert.are.equal("ok", s.sync)
+    end)
+
+    it("reports a held sync while the setup guide holds it, not \"ok\"", function()
+      local onboarding = ns.FS:GetModule("Onboarding")
+      local base = onboarding.HoldsSync
+      onboarding.HoldsSync = function() return true end
+      finally(function() onboarding.HoldsSync = base end)
+      assert.are.equal("held", Guild:SyncStatus())
+      assert.are.equal("held", Guild:Status().sync)
+      settings.share = false
+      assert.are.equal("off", Guild:SyncStatus())          -- sharing off sends its empty HELLO: nothing is held
+    end)
+
+    it("reports the chat gate and what waits behind it", function()
+      p4.restriction.lockdown = true
+      Guild.comm:Send(Protocol.Hello("1.0.0", {}), "GUILD", nil, { key = "hello" })
+      local s = Guild:Status()
+      assert.is_true(s.gateLocked)
+      assert.are.equal("lockdown", s.gateReason)
+      assert.are.equal(1, s.queue)
+      assert.are.equal("paused", s.sync)
+    end)
+
+    it("is empty outside a guild and says read-only on a newer saved format", function()
+      ns.FS.dbIsNewer = true
+      assert.are.equal("readOnly", Guild:Status().sync)
+      ns.FS.dbIsNewer = false
+      p4.guild.key = nil
+      Guild:OnGuildUpdate()
+      local s = Guild:Status()
+      assert.is_nil(s.guildKey)
+      assert.are.same({ 0, 0, 0, 0 }, { s.addonMembers, s.profiles, s.nativeCached, s.queue })
+    end)
+  end)
+
+  describe("SelfTest", function()
+    it("round-trips the largest own profile", function()
+      local r = Guild:SelfTest()
+      assert.is_true(r.ok); assert.is_nil(r.err)
+      assert.is_false(r.trimmed)
+      assert.is_true(r.wireBytes > 0)
+      assert.are.equal(math.ceil(r.wireBytes / 254), r.chunks)
+    end)
+
+    it("picks the largest profile of the account", function()
+      local small = Guild:SelfTest().wireBytes
+      chars["Alt-Realm"].professions[2906].recipes = {}
+      for id = 1, 40 do chars["Alt-Realm"].professions[2906].recipes[5000 + id] = true end
+      Guild:OnPrivacyChanged(); p4.advance(1)
+      settings.shareAlts = "all"
+      Guild:OnPrivacyChanged(); p4.advance(1)
+      assert.is_true(Guild:SelfTest().wireBytes > small)
+    end)
+
+    it("is cache-only: with sharing off it builds nothing and says there is no profile", function()
+      settings.share = false
+      Guild:OnPrivacyChanged()
+      local calls = 0
+      ns.FS:GetModule("Recipes").Evaluate = function() calls = calls + 1; return { expectedQuality = 3 } end
+      local r = Guild:SelfTest()
+      assert.is_false(r.ok); assert.are.equal("no profile", r.err)
+      assert.are.equal(0, calls)
+      assert.is_false(Guild:IsDiagnosticBuilding())
+    end)
+
+    describe("SelfTestAsync", function()
+      local clock, evaluations, results
+
+      local function many_recipes(n)
+        local recipes = {}
+        for i = 1, n do recipes[6000 + i] = true end
+        return recipes
+      end
+
+      before_each(function()
+        clock, evaluations, results = 0, 0, {}
+        _G.debugprofilestop = function() return clock end
+        ns.FS:GetModule("Recipes").Evaluate = function(_, _, _, o)
+          evaluations = evaluations + 1
+          clock = clock + 3                                           -- 3 ms each: two per recipe, a 4 ms budget
+          return { expectedQuality = o.useConcentration and 5 or 3 }
+        end
+        chars["Alt-Realm"].professions[2906].recipes = many_recipes(6)
+        settings.share = false
+        Guild:OnPrivacyChanged()                                      -- nothing cached: sharing is off
+        evaluations = 0
+      end)
+
+      local restore
+      after_each(function()
+        _G.debugprofilestop = nil
+        if restore then restore(); restore = nil end
+      end)
+
+      -- Takes over C_Timer.NewTicker: the callbacks are run by hand, one per "frame" (the stub clock would run a
+      -- zero-delay ticker to completion inside one advance). Returns the list of { fn, cancelled }.
+      local function manual_tickers()
+        local handles = {}
+        local real = C_Timer.NewTicker
+        C_Timer.NewTicker = function(_, fn)
+          local h = { fn = fn, cancelled = false }
+          function h:Cancel() self.cancelled = true end
+          handles[#handles + 1] = h
+          return h
+        end
+        return handles, function() C_Timer.NewTicker = real end
+      end
+
+      local function start()
+        return Guild:SelfTestAsync(function(r) results[#results + 1] = r end)
+      end
+
+      it("answers at once from the cache, without building", function()
+        settings.share = true
+        Guild:OnPrivacyChanged(); p4.advance(1)
+        evaluations = 0
+        assert.is_false(start())
+        assert.are.equal(1, #results); assert.is_true(results[1].ok)
+        assert.are.equal(0, evaluations)
+      end)
+
+      it("builds only the character with the most recipes, spread over several frames", function()
+        local handles
+        handles, restore = manual_tickers()
+        assert.is_true(start())
+        assert.are.equal(1, #handles)
+        assert.are.same({}, results)
+        assert.is_true(Guild:IsDiagnosticBuilding())
+        local frames = 0
+        while #results == 0 and frames < 50 do
+          local before = evaluations
+          handles[1].fn()
+          frames = frames + 1
+          assert.is_true(evaluations - before <= 2, "frame " .. frames)   -- one recipe (6 ms) spends the 4 ms budget
+        end
+        assert.is_true(frames >= 6, "built in " .. frames .. " frames")
+        assert.are.equal(12, evaluations)                             -- 6 recipes x 2: Alt-Realm, not Me-Realm
+        assert.is_true(results[1].ok)
+        assert.are.equal("Alt-Realm", results[1].charKey)
+        assert.is_false(results[1].trimmed)
+        assert.is_false(Guild:IsDiagnosticBuilding())
+        assert.is_true(handles[1].cancelled)                          -- the ticker stopped itself
+      end)
+
+      it("leaves the sync's counters, log and own profiles alone, and reports a trimmed profile", function()
+        ns.Social.Codec.MAX_WIRE = 220
+        chars["Alt-Realm"].professions[2906].recipes = many_recipes(20)
+        local before = Guild.stats.trimmed
+        start()
+        p4.advance(1); for _ = 1, 100 do if #results == 0 then p4.advance(0.01) end end
+        assert.are.equal(1, #results)
+        assert.is_true(results[1].ok)
+        assert.is_true(results[1].trimmed)
+        assert.is_true(results[1].wireBytes <= 220)
+        assert.are.equal(before, Guild.stats.trimmed)
+        assert.are.same({}, ns.FS.db.global.diagnostics.errors)
+        assert.are.same({}, Guild:GetOwnHashes())
+        assert.is_nil(Guild:GetOwnProfile("Alt-Realm"))
+      end)
+
+      it("a new call replaces the build in progress", function()
+        local handles
+        local first = {}
+        handles, restore = manual_tickers()
+        Guild:SelfTestAsync(function(r) first[#first + 1] = r end)
+        handles[1].fn()
+        start()
+        assert.is_true(handles[1].cancelled)
+        handles[1].fn()                                               -- a stale tick does nothing
+        for _ = 1, 50 do if #results == 0 then handles[2].fn() end end
+        assert.are.same({}, first)
+        assert.are.equal(1, #results)
+      end)
+
+      it("is cancelled when Guild is turned off", function()
+        local handles
+        handles, restore = manual_tickers()
+        start()
+        handles[1].fn()
+        Guild:Disable()
+        assert.is_false(Guild:IsDiagnosticBuilding())
+        assert.is_true(handles[1].cancelled)
+        local seen = evaluations
+        handles[1].fn()
+        p4.advance(2)
+        assert.are.same({}, results)
+        assert.are.equal(seen, evaluations)
+      end)
+
+      it("fails with 'no profile' without a character that has recipes", function()
+        chars["Me-Realm"].professions = {}
+        chars["Alt-Realm"].professions = {}
+        assert.is_false(start())
+        assert.are.equal("no profile", results[1].err)
+      end)
+
+      it("/fs guild selftest says it is building, then prints the result", function()
+        ns.FS:HandleSlash("guild selftest")
+        assert.truthy(printed():find("building", 1, true))
+        for _ = 1, 100 do if not printed():find("selftest ok", 1, true) then p4.advance(0.01) end end
+        assert.truthy(printed():find("guild selftest ok: Alt-Realm", 1, true))
+      end)
+    end)
+
+    it("sends one chunk up to 255 bytes and ceil(bytes / 254) above", function()
+      local Codec = ns.Social.Codec
+      for _, case in ipairs({ { 253, 255, 1 }, { 254, 256, 2 }, { 507, 509, 3 } }) do
+        local encoded, bytes, chunks = case[1], case[2], case[3]
+        Codec.Encode = function() return string.rep("x", encoded) end
+        local r = Guild:SelfTest()
+        assert.are.equal(bytes, r.wireBytes)
+        assert.are.equal(chunks, r.chunks)
+        assert.is_false(r.ok)                                 -- the filler does not decode
+      end
+    end)
+
+    it("fails clearly without a profile or without the codec", function()
+      chars["Me-Realm"].professions = {}
+      chars["Alt-Realm"].professions = {}
+      settings.share = false
+      Guild:OnPrivacyChanged()                                -- forgets the profiles built at login
+      local r = Guild:SelfTest()
+      assert.is_false(r.ok); assert.are.equal("no profile", r.err)
+      assert.are.equal(0, r.wireBytes); assert.are.equal(0, r.chunks)
+      chars = fixture_chars()
+      _G.C_EncodingUtil = nil
+      r = Guild:SelfTest()
+      assert.is_false(r.ok); assert.are.equal("no codec", r.err)
+    end)
+
+    it("reports a mismatch after the round trip", function()
+      ns.Social.Protocol.Unwire = function()
+        return ns.Social.Protocol.Data({ c = "X-Realm", ts = 1, lv = "r", pr = {} })
+      end
+      local r = Guild:SelfTest()
+      assert.is_false(r.ok)
+      assert.are.equal("mismatch", r.err)
+    end)
+  end)
+
+  ---------------------------------------------------------------------------
+  -- /fs guild
+  ---------------------------------------------------------------------------
+
+  describe("/fs guild", function()
+    it("is a registered subcommand with a help line", function()
+      assert.is_truthy(ns.FS.slashCommands.guild)
+      assert.are.equal("guild sync status; 'selftest' checks the wire format", ns.FS.slashCommands.guild.help)
+    end)
+
+    it("says that sharing waits for the setup guide while it holds sync", function()
+      local onboarding = ns.FS:GetModule("Onboarding")
+      local base = onboarding.HoldsSync
+      onboarding.HoldsSync = function() return true end
+      finally(function() onboarding.HoldsSync = base end)
+      ns.FS:HandleSlash("guild")
+      local text = table.concat(W.printed, "\n")
+      assert.truthy(text:find("guild G-Realm, sync waiting for the setup guide", 1, true))
+      local held = "Sharing with your guild waits for the setup guide. Type /fs setup to finish or skip it."
+      assert.truthy(text:find(held, 1, true))
+    end)
+
+    it("prints the status without arguments", function()
+      ns.FS:HandleSlash("guild")
+      local text = table.concat(W.printed, "\n")
+      assert.truthy(text:find("G-Realm", 1, true))
+      assert.truthy(text:find("3 profiles", 1, true))
+    end)
+
+    it("prints what the inbound limit and the re-requests did (the in-game throttle check)", function()
+      Guild.comm.stats.rateLimited, Guild.comm.stats.refused = 4, 2
+      Guild.stats.retried = 3
+      ns.FS:HandleSlash("guild")
+      local text = table.concat(W.printed, "\n")
+      assert.truthy(text:find("received: 4 rate-limited, 2 refused, 0 invalid; 3 re-requests", 1, true))
+      local s = Guild:Status()
+      assert.are.same({ rateLimited = 4, refused = 2, invalid = 0 }, s.received)
+    end)
+
+    it("prints the self-test result", function()
+      ns.FS:HandleSlash("guild selftest")
+      local line = printed()
+      assert.truthy(line:find("ok", 1, true))
+      assert.truthy(line:find("bytes", 1, true))
+      assert.truthy(line:find("chunk", 1, true))
+    end)
+
+    it("says FAILED with the reason, and warns above 12000 bytes", function()
+      chars["Me-Realm"].professions = {}
+      chars["Alt-Realm"].professions = {}
+      settings.share = false
+      Guild:OnPrivacyChanged()
+      ns.FS:HandleSlash("guild selftest")
+      assert.truthy(printed():find("FAILED", 1, true))
+      assert.truthy(printed():find("no profile", 1, true))
+      chars = fixture_chars()
+      settings.share = true
+      Guild:OnPrivacyChanged(); p4.advance(1)
+      local Codec = ns.Social.Codec
+      local real = Codec.Encode
+      Codec.Encode = function(msg) local e = real(msg); return e .. string.rep("x", 12100) end
+      ns.FS:HandleSlash("guild selftest")
+      assert.truthy(printed():find("12000", 1, true))
+    end)
+
+    it("answers an unknown argument with the usage", function()
+      ns.FS:HandleSlash("guild nonsense")
+      assert.truthy(printed():find("selftest", 1, true))
+    end)
+
+    it("works while Guild is off", function()
+      Guild:Disable()
+      ns.FS:HandleSlash("guild")
+      assert.truthy(table.concat(W.printed, "\n"):find("turned off", 1, true))
+      assert.same({}, ns.FS.db.global.diagnostics.errors)
+    end)
+  end)
+
+  ---------------------------------------------------------------------------
+  -- Options group
+  ---------------------------------------------------------------------------
+
+  describe("options group", function()
+    local OPTION_KEYS = { "share", "shareLevel", "shareAlts", "tooltipLine", "panelLine", "useNative", "purge" }
+
+    it("registers the guild group at order 70 with every setting", function()
+      local opts = registered_options("guild")
+      assert.are.equal("group", opts.type)
+      assert.are.equal(70, opts.order)
+      for _, key in ipairs(OPTION_KEYS) do assert.is_table(opts.args[key], key) end
+      assert.are.equal("toggle", opts.args.share.type)
+      assert.are.equal("select", opts.args.shareLevel.type)
+      assert.are.equal("Recipes and expected quality", opts.args.shareLevel.values.quality)
+      assert.are.equal("Recipes only", opts.args.shareLevel.values.recipes)
+      assert.is_string(opts.args.shareAlts.values.current)
+      assert.is_string(opts.args.shareAlts.values.guild)
+      assert.is_string(opts.args.shareAlts.values.all)
+      assert.are.equal("execute", opts.args.purge.type)
+    end)
+
+    it("reads the settings", function()
+      local opts = registered_options("guild")
+      assert.is_true(opts.args.share.get())
+      assert.are.equal("quality", opts.args.shareLevel.get())
+      assert.are.equal("guild", opts.args.shareAlts.get())
+      settings.tooltipLine = false
+      assert.is_false(opts.args.tooltipLine.get())
+    end)
+
+    it("re-announces after a privacy change", function()
+      local opts = registered_options("guild")
+      opts.args.shareLevel.set(nil, "recipes")
+      assert.are.equal("recipes", settings.shareLevel)
+      p4.advance(1)
+      assert.are.equal("r", Guild:GetOwnProfile("Me-Realm").lv)
+      assert.are.equal("H", last_sent_msg().t)
+    end)
+
+    it("sends the empty HELLO at once when sharing is switched off", function()
+      local opts = registered_options("guild")
+      opts.args.share.set(nil, false)
+      assert.is_false(settings.share)
+      local msg = last_sent_msg()
+      assert.are.equal("H", msg.t)
+      assert.are.same({}, msg.c)
+      assert.are.same({}, Guild:GetOwnHashes())
+    end)
+
+    it("rebuilds and announces when the characters shared change", function()
+      local opts = registered_options("guild")
+      opts.args.shareAlts.set(nil, "current")
+      assert.are.equal("current", settings.shareAlts)
+      p4.advance(1)
+      assert.are.equal("H", last_sent_msg().t)
+    end)
+
+    it("ignores a value that is not one of the choices", function()
+      local opts = registered_options("guild")
+      opts.args.shareLevel.set(nil, "everything")
+      opts.args.shareAlts.set(nil, "nobody")
+      assert.are.equal("quality", settings.shareLevel)
+      assert.are.equal("guild", settings.shareAlts)
+    end)
+
+    it("changes the line toggles without announcing anything", function()
+      local opts = registered_options("guild")
+      opts.args.tooltipLine.set(nil, false)
+      opts.args.panelLine.set(nil, false)
+      opts.args.useNative.set(nil, false)
+      assert.is_false(settings.tooltipLine); assert.is_false(settings.panelLine); assert.is_false(settings.useNative)
+      p4.advance(2)
+      assert.are.equal(0, #p4.comm.sent)
+    end)
+
+    it("forgets the current guild's directory behind a confirmation", function()
+      local opts = registered_options("guild")
+      assert.is_function(opts.args.purge.confirm)
+      assert.is_string(opts.args.purge.confirm())
+      assert.is_not_nil(ns.FS.db.global.guildDirectory["G-Realm"])
+      opts.args.purge.func()
+      assert.is_nil(ns.FS.db.global.guildDirectory["G-Realm"])
+    end)
+
+    it("is disabled and writes nothing while the saved data is from a newer version", function()
+      local opts = registered_options("guild")
+      local before = ns.Util.DeepCopy(ns.FS.db.global)
+      local sentBefore = #p4.comm.sent
+      ns.FS.dbIsNewer = true
+      for _, key in ipairs(OPTION_KEYS) do
+        assert.is_true(opts.args[key].disabled(), key)
+      end
+      assert.has_no.errors(function()
+        opts.args.share.set(nil, false)
+        opts.args.shareLevel.set(nil, "recipes")
+        opts.args.shareAlts.set(nil, "all")
+        opts.args.tooltipLine.set(nil, false)
+        opts.args.panelLine.set(nil, false)
+        opts.args.useNative.set(nil, false)
+        opts.args.purge.func()
+      end)
+      p4.advance(5)
+      assert.are.same(before, ns.FS.db.global)
+      assert.are.equal(sentBefore, #p4.comm.sent)
+      ns.FS.dbIsNewer = false
+      assert.is_false(opts.args.share.disabled())
+    end)
+  end)
+
+  ---------------------------------------------------------------------------
+  -- Tab
+  ---------------------------------------------------------------------------
+
+  describe("tab", function()
+    local container, refreshed
+
+    local function view() return ns.FS:GetModule("GuildTab"):GetView() end
+    local function open(width)
+      container = CreateFrame("Frame")
+      container:SetSize(width or 716, 500)
+      local def = registered_tab("guild")
+      def.build(container)
+      def.refresh(container)
+      return view()
+    end
+    local function resize(width)
+      container:SetSize(width, 500)
+      container:GetScript("OnSizeChanged")(container, width, 500)
+    end
+    local function row_frame(grid, i) return grid.rowPool[i] end
+    local function click(frame) frame:GetScript("OnClick")(frame) end
+    local function hover(frame) frame:GetScript("OnEnter")(frame) end
+    local function refresh_now() registered_tab("guild").refresh(container) end
+
+    before_each(function()
+      refreshed = {}
+      container = nil
+      MW.RefreshTab = function(_, id)
+        refreshed[#refreshed + 1] = id
+        if container then registered_tab(id).refresh(container) end
+      end
+    end)
+
+    it("registers at order 90 in phase 4 through a core registrar", function()
+      local def = registered_tab("guild")
+      assert.are.equal(90, def.order)
+      assert.are.equal(4, def.phase)
+      assert.are.equal("Guild", def.label)
+      assert.are.equal("Interface\\Icons\\INV_Misc_Tabard_01", def.icon)
+      assert.is_function(def.build); assert.is_function(def.refresh)
+      assert.is_true(ns.FS:GetModule("GuildTab").coreModule)
+      assert.is_true(ns.FS:GetModule("GuildTab"):IsEnabled())
+    end)
+
+    describe("Layout", function()
+      local Tab
+      before_each(function() Tab = ns.UI.GuildTab end)
+
+      it("gives the Recipe column at least 120 px at 516 px and all columns room", function()
+        local l = Tab.Layout(516)
+        assert.same({}, l.hidden)
+        assert.are.equal(516 - 12 - 306 - 20, l.flex)
+        assert.is_true(l.flex >= 120)
+        assert.are.equal(716 - 12 - 306 - 20, Tab.Layout(716).flex)
+      end)
+
+      it("hides Source, then Conc Q, then Age when the width is short", function()
+        assert.same({ source = true }, Tab.Layout(400).hidden)
+        assert.same({ source = true, qc = true }, Tab.Layout(380).hidden)
+        assert.same({ source = true, qc = true, age = true }, Tab.Layout(330).hidden)
+        for _, w in ipairs({ 400, 380, 330 }) do assert.is_true(Tab.Layout(w).flex >= 120, w) end
+      end)
+
+      it("hides nothing for an unknown width", function()
+        assert.same({}, Tab.Layout(nil).hidden)
+        assert.is_nil(Tab.Layout(0).flex)
+      end)
+    end)
+
+    it("builds the bar and lays it out at 516 and 716 px", function()
+      local v = open(516)
+      assert.are.equal("TOPLEFT", point(v.search)[1])
+      assert.same({ "TOPLEFT", v.bar, "TOPLEFT", 0, -4 }, point(v.search))
+      assert.are.equal(170, v.search:GetWidth())
+      assert.same({ "TOPLEFT", v.bar, "TOPLEFT", 174, -4 }, point(v.profButton))
+      assert.are.equal(150, v.profButton:GetWidth())
+      assert.same({ "TOPRIGHT", v.bar, "TOPRIGHT", 0, -4 }, point(v.askButton))
+      assert.are.equal(100, v.askButton:GetWidth())
+      assert.same({ "TOPRIGHT", v.bar, "TOPRIGHT", -104, -4 }, point(v.whisperButton))
+      assert.are.equal(72, v.whisperButton:GetWidth())
+      assert.is_true(170 + 4 + 150 + 4 <= 516 - 12 - 100 - 4 - 72) -- the four controls never overlap
+      assert.are.equal(516 - 12, v.status:GetWidth())
+      assert.are.equal(178, v.grid.layout.flex)
+      resize(716)
+      assert.same({ "TOPRIGHT", v.bar, "TOPRIGHT", 0, -4 }, point(v.askButton))
+      assert.are.equal(716 - 12, v.status:GetWidth())
+      assert.are.equal(378, v.grid.layout.flex)
+      resize(380)
+      assert.same({ source = true, qc = true }, v.grid.layout.hidden)
+    end)
+
+    it("shows one grid row per crafter with the six columns", function()
+      local v = open()
+      assert.are.equal(6, v.grid.shownRows)
+      local axe = row_frame(v.grid, 1)
+      assert.are.same({ "Everforged Axe", "B-Realm", "2", "4", "Addon", "<1m" },
+        { plain(axe.cells.recipe:GetText()), plain(axe.cells.crafter:GetText()), axe.cells.q:GetText(),
+          axe.cells.qc:GetText(), axe.cells.source:GetText(), axe.cells.age:GetText() })
+      local mace_c = row_frame(v.grid, 3)
+      assert.are.same({ "C-Realm", EM_DASH, EM_DASH }, { plain(mace_c.cells.crafter:GetText()), mace_c.cells.q:GetText(),
+        mace_c.cells.qc:GetText() })                                    -- recipes-only profile: quality unknown, never 0
+      local bandage = row_frame(v.grid, 5)
+      assert.are.same({ "D-Realm", EM_DASH, EM_DASH, "Guild query" }, { plain(bandage.cells.crafter:GetText()),
+        bandage.cells.q:GetText(), bandage.cells.qc:GetText(), bandage.cells.source:GetText() })
+      assert.is_false(v.empty:IsShown())
+    end)
+
+    it("dims crafters known to be offline", function()
+      local v = open()
+      local offline = row_frame(v.grid, 6)                              -- B-Realm, native, online = false
+      assert.are.equal(DIM .. "B-Realm|r", offline.cells.crafter:GetText())
+      local online = row_frame(v.grid, 5)
+      assert.are.equal("D-Realm", online.cells.crafter:GetText())
+    end)
+
+    it("escapes pipes in peer names and writes a copy reported by someone else as 'via owner'", function()
+      store("Ev|cffff0000il-Realm", "Peer|TBad-Realm", { verified = false, recipes = { [101] = { 5, 5 } } })
+      local v = open()
+      local text
+      for i = 1, v.grid.shownRows do
+        local t = row_frame(v.grid, i).cells.crafter:GetText()
+        if t:find("Ev", 1, true) then text = t end
+      end
+      assert.truthy(text)
+      assert.truthy(text:find("Ev||cffff0000il-Realm (via Peer||TBad-Realm)", 1, true))
+      assert.is_nil(text:find("[^|]|c"))
+    end)
+
+    it("shows every value, hidden columns included, in the row tooltip", function()
+      local v = open(380)                                              -- source and conc Q hidden
+      local row = row_frame(v.grid, 2)                                 -- Everforged Mace / B-Realm
+      hover(row)
+      local text = plain(table.concat(tooltip.lines, "\n"))
+      assert.truthy(text:find("Everforged Mace", 1, true))
+      assert.truthy(text:find("B-Realm", 1, true))
+      assert.truthy(text:find("Blacksmithing", 1, true) or text:find("2907", 1, true))
+      assert.truthy(text:find("Q3", 1, true))
+      assert.truthy(text:find("Q5", 1, true))
+      assert.truthy(text:find("Addon", 1, true))
+      assert.truthy(text:find("synced", 1, true))
+    end)
+
+    it("filters by the search box after 0.3 s and by the profession button", function()
+      local v = open()
+      v.search:Type("mace")
+      assert.are.equal(6, v.grid.shownRows)                            -- nothing yet
+      p4.advance(0.3)
+      assert.same({ "Everforged Mace", "Everforged Mace" }, (function()
+        local out = {}
+        for i = 1, v.grid.shownRows do out[i] = plain(row_frame(v.grid, i).cells.recipe:GetText()) end
+        return out
+      end)())
+      v.search:Type("")
+      assert.are.equal(6, v.grid.shownRows)                            -- clearing is immediate
+      assert.are.equal("All professions", v.profButton:GetText())
+      click(v.profButton)
+      assert.truthy(v.profButton:GetText():find("Alchemy", 1, true))
+      assert.are.equal(1, v.grid.shownRows)
+      click(v.profButton)
+      assert.truthy(v.profButton:GetText():find("Blacksmithing", 1, true))
+      assert.are.equal(5, v.grid.shownRows)
+      click(v.profButton)
+      assert.are.equal("All professions", v.profButton:GetText())
+      assert.are.equal(6, v.grid.shownRows)
+    end)
+
+    it("selects a clicked row without whispering anyone", function()
+      local v = open()
+      assert.is_false(v.whisperButton:IsEnabled())
+      click(row_frame(v.grid, 2))
+      assert.are.same({}, W.tells)
+      assert.are.equal(100, v.selected.recipeID)
+      assert.truthy(v.status:GetText():find("Everforged Mace", 1, true))
+      assert.is_true(v.whisperButton:IsEnabled())
+    end)
+
+    it("opens a whisper to the crafter only on a double click or the Whisper button", function()
+      local v = open()
+      local row = row_frame(v.grid, 2)
+      row:GetScript("OnDoubleClick")(row)
+      assert.are.same({ { "B-Realm" } }, W.tells)
+      assert.are.equal(100, v.selected.recipeID)
+      click(row_frame(v.grid, 5))
+      assert.are.equal(1, #W.tells)
+      click(v.whisperButton)
+      assert.are.same({ "B-Realm", "D-Realm" }, { W.tells[1][1], W.tells[2][1] })
+      assert.are.equal(200, v.selected.recipeID)
+    end)
+
+    it("whispers the owner of a copy the character did not confirm (a '(via owner)' row)", function()
+      store("Twink-Realm", "Main-Realm", { verified = false, recipes = { [101] = { 5, 5 } } })
+      local v = open()
+      local target
+      for i = 1, v.grid.shownRows do
+        if plain(row_frame(v.grid, i).cells.crafter:GetText()):find("Twink-Realm (via Main-Realm)", 1, true) then
+          target = row_frame(v.grid, i)
+        end
+      end
+      click(target)
+      hover(v.whisperButton)
+      assert.truthy(table.concat(tooltip.lines, "\n"):find("Main-Realm", 1, true))
+      click(v.whisperButton)
+      assert.are.same({ { "Main-Realm" } }, W.tells)
+    end)
+
+    it("never sends a chat message itself", function()
+      local v = open()
+      _G.SendChatMessage = function() error("SendChatMessage must not be called") end
+      assert.has_no.errors(function() click(row_frame(v.grid, 1)) end)
+    end)
+
+    describe("Ask guild", function()
+      it("says when the profession of the selected recipe is not known", function()
+        local Tab = ns.UI.GuildTab
+        assert.are.same({ false, "noline" }, { Tab.AskState({ enabled = true, guildKey = "G-Realm", useNative = true,
+          available = true, selected = { recipeID = 700 } }) })
+        local v = open()
+        v.selected = { recipeID = 700, recipeName = "Everforged Helm", guildKey = "G-Realm" }   -- no skillLineID
+        refresh_now()
+        assert.is_false(v.askButton:IsEnabled())
+        hover(v.askButton)
+        assert.truthy(table.concat(tooltip.lines, "\n"):find("The profession of this recipe is not known yet", 1, true))
+      end)
+
+      it("is disabled until a row is selected", function()
+        local v = open()
+        assert.is_false(v.askButton:IsEnabled())
+        hover(v.askButton)
+        assert.truthy(table.concat(tooltip.lines, "\n"):find("row", 1, true))
+        click(row_frame(v.grid, 5))
+        assert.is_true(v.askButton:IsEnabled())
+      end)
+
+      it("is disabled while the chat gate is locked, with 'Sync paused' in the footer", function()
+        local v = open()
+        click(row_frame(v.grid, 5))
+        p4.restriction.lockdown = true
+        ns.FS:SendMessage(ns.Msg.COMM_GATE_CHANGED, true, "lockdown")
+        p4.advance(0.5)
+        assert.is_false(v.askButton:IsEnabled())
+        assert.truthy(v.footer:GetText():find("^Sync paused %(instance%)"))
+        p4.restriction.lockdown = false
+        ns.FS:SendMessage(ns.Msg.COMM_GATE_CHANGED, false)
+        p4.advance(0.5)
+        assert.is_true(v.askButton:IsEnabled())
+        assert.is_nil(v.footer:GetText():find("paused", 1, true))
+      end)
+
+      it("is disabled when the guild recipe list is switched off in the settings", function()
+        local v = open()
+        click(row_frame(v.grid, 5))
+        settings.useNative = false
+        refresh_now()
+        assert.is_false(v.askButton:IsEnabled())
+        assert.are.equal(0, p4.guild.queryCount)
+        v.askButton:GetScript("OnClick")(v.askButton)                  -- a click anyway asks nothing
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("is disabled while the saved data is from a newer version (no answer would be stored)", function()
+        local v = open()
+        click(row_frame(v.grid, 5))
+        ns.FS.dbIsNewer = true
+        refresh_now()
+        assert.is_false(v.askButton:IsEnabled())
+        hover(v.askButton)
+        assert.truthy(table.concat(tooltip.lines, "\n"):find("Read-only", 1, true))
+        v.askButton:GetScript("OnClick")(v.askButton)
+        assert.are.equal(0, p4.guild.queryCount)
+        assert.truthy(v.status:GetText():find("Read-only", 1, true))
+        assert.are.same({ false, "readonly" }, { ns.UI.GuildTab.AskState({ enabled = true, readOnly = true,
+          guildKey = "G-Realm", useNative = true, selected = {} }) })
+      end)
+
+      it("queries the selected recipe and shows the answer", function()
+        local v = open()
+        click(row_frame(v.grid, 2))                                   -- Everforged Mace, skill line 2907
+        v.askButton:GetScript("OnClick")(v.askButton)
+        assert.are.equal(1, p4.guild.queryCount)
+        assert.same({ skillLineID = 2907, recipeID = 100 }, { skillLineID = p4.guild.lastQuery.skillLineID,
+          recipeID = p4.guild.lastQuery.recipeID })
+        assert.truthy(v.status:GetText():find("Asking", 1, true))
+        p4.guild.postQuery = { skillLineID = 2907, recipeID = 100,
+          list = { { "Zed", "Zed-Realm", "MAGE", true }, { "Yan", "Yan-Realm", "ROGUE", false } } }
+        W.fire("GUILD_RECIPE_KNOWN_BY_MEMBERS")
+        assert.truthy(v.status:GetText():find("2 can craft", 1, true))
+        p4.advance(2)                                                  -- FS_GUILD_CHANGED, then the debounced refresh
+        assert.truthy(refreshed[1] == "guild")
+        local names = {}
+        for i = 1, v.grid.shownRows do names[#names + 1] = plain(row_frame(v.grid, i).cells.crafter:GetText()) end
+        assert.truthy((table.concat(names, ","):find("Zed-Realm", 1, true)))
+      end)
+
+      it("says why a query failed", function()
+        local v = open()
+        click(row_frame(v.grid, 2))
+        v.askButton:GetScript("OnClick")(v.askButton)
+        p4.advance(6)
+        assert.truthy(v.status:GetText():find("did not answer", 1, true))
+      end)
+    end)
+
+    describe("typed search", function()
+      local ITEM_LINK = "|cffa335ee|Hitem:6001::::::::|h[Everforged Mace]|h|r"
+
+      before_each(function()
+        _G.ChatFrameUtil.InsertLink = function() return false end       -- the game's own function, hooked at build
+      end)
+
+      local function shown(v)
+        local out = {}
+        for i = 1, v.grid.shownRows do
+          out[i] = plain(row_frame(v.grid, i).cells.recipe:GetText()) .. "/" .. plain(row_frame(v.grid, i).cells.crafter:GetText())
+        end
+        return out
+      end
+
+      it("takes a link or a long text and says so in the box", function()
+        local v = open()
+        assert.are.equal(255, v.search.maxLetters)
+        assert.are.equal("Recipe, crafter or item link...", v.search.Instructions:GetText())
+      end)
+
+      it("selects the only found recipe and asks the guild about it on click", function()
+        local v = open()
+        v.search:Type("Everforged Helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)
+        assert.are.equal(2907, v.selected.skillLineID)
+        assert.is_nil(v.selected.whisper)
+        assert.are.equal(0, p4.guild.queryCount)                         -- never asks without a click
+        assert.is_true(v.askButton:IsEnabled())
+        assert.truthy(v.status:GetText():find("Everforged Helm", 1, true))
+        click(v.askButton)
+        assert.are.equal(1, p4.guild.queryCount)
+        assert.same({ skillLineID = 2907, recipeID = 700 }, { skillLineID = p4.guild.lastQuery.skillLineID,
+          recipeID = p4.guild.lastQuery.recipeID })
+        assert.truthy(v.status:GetText():find("Asking", 1, true))
+        p4.guild.postQuery = { skillLineID = 2907, recipeID = 700, list = { { "Zed", "Zed-Realm", "MAGE", true } } }
+        W.fire("GUILD_RECIPE_KNOWN_BY_MEMBERS")
+        assert.truthy(v.status:GetText():find("1 can craft", 1, true))
+      end)
+
+      it("shows a placeholder row with dashes and a tooltip that says what to do", function()
+        local v = open()
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(1, v.grid.shownRows)
+        local row = row_frame(v.grid, 1)
+        assert.are.same({ "Everforged Helm", DIM .. "no known crafter|r", EM_DASH, EM_DASH, EM_DASH, EM_DASH },
+          { row.cells.recipe:GetText(), row.cells.crafter:GetText(), row.cells.q:GetText(), row.cells.qc:GetText(),
+            row.cells.source:GetText(), row.cells.age:GetText() })
+        assert.is_false(v.empty:IsShown())
+        hover(row)
+        assert.are.same({ "Everforged Helm",
+          "No guildmate is known to craft this yet. Select the row, then click \"Ask guild\"." }, tooltip.lines)
+      end)
+
+      it("selects a placeholder row on a click and a double click, without a whisper target", function()
+        local v = open()
+        v.search:Type("everforged"); p4.advance(0.3)
+        assert.is_nil(v.selected)                                        -- three recipes found: nothing chosen for you
+        local helm
+        for i = 1, v.grid.shownRows do
+          if row_frame(v.grid, i).cells.recipe:GetText() == "Everforged Helm" then helm = row_frame(v.grid, i) end
+        end
+        click(helm)
+        assert.are.equal(700, v.selected.recipeID)
+        assert.is_nil(v.selected.whisper)
+        assert.is_false(v.whisperButton:IsEnabled())
+        assert.is_true(v.askButton:IsEnabled())
+        helm:GetScript("OnDoubleClick")(helm)
+        assert.are.same({}, W.tells)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("lists a recipe's crafters and selects it when the search finds just that recipe", function()
+        local v = open()
+        v.search:Type("mace"); p4.advance(0.3)
+        assert.same({ "Everforged Mace/B-Realm", "Everforged Mace/C-Realm" }, shown(v))
+        assert.are.equal(100, v.selected.recipeID)
+        assert.is_nil(v.selected.whisper)
+        assert.are.equal(2907, v.selected.skillLineID)
+        click(row_frame(v.grid, 2))                                      -- choosing a crafter keeps the recipe
+        assert.are.equal("C-Realm", v.selected.whisper)
+        v.search:Type("everforged mace"); p4.advance(0.3)
+        assert.are.equal("C-Realm", v.selected.whisper)                  -- the same recipe stays as chosen
+      end)
+
+      -- "helm" finds one recipe (the Helm, nobody crafts it) and also lists Helmsman's Axe by the crafter's name.
+      local function with_helmsman()
+        store("Helmsman-Realm", "Peer-Realm", { recipes = { [101] = { 2, 4 } } })
+        local v = open()
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)                       -- a new search text selects the only recipe
+        assert.same({ "Everforged Axe/Helmsman-Realm", "Everforged Helm/no known crafter" }, shown(v))
+        return v
+      end
+
+      it("keeps a row the player chose across a refresh while the search still finds one recipe", function()
+        local v = with_helmsman()
+        click(row_frame(v.grid, 1))                                      -- Helmsman's Axe
+        assert.are.equal(101, v.selected.recipeID)
+        refresh_now()
+        assert.are.equal(101, v.selected.recipeID)
+        assert.are.equal("Helmsman-Realm", v.selected.whisper)
+        ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "G-Realm"); p4.advance(2)
+        p4.advance(61)                                                   -- the minute tick
+        assert.are.equal(101, v.selected.recipeID)
+      end)
+
+      it("keeps the last action's feedback across a refresh", function()
+        local v = with_helmsman()
+        click(row_frame(v.grid, 1))
+        click(v.askButton)
+        assert.truthy(v.status:GetText():find("Asking", 1, true))
+        refresh_now()
+        assert.truthy(v.status:GetText():find("Asking", 1, true))
+        assert.are.equal(101, v.selected.recipeID)
+      end)
+
+      it("selects a found recipe once the profession filter shows it", function()
+        local v = open()
+        click(v.profButton)                                              -- Alchemy (2906); the Helm is Blacksmithing
+        assert.truthy(v.profButton:GetText():find("Alchemy", 1, true))
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(0, v.grid.shownRows)
+        assert.is_nil(v.selected)                                        -- hidden: the auto-select is not used up
+        assert.is_false(v.askButton:IsEnabled())
+        click(v.profButton)                                              -- Blacksmithing lists it now
+        assert.are.equal(1, v.grid.shownRows)
+        assert.are.equal(700, v.selected.recipeID)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("asks FindRecipes once per refresh", function()
+        local v = open()
+        local calls, orig = 0, Guild.FindRecipes
+        Guild.FindRecipes = function(...) calls = calls + 1; return orig(...) end
+        finally(function() Guild.FindRecipes = orig end)
+        v.search:Type("Everforged Helm"); p4.advance(0.3)                -- one refresh, from the search debounce
+        assert.are.equal(1, calls)
+        assert.are.equal(700, v.selected.recipeID)
+      end)
+
+      it("selects the only found recipe again after a guild change with the same text", function()
+        local v = open()
+        v.search:Type("Everforged Helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)
+        p4.guild.key = { "Other", "Realm" }; Guild:OnGuildUpdate(); p4.advance(3)
+        assert.are.equal("Other-Realm", Guild.guildKey)
+        assert.are.equal(700, v.selected.recipeID)
+        assert.are.equal("Other-Realm", v.selected.guildKey)
+      end)
+
+      it("selects the only found recipe again for each new search text", function()
+        local v = open()
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)
+        v.search:Type("axe"); p4.advance(0.3)
+        assert.are.equal(101, v.selected.recipeID)
+        v.search:Type("everforged mace"); p4.advance(0.3)
+        assert.are.equal(100, v.selected.recipeID)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("selects the newly found recipe when another one was selected", function()
+        local v = open()
+        click(row_frame(v.grid, 5))                                      -- Silk Bandage
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("explains an item link it cannot resolve", function()
+        local v = open()
+        v.search:Type("|cffffffff|Hitem:1::::|h[Nothing Here]|h|r"); p4.advance(0.3)
+        assert.are.equal(0, v.grid.shownRows)
+        assert.are.equal("No recipe found for this item. Type the recipe's name instead.", plain(v.empty:GetText()))
+        assert.is_true(v.empty:IsShown())
+        assert.is_nil(v.selected)
+        assert.is_false(v.askButton:IsEnabled())
+        v.search:Type("zzz"); p4.advance(0.3)
+        assert.truthy(v.empty:GetText():find("No crafters match", 1, true))
+      end)
+
+      it("shows the crafters for a pasted recipe or item link", function()
+        p4.fake_module(ns, "Recipes", { FindRecipesForItem = function(_, id)
+          return id == 6001 and { { recipeID = 100, quality = 1 } } or {} end })
+        local v = open()
+        v.search:Type(ITEM_LINK); p4.advance(0.3)
+        assert.same({ "Everforged Mace/B-Realm", "Everforged Mace/C-Realm" }, shown(v))
+        assert.are.equal(100, v.selected.recipeID)
+        v.search:Type("|cffffd000|Henchant:700|h[Everforged Helm]|h|r"); p4.advance(0.3)
+        assert.same({ "Everforged Helm/no known crafter" }, shown(v))
+        assert.are.equal(700, v.selected.recipeID)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("cannot ask about a recipe link whose profession is unknown", function()
+        local v = open()
+        v.search:Type("|cffffd000|Henchant:424242|h[Mystery]|h|r"); p4.advance(0.3)
+        assert.are.equal(424242, v.selected.recipeID)
+        assert.is_nil(v.selected.skillLineID)
+        assert.is_false(v.askButton:IsEnabled())
+        click(v.askButton)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("never asks the guild without a click", function()
+        local v = open()
+        for _, text in ipairs({ "helm", "everforged", "mace", ITEM_LINK, "he" }) do
+          v.search:Type(text); p4.advance(0.3)
+        end
+        v.search:Type("Everforged Helm"); p4.advance(0.3)
+        p4.advance(70)
+        assert.are.equal(0, p4.guild.queryCount)
+      end)
+
+      it("keeps the selected recipe when guild data arrives and the tab refreshes", function()
+        local v = open()
+        v.search:Type("helm"); p4.advance(0.3)
+        assert.are.equal(700, v.selected.recipeID)
+        store("N-Realm", "Peer-Realm", { recipes = { [700] = { 2, 3 } } })       -- a DATA for the selected recipe
+        Guild:_Changed()
+        p4.advance(2)
+        assert.is_true(#refreshed >= 1)
+        assert.are.equal(700, v.selected.recipeID)
+        assert.same({ "Everforged Helm/N-Realm" }, shown(v))
+        assert.is_true(v.askButton:IsEnabled())
+        assert.truthy(v.status:GetText():find("Everforged Helm", 1, true))
+      end)
+
+      it("keeps the selected recipe when a refresh no longer lists it", function()
+        local v = open()
+        click(row_frame(v.grid, 5))
+        v.search:Type("zzz"); p4.advance(0.3)
+        assert.are.equal(200, v.selected.recipeID)
+        assert.is_true(v.askButton:IsEnabled())
+      end)
+
+      it("inserts a shift-clicked link only while the search box has focus", function()
+        local v = open()
+        v.search.focused = true
+        _G.ChatFrameUtil.InsertLink(ITEM_LINK)
+        assert.truthy(v.search:GetText():find("Hitem:6001", 1, true))
+        v.search.focused = false
+        v.search:SetText("")
+        _G.ChatFrameUtil.InsertLink("|Hitem:1|h[x]|h")
+        assert.are.equal("", v.search:GetText())
+      end)
+
+      it("runs the search for an inserted link after the usual 0.3 s", function()
+        local v = open()
+        v.search.focused = true
+        _G.ChatFrameUtil.InsertLink("|cffffd000|Henchant:700|h[Everforged Helm]|h|r")
+        assert.are.equal(6, v.grid.shownRows)
+        p4.advance(0.3)
+        assert.same({ "Everforged Helm/no known crafter" }, shown(v))
+      end)
+
+      it("inserts nothing while the tab is turned off", function()
+        local v = open()
+        v.search.focused = true
+        ns.FS:GetModule("GuildTab"):Disable()
+        _G.ChatFrameUtil.InsertLink(ITEM_LINK)
+        assert.are.equal("", v.search:GetText())
+      end)
+
+      it("hooks the game's function once, and its post-hook never raises", function()
+        local before = #W.hooks
+        open()
+        assert.are.equal(before + 1, #W.hooks)
+        local v = open()                                                 -- a second build hooks nothing more
+        assert.are.equal(before + 1, #W.hooks)
+        v.search.Insert = function() error("boom") end
+        v.search.focused = true
+        assert.has_no.errors(function() _G.ChatFrameUtil.InsertLink(ITEM_LINK) end)
+      end)
+
+      it("falls back to the older ChatEdit_InsertLink, and to nothing without either", function()
+        _G.ChatFrameUtil.InsertLink = nil
+        _G.ChatEdit_InsertLink = function() return false end
+        finally(function() _G.ChatEdit_InsertLink = nil end)
+        boot()
+        local v = open()
+        v.search.focused = true
+        _G.ChatEdit_InsertLink(ITEM_LINK)
+        assert.truthy(v.search:GetText():find("Hitem:6001", 1, true))
+        _G.ChatEdit_InsertLink = nil
+        boot()
+        assert.has_no.errors(function() open() end)
+      end)
+    end)
+
+    it("shows the sync summary in the footer, leading with its key word", function()
+      local v = open()
+      local text = v.footer:GetText()
+      assert.truthy(text:find("^Sync: on"))
+      assert.truthy(text:find("2 with addon", 1, true))
+      assert.truthy(text:find("3 profiles", 1, true))
+      settings.share = false
+      refresh_now()
+      assert.truthy(v.footer:GetText():find("^Sync: sharing off"))
+      hover(v.footerHit)
+      assert.truthy(#tooltip.lines > 1)
+    end)
+
+    it("says in the footer, its tooltip and the status line that sharing waits for the setup guide", function()
+      local onboarding = ns.FS:GetModule("Onboarding")
+      local base = onboarding.HoldsSync
+      onboarding.HoldsSync = function() return true end
+      finally(function() onboarding.HoldsSync = base end)
+      local held = "Sharing with your guild waits for the setup guide. Type /fs setup to finish or skip it."
+      local v = open()
+      assert.are.equal(1, (v.footer:GetText():find("Sync: waiting for the setup guide", 1, true)))   -- the short head
+      assert.is_nil(v.footer:GetText():find(held, 1, true))
+      hover(v.footerHit)
+      assert.truthy(contains(tooltip.lines, held))
+      assert.truthy(contains(tooltip.lines, "Sync: waiting for the setup guide"))
+      assert.truthy(plain(v.status:GetText()):find(held, 1, true))
+      onboarding.HoldsSync = base
+      ns.FS:SendMessage(ns.Msg.ONBOARDING_DONE); p4.advance(0.5)   -- the hold ended: the open tab refreshes
+      assert.truthy(v.footer:GetText():find("^Sync: on"))
+      assert.is_nil(plain(v.status:GetText()):find(held, 1, true))
+    end)
+
+    it("says when Guild is turned off, there is no guild, or nobody crafts anything", function()
+      local v = open()
+      Guild:Disable()
+      refresh_now()
+      assert.is_true(v.empty:IsShown())
+      assert.truthy(v.empty:GetText():find("Guild sync is turned off", 1, true))
+      assert.is_false(v.grid.frame:IsShown())
+      Guild:Enable()
+      refresh_now()
+      assert.is_true(v.grid.frame:IsShown())
+      assert.is_false(v.empty:IsShown())
+      p4.guild.key = nil
+      Guild:OnGuildUpdate()
+      refresh_now()
+      assert.truthy(v.empty:GetText():find("Not in a guild", 1, true))
+      p4.guild.key = { "G", "Realm" }
+      Guild:OnGuildUpdate()
+      ns.FS.db.global.guildDirectory["G-Realm"] = nil
+      refresh_now()
+      assert.truthy(v.empty:GetText():find("No guild crafters", 1, true))
+      v.search:Type("zzz")
+      p4.advance(0.3)
+      assert.truthy(v.empty:GetText():find("match", 1, true))
+    end)
+
+    it("refreshes after FS_GUILD_CHANGED and FS_COMM_GATE_CHANGED, once per burst", function()
+      open()
+      ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "G-Realm")
+      ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "G-Realm")
+      ns.FS:SendMessage(ns.Msg.COMM_GATE_CHANGED, true, "lockdown")
+      p4.advance(0.4)
+      assert.are.same({}, refreshed)
+      p4.advance(0.2)
+      assert.are.same({ "guild" }, refreshed)
+      p4.advance(0.5)
+      assert.are.same({ "guild" }, refreshed)
+    end)
+
+    it("keeps ages moving once a minute while shown, and stops when hidden", function()
+      open()
+      p4.advance(61)
+      assert.is_true(#refreshed >= 1)
+      refreshed = {}
+      container:GetScript("OnHide")(container)
+      p4.advance(130)
+      assert.are.same({}, refreshed)
+    end)
+
+    it("cancels everything pending and listens to nothing while disabled", function()
+      open()
+      ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "G-Realm")
+      ns.FS:GetModule("GuildTab"):Disable()
+      p4.advance(5)
+      assert.are.same({}, refreshed)
+      assert.are.same({}, W.registrations(ns.FS:GetModule("GuildTab")).messages)
+      assert.are.same({}, W.registrations(ns.FS:GetModule("GuildTab")).events)
+      ns.FS:SendMessage(ns.Msg.GUILD_CHANGED, "G-Realm")
+      p4.advance(5)
+      assert.are.same({}, refreshed)
+    end)
+
+    it("logs no errors through a refresh", function()
+      local v = open()
+      click(row_frame(v.grid, 1))
+      refresh_now()
+      assert.same({}, ns.FS.db.global.diagnostics.errors)
+    end)
+  end)
+end)
+
+describe("Guild tab in a full load", function()
+  it("is a core registrar before the Settings tab, and the guild group is registered", function()
+    local W = install_wow_stubs()
+    local ns = load_addon({})
+    W.boot()
+    local ids = {}
+    for _, t in ipairs(ns.FS:GetModule("MainWindow"):GetTabs()) do ids[#ids + 1] = t.id end
+    assert.same({ "dashboard", "recipes", "queue", "orders", "customers", "ledger", "characters", "planner", "guild",
+      "requests", "settings" }, ids)
+    assert.is_true(ns.FS:GetModule("GuildTab"):IsEnabled())
+    assert.is_nil(ns.FS:GetOptionsTable().args.modules.args.GuildTab)
+    assert.is_table(ns.FS:GetOptionsTable().args.guild)
+    ns.FS:HandleSlash("tab guild")
+    assert.equal("guild", ns.FS:GetModule("MainWindow"):GetSelectedTab())
+    ns.FS:HandleSlash("guild selftest")
+    assert.same({}, ns.FS.db.global.diagnostics.errors)
+  end)
+end)

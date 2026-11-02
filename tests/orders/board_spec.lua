@@ -1,0 +1,990 @@
+local P2 = require("tests.helpers.phase2")
+
+describe("Orders board", function()
+  local ns, O, W, claimed, claimCalls, board
+  before_each(function()
+    claimed, claimCalls, board = nil, {}, {}
+    ns, W = P2.boot({
+      C_CraftingOrders = { GetCrafterOrders = function() return board end,   -- what Blizzard's board holds at click time
+        GetCraftingOrderTime = function() return 5000 end, GetClaimedOrder = function() return claimed end,
+        GetOrderClaimInfo = function() return {claimsRemaining = 3} end, ClaimOrder = function(id, p) claimCalls[#claimCalls+1] = {id, p} end },
+      C_TradeSkillUI = { GetChildProfessionInfo = function() return {profession = 7} end,
+        GetItemCraftedQualityByItemInfo = function() return 3 end } })
+    P2.fake_module(ns, "Recipes", { Evaluate = function() return {expectedQuality=3, reagentCost=200000, flags={}} end, GetRanked = function() return {} end })
+    P2.fake_module(ns, "Customers", { IsBlocked = function(_, n) return n == "Bad-Silvermoon" end,
+      NormalizeName = function(_, n) return n and (n:find("-") and n or n .. "-Silvermoon") end })
+    P2.fake_module(ns, "Prices", { Get = function() return {} end })
+    P2.fake_module(ns, "Scanner", { GetSchematic = function() return {skillLineID = 2900} end, ProjectConcentration = function() return 500, 1000 end })
+    P2.load(ns, {"Data/OrderRewards.lua", "Modules/Orders.lua"}); O = ns.FS:GetModule("Orders")
+    -- Enabling Orders announces FS_ORDERS_CHANGED (tested below); the specs count the messages their own calls send.
+    for i = #W.messages, 1, -1 do
+      if W.messages[i][1] == "FS_ORDERS_CHANGED" then table.remove(W.messages, i) end
+    end
+  end)
+  it("replaces only the shown order type in the snapshot", function()
+    O:OnBoardShown(0, { P2.raw_order({orderID=1, orderType=0}), P2.raw_order({orderID=2, orderType=0}) })
+    O:OnBoardShown(2, { P2.raw_order({orderID=3}) })
+    assert.equal(3, #O:GetSnapshot().orders)
+    O:OnBoardShown(0, {})
+    assert.equal(1, #O:GetSnapshot().orders); assert.equal(1000, O:GetSnapshot().time)
+    assert.equal("Me-Silvermoon", O:GetSnapshot().charKey)
+  end)
+  describe("new orders", function()
+    local function sent(name)
+      local out = {}
+      for _, m in ipairs(W.messages) do if m[1] == name then out[#out + 1] = { unpack(m, 2) } end end
+      return out
+    end
+    it("sends FS_ORDERS_NEW for new matching orders on a scope seen before", function()
+      O:OnBoardShown(0, { P2.raw_order({ orderID = 1, orderType = 0 }) })
+      O:OnBoardShown(0, { P2.raw_order({ orderID = 1, orderType = 0 }), P2.raw_order({ orderID = 2, orderType = 0 }),
+        P2.raw_order({ orderID = 3, orderType = 0 }) })
+      assert.same({ { "Me-Silvermoon", 2, "public" } }, sent("FS_ORDERS_NEW"))
+      O:OnBoardShown(0, { P2.raw_order({ orderID = 1, orderType = 0 }), P2.raw_order({ orderID = 2, orderType = 0 }),
+        P2.raw_order({ orderID = 3, orderType = 0 }) })
+      assert.equal(1, #sent("FS_ORDERS_NEW"))   -- nothing new the third time
+      assert.equal("FS_ORDERS_NEW", ns.Msg.ORDERS_NEW)
+    end)
+    it("sends nothing for the first board of a scope", function()
+      O:OnBoardShown(0, { P2.raw_order({ orderID = 1, orderType = 0 }) })
+      assert.same({}, sent("FS_ORDERS_NEW"))
+      O:OnBoardShown(1, { P2.raw_order({ orderID = 5, orderType = 1 }) })   -- another type is another scope
+      assert.same({}, sent("FS_ORDERS_NEW"))
+      board = nil
+      O:OnBoardShown(0, { P2.raw_order({ orderID = 1, orderType = 0 }) }, 8)   -- another profession too
+      assert.same({}, sent("FS_ORDERS_NEW"))
+    end)
+    it("leaves hidden orders out of the count", function()
+      O:OnBoardShown(0, { P2.raw_order({ orderID = 1, orderType = 0 }) })
+      O:Settings().filters.orderTypes.public = false
+      O:OnBoardShown(0, { P2.raw_order({ orderID = 1, orderType = 0 }), P2.raw_order({ orderID = 2, orderType = 0 }) })
+      assert.same({}, sent("FS_ORDERS_NEW"))
+      O:Settings().filters.orderTypes.public = true
+      O:OnBoardShown(0, { P2.raw_order({ orderID = 1, orderType = 0 }), P2.raw_order({ orderID = 2, orderType = 0 }),
+        P2.raw_order({ orderID = 4, orderType = 0 }) })
+      assert.same({ { "Me-Silvermoon", 1, "public" } }, sent("FS_ORDERS_NEW"))   -- order 2 was stored while hidden
+    end)
+    local function ids(first, last, orderType)
+      local list = {}
+      for id = first, last do list[#list + 1] = P2.raw_order({ orderID = id, orderType = orderType or 0 }) end
+      return list
+    end
+    it("sends nothing when the next page of a list loads", function()
+      O:OnBoardShown(0, ids(1, 4))              -- stored: 1..4
+      O:OnBoardShown(0, ids(1, 2), nil, 0)      -- Search shows the first page (the others leave the board)
+      O:OnBoardShown(0, ids(1, 4), nil, 2)      -- scrolling loads the next page: the cumulative list
+      assert.same({}, sent("FS_ORDERS_NEW"))
+      O:OnBoardShown(0, ids(1, 4))              -- and Search again: nothing was new either
+      assert.same({}, sent("FS_ORDERS_NEW"))
+    end)
+    it("adds the orders of a later page to the seen set without announcing them", function()
+      O:OnBoardShown(0, ids(1, 2))
+      O:OnBoardShown(0, ids(1, 4), nil, 2)      -- 3 and 4 are on page 2: seen, not announced
+      assert.same({}, sent("FS_ORDERS_NEW"))
+      O:OnBoardShown(0, ids(1, 2))
+      O:OnBoardShown(0, ids(1, 4), nil, 2)
+      O:OnBoardShown(0, ids(1, 5))              -- only 5 was never seen
+      assert.same({ { "Me-Silvermoon", 1, "public" } }, sent("FS_ORDERS_NEW"))
+    end)
+    it("sends nothing for a one-page Refresh of known orders and one for a genuinely new order", function()
+      O:OnBoardShown(0, ids(1, 4))
+      O:OnBoardShown(0, ids(1, 2))              -- Search shows page 1
+      O:OnBoardShown(0, ids(1, 2), nil, 0)      -- a Refresh answer: one page of known orders
+      assert.same({}, sent("FS_ORDERS_NEW"))
+      O:OnBoardShown(0, ids(1, 3), nil, 0)      -- order 3 is known from before: still nothing
+      assert.same({}, sent("FS_ORDERS_NEW"))
+      O:OnBoardShown(0, ids(1, 2), nil, 0)
+      local fresh = ids(1, 2); fresh[3] = P2.raw_order({ orderID = 9, orderType = 0 })
+      O:OnBoardShown(0, fresh, nil, 0)
+      assert.same({ { "Me-Silvermoon", 1, "public" } }, sent("FS_ORDERS_NEW"))
+    end)
+    it("keeps the seen set per scope, prunes it with expiry and creates it lazily", function()
+      assert.is_nil(ns.FS.db.global.orderBoards)
+      O:OnBoardShown(0, ids(1, 2))
+      local seen = ns.FS.db.global.orderBoards["Me-Silvermoon"].seen
+      assert.is_number(seen["public:7"][1]); assert.is_number(seen["public:7"][2])
+      seen["public:7"][99] = 0                  -- expired long ago
+      seen["guild:7"] = { [98] = 0, [97] = 10 ^ 12 }
+      O:OnBoardShown(0, ids(1, 2))
+      assert.is_nil(seen["public:7"][99]); assert.is_nil(seen["guild:7"][98]); assert.is_number(seen["guild:7"][97])
+    end)
+    it("repairs a damaged seen field and writes nothing while the saved data is from a newer version", function()
+      O:OnBoardShown(0, ids(1, 2))
+      ns.FS.db.global.orderBoards["Me-Silvermoon"].seen = "damaged"
+      O:OnBoardShown(0, ids(1, 3))
+      assert.is_table(ns.FS.db.global.orderBoards["Me-Silvermoon"].seen)
+      assert.same({ { "Me-Silvermoon", 1, "public" } }, sent("FS_ORDERS_NEW"))
+      ns.FS.dbIsNewer = true
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      O:OnBoardShown(0, ids(1, 5))
+      assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+    end)
+    it("counts an order id once and ignores another character's board", function()
+      O:OnBoardShown(0, {})
+      ns.FS.CharKey = function() return "Alt-Silvermoon" end
+      O:OnBoardShown(0, { P2.raw_order({ orderID = 9, orderType = 0 }) })
+      assert.same({}, sent("FS_ORDERS_NEW"))   -- the alt's scope was not seen before
+      ns.FS.CharKey = function() return "Me-Silvermoon" end
+      O:OnBoardShown(0, { P2.raw_order({ orderID = 9, orderType = 0 }), P2.raw_order({ orderID = 9, orderType = 0 }) })
+      assert.same({ { "Me-Silvermoon", 1, "public" } }, sent("FS_ORDERS_NEW"))
+    end)
+  end)
+  describe("RequestBoard", function()
+    local open, page, profession
+    before_each(function()
+      open, profession = true, 7
+      page = { orderType = 2 }   -- the orders page: the tab it shows, and Blizzard's own request while one is in flight
+      _G.ProfessionsFrame = { OrdersPage = page }
+      ns.FS:GetModule("Scanner").IsProfessionOpen = function() return open end
+      C_TradeSkillUI.GetChildProfessionInfo = function() return { profession = profession } end
+    end)
+    after_each(function() _G.ProfessionsFrame = nil end)
+    local function answer(i, result, orderType, buckets) W.orderRequests[i].callback(result, orderType, buckets) end
+
+    it("refuses without a profession open, without the API and with a request in flight", function()
+      open = false
+      assert.same({ false, "noProfession" }, { O:RequestBoard() })
+      open = true
+      local api = C_FunctionContainers
+      _G.C_FunctionContainers = nil
+      assert.same({ false, "unavailable" }, { O:RequestBoard() })
+      _G.C_FunctionContainers = api
+      local ask = C_CraftingOrders.RequestCrafterOrders
+      C_CraftingOrders.RequestCrafterOrders = nil
+      assert.same({ false, "unavailable" }, { O:RequestBoard() })
+      assert.equal("unavailable", O:GetRequestState())   -- the panel hides Refresh from now on
+      C_CraftingOrders.RequestCrafterOrders = ask
+      assert.same({ true }, { O:RequestBoard() })
+      assert.same({ false, "busy" }, { O:RequestBoard() })
+      assert.equal(1, #W.orderRequests)
+    end)
+    it("sends the request fields and scores the board the callback reports", function()
+      assert.is_true(O:RequestBoard())
+      local r = W.orderRequests[1]
+      assert.same({ orderType = 2, searchFavorites = false, initialNonPublicSearch = false, forCrafter = true,
+        offset = 0, profession = 7, primarySort = { sortType = 0, reversed = false },
+        secondarySort = { sortType = 0, reversed = false } },
+        { orderType = r.orderType, searchFavorites = r.searchFavorites, initialNonPublicSearch = r.initialNonPublicSearch,
+          forCrafter = r.forCrafter, offset = r.offset, profession = r.profession, primarySort = r.primarySort,
+          secondarySort = r.secondarySort })
+      assert.is_function(r.callback)
+      board = { P2.raw_order({ orderID = 31 }) }
+      answer(1, 0, 2, false)
+      assert.equal(31, O:GetView(31).orderID)
+      assert.equal(31, O:GetLiveViews()[1].orderID)
+      assert.same({ true }, { O:RequestBoard() })   -- the callback ended the request
+    end)
+    it("asks for the tab the page shows, not the type of the last board", function()
+      O:OnBoardShown(2, {})      -- a personal board was shown last ...
+      page.orderType = 0         -- ... but the page is on the public tab now
+      assert.is_true(O:RequestBoard())
+      assert.equal(0, W.orderRequests[1].orderType)
+    end)
+    it("cannot ask while the orders page cannot be read", function()
+      _G.ProfessionsFrame = nil
+      assert.same({ false, "noProfession" }, { O:RequestBoard() })
+      _G.ProfessionsFrame = { OrdersPage = {} }
+      assert.same({ false, "noProfession" }, { O:RequestBoard() })
+      assert.equal(0, #W.orderRequests)
+    end)
+    it("ignores bucket and failed answers", function()
+      page.orderType = 0
+      assert.is_true(O:RequestBoard())
+      board = { P2.raw_order({ orderID = 32, orderType = 0 }) }
+      answer(1, 0, 0, true)   -- the public bucket list: nothing flat to score
+      assert.is_nil(O:GetView(32))
+      assert.is_true(O:RequestBoard())
+      answer(2, 5, 0, false)  -- a failed result
+      assert.is_nil(O:GetView(32))
+    end)
+    it("announces a bucket list shown, so the panel hears that Blizzard's request ended", function()
+      local n = #W.messages
+      O:OnBucketsShown()
+      assert.equal("FS_ORDERS_CHANGED", W.messages[n + 1][1])
+    end)
+    it("is busy while Blizzard's own request is in flight", function()
+      page.requestCallback = {}
+      assert.equal("busy", O:GetRequestState())
+      assert.same({ false, "busy" }, { O:RequestBoard() })
+      assert.equal(0, #W.orderRequests)
+      page.requestCallback = nil
+      assert.equal("ready", O:GetRequestState())
+    end)
+    it("drops an answer for another tab than the page shows now", function()
+      assert.is_true(O:RequestBoard())               -- asked on the personal tab (2)
+      page.orderType = 0                             -- the player switched to the public tab
+      board = { P2.raw_order({ orderID = 41, orderType = 2 }) }
+      answer(1, 0, 2, false)
+      assert.is_nil(O:GetView(41)); assert.same({}, O:GetLiveViews())
+      assert.equal("ready", O:GetRequestState())     -- the wait still ended
+    end)
+    it("drops a late answer after the timeout", function()
+      assert.is_true(O:RequestBoard())
+      W.advance(9); assert.same({ false, "busy" }, { O:RequestBoard() })
+      W.advance(2); assert.equal("ready", O:GetRequestState())
+      board = { P2.raw_order({ orderID = 42 }) }
+      answer(1, 0, 2, false)
+      assert.is_nil(O:GetView(42))
+    end)
+    it("drops an answer for a request a newer one replaced", function()
+      assert.is_true(O:RequestBoard())
+      W.advance(11)
+      assert.is_true(O:RequestBoard())
+      board = { P2.raw_order({ orderID = 43 }) }
+      answer(1, 0, 2, false)                          -- the first request answers late
+      assert.is_nil(O:GetView(43))
+      assert.equal("busy", O:GetRequestState())       -- and the second one is still waited for
+      answer(2, 0, 2, false)
+      assert.equal(43, O:GetView(43).orderID)
+    end)
+    it("drops an answer after the frame closed", function()
+      assert.is_true(O:RequestBoard())
+      O:ClearLive()
+      assert.equal("ready", O:GetRequestState())
+      board = { P2.raw_order({ orderID = 44 }) }
+      answer(1, 0, 2, false)
+      assert.is_nil(O:GetView(44))
+    end)
+    it("drops an answer after a switch to another profession, and is not busy there", function()
+      O:OnBoardShown(2, { P2.raw_order({ orderID = 45 }) })   -- profession 7's live board
+      assert.is_true(O:RequestBoard())
+      profession = 8
+      assert.equal("ready", O:GetRequestState())              -- the request was for profession 7
+      board = { P2.raw_order({ orderID = 46 }) }
+      answer(1, 0, 2, false)
+      assert.is_nil(O:GetView(46))
+      profession = 7
+      assert.equal(45, O:GetLiveViews()[1].orderID)           -- nothing was dropped from the open board
+    end)
+    it("reports new orders found by a Refresh until the next board show", function()
+      page.orderType = 0
+      O:OnBoardShown(0, { P2.raw_order({ orderID = 1, orderType = 0 }) })
+      assert.is_true(O:RequestBoard())
+      board = { P2.raw_order({ orderID = 1, orderType = 0 }), P2.raw_order({ orderID = 2, orderType = 0 }) }
+      answer(1, 0, 0, false)
+      assert.equal(1, O:GetRefreshFresh())
+      O:OnBoardShown(0, board)   -- Blizzard's own Search
+      assert.is_nil(O:GetRefreshFresh())
+    end)
+  end)
+  it("applies a late customer name and re-flags a blocked customer", function()
+    O:OnBoardShown(2, { P2.raw_order({customerName = P2.NIL}) })
+    assert.same({}, O:GetView(777).risks)
+    O:OnCustomerNameUpdated("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", "Bad", 777)
+    assert.equal("Bad-Silvermoon", O:GetView(777).customer); assert.same({"blockedCustomer"}, O:GetView(777).risks)
+  end)
+  it("rescoring uses the snapshot character and GetSnapshot drops expired orders", function()
+    O:OnBoardShown(2, { P2.raw_order({orderID=1}), P2.raw_order({orderID=2, expirationTime=4000}) })  -- expiresAt 0
+    ns.FS.CharKey = function() return "Alt-Silvermoon" end; local s = spy.on(O, "BuildContext")
+    O:Rescore()
+    assert.spy(s).was.called_with(O, "Me-Silvermoon")
+    assert.equal(1, #O:GetSnapshot().orders)
+  end)
+  it("debounces rescoring on bus messages", function()
+    local s = spy.on(O, "Rescore")
+    ns.FS:SendMessage("FS_PRICES_CHANGED", 2); ns.FS:SendMessage("FS_CUSTOMERS_CHANGED", "Bob-Silvermoon")
+    W.advance(0.4); assert.spy(s).was_not.called(); W.advance(0.2); assert.spy(s).was.called(1)
+  end)
+  it("claims the best order once and refuses while one is claimed", function()
+    board = { P2.raw_order({orderID=10, tipAmount=900000}), P2.raw_order({orderID=11}) }
+    O:OnBoardShown(2, board)
+    assert.equal(10, O:ClaimBest().orderID); assert.same({{10, 7}}, claimCalls)
+    claimed = P2.raw_order({orderID=10})
+    assert.same({nil, "alreadyClaimed"}, {O:ClaimBest()}); assert.equal(1, #claimCalls)
+  end)
+  it("sends FS_ORDER_FULFILLED on a successful fulfil response", function()
+    claimed = P2.raw_order({outputItemHyperlink = "|Hitem:211111::|h[Potion]|h"})
+    spy.on(O, "SendMessage")
+    O:OnFulfillClicked(777, "", 7)
+    O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 10, 777)   -- CannotFulfill: nothing sent
+    assert.spy(O.SendMessage).was_not.called()
+    O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+    assert.spy(O.SendMessage).was.called_with(O, "FS_ORDER_FULFILLED", {orderID=777, orderType="personal", customer="Bob-Silvermoon",
+      recipeID=4444, itemID=211111, quality=3, tip=500000, consortiumCut=50000, commission=450000, rewards={}, rewardsValue=0, time=1000, charKey="Me-Silvermoon"})
+  end)
+  it("marks a recraft order's FulfilledOrder with isRecraft", function()
+    claimed = P2.raw_order({isRecraft = true})
+    spy.on(O, "SendMessage")
+    O:OnFulfillClicked(777, "", 7)
+    O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+    local sent
+    for _, call in ipairs(O.SendMessage.calls) do
+      if call.vals[2] == "FS_ORDER_FULFILLED" then sent = call.vals[3] end
+    end
+    assert.is_true(sent.isRecraft)
+  end)
+  it("detects personal order arrivals after a baseline", function()
+    local t = {profession=7, professionName="Tailoring"}
+    assert.same({}, O:UpdatePersonalCounts({P2.merge(t, {numPersonalOrders=1})}))   -- first sighting is the baseline
+    assert.same({}, O:UpdatePersonalCounts({P2.merge(t, {numPersonalOrders=1})}))
+    assert.same({}, O:UpdatePersonalCounts({P2.merge(t, {numPersonalOrders=0})}))
+    assert.same({{profession=7, professionName="Tailoring", count=2, delta=2}}, O:UpdatePersonalCounts({P2.merge(t, {numPersonalOrders=2})}))
+  end)
+
+  ---------------------------------------------------------------------------
+  -- Beyond the brief's examples
+  ---------------------------------------------------------------------------
+
+  local function messages(name)
+    local out = {}
+    for _, m in ipairs(W.messages) do
+      if m[1] == name then out[#out + 1] = m end
+    end
+    return out
+  end
+
+  it("snapshot_stores_trimmed_copy", function()
+    local shared = { expectedQuality = 3, reagentCost = 200000, expectedSale = 900000, profit = 700000,
+      concentrationCost = 0, goldPerConcentration = 1234, flags = { estimated = true },
+      allocation = { { itemID = 100, quantity = 2 } }, reagents = { 1, 2, 3 }, breakdown = "big" }
+    ns.FS:GetModule("Recipes").Evaluate = function() return shared end
+    O:OnBoardShown(2, { P2.raw_order() })
+    local stored = ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777]
+    assert.is_table(stored)
+    assert.are_not.equal(shared, stored.result)
+    assert.same({ expectedQuality = 3, reagentCost = 200000, expectedSale = 900000, profit = 700000,
+      concentrationCost = 0, goldPerConcentration = 1234, flags = { estimated = true } }, stored.result)
+    assert.are_not.equal(shared.flags, stored.result.flags)
+    -- The live view keeps Recipes' result; the stored one is a separate deep copy.
+    local liveView = O:GetLiveViews()[1]
+    assert.equal(shared, liveView.result)
+    assert.are_not.equal(liveView.input, stored.input); assert.same(liveView.input, stored.input)
+    assert.are_not.equal(liveView.flags, stored.flags); assert.are_not.equal(liveView.risks, stored.risks)
+    shared.flags.estimated = false
+    assert.is_true(stored.result.flags.estimated)
+    -- GetSnapshot lists the stored copies.
+    assert.equal(stored, O:GetSnapshot().orders[1])
+  end)
+
+  it("scores each order once per board capture", function()
+    local evaluations, s = 0, spy.on(O, "BuildContext")
+    ns.FS:GetModule("Recipes").Evaluate = function() evaluations = evaluations + 1; return {expectedQuality=3, reagentCost=200000, flags={}} end
+    O:OnBoardShown(3, { P2.raw_order({orderID=1, orderType=3, npcOrderRewards={{itemLink="|Hitem:88888::|h[X]|h", count=1}}}),
+                        P2.raw_order({orderID=2, orderType=3}) })
+    assert.spy(s).was.called(1); assert.equal(2, evaluations)
+    assert.equal(1, ns.FS.db.global.ordersUnknownRewards["item:88888"].count)
+    O:Rescore()
+    assert.equal(1, ns.FS.db.global.ordersUnknownRewards["item:88888"].count)
+    assert.is_nil(O:GetView(1).customer)   -- NPC orders have no customer
+  end)
+
+  it("announces FS_ORDERS_CHANGED when turned back on, so the board cells and the tab notice follow at once", function()
+    O:Disable()
+    local before = #messages("FS_ORDERS_CHANGED")
+    O:Enable()
+    assert.equal(before + 1, #messages("FS_ORDERS_CHANGED"))
+  end)
+  it("sends FS_ORDERS_CHANGED for a board capture and lists live views by orderID", function()
+    O:OnBoardShown(2, { P2.raw_order({orderID=12}), P2.raw_order({orderID=11}) })
+    assert.equal(1, #messages("FS_ORDERS_CHANGED"))
+    local live = O:GetLiveViews()
+    assert.same({11, 12}, {live[1].orderID, live[2].orderID})
+    assert.equal(12, O:GetView(12).orderID); assert.is_nil(O:GetView(99))
+  end)
+
+  it("keeps the snapshot after the live set is cleared, and GetView falls back to it", function()
+    O:OnBoardShown(2, { P2.raw_order() })
+    O:ClearLive()
+    assert.same({}, O:GetLiveViews())
+    assert.equal(777, O:GetView(777).orderID)
+    assert.equal(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777], O:GetView(777))
+  end)
+
+  it("GetSnapshot shows the board of the character logged in now", function()
+    O:OnBoardShown(0, { P2.raw_order({orderID=1, orderType=0}) })
+    O:OnBoardShown(2, { P2.raw_order({orderID=2}) })
+    ns.FS.CharKey = function() return "Alt-Silvermoon" end
+    O:OnBoardShown(0, { P2.raw_order({orderID=3, orderType=0}) })
+    local snap = O:GetSnapshot()
+    assert.equal("Alt-Silvermoon", snap.charKey); assert.equal(1, #snap.orders); assert.equal(3, snap.orders[1].orderID)
+  end)
+
+  it("rescores stored views with the snapshot character and announces it", function()
+    O:OnBoardShown(2, { P2.raw_order() })
+    O:ClearLive()
+    ns.FS:GetModule("Recipes").Evaluate = function() return {expectedQuality=3, reagentCost=100000, flags={}} end
+    O:Rescore()
+    assert.equal(350000, O:GetView(777).score)
+    assert.equal("Me-Silvermoon", O:GetView(777).charKey)
+    assert.equal(3, #messages("FS_ORDERS_CHANGED"))   -- capture, ClearLive, Rescore
+  end)
+
+  it("applies updated patron rewards to the live view and the snapshot", function()
+    ns.FS:GetModule("Prices").Get = function(_, id) return { value = id == 210000 and 30000 or nil } end
+    O:OnBoardShown(3, { P2.raw_order({orderType=3}) })
+    assert.equal(0, O:GetView(777).rewardsValue)
+    O:OnRewardsUpdated("CRAFTINGORDERS_UPDATE_REWARDS", { {itemLink="|Hitem:210000::|h[R]|h", count=2} }, 777)
+    assert.equal(60000, O:GetView(777).rewardsValue)
+    assert.equal(60000, ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777].rewardsValue)
+    assert.same({ {itemID=210000, count=2} }, ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777].input.rewards)
+  end)
+
+  it("ignores name and reward updates for unknown orders and NPC customer names", function()
+    O:OnCustomerNameUpdated("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", "Bad", 1)
+    O:OnRewardsUpdated("CRAFTINGORDERS_UPDATE_REWARDS", {}, 1)
+    assert.equal(0, #messages("FS_ORDERS_CHANGED"))
+    O:OnBoardShown(3, { P2.raw_order({orderType=3, customerName=P2.NIL}) })
+    O:OnCustomerNameUpdated("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", "Bad", 777)
+    assert.is_nil(O:GetView(777).customer); assert.same({}, O:GetView(777).risks)
+  end)
+
+  describe("ClaimBest", function()
+    it("needs an open profession and calls nothing without one", function()
+      O:OnBoardShown(2, { P2.raw_order() })
+      _G.C_TradeSkillUI.GetChildProfessionInfo = function() return nil end
+      assert.same({nil, "noProfession"}, {O:ClaimBest()}); assert.same({}, claimCalls)
+    end)
+    it("claims only orders on the live board", function()
+      O:OnBoardShown(2, { P2.raw_order() })
+      O:ClearLive()
+      assert.same({nil, "none"}, {O:ClaimBest()}); assert.same({}, claimCalls)
+    end)
+    it("does not claim a public order without claims left", function()
+      _G.C_CraftingOrders.GetOrderClaimInfo = function() return {claimsRemaining = 0} end
+      O:OnBoardShown(0, { P2.raw_order({orderType=0}) })
+      assert.same({nil, "none"}, {O:ClaimBest()}); assert.same({}, claimCalls)
+    end)
+    it("does not claim a rewardTooCostly order by default", function()
+      O:Settings().rewardCostLimits.knowledge = 1000
+      assert.is_true(O:Settings().claimBlockingRisks.rewardTooCostly)
+      -- reagents cost 200000 against a tip of 0: 200000 per knowledge point
+      board = { P2.raw_order({ orderID = 20, tipAmount = 0, consortiumCut = 0, orderType = 3,
+        npcOrderRewards = { { currencyType = 3151, count = 1 } } }) }
+      O:OnBoardShown(3, board)
+      assert.same({ "rewardTooCostly" }, O:GetView(20).risks)
+      assert.same({ nil, "none" }, { O:ClaimBest() }); assert.same({}, claimCalls)
+      O:Settings().claimBlockingRisks.rewardTooCostly = false
+      assert.equal(20, O:ClaimBest().orderID)   -- the setting is read when claiming
+    end)
+    it("never claims an order for a recipe the character has not learned, and the filter hides it", function()
+      ns.FS:GetModule("Recipes").Evaluate = function() return {expectedQuality=3, reagentCost=200000, flags={unknownRecipe=true}} end
+      O:OnBoardShown(2, { P2.raw_order({ orderID = 21, tipAmount = 900000 }) })
+      assert.same({ "notLearned" }, O:GetView(21).risks)
+      assert.is_true(O:Settings().claimBlockingRisks.notLearned)
+      assert.same({ nil, "none" }, { O:ClaimBest() }); assert.same({}, claimCalls)
+      O:Settings().claimBlockingRisks.notLearned = false
+      assert.same({ nil, "none" }, { O:ClaimBest() })   -- still unscored: never the best claimable
+      assert.is_true(O:IsHidden(O:GetView(21), { hideRisks = { notLearned = true } }))
+      assert.is_false(O:IsHidden(O:GetView(21), { hideRisks = {} }))
+    end)
+    it("adds the notLearned default to settings saved before it existed", function()
+      ns.FS.db.global.settings.orders = { claimBlockingRisks = { expiringSoon = false } }
+      assert.is_true(O:Settings().claimBlockingRisks.notLearned)
+    end)
+    it("adds the rewardTooCostly default to settings saved before it existed", function()
+      ns.FS.db.global.settings.orders = { claimBlockingRisks = { expiringSoon = false } }
+      local s = O:Settings()
+      assert.is_true(s.claimBlockingRisks.rewardTooCostly); assert.is_false(s.claimBlockingRisks.expiringSoon)
+      assert.same({}, s.rewardCostLimits)
+    end)
+    it("does nothing while Orders is off", function()
+      O:OnBoardShown(2, { P2.raw_order() })
+      O:Disable()
+      assert.same({nil, "disabled"}, {O:ClaimBest()}); assert.same({}, claimCalls)
+    end)
+    it("GetBestCandidate names the order ClaimBest would claim, without claiming it", function()
+      board = { P2.raw_order({orderID=10, tipAmount=900000}), P2.raw_order({orderID=11}) }
+      O:OnBoardShown(2, board)
+      assert.equal(10, O:GetBestCandidate().orderID); assert.same({}, claimCalls)
+      assert.equal(10, O:ClaimBest().orderID)
+      claimed = P2.raw_order({orderID=10})
+      assert.same({nil, "alreadyClaimed"}, {O:GetBestCandidate()})
+    end)
+    it("GetBestCandidate chooses from ClaimBest's candidates", function()
+      O:OnBoardShown(2, { P2.raw_order() }, 8)   -- seen under another profession
+      assert.same({nil, "none"}, {O:GetBestCandidate()})
+      _G.C_TradeSkillUI.GetChildProfessionInfo = function() return nil end
+      assert.same({nil, "noProfession"}, {O:GetBestCandidate()})
+      _G.C_TradeSkillUI.GetChildProfessionInfo = function() return {profession = 7} end
+      _G.C_CraftingOrders.GetOrderClaimInfo = function() return {claimsRemaining = 0} end
+      O:OnBoardShown(0, { P2.raw_order({orderType=0}) })
+      assert.same({nil, "none"}, {O:GetBestCandidate()})
+      _G.C_CraftingOrders.GetOrderClaimInfo = function() return {claimsRemaining = 1} end
+      assert.equal(777, O:GetBestCandidate().orderID)
+      O:Disable(); assert.same({nil, "disabled"}, {O:GetBestCandidate()}); assert.same({}, claimCalls)
+    end)
+  end)
+
+  describe("ClaimBest against the board on screen", function()
+    it("considers only the open profession's views", function()
+      board = { P2.raw_order() }
+      O:OnBoardShown(2, board, 8)   -- seen under another profession
+      assert.same({nil, "none"}, {O:ClaimBest()}); assert.same({}, claimCalls)
+    end)
+    it("skips views that have expired", function()
+      O:Settings().claimBlockingRisks.expiringSoon = false   -- only the expiry itself may keep it out
+      board = { P2.raw_order({expirationTime=5000}) }   -- expiresAt = now
+      O:OnBoardShown(2, board)
+      assert.same({nil, "none"}, {O:ClaimBest()}); assert.same({}, claimCalls)
+    end)
+    it("refuses a best view that is no longer on Blizzard's board and drops it", function()
+      O:OnBoardShown(2, { P2.raw_order({orderID=10, tipAmount=900000}), P2.raw_order({orderID=11}) })
+      board = { P2.raw_order({orderID=11}) }
+      assert.same({nil, "stale"}, {O:ClaimBest()}); assert.same({}, claimCalls)
+      assert.is_nil(O:GetLiveViews()[2]); assert.equal(11, O:GetLiveViews()[1].orderID)
+      assert.equal(11, O:ClaimBest().orderID); assert.same({{11, 7}}, claimCalls)
+    end)
+  end)
+
+  describe("claim responses", function()
+    before_each(function()
+      board = { P2.raw_order({orderID=10, tipAmount=900000}), P2.raw_order({orderID=11}) }
+      O:OnBoardShown(2, board)
+    end)
+    it("is busy until the claim response arrives", function()
+      assert.equal(10, O:ClaimBest().orderID)
+      assert.same({nil, "busy"}, {O:ClaimBest()}); assert.equal(1, #claimCalls)
+      W.fire("CRAFTINGORDERS_CLAIM_ORDER_RESPONSE", 0, 10)
+      assert.equal(10, O:ClaimBest().orderID); assert.equal(2, #claimCalls)
+    end)
+    it("drops an order whose claim failed and announces it", function()
+      O:ClaimBest()
+      local before = #messages("FS_ORDERS_CHANGED")
+      W.fire("CRAFTINGORDERS_CLAIM_ORDER_RESPONSE", 2, 10)   -- AlreadyClaimed
+      assert.is_nil(O:GetLiveViews()[2]); assert.equal(11, O:GetLiveViews()[1].orderID)
+      assert.equal(before + 1, #messages("FS_ORDERS_CHANGED"))
+      assert.equal(11, O:ClaimBest().orderID); assert.same({{10, 7}, {11, 7}}, claimCalls)
+    end)
+    it("stops waiting after 10 seconds without a response", function()
+      O:ClaimBest()
+      W.advance(9); assert.same({nil, "busy"}, {O:ClaimBest()})
+      W.advance(1); assert.equal(10, O:ClaimBest().orderID); assert.equal(2, #claimCalls)
+    end)
+    it("forgets a claim in flight when turned off", function()
+      O:ClaimBest(); O:Disable(); O:Enable()
+      O:OnBoardShown(2, board)
+      assert.equal(10, O:ClaimBest().orderID)
+    end)
+  end)
+
+  describe("one board per character", function()
+    local function show_board(charKey, profession, orders)
+      local name = charKey:match("^(.-)%-")
+      _G.UnitName = function() return name end
+      O:OnBoardShown(0, orders, profession)
+    end
+    local function order(id) return P2.raw_order({orderID=id, orderType=0}) end
+
+    it("keeps both alts' boards when the second alt opens the same profession", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, { order(888) })
+      local boards = O:GetBoards()
+      assert.equals(2, #boards); assert.equals("Alt-Silvermoon", boards[1].charKey)   -- current first
+      assert.equals("Me-Silvermoon", boards[2].charKey)
+      assert.same({888}, {boards[1].orders[1].orderID}); assert.same({777}, {boards[2].orders[1].orderID})
+      assert.truthy(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777])
+      assert.truthy(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[888])
+      assert.is_nil(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[777])
+    end)
+    it("rescores each board for its own character", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, { order(888) })
+      local s = spy.on(O, "BuildContext")
+      O:Rescore()
+      assert.spy(s).was.called(2)
+      assert.spy(s).was.called_with(O, "Me-Silvermoon"); assert.spy(s).was.called_with(O, "Alt-Silvermoon")
+      assert.equal("Me-Silvermoon", ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777].charKey)
+      assert.equal("Alt-Silvermoon", ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[888].charKey)
+    end)
+    it("GetSnapshot falls back to the newest board when this character has none", function()
+      show_board("Me-Silvermoon", 7, { order(777) })
+      W.advance(10); show_board("Alt-Silvermoon", 7, { order(888) })
+      _G.UnitName = function() return "Third" end
+      local snap = O:GetSnapshot()
+      assert.equal("Alt-Silvermoon", snap.charKey); assert.equal(1010, snap.time); assert.equal(888, snap.orders[1].orderID)
+      _G.UnitName = function() return "Me" end
+      snap = O:GetSnapshot()
+      assert.equal("Me-Silvermoon", snap.charKey); assert.equal(1000, snap.time); assert.equal(777, snap.orders[1].orderID)
+    end)
+    it("GetSnapshot is empty without boards and creates none", function()
+      assert.same({ orders = {} }, O:GetSnapshot()); assert.same({}, O:GetBoards())
+      assert.is_nil(ns.FS.db.global.orderBoards)
+    end)
+    it("GetView finds an order on another character's board", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, { order(888) })
+      O:ClearLive()
+      assert.equal(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777], O:GetView(777))
+      assert.equal(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[888], O:GetView(888))
+    end)
+    it("GetView prefers the current character's copy of an order both boards hold", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, { order(777) })
+      O:ClearLive()
+      assert.equal(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[777], O:GetView(777))
+      _G.UnitName = function() return "Me" end
+      assert.equal(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777], O:GetView(777))
+    end)
+    it("records the scope of every board shown", function()
+      show_board("Me-Silvermoon", 7, { order(777) })
+      assert.equals(ns.FS:Now(), ns.FS.db.global.orderBoards["Me-Silvermoon"].scopes["public:7"])
+      W.advance(5); O:OnBoardShown(2, {}, 8)
+      local mine = ns.FS.db.global.orderBoards["Me-Silvermoon"]
+      assert.equals(1005, mine.scopes["personal:8"]); assert.equals(1000, mine.scopes["public:7"])
+      assert.equals(1005, mine.time)
+    end)
+    it("drops expired views from every board", function()
+      show_board("Me-Silvermoon", 7, { order(777), P2.raw_order({orderID=1, orderType=0, expirationTime=6000}) })
+      assert.truthy(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[1])
+      W.advance(1500); show_board("Alt-Silvermoon", 7, {})
+      assert.is_nil(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[1])
+      assert.truthy(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777])
+    end)
+    it("applies a late customer name to the board holding the order", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, {})
+      O:OnCustomerNameUpdated("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", "Bad", 777)
+      assert.equal("Bad-Silvermoon", ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777].customer)
+      assert.same({}, ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders)
+    end)
+    it("removes a fulfilled order from every board", function()
+      show_board("Me-Silvermoon", 7, { order(777) }); show_board("Alt-Silvermoon", 7, { order(777) })
+      O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+      assert.is_nil(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777])
+      assert.is_nil(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[777])
+    end)
+    it("sorts boards current first, then newest, then by name, and skips damaged ones", function()
+      ns.FS.db.global.orderBoards = {
+        ["Zed-Silvermoon"] = { time = 500, orders = {} }, ["Abe-Silvermoon"] = { time = 500, orders = {} },
+        ["Old-Silvermoon"] = { orders = { [1] = { orderID = 1 } } }, ["New-Silvermoon"] = { time = 900, orders = "junk" },
+        ["Me-Silvermoon"] = { time = 100, orders = { [3] = { orderID = 3 }, [2] = { orderID = 2 } } }, ["Bad-Silvermoon"] = "junk" }
+      local keys = {}
+      for _, b in ipairs(O:GetBoards()) do keys[#keys + 1] = b.charKey end
+      assert.same({ "Me-Silvermoon", "New-Silvermoon", "Abe-Silvermoon", "Zed-Silvermoon", "Old-Silvermoon" }, keys)
+      local me = O:GetBoards()[1]
+      assert.equal(100, me.time); assert.same({2, 3}, {me.orders[1].orderID, me.orders[2].orderID})
+      assert.same({}, O:GetBoards()[2].orders)
+    end)
+  end)
+
+  describe("GetOrders", function()
+    local function seed(boards)
+      ns.FS.db.global.orderBoards = boards
+    end
+    local function stored(id, extra)
+      return P2.merge({ orderID = id, orderType = "public", score = 10, risks = {}, charKey = "Me-Silvermoon" }, extra)
+    end
+    local function by_id(list) local out = {}; for _, v in ipairs(list) do out[v.orderID] = v end; return out end
+    local function ids(list) local out = {}; for i, v in ipairs(list) do out[i] = v.orderID end; return out end
+
+    it("lists every board's orders best first, with each board's time", function()
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1, { score = 5 }), stored(2, { score = 50 }) }) },
+        ["Alt-Silvermoon"] = { time = 800, orders = by_id({ stored(3, { score = 20, charKey = "Alt-Silvermoon" }) }) } })
+      local views, times = O:GetOrders({})
+      assert.same({ 2, 3, 1 }, ids(views))
+      assert.same({ ["Me-Silvermoon"] = 900, ["Alt-Silvermoon"] = 800 }, times)
+      assert.equal(ns.FS.db.global.orderBoards["Alt-Silvermoon"].orders[3], views[2])   -- the stored table, read-only
+    end)
+    it("keeps the current character's board only for \"current\"", function()
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1) }) },
+        ["Alt-Silvermoon"] = { time = 800, orders = by_id({ stored(3, { charKey = "Alt-Silvermoon" }) }) } })
+      local views, times = O:GetOrders({ characters = "current" })
+      assert.same({ 1 }, ids(views)); assert.same({ ["Me-Silvermoon"] = 900 }, times)
+      views, times = O:GetOrders({ characters = "all" })
+      assert.same({ 1, 3 }, ids(views)); assert.same({ ["Me-Silvermoon"] = 900, ["Alt-Silvermoon"] = 800 }, times)
+    end)
+    it("sorts by expiry with unknown expiry last, then by orderID", function()
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1), stored(3, { expiresAt = 1400 }),
+        stored(2, { expiresAt = 1300 }), stored(4) }) } })
+      assert.same({ 2, 3, 1, 4 }, ids(O:GetOrders({ sort = "expires" })))
+    end)
+    it("sorts by character, then best first", function()
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1, { score = 5 }), stored(2, { score = 50 }) }) },
+        ["Alt-Silvermoon"] = { time = 800, orders = by_id({ stored(3, { score = 20, charKey = "Alt-Silvermoon" }),
+          stored(4, { score = 30, charKey = "Alt-Silvermoon" }) }) } })
+      assert.same({ 4, 3, 2, 1 }, ids(O:GetOrders({ sort = "character" })))
+      assert.same({ 2, 4, 3, 1 }, ids(O:GetOrders({ sort = "score" })))
+      assert.same({ 2, 4, 3, 1 }, ids(O:GetOrders({})))
+    end)
+    it("applies the filters", function()
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1, { risks = { "expiringSoon" } }), stored(2) }) } })
+      assert.same({ 2 }, ids(O:GetOrders({ hideRisks = { expiringSoon = true } })))
+    end)
+    it("leaves hidden characters out while Alts is on", function()
+      P2.fake_module(ns, "Alts", { Settings = function() return { hidden = { ["Alt-Silvermoon"] = true } } end })
+      ns.FS:SetModuleEnabled("Alts", true)
+      seed({ ["Me-Silvermoon"] = { time = 900, orders = by_id({ stored(1) }) },
+        ["Alt-Silvermoon"] = { time = 800, orders = by_id({ stored(3, { charKey = "Alt-Silvermoon" }) }) } })
+      local views, times = O:GetOrders({})
+      assert.same({ 1 }, ids(views)); assert.same({ ["Me-Silvermoon"] = 900 }, times)
+      ns.FS:SetModuleEnabled("Alts", false)
+      views, times = O:GetOrders({})
+      assert.same({ 1, 3 }, ids(views)); assert.same({ ["Me-Silvermoon"] = 900, ["Alt-Silvermoon"] = 800 }, times)
+    end)
+    it("reads the saved filters without any, and creates nothing", function()
+      assert.same({}, (O:GetOrders()))
+      assert.is_nil(ns.FS.db.global.orderBoards)
+    end)
+  end)
+
+  describe("board scope", function()
+    it("replaces views per order type and profession, keeping other professions in the snapshot", function()
+      O:OnBoardShown(2, { P2.raw_order({orderID=1}) }, 7)
+      O:OnBoardShown(2, { P2.raw_order({orderID=2}) }, 8)
+      assert.equal(2, #O:GetSnapshot().orders)
+      assert.same({2}, {O:GetLiveViews()[1].orderID}); assert.equal(1, #O:GetLiveViews())   -- live: open profession only
+      assert.equal(8, O:GetView(2).profession); assert.equal(7, O:GetView(1).profession)
+      O:OnBoardShown(2, {}, 7)
+      local snap = O:GetSnapshot()
+      assert.equal(1, #snap.orders); assert.equal(2, snap.orders[1].orderID)
+    end)
+    it("uses the open profession by default and keeps it through rescoring", function()
+      O:OnBoardShown(2, { P2.raw_order() })
+      assert.equal(7, O:GetView(777).profession)
+      O:Rescore()
+      assert.equal(7, O:GetView(777).profession); assert.equal(7, ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777].profession)
+      O:OnCustomerNameUpdated("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", "Bad", 777)
+      assert.equal(7, O:GetView(777).profession)
+    end)
+    it("replaces saved views of that type that have no profession", function()
+      ns.FS.db.global.orderBoards = { ["Me-Silvermoon"] = { orders = { [5] = { orderID = 5, orderType = "personal", charKey = "Me-Silvermoon" } } } }
+      ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[6] = { orderID = 6, orderType = "public", charKey = "Me-Silvermoon" }
+      O:OnBoardShown(2, {}, 7)
+      assert.same({6}, {O:GetSnapshot().orders[1].orderID}); assert.equal(1, #O:GetSnapshot().orders)
+    end)
+  end)
+
+  describe("fulfilment", function()
+    it("keeps the pending fulfilment after a failure and removes the order on success", function()
+      O:OnBoardShown(2, { P2.raw_order() })
+      claimed = P2.raw_order()
+      O:OnFulfillClicked(777, "", 7)
+      O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 10, 777)
+      assert.equal(0, #messages("FS_ORDER_FULFILLED")); assert.is_table(O:GetView(777))
+      O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+      local sent = messages("FS_ORDER_FULFILLED")
+      assert.equal(1, #sent); assert.is_nil(sent[1][2].quality)   -- no output link: quality unknown
+      assert.is_nil(O:GetView(777)); assert.is_nil(ns.FS.db.global.orderBoards["Me-Silvermoon"].orders[777])
+      assert.same({}, O:GetLiveViews())
+      O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)   -- no second message
+      assert.equal(1, #messages("FS_ORDER_FULFILLED"))
+    end)
+    it("falls back to the board view when the claimed order is another one", function()
+      O:OnBoardShown(3, { P2.raw_order({orderType=3, npcCustomerCreatureID=9, customerName=P2.NIL}) })
+      O:OnFulfillClicked(777, "", 7)
+      O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+      local f = messages("FS_ORDER_FULFILLED")[1][2]
+      assert.same({"npc", nil, 9, 450000}, {f.orderType, f.customer, f.npcCreatureID, f.commission})
+    end)
+    it("drops a pending fulfilment after an hour without a response", function()
+      claimed = P2.raw_order()
+      O:OnFulfillClicked(777, "", 7)
+      W.advance(3601)
+      O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+      assert.equal(0, #messages("FS_ORDER_FULFILLED"))
+    end)
+    it("sends nothing for an order it knows nothing about", function()
+      O:OnFulfillClicked(5, "", 7)
+      O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 5)
+      assert.equal(0, #messages("FS_ORDER_FULFILLED"))
+    end)
+    it("hooks C_CraftingOrders.FulfillOrder once and ignores it while off", function()
+      claimed = P2.raw_order()
+      O:Disable(); O:Enable()
+      local hooks = 0
+      for _, h in ipairs(W.hooks) do if h[2] == "FulfillOrder" then hooks = hooks + 1 end end
+      assert.equal(1, hooks)
+      C_CraftingOrders.FulfillOrder(777, "", 7)
+      W.fire("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+      assert.equal(1, #messages("FS_ORDER_FULFILLED"))
+      O:Disable()
+      C_CraftingOrders.FulfillOrder(777, "", 7)
+      O:Enable()
+      W.fire("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+      assert.equal(1, #messages("FS_ORDER_FULFILLED"))
+    end)
+  end)
+
+  describe("personal counts", function()
+    it("persists counts per character and announces arrivals", function()
+      local t = {profession=7, professionName="Tailoring"}
+      O:UpdatePersonalCounts({P2.merge(t, {numPersonalOrders=1})})
+      O:UpdatePersonalCounts({P2.merge(t, {numPersonalOrders=3})})
+      assert.equal(3, ns.FS.db.global.ordersState["Me-Silvermoon"].personalCounts[7])
+      assert.same({{"FS_PERSONAL_ORDER_ARRIVED", "Tailoring", 3, 2}}, messages("FS_PERSONAL_ORDER_ARRIVED"))
+    end)
+    it("ignores malformed entries", function()
+      assert.same({}, O:UpdatePersonalCounts(nil))
+      assert.same({}, O:UpdatePersonalCounts({ {profession=7}, "x", {numPersonalOrders=2} }))
+    end)
+  end)
+
+  describe("events", function()
+    local infos
+    before_each(function()
+      infos = { {profession=7, professionName="Tailoring", numPersonalOrders=1} }
+      _G.C_CraftingOrders.GetPersonalOrdersInfo = function() return infos end
+    end)
+    it("reads personal counts on both count events, the order-count one for the Personal type only", function()
+      local s = spy.on(O, "UpdatePersonalCounts")
+      W.fire("CRAFTINGORDERS_UPDATE_ORDER_COUNT", 0, 4)
+      assert.spy(s).was_not.called()
+      W.fire("CRAFTINGORDERS_UPDATE_ORDER_COUNT", 2, 1)
+      assert.spy(s).was.called_with(match.is_ref(O), match.is_ref(infos))
+      W.fire("CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS")
+      assert.spy(s).was.called(2)
+    end)
+    it("routes customer-name and reward events to the order", function()
+      O:OnBoardShown(2, { P2.raw_order({customerName = P2.NIL}) })
+      W.fire("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", "Bad", 777)
+      assert.same({"blockedCustomer"}, O:GetView(777).risks)
+      local s = spy.on(O, "OnRewardsUpdated")
+      W.fire("CRAFTINGORDERS_UPDATE_REWARDS", {}, 777)
+      assert.spy(s).was.called_with(O, "CRAFTINGORDERS_UPDATE_REWARDS", {}, 777)
+    end)
+    it("rescores on RECIPES_CHANGED and stops a pending rescore when turned off", function()
+      local s = spy.on(O, "Rescore")
+      ns.FS:SendMessage("FS_RECIPES_CHANGED")
+      W.advance(0.6); assert.spy(s).was.called(1)
+      ns.FS:SendMessage("FS_PRICES_CHANGED", 3)
+      O:Disable()
+      W.advance(1); assert.spy(s).was.called(1)
+    end)
+  end)
+
+  describe("read-only saved data", function()
+    it("writes nothing to saved data while it is newer, but still works for the session", function()
+      ns.FS.dbIsNewer = true
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      O:OnBoardShown(2, { P2.raw_order() })
+      O:UpdatePersonalCounts({ {profession=7, professionName="Tailoring", numPersonalOrders=1} })
+      assert.same(before, ns.FS.db.global); assert.is_nil(ns.FS.db.global.orderBoards); assert.is_nil(ns.FS.db.global.ordersState)
+      assert.equal(1, #O:GetSnapshot().orders)
+      assert.same({{profession=7, professionName="Tailoring", count=2, delta=1}},
+        O:UpdatePersonalCounts({ {profession=7, professionName="Tailoring", numPersonalOrders=2} }))
+    end)
+  end)
+
+  describe("board hook", function()
+    local page, frame
+    local function fake_frame()
+      frame = CreateFrame("Frame")
+      page = { orderType = 2, shown = 0, buckets = 0 }
+      function page.ShowOrders(p) p.shown = p.shown + 1 end
+      function page.ShowBuckets(p) p.buckets = p.buckets + 1 end
+      frame.OrdersPage = page
+      _G.ProfessionsFrame = frame
+    end
+    after_each(function()
+      for _, name in ipairs({ "ProfessionsFrame", "ProfessionsRecipeSchematicFormMixin", "Professions", "ScrollBoxListMixin" }) do
+        _G[name] = nil
+      end
+    end)
+
+    it("captures the board after ShowOrders and clears the live views when the frame hides", function()
+      fake_frame()
+      _G.C_CraftingOrders.GetCrafterOrders = function() return { P2.raw_order({orderID=5}) } end
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      assert.is_true(O.attached)
+      page:ShowOrders(0, false)
+      assert.equal(1, page.shown)
+      assert.equal(5, O:GetLiveViews()[1].orderID); assert.equal(1, #O:GetSnapshot().orders)
+      frame:GetScript("OnHide")(frame)
+      assert.same({}, O:GetLiveViews()); assert.equal(1, #O:GetSnapshot().orders)
+    end)
+    it("installs once across ADDON_LOADED and re-enabling", function()
+      fake_frame()
+      _G.C_AddOns.IsAddOnLoaded = function(name) return name == "Blizzard_Professions" end
+      O:Disable(); O:Enable()
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      O:Disable(); O:Enable()
+      local hooks = 0
+      for _, h in ipairs(W.hooks) do if h[2] == "ShowOrders" then hooks = hooks + 1 end end
+      assert.equal(1, hooks)
+      assert.is_true(O:InstallBoardHook())
+    end)
+    it("ignores the board while Orders is off", function()
+      fake_frame()
+      _G.C_CraftingOrders.GetCrafterOrders = function() return { P2.raw_order({orderID=5}) } end
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      O:Disable()
+      page:ShowOrders(0, false)
+      assert.same({}, O:GetLiveViews()); assert.equal(0, #O:GetSnapshot().orders)
+    end)
+    it("reports a missing hook target once and keeps the rest of Orders working", function()
+      _G.ProfessionsFrame = CreateFrame("Frame")
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      assert.is_false(O:InstallBoardHook())
+      local errors = ns.FS.db.global.diagnostics.errors
+      assert.equal("hook target missing: ProfessionsFrame.OrdersPage.ShowOrders", errors[#errors].err)
+      assert.equal("Orders", errors[#errors].source)
+      local lines = 0
+      for _, line in ipairs(W.printed) do if line:find("ShowOrders", 1, true) or line:find("order board", 1, true) then lines = lines + 1 end end
+      assert.equal(1, lines)
+      assert.is_true(O:IsEnabled())
+      O:OnBoardShown(2, { P2.raw_order() })
+      assert.equal(1, #O:GetLiveViews())
+    end)
+    it("works on the shared fake Professions frame without writing Blizzard fields", function()
+      local form = fake_professions_frame({ orderType = 0 })
+      _G.C_CraftingOrders.GetCrafterOrders = function() return { P2.raw_order({orderID=5, orderType=0}) } end
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      form.ordersPage:ShowOrders(0, false)
+      assert.equal(1, form.showOrdersCalls)
+      assert.same({5, "public"}, {O:GetLiveViews()[1].orderID, O:GetLiveViews()[1].orderType})
+      form.hide()
+      assert.same({}, O:GetLiveViews())
+      assert.same({}, form.assignedFields)
+    end)
+    it("drops live public views when the public bucket list is shown", function()
+      fake_frame()
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      O:OnBoardShown(0, { P2.raw_order({orderID=1, orderType=0}) })
+      O:OnBoardShown(2, { P2.raw_order({orderID=2}) })
+      board = { P2.raw_order({orderID=1, orderType=0}), P2.raw_order({orderID=2}) }
+      local before = #messages("FS_ORDERS_CHANGED")
+      page:ShowBuckets(0, false)
+      assert.equal(1, page.buckets)
+      assert.same({2}, {O:GetLiveViews()[1].orderID}); assert.equal(1, #O:GetLiveViews())
+      assert.equal(2, #O:GetSnapshot().orders)
+      assert.equal(before + 1, #messages("FS_ORDERS_CHANGED"))
+      assert.equal(2, O:ClaimBest().orderID)   -- the public order is not on screen
+    end)
+    it("ignores ShowBuckets while Orders is off", function()
+      fake_frame()
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      local s = spy.on(O, "OnBucketsShown")
+      O:Disable(); page:ShowBuckets()
+      assert.spy(s).was_not.called()
+      O:Enable(); page:ShowBuckets()
+      assert.spy(s).was.called(1)
+    end)
+    it("logs only when ShowBuckets is missing", function()
+      fake_frame(); page.ShowBuckets = nil
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      assert.is_true(O.attached)
+      local errors = ns.FS.db.global.diagnostics.errors
+      assert.equal("hook target missing: ProfessionsFrame.OrdersPage.ShowBuckets", errors[#errors].err)
+      assert.is_true(O:IsEnabled())
+    end)
+    it("ignores ADDON_LOADED for other addons", function()
+      fake_frame()
+      W.fire("ADDON_LOADED", "Blizzard_AuctionHouseUI")
+      assert.is_nil(O.attached)
+    end)
+  end)
+end)
+
+describe("Orders fulfilment with the real Customers module", function()
+  local ns, claimed
+  before_each(function()
+    claimed = nil
+    ns = P2.boot({
+      C_CraftingOrders = { GetCraftingOrderTime = function() return 5000 end, GetClaimedOrder = function() return claimed end },
+      C_TradeSkillUI = { GetItemCraftedQualityByItemInfo = function() return 2 end } })
+    P2.fake_module(ns, "Recipes", { Evaluate = function() return {expectedQuality=3, reagentCost=200000, flags={}} end, GetRanked = function() return {} end })
+    P2.fake_module(ns, "Prices", { Get = function() return {} end })
+    P2.fake_module(ns, "Scanner", { GetSchematic = function() return {skillLineID = 2900} end })
+    P2.load(ns, {"Modules/Customers.lua", "Data/OrderRewards.lua", "Modules/Orders.lua"})
+  end)
+  it("records the customer's order; NPC orders record no customer", function()
+    local O, C = ns.FS:GetModule("Orders"), ns.FS:GetModule("Customers")
+    claimed = P2.raw_order({outputItemHyperlink = "|Hitem:211111::|h[Potion]|h"})
+    O:OnFulfillClicked(777, "", 7)
+    O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+    local r = C:Get("Bob-Silvermoon")
+    assert.equal(1, #r.orders)
+    assert.same({777, 2, 500000, 450000, "personal"}, {r.orders[1].orderID, r.orders[1].quality, r.orders[1].tip,
+      r.orders[1].commission, r.orders[1].orderType})
+    claimed = P2.raw_order({orderID=778, orderType=3, customerName="Patron Name", npcCustomerCreatureID=9})
+    O:OnFulfillClicked(778, "", 7)
+    O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 778)
+    assert.is_nil(C:Get("Patron Name-Silvermoon"))
+    assert.equal(1, #C:Get("Bob-Silvermoon").orders)
+  end)
+end)

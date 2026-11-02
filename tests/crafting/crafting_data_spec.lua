@@ -1,0 +1,233 @@
+describe("CraftingData", function()
+  local ns, CD, gd
+  before_each(function()
+    install_wow_stubs(); ns = load_addon({}, "Modules/CraftingData.lua"); CD, gd = ns.CraftingData, ns.GameData
+    gd.Define("ReagentQuality", 70575, { [1002] = { rank = 2, categoryID = 50, maxDifficultyAdjustment = 0, reagentEffectPct = 0 },
+                                         [7001] = { rank = 1, categoryID = 60, maxDifficultyAdjustment = 35, reagentEffectPct = 0 },
+                                         [7002] = { rank = 1, categoryID = 61, maxDifficultyAdjustment = 0, reagentEffectPct = 50 } })
+    gd.Define("ReagentCategories", 70575, { [50] = { matQualityWeight = 48 } })
+    gd.Define("OptionalReagents", 70575, { [7002] = { categoryID = 61, effects = { { type = "multicraft", amount = 60 }, { type = "type42", amount = 9 } } } })
+    gd.Define("CraftingData", 70575, { [2588] = { craftingDifficultyID = 77, difficulty = 700, craftedItemID = 5001 } })
+    gd.Define("ItemCraftingData", 70575, { [5001] = 2588 })
+    gd.Define("QualityThresholds", 70575, { [77] = { [1] = 0, [2] = 100 } })
+    gd.Define("ConcentrationCurves", 70575, { [77] = { skill = { {0,2.35},{60,2.2},{80,1.1},{99.99,1.0},{100,0} }, difficulty = { {0,200},{1000,200} } } })
+  end)
+  it("reagent weight", function() assert.equals(48, CD.ReagentWeight(gd, 1002)); assert.equals(0, CD.ReagentWeight(gd, 424242)) end)
+  it("curve in fractions", function()
+    assert.same({ constant = { {0,200},{1000,200} }, curve = { {0,2.35},{0.6,2.2},{0.8,1.1},{0.9999,1.0},{1,0} } }, CD.Curve(gd, 2588))
+    assert.is_nil(CD.Curve(gd, 1))
+  end)
+  it("threshold fractions", function() assert.same({ 1.0 }, CD.ThresholdFractions(gd, 2588, 2)); assert.is_nil(CD.ThresholdFractions(gd, 2588, 5)) end)
+  it("craftingDataID from schematic or output item", function()
+    assert.equals(2588, CD.CraftingDataIDFor(gd, { craftingDataID = 2588, outputItemIDs = {} }))
+    assert.equals(2588, CD.CraftingDataIDFor(gd, { outputItemIDs = { [1] = 5001 } }))
+  end)
+  it("optional and finishing stats", function()
+    assert.same({ increasedifficulty = 35 }, CD.OptionalStats(gd, 7001, "optional"))
+    assert.same({ multicraft = 30 }, CD.OptionalStats(gd, 7002, "finishing"))      -- 60 × 50 %, type42 ignored
+  end)
+  it("maps reagent info back to slots", function()
+    local schematic = { reagentSlots = { { slotIndex = 1, dataSlotIndex = 4, kind = "basic" }, { slotIndex = 4, dataSlotIndex = 9, kind = "finishing" } } }
+    local alloc, opt = CD.AllocationFromReagentInfo(schematic, { { reagent = { itemID = 1002 }, dataSlotIndex = 4, quantity = 7 }, { reagent = { itemID = 7002 }, dataSlotIndex = 9, quantity = 1 } })
+    assert.same({ { slotIndex = 1, itemID = 1002, quantity = 7 } }, alloc); assert.same({ 7002 }, opt)
+  end)
+
+  describe("beyond the happy path", function()
+    it("maps the effect names it knows", function()
+      assert.same({ skill = "skill", multicraft = "multicraft", resourcefulness = "resourcefulness" }, CD.EFFECT_MAP)
+    end)
+    it("curve is nil when the difficulty curve or the skill points are empty", function()
+      gd.Define("ConcentrationCurves", 70575, { [77] = { skill = { {0,2}, {50,1} }, difficulty = {} } })
+      assert.is_nil(CD.Curve(gd, 2588))
+      gd.Define("ConcentrationCurves", 70575, { [77] = { skill = { {0,2}, {50,1} } } })
+      assert.is_nil(CD.Curve(gd, 2588))
+      gd.Define("ConcentrationCurves", 70575, { [77] = { skill = {}, difficulty = { {0,200} } } })
+      assert.is_nil(CD.Curve(gd, 2588))
+    end)
+    it("curve does not alias or mutate the GameData points", function()
+      local curve = CD.Curve(gd, 2588)
+      curve.constant[1][2] = -1
+      assert.equals(200, gd.Get("ConcentrationCurves")[77].difficulty[1][2])
+      assert.equals(60, gd.Get("ConcentrationCurves")[77].skill[2][1])
+    end)
+    it("threshold fractions are ascending for several tiers and nil when any tier is missing", function()
+      gd.Define("QualityThresholds", 70575, { [77] = { [1] = 0, [2] = 50, [3] = 80, [5] = 100 } })
+      assert.same({ 0.5, 0.8 }, CD.ThresholdFractions(gd, 2588, 3))
+      assert.is_nil(CD.ThresholdFractions(gd, 2588, 5))   -- tier 4 missing
+      assert.same({}, CD.ThresholdFractions(gd, 2588, 1))
+      assert.is_nil(CD.ThresholdFractions(gd, 999, 2))
+    end)
+    it("craftingDataID is nil when neither the schematic nor the output item knows it", function()
+      assert.is_nil(CD.CraftingDataIDFor(gd, { outputItemIDs = { [1] = 31337 } }))
+      assert.is_nil(CD.CraftingDataIDFor(gd, { outputItemIDs = {} }))
+      assert.is_nil(CD.CraftingDataIDFor(gd, {}))
+      assert.is_nil(CD.CraftingDataIDFor(gd, nil))
+    end)
+    it("optional stats sum mapped effects and combine with increasedifficulty", function()
+      gd.Define("ReagentQuality", 70575, { [8001] = { rank = 1, categoryID = 1, maxDifficultyAdjustment = 10, reagentEffectPct = 0 } })
+      gd.Define("OptionalReagents", 70575, { [8001] = { categoryID = 1, effects = {
+        { type = "skill", amount = 20 }, { type = "skill", amount = 5 }, { type = "resourcefulness", amount = 7 } } } })
+      assert.same({ increasedifficulty = 10, skill = 25, resourcefulness = 7 }, CD.OptionalStats(gd, 8001, "optional"))
+    end)
+    it("finishing effects are unscaled when the item has no positive effect percentage", function()
+      gd.Define("OptionalReagents", 70575, { [9001] = { categoryID = 1, effects = { { type = "multicraft", amount = 40 } } } })
+      assert.same({ multicraft = 40 }, CD.OptionalStats(gd, 9001, "finishing"))
+    end)
+    it("optional stats are empty for unknown items", function()
+      assert.same({}, CD.OptionalStats(gd, 424242, "optional"))
+      assert.same({}, CD.OptionalStats(gd, 424242, "finishing"))
+    end)
+    it("allocation ignores unknown data slots and malformed infos", function()
+      local schematic = { reagentSlots = { { slotIndex = 2, dataSlotIndex = 5, kind = "basic" }, { slotIndex = 6, dataSlotIndex = 8, kind = "optional" } } }
+      local alloc, opt = CD.AllocationFromReagentInfo(schematic, {
+        { reagent = { itemID = 1 }, dataSlotIndex = 99, quantity = 1 }, { dataSlotIndex = 5, quantity = 1 },
+        { reagent = { itemID = 3 }, dataSlotIndex = 5, quantity = 2 }, { reagent = { itemID = 4 }, dataSlotIndex = 8, quantity = 1 } })
+      assert.same({ { slotIndex = 2, itemID = 3, quantity = 2 } }, alloc)
+      assert.same({ 4 }, opt)
+      alloc, opt = CD.AllocationFromReagentInfo({}, nil)
+      assert.same({}, alloc); assert.same({}, opt)
+    end)
+  end)
+
+  describe("OptionalSlots", function()
+    it("lists the optional and finishing slots that can take a chosen item, the rows BuildInput offers Place", function()
+      local schematic = { reagentSlots = {
+        { slotIndex = 1, dataSlotIndex = 4, kind = "basic", reagents = { 1002 }, quantity = 2 },
+        { slotIndex = 2, dataSlotIndex = 5, kind = "optional", required = true, reagents = { 7101 } },    -- a spark
+        { slotIndex = 3, dataSlotIndex = 6, kind = "optional", reagents = { 7001, 7002 }, quantity = 2 },
+        { slotIndex = 4, dataSlotIndex = 7, kind = "finishing", reagents = {} },
+        { slotIndex = 5, dataSlotIndex = 8, kind = "finishing", reagents = { 7002 } } } }
+      local expected = { { slotIndex = 3, kind = "optional", quantity = 2, itemIDs = { 7001, 7002 } },
+        { slotIndex = 5, kind = "finishing", quantity = 1, itemIDs = { 7002 } } }
+      assert.same(expected, CD.OptionalSlots(schematic))
+      assert.same(expected, CD.BuildInput(gd, { schematic = schematic, professionSkill = 100, optionalItemIDs = {} }).optionalSlots)
+    end)
+    it("never offers a slot without a dataSlotIndex, so nothing is scored that cannot be sent", function()
+      local schematic = { reagentSlots = {
+        { slotIndex = 3, kind = "optional", reagents = { 7001 } },
+        { slotIndex = 5, dataSlotIndex = 8, kind = "finishing", reagents = { 7002 } } } }
+      assert.same({ 5 }, { CD.OptionalSlots(schematic)[1].slotIndex })
+      assert.equals(1, #CD.OptionalSlots(schematic))
+      assert.equals(1, #CD.BuildInput(gd, { schematic = schematic, professionSkill = 100, optionalItemIDs = {} }).optionalSlots)
+    end)
+    it("is empty without a schematic", function() assert.same({}, CD.OptionalSlots(nil)) end)
+  end)
+
+  describe("required non-basic slots", function()
+    it("maps a required modifying slot's reagent to an allocation row, an optional one to optionalItemIDs", function()
+      local schematic = { reagentSlots = {
+        { slotIndex = 1, dataSlotIndex = 4, kind = "basic", reagents = { 1002 } },
+        { slotIndex = 5, dataSlotIndex = 10, kind = "optional", required = true, reagents = { 7101, 7102 } },
+        { slotIndex = 6, dataSlotIndex = 11, kind = "optional", required = false, reagents = { 7001 } } } }
+      local alloc, opt = CD.AllocationFromReagentInfo(schematic, {
+        { reagent = { itemID = 1002 }, dataSlotIndex = 4, quantity = 3 }, { reagent = { itemID = 7102 }, dataSlotIndex = 10, quantity = 1 },
+        { reagent = { itemID = 7001 }, dataSlotIndex = 11, quantity = 1 } })
+      assert.same({ { slotIndex = 1, itemID = 1002, quantity = 3 }, { slotIndex = 5, itemID = 7102, quantity = 1 } }, alloc)
+      assert.same({ 7001 }, opt)
+    end)
+    it("IsAllocated: basic slots and required slots with reagents", function()
+      assert.is_true(CD.IsAllocated({ kind = "basic", reagents = { 1 } }))
+      assert.is_true(CD.IsAllocated({ kind = "optional", required = true, reagents = { 1 } }))
+      assert.is_true(CD.IsAllocated({ kind = "finishing", required = true, reagents = { 1 } }))
+      assert.is_false(CD.IsAllocated({ kind = "optional", required = false, reagents = { 1 } }))
+      assert.is_false(CD.IsAllocated({ kind = "optional", required = true, reagents = {} }))
+      assert.is_false(CD.IsAllocated({ kind = "basic", reagents = {}, currencyID = 3008 }))
+      assert.is_false(CD.IsAllocated(nil))
+    end)
+  end)
+
+  describe("carried guards", function()
+    it("allocation skips currency slots and slots with an empty reagents list", function()
+      local schematic = { reagentSlots = {
+        { slotIndex = 1, dataSlotIndex = 4, kind = "basic", reagents = { 1002 } },
+        { slotIndex = 2, dataSlotIndex = 5, kind = "basic", reagents = {}, currencyID = 3008 },
+        { slotIndex = 3, dataSlotIndex = 6, kind = "basic", reagents = {} },
+        { slotIndex = 4, dataSlotIndex = 7, kind = "basic", reagents = { 1005 }, currencyID = 3009 } } }
+      local alloc, opt = CD.AllocationFromReagentInfo(schematic, {
+        { reagent = { itemID = 1002 }, dataSlotIndex = 4, quantity = 1 }, { reagent = { itemID = 9 }, dataSlotIndex = 5, quantity = 1 },
+        { reagent = { itemID = 8 }, dataSlotIndex = 6, quantity = 1 }, { reagent = { itemID = 1005 }, dataSlotIndex = 7, quantity = 1 } })
+      assert.same({ { slotIndex = 1, itemID = 1002, quantity = 1 } }, alloc); assert.same({}, opt)
+    end)
+    it("threshold fractions are nil for a non-number maxQuality", function()
+      assert.is_nil(CD.ThresholdFractions(gd, 2588, nil)); assert.is_nil(CD.ThresholdFractions(gd, 2588, "2"))
+      assert.is_nil(CD.ThresholdFractions(gd, 2588, {}))
+    end)
+  end)
+
+  -- A schematic can hold a basic type-1 slot and a type-2 (modified reagent) slot with the same dataSlotIndex: the real
+  -- Rootbound Vat has s1/s3 on index 1 and s2/s4 on index 2 (tests/fixtures/orders/rootbound_vat.lua).
+  describe("slots sharing a dataSlotIndex (Rootbound Vat, real schematic)", function()
+    local VAT = require("tests.fixtures.orders.rootbound_vat")
+    local function info(itemID, dataSlotIndex, quantity, dataSlotType, slotIndex)
+      return { reagent = { itemID = itemID }, dataSlotIndex = dataSlotIndex, quantity = quantity,
+        dataSlotType = dataSlotType, slotIndex = slotIndex }
+    end
+    local function slots_of(alloc)
+      local out = {}
+      for _, row in ipairs(alloc) do out[row.slotIndex] = { row.itemID, row.quantity } end
+      return out
+    end
+    it("puts the reagents for s3 and s4 in s3 and s4, not s1 and s2", function()
+      local alloc = CD.AllocationFromReagentInfo(VAT.schematic, { info(241281, 1, 4), info(241283, 2, 4) })
+      assert.same({ [3] = { 241281, 4 }, [4] = { 241283, 4 } }, slots_of(alloc))
+    end)
+    it("does not depend on the order the schematic lists its slots in", function()
+      local schematic = { reagentSlots = {} }
+      for i = #VAT.schematic.reagentSlots, 1, -1 do schematic.reagentSlots[#schematic.reagentSlots + 1] = VAT.schematic.reagentSlots[i] end
+      local alloc = CD.AllocationFromReagentInfo(schematic, { info(241281, 1, 4), info(241283, 2, 4) })
+      assert.same({ [3] = { 241281, 4 }, [4] = { 241283, 4 } }, slots_of(alloc))
+    end)
+    it("maps by (dataSlotType, dataSlotIndex) when the info carries the type", function()
+      local alloc = CD.AllocationFromReagentInfo(VAT.schematic, { info(236950, 1, 6, 1), info(256963, 2, 16, 1),
+        info(241281, 1, 4, 2), info(241283, 2, 4, 2) })
+      assert.same({ [1] = { 236950, 6 }, [2] = { 256963, 16 }, [3] = { 241281, 4 }, [4] = { 241283, 4 } }, slots_of(alloc))
+    end)
+    it("maps by slotIndex when the info carries it", function()
+      local alloc = CD.AllocationFromReagentInfo(VAT.schematic, { info(236950, 1, 6, nil, 1), info(241281, 1, 4, nil, 3) })
+      assert.same({ [1] = { 236950, 6 }, [3] = { 241281, 4 } }, slots_of(alloc))
+    end)
+    it("skips an info whose type has no slot at that index", function()
+      local schematic = { reagentSlots = { { slotIndex = 1, dataSlotIndex = 4, dataSlotType = 1, kind = "basic", reagents = { 1 } } } }
+      assert.same({}, CD.AllocationFromReagentInfo(schematic, { info(1, 4, 1, 2) }))
+    end)
+    it("still maps infos without a type onto slots without one", function()
+      local schematic = { reagentSlots = { { slotIndex = 7, dataSlotIndex = 4, kind = "basic", reagents = { 1 } } } }
+      assert.same({ { slotIndex = 7, itemID = 5, quantity = 2 } }, (CD.AllocationFromReagentInfo(schematic, { info(5, 4, 2, 2) })))
+    end)
+  end)
+
+  describe("with empty or missing GameData tables", function()
+    local function empty()
+      for _, name in ipairs({ "ReagentQuality", "ReagentCategories", "OptionalReagents", "CraftingData",
+        "ItemCraftingData", "QualityThresholds", "ConcentrationCurves" }) do gd.Define(name, nil, {}) end
+    end
+    it("returns safe empty results for empty tables", function()
+      empty()
+      assert.equals(0, CD.ReagentWeight(gd, 1002))
+      assert.is_nil(CD.Curve(gd, 2588))
+      assert.is_nil(CD.ThresholdFractions(gd, 2588, 2))
+      assert.is_nil(CD.CraftingDataIDFor(gd, { craftingDataID = nil, outputItemIDs = { 5001 } }))
+      assert.same({}, CD.OptionalStats(gd, 7002, "finishing"))
+    end)
+    it("still honours a schematic's own craftingDataID when GameData is empty", function()
+      empty()
+      assert.equals(2588, CD.CraftingDataIDFor(gd, { craftingDataID = 2588 }))
+    end)
+    it("does not error when a table was never defined or the registry is absent", function()
+      local bare = { Get = function() return nil end }
+      assert.equals(0, CD.ReagentWeight(bare, 1))
+      assert.is_nil(CD.Curve(bare, 1))
+      assert.is_nil(CD.ThresholdFractions(bare, 1, 2))
+      assert.is_nil(CD.CraftingDataIDFor(bare, { outputItemIDs = { 1 } }))
+      assert.same({}, CD.OptionalStats(bare, 1, "optional"))
+      assert.equals(0, CD.ReagentWeight(nil, 1))
+      assert.is_nil(CD.Curve(nil, 1))
+    end)
+    it("tolerates a CraftingData row whose difficulty tables are missing", function()
+      empty()
+      gd.Define("CraftingData", nil, { [2588] = { craftingDifficultyID = 77, difficulty = 700, craftedItemID = 5001 } })
+      assert.is_nil(CD.Curve(gd, 2588))
+      assert.is_nil(CD.ThresholdFractions(gd, 2588, 2))
+    end)
+  end)
+end)

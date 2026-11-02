@@ -68,9 +68,9 @@ Five inputs or conditions most likely to cause problems for a player that the sp
 - Shapes:
   - `OrderInput = { orderID, orderType, recipeID, itemID, skillLineAbilityID, minQuality, tipAmount, consortiumCut, reagentState = "all"|"some"|"none", customer = nameRealm|nil, npcCreatureID|nil, expiresAt, provided = {[itemID]=qty}, rewards = { {itemID?, currencyID?, count} }, isRecraft, outputItemHyperlink|nil }`
   - `OrderView` = the contract fields plus `itemID, consortiumCut, commission, rewardsValue, usedConcentration, concentrationCost, net, goldPerConcentration, flags = {noPrice, unknownRecipe, unpricedReward, estimated, stalePrice}, charKey, input = OrderInput`. `tip` is the gross `tipAmount`; `rewards = { {itemID?, currencyID?, count, value|nil, kind} }`. `flags.estimated` / `flags.stalePrice` are copied from 1b's `RecipeResult.flags` (estimated = no calibration for that character); `flags.noPrice` is order-specific (see Task 4) and is **not** 1b's `flags.noPrice`.
-  - `FulfilledOrder = { orderID, orderType, customer|nil, npcCreatureID|nil, recipeID, itemID, quality|nil, tip, consortiumCut, commission, rewards, rewardsValue, time, charKey }`
+  - `FulfilledOrder = { orderID, orderType, customer|nil, npcCreatureID|nil, recipeID, itemID, quality|nil, tip, consortiumCut, commission, rewards, rewardsValue, isRecraft|nil, time, charKey }`
   - `CustomerRecord = { nameRealm, firstSeen, lastSeen, orders = { {time, orderID, itemID, recipeID, quality, tip, commission, orderType} }, tipsTotal, notes, tags = {[tag]=true}, linkedTo = nameRealm|nil }`
-  - `LedgerEntry = { time, type = "craft"|"sale"|"commission", itemID|nil, amount, charKey, ref|nil, recipeID?, quality?, quantity?, itemName?, cost?, incomplete?, ambiguous?, customer?, orderType?, tip?, rewardsValue?, source? }`. `amount` is negative for `craft`.
+  - `LedgerEntry = { time, type = "craft"|"sale"|"commission", itemID|nil, amount, charKey, ref|nil, recipeID?, quality?, quantity?, itemName?, cost?, incomplete?, ambiguous?, customer?, orderType?, tip?, rewardsValue?, source? }`. `amount` is negative for `craft`. **As built** (final fix wave): entries also carry `estimated?` (cost estimated), `recraft?` (recraft commission, no cost), `buyer?`, `deposit?` (invoice sales) and `operationID?` (crafts); the interface contract's "[phase 2] as built" section has the full shape.
 - DB keys: `global.customers` (1a default), `global.ledger = {entries (1a default), costBasis = {[itemID]={totalCost,totalQty,recipeID}}, nameIndex = {[itemName]={itemID, ambiguous}}}`, `global.ordersSnapshot = {time, charKey, orders}` (1a default `{orders = {}}`; `orders` is keyed by `orderID` in storage, and `GetSnapshot` returns a list), `global.ordersState = {[charKey] = {personalCounts = {[profession]=n}}}`, `global.ordersUnknownRewards = {[key] = {count, lastSeen}}`, `global.settings.orders / .alerts / .ledger`. Module on/off state lives in 1a's `global.settings.modules[<Name>]`.
 - GameData table `"OrderRewards"`, defined in `Data/OrderRewards.lua` with 1a's `ns.GameData.Define("OrderRewards", <build>, tbl)` and read with `ns.GameData.Get("OrderRewards")`: `{ items = {[itemID] = {kind, points?}}, currencies = {[currencyID] = {kind, points?}} }`, where kind is `"knowledge"`, `"moxie"` or `"reagent"`. `<build>` is the same literal build that `Data/GameData_Manual.lua` uses (70575 at 1a time), never nil, because 1a's `GameData.Status` reports `missing` when any table has a nil build.
 - Module names: `Customers`, `Orders`, `Ledger`, `OrdersRowAddons`, `OrdersSidePanel`, `OrderViewWarning`, `OrderAlert` (user-toggleable); `OrdersTab`, `CustomersTab`, `LedgerTab`, `OrdersWidgets` (`coreModule`).
@@ -265,7 +265,7 @@ describe("Orders:Normalize / ValueRewards", function()
     assert.equal("Bob-Silvermoon", i.customer)
   end)
   it("normalizes a nil customer name", function()
-    assert.is_nil(O:Normalize(P2.raw_order({ customerName = nil })).customer)
+    assert.is_nil(O:Normalize(P2.raw_order({ customerName = P2.NIL })).customer)
   end)
   it("values knowledge, moxie, priced items and flags unpriced rewards", function()
     local total, valued, unpriced = O:ValueRewards({ {itemID=99001,count=2}, {currencyID=3256,count=10}, {itemID=210000,count=5}, {itemID=88888,count=1} })
@@ -505,7 +505,7 @@ describe("Orders board", function()
     assert.equal("Me-Silvermoon", O:GetSnapshot().charKey)
   end)
   it("applies a late customer name and re-flags a blocked customer", function()
-    O:OnBoardShown(2, { P2.raw_order({customerName=nil}) })
+    O:OnBoardShown(2, { P2.raw_order({customerName = P2.NIL}) })
     assert.same({}, O:GetView(777).risks)
     O:OnCustomerNameUpdated("CRAFTINGORDERS_UPDATE_CUSTOMER_NAME", "Bad", 777)
     assert.equal("Bad-Silvermoon", O:GetView(777).customer); assert.same({"blockedCustomer"}, O:GetView(777).risks)

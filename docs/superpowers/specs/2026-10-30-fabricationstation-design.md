@@ -79,7 +79,7 @@ FabricationStationDB = {
     queue = { entries = { {recipeID, quantity, charKey, targetQuality, useConcentration} } , restock = { [itemID] = target } },
     customers = { [nameRealm] = {orders = {...}, tips, notes, tags, linkedTo} },
     ledger = { entries = { {time, type, itemID, amount, charKey, ref} } },
-    ordersSnapshot = { time, orders = {...} },
+    ordersSnapshot = { time, orders = {...} },  -- phase 7: replaced by orderBoards[charKey] (migration 3)
     diagnostics = { mismatches = {...} },
     captures = { ... },  -- /fs capture fixtures
   },
@@ -212,6 +212,103 @@ Per character: known recipes, skill, spec state, concentration snapshot, item co
 - Trade-chat scanner for crafting requests the player can fill.
 - First-run setup wizard.
 - CurseForge/Wago release.
+
+## 9a. Phase 5 — pre-1.0 hardening
+
+The work deferred from phase 4 that must settle before the first `v1.0.0` tag. Nothing here adds a feature area; it
+changes how phase 4 data is stored, closes gaps the phase 4 review found, and finishes localization. Priority order:
+
+1. **Compact stored guild profiles and a crafter index** (review M3, M5). Guildmates' profiles are saved in a compact
+   form (the validated wire profile, each profession line's recipes packed into one string) instead of three
+   per-recipe maps, with a forward SavedVariables migration that converts the old shape in place and never wipes
+   data, and a per-guild cap on stored profiles that drops the least recently seen first. Lookups go through a
+   `recipeID -> characters` index kept next to the item index and rebuilt in the same time-sliced ticks, so a tooltip
+   no longer scans every stored profile. The sync wire format and `Protocol.VERSION` do not change.
+2. **Hiding the setup guide is not skipping it.** Only Skip, the close button and finishing record a choice. When the
+   guide is hidden any other way (the UI hidden with Alt+Z, a cinematic, Escape) it stays pending: it comes back with
+   the UI, or at the next login. Guild sync stays held until a real choice, and the hold is still never permanent for
+   a user who is not offered the guide.
+3. **Typed search in the Guild tab.** A recipe name or a shift-clicked item link resolves to recipes, shows their
+   guild crafters, and lists a recipe nobody is known to craft so "Ask guild" can ask the game about it (a click,
+   through the native query's queue and gate).
+4. **Setup guide text fits any language** (review M6): wrapped text boxes are sized from the measured text, and the
+   window grows to fit; a test under an artificially long locale proves nothing is cut off.
+5. **Whole-sentence localization.** Display text built by joining pieces (`"Income: " .. money`, plural endings,
+   bracketed qualifiers) becomes one format-string key per sentence, area by area, with a checker that keeps it that
+   way. English output does not change.
+6. **Small deferred items:** the release gate also checks the `## Interface` line and the licence/notices files; long
+   CHANGELOG and comment lines; the setup guide's duplicate profession row and greyed labels; a missing utility test.
+
+Out of scope for phase 5: the guild privacy defaults (`share = true`, `shareAlts = "guild"`, the user's decision);
+anything that needs the game client to verify (it becomes `P5-` lines in `docs/in-game-checklist.md`); releasing,
+tagging or pushing; Classic; everything in §10.
+
+## 9b. Phase 6 — polish and guild recipe dedup
+
+The minors that phase 5 and the order-row work after it deferred, and one storage question. Nothing here adds a
+feature area. Priority order:
+
+1. **Polish.**
+   - Guild directory and Guild tab: the search catalogue follows new guild data and newly learned recipes, an
+     auto-selection survives a guild change, and a recipe whose profession is not known says so.
+   - Setup guide: the step counter never sits under a button, the social headings grey out with their buttons, and a
+     scan row that is cut off shows its full text on hover.
+   - Order rows: every hover handler runs inside error isolation, a game call that fails on a row reads as "unknown",
+     and the settings text describes the icons where they are now.
+   - Localization: the checker also catches bracket and dash joins and one-line label tables. Duration letters,
+     order and ledger types and the last joined labels become keys. Plural keys take `%d`. Ambiguous keys get
+     translator context, and every area has a translated-locale test.
+   - Docs: the CHANGELOG lists phase 5 and the order-row additions, and the README and CHANGELOG keep to 120 columns.
+2. **Guild recipe-list dedup** (store a profession line's packed recipe string once per guild instead of once per
+   character). It is built only if it saves at least about 20 % of the stored guild data on realistic data. The
+   phase 6 plan measured 0–2 % for a realistic guild with the default quality sharing. It reached 39–77 % only when
+   most characters know every recipe of a line with the same expected qualities. So it is not built in phase 6. A P6
+   check counts the identical lines in a real SavedVariables file, and that count decides whether it comes back.
+
+Out of scope for phase 6: the guild privacy defaults; the `Protocol.VERSION` and the wire format (unchanged); anything
+that needs the game client to verify (it becomes `P6-` lines in `docs/in-game-checklist.md`); releasing, tagging or
+pushing; the spec items listed as not built in the phase 6 plan's appendix, unless trivial; everything in §10.
+
+## 9c. Phase 7 — competitive features
+
+The features other retail crafting addons have that a seller needs most (`reports/Feature gaps 2026-11-01.md`; ids in
+brackets). Every action stays a player click or key press (rule 3). In dependency order:
+
+1. **Orders across characters** [C5, C1, C6]. Each character keeps its own last order board (a saved-data migration;
+   alts with the same profession no longer overwrite each other). The Orders tab lists every character's orders in
+   one list, with each board's age, expiry, sorting and filters. Patron rewards are priced: knowledge points at the
+   player's gold value per point, Moxie and reagent rewards by value, any other reward at a value the player gives
+   it, and a "costs too much" risk
+   when an order costs more per knowledge point or Moxie than the player allows. Selected orders become one
+   Auctionator shopping list of their missing reagents.
+2. **Ready alerts** [V5]. Opt-in, in-game only: concentration full, Moxie over a threshold, a cooldown ready, and a
+   taskbar flash (`FlashClientIcon`) on new orders that match the filters. A Refresh button on the order board asks
+   for the board once per click; nothing refreshes on a timer.
+3. **Sales and stock** [C12, C2]. The player's own auction posts, cancels, expiries and sales (own events and own
+   mail; this is the player's own history, not the excluded TSM sale-rate data), a personal sale rate and last sale
+   price per item in a Ledger view and in item tooltips. Restock targets get a minimum profit per craft, and count
+   the player's own auction listings and mail as held.
+4. **Craft log** [C11]. Every craft's real result (quality, Multicraft extra items, Resourcefulness returns,
+   concentration spent) next to FabricationStation's and the game's prediction, per recipe over time, and an exporter
+   that turns logged crafts and `/fs capture` records into the golden fixtures of §11.
+5. **Better crafting choices** [C3, C4, C13]. A finishing and optional reagent optimizer (one slot at a time, or every
+   combination when there are few) whose pick shows in the side panel and is crafted by Craft Next. Saved craft lists
+   with rules (minimum profit, minimum quality, concentration off / single best / across recipes) queued with one
+   click, and "Queue plan" for the Planner's concentration schedule. For reagents a character can craft: craft cost
+   against buy price, the player's choice per reagent, and the sub-crafts queued ahead of the craft that needs them
+   (at most 3 levels, never in a cycle).
+6. **Getting reagents** [C14, C15]. A gathering plan per missing reagent (alts' bags and banks, mail, crafting it,
+   vendor, auction house). At the bank, a button moves exactly what the queue still needs from the bank or warband
+   bank into the bags, one move per click; at a merchant, a button buys the queue's vendor reagents, one click per
+   batch. Nothing moves or buys when a window opens.
+7. **Chat requests and key bindings** [V7, V8]. Chat requests are kept in a list across characters with reply status,
+   the whisper history and auto-dismiss; replying fills the chat box and sends nothing. Key bindings for Craft Next,
+   Claim Best Order, opening FabricationStation and replying to the latest request, each a key press that runs the
+   same click handler as its button.
+
+Out of scope for phase 7: automatic crafting, claiming, posting, buying or item moves; board auto-refresh on a timer;
+TSM; Syndicator; notifications outside the game; anything that needs the game client to verify (it becomes `P7-` lines
+in `docs/in-game-checklist.md`); releasing, tagging or pushing; everything in §10.
 
 ## 10. Out of scope
 

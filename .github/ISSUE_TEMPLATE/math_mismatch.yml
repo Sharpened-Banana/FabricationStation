@@ -1,0 +1,56 @@
+name: Math mismatch
+description: FabricationStation predicts a different quality, skill, concentration cost or profit than the game shows.
+title: "[Math] "
+labels: ["math"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Select the recipe in the profession window, run `/fs capture` (or `/fabstation capture` if another addon owns
+        `/fs`), then `/reload`. The capture is saved in
+        `WTF/Account/<ACCOUNT>/SavedVariables/FabricationStation.lua` under `FabricationStationDB.global.captures.list`.
+        Paste only the entry for this recipe below, not the whole file (GitHub limits the size of a field). Without a
+        capture the numbers cannot be reproduced.
+  - type: input
+    id: recipe
+    attributes:
+      label: Recipe
+      description: Name, and the profession.
+    validations:
+      required: true
+  - type: input
+    id: character
+    attributes:
+      label: Character skill and specialization
+      description: Profession skill, the specialization paths you have points in, and your crafting stats.
+    validations:
+      required: true
+  - type: textarea
+    id: prediction
+    attributes:
+      label: What FabricationStation predicted
+      description: Quality, skill, concentration cost or profit, as shown by the addon.
+    validations:
+      required: true
+  - type: textarea
+    id: game
+    attributes:
+      label: What the game shows
+      description: The same values from Blizzard's own profession window, or the result you actually crafted.
+    validations:
+      required: true
+  - type: textarea
+    id: capture
+    attributes:
+      label: /fs capture entry
+      description: The capture table for this recipe from the SavedVariables file.
+      render: lua
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: FabricationStation version and WoW build
+      placeholder: "1.0.0, 12.1.5 (70688)"
+    validations:
+      required: true

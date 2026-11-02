@@ -1,0 +1,34 @@
+std = "lua51+wow"
+max_line_length = false
+exclude_files = { "Libs/", ".lua/", ".luarocks/", ".release/", "tools/gamedata/cache/", "tests/fixtures/" }
+ignore = { "211/ADDON_NAME", "212/self" }
+stds.wow = {
+  globals = { "FabricationStationDB", "UISpecialFrames", "FabricationStation_Binding", "BINDING_HEADER_FABRICATIONSTATION",
+    "BINDING_NAME_FABRICATIONSTATION_CRAFTNEXT", "BINDING_NAME_FABRICATIONSTATION_CLAIMBEST",
+    "BINDING_NAME_FABRICATIONSTATION_TOGGLE", "BINDING_NAME_FABRICATIONSTATION_REPLYLATEST" },
+  read_globals = { "LibStub", "STANDARD_TEXT_FONT", "GetItemInfo", "Auctionator", "C_TradeSkillUI", "C_CraftingOrders", "C_Item", "C_CurrencyInfo",
+    "C_ProfSpecs", "C_Traits", "C_Container", "C_Bank", "C_AddOns", "C_Timer", "C_DateAndTime", "Enum", "CreateFrame", "UIParent", "GameTooltip",
+    "GetServerTime", "GetBuildInfo", "GetMoney", "GetMoneyString", "UnitName", "UnitClass", "GetRealmName",
+    "GetNormalizedRealmName", "GetProfessions", "GetProfessionInfo", "GetInventoryItemLink", "ProfessionsFrame",
+    "ProfessionsRecipeSchematicFormMixin", "Professions", "ScrollBoxListMixin", "TooltipDataProcessor",
+    "ButtonFrameTemplate_HidePortrait", "ButtonFrameTemplate_HideButtonBar", "hooksecurefunc", "EventRegistry",
+    "debugstack", "debugprofilestop", "geterrorhandler", "date", "time", "wipe", "tinsert", "tremove", "strsplit", "strtrim",
+    "GetInboxInvoiceInfo", "GetInboxHeaderInfo", "TakeInboxMoney", "AutoLootMailItem", "AUCTION_SOLD_MAIL_SUBJECT",
+    "ScrollUtil", "PlaySound", "SOUNDKIT", "C_QuestLog", "C_Spell", "GetCurrentRegion", "canaccessvalue",
+    "RAID_CLASS_COLORS", "C_ChatInfo", "C_RestrictedActions", "C_EncodingUtil", "C_GuildInfo", "GetGuildInfo",
+    "IsInGuild", "GetGuildRecipeInfoPostQuery", "GetGuildRecipeMember", "GetNumGuildMembers", "Ambiguate",
+    "issecretvalue", "ChatFrameUtil", "ChatEdit_InsertLink", "C_FriendList", "IsInInstance", "InCombatLockdown", "GetTime", "GetItemIcon",
+    "FlashClientIcon", "C_FunctionContainers", "C_AuctionHouse", "GetInboxNumItems", "GetInboxItem",
+    "AUCTION_EXPIRED_MAIL_SUBJECT", "ATTACHMENTS_MAX_RECEIVE", "GetCursorInfo", "ClearCursor", "BankFrame",
+    "GetMerchantNumItems", "GetMerchantItemID", "GetMerchantItemInfo", "C_MerchantFrame", "GetMerchantItemMaxStack",
+    "BuyMerchantItem", "MerchantFrame" },
+}
+files["Math/"] = { std = "lua51" }
+files["Data/"] = { std = "lua51" }
+files["Modules/CraftingData.lua"] = { std = "lua51" }
+files["Modules/PlanCalc.lua"] = { std = "lua51" }
+files["Modules/Social/ChatMatcher.lua"] = { std = "lua51" }
+files["tools/"] = { std = "lua51" }
+files["Locales/"] = { ignore = { "211/ns" } }  -- every locale file keeps the standard `local ADDON_NAME, ns = ...` header
+files["tests/"] = { std = "lua51+busted+wow", globals = { "make_world", "fake_professions_frame" },
+  ignore = { "11", "12", "14" } }  -- tests install and mutate fake globals

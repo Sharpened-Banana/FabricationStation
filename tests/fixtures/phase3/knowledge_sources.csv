@@ -1,0 +1,4 @@
+skillLineID,category,quests,limit,itemID,points,hint,credit
+2907,weeklyQuest,93691,,263455,2,Artisan's Consortium weekly,xref
+2912,weeklyQuest,93700 93701 93702 93703 93704,1,263462,3,"Herbalism trainer, Silvermoon",xref
+2909,drop,95048 95049 95050 95051 95052,,267654,1,Disenchanting,xref

@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Retail only (Midnight 12.x). API facts below were read from Gethe/wow-ui-source `live` @ `15881d5` = build **12.1.5 (70575)**, 2026-10-23. Interface number is pinned by phase 1a; the release checklist bumps it.
+- Retail only (Midnight 12.x). API facts below were read from Gethe/wow-ui-source `live` @ `15881d5` = build 12.1.5 (70575), 2026-10-23, and re-checked at **12.1.5 (70688)** on 2026-10-31 (same interface 120105; every item below is unchanged; the Enum values used by the test stubs were re-read from the 70688 generated docs). Interface number is pinned by phase 1a; the release checklist bumps it.
 - Spec §3 rules apply in full. Phase-4 specifics: no auto-whisper and no chat sending. The only whisper path is a toast/row **click** calling `ChatFrameUtil.SendTellWithMessage(name, text)` or `ChatFrameUtil.SendTell(name)`, which only open the chat edit box. Never call `SendChatMessage` / `C_ChatInfo.SendChatMessage` (`HasRestrictions`).
 - No chat message filters (`ChatFrameUtil.AddMessageEventFilter`). ChatScan listens to events only and never changes what the chat frame shows.
 - Addon message prefix: `"FabStn"` (6 chars, limit 16). Transport: AceComm-3.0 (MINOR 14) `SendCommMessage(prefix, text, distribution, target, prio, callbackFn, callbackArg)`. AceComm chunks text over 255 bytes and calls `callbackFn(callbackArg, bytesSent, bytesTotal, sendResult)` once per chunk. ChatThrottleLib v32 retries only `AddonMessageThrottle`.

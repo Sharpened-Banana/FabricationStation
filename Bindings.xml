@@ -1,0 +1,6 @@
+<Bindings>
+  <Binding name="FABRICATIONSTATION_CRAFTNEXT" header="FABRICATIONSTATION" category="ADDONS">FabricationStation_Binding("craftNext")</Binding>
+  <Binding name="FABRICATIONSTATION_CLAIMBEST" category="ADDONS">FabricationStation_Binding("claimBest")</Binding>
+  <Binding name="FABRICATIONSTATION_TOGGLE" category="ADDONS">FabricationStation_Binding("toggle")</Binding>
+  <Binding name="FABRICATIONSTATION_REPLYLATEST" category="ADDONS">FabricationStation_Binding("replyLatest")</Binding>
+</Bindings>

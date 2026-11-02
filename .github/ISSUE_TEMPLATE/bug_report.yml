@@ -1,0 +1,62 @@
+name: Bug report
+description: Something in FabricationStation does not work, or throws a Lua error.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. If a number is wrong (a predicted quality, a concentration cost or a profit),
+        please use the "Math mismatch" form instead.
+  - type: input
+    id: fs_version
+    attributes:
+      label: FabricationStation version
+      description: |
+        Run `/dump C_AddOns.GetAddOnMetadata("FabricationStation", "Version")` in game.
+        A source checkout shows `@project-version@`; in that case give the commit hash instead.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: wow_build
+    attributes:
+      label: WoW build
+      description: "Run `/dump GetBuildInfo()` in game and paste the version and build, for example 12.1.5 (70688)."
+      placeholder: "12.1.5 (70688)"
+    validations:
+      required: true
+  - type: textarea
+    id: other_addons
+    attributes:
+      label: Other addons
+      description: Auctionator and any other addon that touches professions, crafting orders, tooltips or chat. If you can reproduce it with only FabricationStation and Auctionator enabled, say so.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the Blacksmithing window
+        2. Select ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: textarea
+    id: lua_error
+    attributes:
+      label: Lua error
+      description: The error text from BugSack / BugGrabber, if there was one. The "Errors" list in `/fs settings` under Diagnostics also helps.
+      render: text

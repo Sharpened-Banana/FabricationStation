@@ -1,0 +1,1286 @@
+describe("Queue tab model", function()
+  local T
+  before_each(function() local ns = make_world({ last = "UI/Tabs/Queue.lua" }); T = ns.UI.QueueTab end)
+  it("shows missing reagents, cost and cooldown", function()
+    local rows = T.BuildRows({ { id = 1, recipeID = 9001, quantity = 3, charKey = "Alt-Realm", targetQuality = 2, useConcentration = true } },
+      { [1] = 2700 }, { [1] = { [1001] = 2 } }, { [1] = 7500 }, 0)
+    assert.same({ 2700, "on", "2× item:1001", "ready in 2h 5m" }, { rows[1].cost, rows[1].concentration, rows[1].missingText, rows[1].readyText })
+  end)
+  it("status text", function()
+    assert.equals("Open Alchemy on Alt", T.StatusText({ status = "open" }, "Alchemy", "Alt"))
+    assert.equals("Queue is empty", T.StatusText({ status = "empty" }))
+  end)
+  it("asks to start (claim) the order of an unclaimed order entry", function()
+    assert.equals("Start (claim) the order first: Sample Recipe 9001",
+      T.StatusText({ status = "order", orderID = 42, recipeName = "Sample Recipe 9001" }))
+    assert.equals("Start (claim) the order first: order #42", T.StatusText({ status = "order", orderID = 42 }))
+  end)
+  it("marks an entry that belongs to a crafting order", function()
+    local rows = T.BuildRows({ { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B", orderID = 42 },
+      { id = 2, recipeID = 9001, quantity = 1, charKey = "A-B" } }, {}, {}, {}, 0)
+    assert.same({ 42, nil }, { rows[1].orderID, rows[2].orderID })
+    assert.is_truthy(T.CellTexts(rows[1]).name:find("[order]", 1, true))
+    assert.is_falsy(T.CellTexts(rows[2]).name:find("[order]", 1, true))
+    assert.same({ "Crafting order #42" }, T.RowTooltip(rows[1]))
+    assert.is_nil(T.RowTooltip(rows[2]))
+  end)
+  -- Phase 7 Task 14: a sub-craft queued for another entry's reagent.
+  it("starts a sub-craft's name with an arrow", function()
+    local rows = T.BuildRows({ { id = 2, recipeID = 9001, quantity = 1, charKey = "A-B", parentID = 1 },
+      { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B" } }, {}, {}, {}, 0)
+    assert.same({ 1, nil }, { rows[1].parentID, rows[2].parentID })
+    assert.equals("\226\134\179 Sample Recipe 9001", T.CellTexts(rows[1]).name)
+    assert.equals("Sample Recipe 9001", T.CellTexts(rows[2]).name)
+  end)
+end)
+
+describe("Queue tab", function()
+  local ns, W, world, Tab, QT, MW, Queue
+
+  local READ_ONLY = "Saved data is from a newer version of FabricationStation; the queue is read-only."
+
+  local function click(frame) frame:GetScript("OnClick")(frame) end
+  local function fs_text(row, key) return row.cells[key]:GetText() end
+  local function add(quantity, opts)
+    opts = opts or {}
+    return Queue:Add({ recipeID = opts.recipeID or 9001, quantity = quantity or 1, charKey = opts.charKey or "Main-Realm",
+      targetQuality = opts.targetQuality, useConcentration = opts.useConcentration, optionalItemIDs = opts.optionalItemIDs })
+  end
+  -- A line without colour codes and with single spaces.
+  local function flat(text) return (text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("  +", " ")) end
+  local function edit(box, text) box.GetText = function() return text end end
+
+  before_each(function()
+    ns, W, world = make_world({ last = "UI/Tabs/Queue.lua" })
+    Tab = ns.UI.QueueTab; QT = ns.FS:GetModule("QueueTab"); MW = ns.FS:GetModule("MainWindow")
+    Queue = ns.FS:GetModule("Queue")
+    world.fakeEvaluate(9001, { allocation = { { slotIndex = 1, itemID = 1001, quantity = 2 }, { slotIndex = 2, itemID = 2002, quantity = 1 } },
+      reagentCost = 900, flags = {} })
+  end)
+
+  describe("models", function()
+    it("names rows from the cached schematic, falling back to recipe:<id>", function()
+      local rows = Tab.BuildRows({ { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B" }, { id = 2, recipeID = 777, quantity = 1, charKey = "A-B" } }, {}, {}, {}, 0)
+      assert.same({ "Sample Recipe 9001", "recipe:777" }, { rows[1].name, rows[2].name })
+    end)
+    it("copies the entry values and shows concentration off by default", function()
+      local rows = Tab.BuildRows({ { id = 4, recipeID = 9001, quantity = 3, charKey = "Alt-Realm", targetQuality = 2 },
+        { id = "restock:5002", recipeID = 9001, quantity = 2, charKey = "Main-Realm", isRestock = true } }, {}, {}, {}, 0)
+      assert.same({ 4, "Alt-Realm", 3, 2, "off", false }, { rows[1].id, rows[1].charKey, rows[1].quantity, rows[1].targetQuality,
+        rows[1].concentration, rows[1].isRestock })
+      assert.same({ "restock:5002", true }, { rows[2].id, rows[2].isRestock })
+    end)
+    it("a missing cost stays nil and shows as no price, never 0", function()
+      local row = Tab.BuildRows({ { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B" } }, {}, {}, {}, 0)[1]
+      assert.is_nil(row.cost)
+      local cells = Tab.CellTexts(row)
+      assert.is_truthy(cells.cost:find("no price", 1, true)); assert.is_falsy(cells.cost:find("0", 1, true))
+      local priced = Tab.CellTexts(Tab.BuildRows({ { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B" } }, { [1] = 12345 }, {}, {}, 0)[1])
+      assert.is_truthy(priced.cost:find(ns.UI.FormatMoney(12345), 1, true))
+    end)
+    it("marks an estimated cost with a tilde and shows its price age, red when stale", function()
+      local entries = { { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B" } }
+      local row = Tab.BuildRows(entries, { [1] = 12345 }, {}, {}, 0,
+        { [1] = { priceAgeDays = 2, flags = { estimated = true, stalePrice = true } } })[1]
+      assert.same({ true, 2, true }, { row.estimated, row.priceAge, row.stale })
+      local cells = Tab.CellTexts(row)
+      assert.is_truthy(cells.cost:find("~" .. ns.UI.FormatMoney(12345), 1, true))
+      assert.is_truthy(cells.cost:find("|cffff4040" .. "2d", 1, true))
+      local plain = Tab.CellTexts(Tab.BuildRows(entries, { [1] = 12345 }, {}, {}, 0, { [1] = { priceAgeDays = 1, flags = {} } })[1])
+      assert.is_falsy(plain.cost:find("~", 1, true)); assert.is_truthy(plain.cost:find("1d", 1, true))
+      local noResult = Tab.CellTexts(Tab.BuildRows(entries, { [1] = 12345 }, {}, {}, 0)[1])
+      assert.equals(ns.UI.FormatMoney(12345), noResult.cost)
+    end)
+    it("an unknown cost stays no price even when estimated", function()
+      local cells = Tab.CellTexts(Tab.BuildRows({ { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B" } }, {}, {}, {}, 0,
+        { [1] = { priceAgeDays = 1, flags = { estimated = true } } })[1])
+      assert.is_truthy(cells.cost:find("no price", 1, true)); assert.is_falsy(cells.cost:find("~", 1, true))
+    end)
+    it("marks an entry whose target quality cannot be reached", function()
+      local row = Tab.BuildRows({ { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B", targetQuality = 2 } }, {}, {}, {}, 0,
+        { [1] = { flags = { unreachableTarget = true } } })[1]
+      assert.is_true(row.unreachable)
+      assert.is_truthy(Tab.CellTexts(row).name:find("[quality unreachable]", 1, true))
+    end)
+    it("a cost of exactly zero is shown as money", function()
+      local cells = Tab.CellTexts(Tab.BuildRows({ { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B" } }, { [1] = 0 }, {}, {}, 0)[1])
+      assert.is_truthy(cells.cost:find(ns.UI.FormatMoney(0), 1, true)); assert.is_falsy(cells.cost:find("no price", 1, true))
+    end)
+    it("lists missing reagents by item ID order with cached names, else item:<id>", function()
+      world.names[2002] = "Glimmer Dust"
+      local row = Tab.BuildRows({ { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B" } }, {},
+        { [1] = { [2002] = 3, [1001] = 2 } }, {}, 0)[1]
+      assert.equals("2× item:1001, 3× Glimmer Dust", row.missingText)
+      assert.equals("", Tab.BuildRows({ { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B" } }, {}, {}, {}, 0)[1].missingText)
+    end)
+    it("formats the cooldown wait, and shows nothing once ready", function()
+      local function ready(readyAt, now)
+        return Tab.BuildRows({ { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B" } }, {}, {}, { [1] = readyAt }, now)[1].readyText
+      end
+      assert.equals("ready in 2h 5m", ready(7500, 0))
+      assert.equals("ready in 1d 3h", ready(100000 + 86400 + 3 * 3600, 100000))
+      assert.equals("ready in 45m", ready(45 * 60, 0))
+      assert.equals("ready in 2h", ready(7200, 0))
+      assert.equals("ready in <1m", ready(30, 0))
+      assert.equals("", ready(100, 100)); assert.equals("", ready(50, 100)); assert.equals("", ready(nil, 0))
+    end)
+    it("says why each Craft Next result happened", function()
+      assert.equals("Crafting Sample Recipe 9001…", Tab.StatusText({ status = "crafted", recipeName = "Sample Recipe 9001" }))
+      assert.equals("Open Alchemy on Alt", Tab.StatusText({ status = "open" }, "Alchemy", "Alt"))
+      assert.equals("Missing reagents — see Shopping List", Tab.StatusText({ status = "missing" }))
+      assert.equals("Next craft ready in 2h 5m", Tab.StatusText({ status = "cooldown", readyAt = 7500 }, nil, nil, 0))
+      assert.equals("Queue is empty", Tab.StatusText({ status = "empty" }))
+      assert.is_truthy(Tab.StatusText({ status = "busy" }):find("current craft", 1, true))
+      assert.is_truthy(Tab.StatusText({ status = "weird" }):find("weird", 1, true))
+      assert.is_truthy(Tab.StatusText(nil):len() > 0)
+    end)
+    it("says item, not items, for one", function()
+      assert.equals("Shopping list updated (1 item)", Tab.ShoppingText(true, { added = 1, skipped = 0 }))
+      assert.equals("Shopping list updated (1 item), 1 item skipped", Tab.ShoppingText(true, { added = 1, skipped = 1 }))
+      assert.equals("1 item skipped: its name could not be loaded", Tab.ShoppingText(true, { added = 0, skipped = 1 }))
+    end)
+    it("says what happened to the shopping list", function()
+      assert.equals("Shopping list updated (4 items)", Tab.ShoppingText(true, { added = 4, skipped = 0 }))
+      assert.equals("Shopping list updated (3 items), 2 items skipped", Tab.ShoppingText(true, { added = 3, skipped = 2 }))
+      assert.equals("2 items skipped: their names could not be loaded", Tab.ShoppingText(true, { added = 0, skipped = 2 }))
+      assert.equals("Loading item names\226\128\166 the list will appear in Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear",
+        Tab.ShoppingText(true, { added = 0, skipped = 2, loading = true }))
+      assert.equals("Auctionator not available", Tab.ShoppingText(false, "noAuctionator"))
+      assert.is_truthy(Tab.ShoppingText(false, "empty"):find("Nothing", 1, true))
+      assert.is_truthy(Tab.ShoppingText(false, "auctionatorError"):find("Auctionator", 1, true))
+      assert.is_truthy(Tab.ShoppingText(false, "other"):len() > 0)
+    end)
+    it("parses the restock inputs", function()
+      assert.same({ 191460, 20 }, { Tab.ParseRestock("191460", "20") })
+      assert.same({ 191460, 5 }, { Tab.ParseRestock("|cff0070dd|Hitem:191460::::::::|h[Ore]|h|r", " 5 ") })
+      assert.is_truthy(select(3, Tab.ParseRestock("", "5")):find("item", 1, true))
+      assert.is_truthy(select(3, Tab.ParseRestock("abc", "5")):find("item", 1, true))
+      assert.is_truthy(select(3, Tab.ParseRestock("191460", "")):find("target", 1, true))
+      assert.is_truthy(select(3, Tab.ParseRestock("191460", "0")):find("target", 1, true))
+      assert.is_truthy(select(3, Tab.ParseRestock("191460", "2.5")):find("target", 1, true))
+    end)
+    it("parses the min profit as gold, empty meaning none", function()
+      assert.same({ 191460, 20, nil }, { Tab.ParseRestock("191460", "20", "") })
+      assert.same({ 191460, 20, nil }, { Tab.ParseRestock("191460", "20", nil) })
+      assert.same({ 191460, 20, 50000 }, { Tab.ParseRestock("191460", "20", "5") })
+      assert.same({ 191460, 20, 25000 }, { Tab.ParseRestock("191460", "20", " 2g 50s ") })
+      assert.same({ 191460, 20, 0 }, { Tab.ParseRestock("191460", "20", "0") })
+      local item, target, problem = Tab.ParseRestock("191460", "20", "lots")
+      assert.is_nil(item); assert.is_nil(target); assert.is_truthy(problem:find("min profit", 1, true))
+      assert.is_nil((Tab.ParseRestock("191460", "20", "-3")))
+    end)
+    it("words the held counts, showing an unknown count as ?", function()
+      local function text(held) return Tab.RestockHeldText({ target = 10, status = { held = held } }) end
+      assert.equals("Target 10 \194\183 held 4", text({ owned = 4, mail = 0, listed = 0, total = 4 }))
+      assert.equals("Target 10 \194\183 held 4", text({ owned = 4, total = 4 }))
+      assert.equals("Target 10 \194\183 held 9 (mail 0, listed 5)", text({ owned = 4, mail = 0, listed = 5, total = 9 }))
+      assert.equals("Target 10 \194\183 held 7 (mail 3, listed 0)", text({ owned = 4, mail = 3, listed = 0, total = 7 }))
+      assert.equals("Target 10 \194\183 held 4 (mail ?, listed 0)", text({ owned = 4, listed = 0, mailUnknown = true, total = 4 }))
+      assert.equals("Target 10 \194\183 held 9 (mail ?, listed 5)", text({ owned = 4, listed = 5, mailUnknown = true, total = 9 }))
+      assert.equals("Target 10 \194\183 held 4 (mail 0, listed ?)", text({ owned = 4, mail = 0, listedUnknown = true, total = 4 }))
+      assert.equals("Target 10", Tab.RestockHeldText({ target = 10 }))
+    end)
+    it("words each restock status", function()
+      local function text(status) return (Tab.RestockStatusText({ status = status })) end
+      assert.equals("3 crafts queued", text({ status = "queued", crafts = 3 }))
+      assert.equals("1 craft queued", text({ status = "queued", crafts = 1 }))
+      assert.equals("Stocked", text({ status = "stocked" }))
+      assert.equals("Below min profit (" .. ns.UI.FormatMoney(4000) .. " per craft)", text({ status = "belowMinProfit", profit = 4000 }))
+      assert.equals("Profit unknown: not restocked", text({ status = "unknownProfit" }))
+      assert.equals("No recipe makes this item", text({ status = "noRecipe" }))
+      assert.equals("No crafter reaches this quality", text({ status = "noCrafter" }))
+      assert.is_nil(Tab.RestockStatusText({}))
+    end)
+    it("builds restock rows by item ID with cached names", function()
+      world.names[22] = "Flux"
+      local rows = Tab.BuildRestockRows({ [30] = 5, [22] = 10 })
+      assert.same({ { 22, "Flux", 10 }, { 30, "item:30", 5 } }, { { rows[1].itemID, rows[1].name, rows[1].target }, { rows[2].itemID, rows[2].name, rows[2].target } })
+    end)
+  end)
+
+  describe("registration", function()
+    it("is a core module that registers the queue tab third in the rail", function()
+      assert.is_true(QT.coreModule)
+      local tab = MW:GetTabs()[3]
+      assert.same({ "queue", "Queue", 30, 1 }, { tab.id, tab.def.label, tab.def.order, tab.def.phase })
+    end)
+    it("does not build until the tab is shown", function() assert.is_nil(QT:GetView()) end)
+  end)
+
+  describe("list", function()
+    it("lists the entries with their cost, missing reagents and concentration", function()
+      add(3, { targetQuality = 2, useConcentration = true })
+      MW:Show("queue")
+      local view = QT:GetView()
+      assert.equals(1, #view.queue.rows); assert.equals(1, view.queue.shown)
+      local row = view.queue.pool[1]
+      assert.is_truthy(fs_text(row, "name"):find("Sample Recipe 9001", 1, true))
+      assert.same({ "Main", "Q2", "on", "3" }, { fs_text(row, "character"), fs_text(row, "quality"), fs_text(row, "concentration"), fs_text(row, "quantity") })
+      assert.is_truthy(fs_text(row, "cost"):find(ns.UI.FormatMoney(2700), 1, true))
+      assert.is_truthy(row.missing:GetText():find("6× item:1001", 1, true))
+      assert.equals("", view.empty:GetText())
+    end)
+    it("names an entry's optionals", function()
+      world.names[7201], world.names[7202] = "Moonpetal", "Sunfire Resin"
+      add(1, { optionalItemIDs = { 7202, 7201 } }); add(1)
+      local rows = Tab.BuildRows(Queue:GetEntries(), {}, {}, {}, 0)
+      assert.equals("Moonpetal, Sunfire Resin", rows[1].optionalsText)
+      assert.equals("", rows[2].optionalsText)
+      assert.equals("Reagents on hand \194\183 Optionals: Moonpetal, Sunfire Resin", flat(Tab.SecondLine(rows[1])))
+      assert.equals("Reagents on hand", flat(Tab.SecondLine(rows[2])))
+      MW:Show("queue")
+      assert.is_truthy(QT:GetView().queue.pool[1].missing:GetText():find("Optionals: Moonpetal, Sunfire Resin", 1, true))
+      assert.is_falsy(QT:GetView().queue.pool[2].missing:GetText():find("Optionals", 1, true))
+    end)
+    it("shows the blocker for an optional that no longer fits on the second line", function()
+      add(1, { optionalItemIDs = { 7201 } })      -- the fake evaluation places nothing
+      MW:Show("queue")
+      assert.is_truthy(flat(QT:GetView().queue.pool[1].missing:GetText()):find("Optional reagent no longer fits: item:7201", 1, true))
+      world.names[7201] = "Moonpetal"
+      local rows = Tab.BuildRows(Queue:GetEntries(), {}, {}, {}, 0, { [1] = { allocation = {}, optionalAllocation = {} } })
+      assert.equals("Moonpetal", rows[1].unplacedText)
+      local placed = Tab.BuildRows(Queue:GetEntries(), {}, {}, {}, 0,
+        { [1] = { optionalAllocation = { { slotIndex = 4, itemID = 7201, quantity = 1 } } } })
+      assert.equals("", placed[1].unplacedText)
+      assert.equals("", Tab.BuildRows(Queue:GetEntries(), {}, {}, {}, 0)[1].unplacedText)     -- no evaluation, no claim
+    end)
+    it("says which optional no longer fits in the Craft Next status", function()
+      assert.equals("Optional reagent no longer fits: item:7201", Tab.StatusText({ status = "optional", unplaced = { 7201 } }))
+    end)
+    it("puts the optionals after the missing reagents on the second line", function()
+      local row = { missingText = "2\195\151 item:1001", optionalsText = "Moonpetal" }
+      assert.equals("Missing: 2\195\151 item:1001 \194\183 Optionals: Moonpetal", flat(Tab.SecondLine(row)))
+    end)
+    it("shows the estimate marker and price age of the entry's evaluation", function()
+      world.fakeEvaluate(9001, { allocation = {}, reagentCost = 900, priceAgeDays = 3, flags = { estimated = true } })
+      add(1); MW:Show("queue")
+      local cost = fs_text(QT:GetView().queue.pool[1], "cost")
+      assert.is_truthy(cost:find("~" .. ns.UI.FormatMoney(900), 1, true)); assert.is_truthy(cost:find("3d", 1, true))
+    end)
+    it("shows no price for an unknown cost", function()
+      world.fakeEvaluate(9001, { allocation = {}, reagentCost = nil, flags = { noPrice = true } })
+      add(1); MW:Show("queue")
+      assert.is_truthy(fs_text(QT:GetView().queue.pool[1], "cost"):find("no price", 1, true))
+    end)
+    it("shows when a cooldown recipe is ready", function()
+      world.cooldown("Main-Realm", 9001, W.now + 7500)
+      add(1); MW:Show("queue")
+      assert.is_truthy(QT:GetView().queue.pool[1].ready:GetText():find("ready in 2h 5m", 1, true))
+    end)
+    it("shows an empty-state line for an empty queue", function()
+      MW:Show("queue")
+      assert.is_truthy(QT:GetView().empty:GetText():find("queue is empty", 1, true))
+    end)
+    it("lists restock entries without quantity or remove buttons", function()
+      Queue:SetRestock(world.outputOf(9001), 10)
+      MW:Show("queue")
+      local row = QT:GetView().queue.pool[1]
+      assert.is_true(row.data.isRestock)
+      assert.is_truthy(fs_text(row, "name"):find("restock", 1, true))
+      assert.is_false(row.minus:IsShown()); assert.is_false(row.plus:IsShown()); assert.is_false(row.remove:IsShown())
+    end)
+    it("pools rows: only the rows in view exist, and scrolling rebinds them", function()
+      for _ = 1, 200 do add(1) end
+      MW:Show("queue")
+      local list = QT:GetView().queue
+      assert.equals(200, #list.rows); assert.is_true(#list.pool < 30)
+      assert.equals(200 * 36, list.child:GetHeight())
+      local pos = 36 * 100
+      list.scroll.GetVerticalScroll = function() return pos end
+      list.scroll:GetScript("OnVerticalScroll")(list.scroll, pos)
+      assert.equals(Queue:GetEntries()[101].id, list.pool[1].data.id)
+      assert.equals(-(100 * 36), select(5, list.pool[1]:GetPoint(1)))
+    end)
+    it("clamps the scroll offset when the list shrinks while scrolled down", function()
+      for _ = 1, 100 do add(1) end
+      MW:Show("queue")
+      local scroll = QT:GetView().queue.scroll
+      local pos = 36 * 80
+      scroll.GetHeight = function() return 180 end
+      scroll.GetVerticalScroll = function() return pos end
+      scroll.SetVerticalScroll = function(_, v) pos = v end
+      for _ = 1, 70 do Queue:Remove(Queue:GetEntries()[1].id) end
+      MW:RefreshTab("queue")
+      assert.equals(30 * 36 - 180, pos)
+      local list = QT:GetView().queue
+      assert.equals(30 * 36, list.child:GetHeight())
+      assert.is_true(list.shown >= 1 and list.shown <= 30)
+    end)
+    it("scrolls back to the top when the list fits the view, and hides spare rows", function()
+      for _ = 1, 5 do add(1) end
+      MW:Show("queue")
+      local view = QT:GetView()
+      local scroll = view.queue.scroll
+      local pos = 36 * 3
+      scroll.GetHeight = function() return 180 end
+      scroll.GetVerticalScroll = function() return pos end
+      scroll.SetVerticalScroll = function(_, v) pos = v end
+      Queue:Clear(); add(1)
+      MW:RefreshTab("queue")
+      assert.equals(0, pos); assert.equals(1, view.queue.shown)
+      assert.is_true(view.queue.pool[1]:IsShown()); assert.is_false(view.queue.pool[2]:IsShown())
+    end)
+    it("scrolls with the mouse wheel inside the range", function()
+      MW:Show("queue")
+      local scroll = QT:GetView().queue.scroll
+      local pos = 0
+      scroll.GetVerticalScrollRange = function() return 100 end
+      scroll.GetVerticalScroll = function() return pos end
+      scroll.SetVerticalScroll = function(_, v) pos = v end
+      local onWheel = scroll:GetScript("OnMouseWheel")
+      onWheel(scroll, -1); assert.is_true(pos > 0)
+      for _ = 1, 20 do onWheel(scroll, -1) end; assert.equals(100, pos)
+      for _ = 1, 40 do onWheel(scroll, 1) end; assert.equals(0, pos)
+    end)
+  end)
+
+  describe("editing the queue", function()
+    it("+ and - change the quantity of a real entry", function()
+      local id = add(2); MW:Show("queue")
+      local row = QT:GetView().queue.pool[1]
+      click(row.plus); assert.equals(3, Queue:GetEntries()[1].quantity)
+      assert.equals("3", fs_text(QT:GetView().queue.pool[1], "quantity"))
+      click(row.minus); click(row.minus)
+      assert.equals(1, Queue:GetEntries()[1].quantity)
+      click(QT:GetView().queue.pool[1].minus)
+      assert.same({}, Queue:GetEntries()); assert.is_nil(id and Queue:GetEntries()[1])
+      assert.equals(0, QT:GetView().queue.shown)
+    end)
+    -- Follow-up F2: the minus button at quantity 1 is a removal by the player, so it goes through Queue:Remove.
+    it("minus on a parent of quantity 1 removes its sub-crafts and says how many", function()
+      local parent = add(1)
+      local child = Queue:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm", parentID = parent }, { before = parent })
+      Queue:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm", parentID = child }, { before = child })
+      local own = add(1)
+      MW:Show("queue")
+      local row
+      for _, r in ipairs(QT:GetView().queue.pool) do
+        if r.data and r.data.id == parent then row = r end
+      end
+      W.printed = {}
+      click(row.minus)
+      local ids = {}
+      for i, e in ipairs(Queue:GetEntries()) do ids[i] = e.id end
+      assert.same({ own }, ids)
+      assert.is_truthy(table.concat(W.printed, "\n"):find("Also removed 2 sub-crafts", 1, true))
+    end)
+    it("minus on a parent of quantity 2 leaves its sub-crafts alone", function()
+      local parent = add(2)
+      Queue:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm", parentID = parent }, { before = parent })
+      MW:Show("queue")
+      local row
+      for _, r in ipairs(QT:GetView().queue.pool) do
+        if r.data and r.data.id == parent then row = r end
+      end
+      W.printed = {}
+      click(row.minus)
+      local e = Queue:GetEntries()
+      assert.same({ 2, 3 }, { #e, e[1].quantity })
+      assert.same({ 1, parent }, { e[2].quantity, e[2].id })
+      assert.same({}, W.printed)
+    end)
+    it("Remove drops the entry and its row", function()
+      add(1); add(1); MW:Show("queue")
+      local keep = Queue:GetEntries()[2].id
+      click(QT:GetView().queue.pool[1].remove)
+      assert.equals(keep, Queue:GetEntries()[1].id); assert.equals(1, QT:GetView().queue.shown)
+    end)
+    it("Clear removes every real entry but keeps restock targets", function()
+      add(1); add(2); Queue:SetRestock(5002, 10); MW:Show("queue")
+      click(QT:GetView().clearButton)
+      assert.same({ [5002] = 10 }, Queue:GetRestockTargets())
+      for _, e in ipairs(Queue:GetEntries()) do assert.is_true(e.isRestock) end
+    end)
+    it("says the queue is read-only and changes nothing when the saved data is from a newer version", function()
+      add(2); MW:Show("queue")
+      ns.FS.dbIsNewer = true
+      local view = QT:GetView()
+      click(view.queue.pool[1].plus); assert.equals(READ_ONLY, view.status:GetText())
+      view.status:SetText("")
+      click(view.queue.pool[1].remove); assert.equals(READ_ONLY, view.status:GetText())
+      view.status:SetText("")
+      click(view.clearButton); assert.equals(READ_ONLY, view.status:GetText())
+      view.status:SetText("")
+      click(view.craftButton); assert.equals(READ_ONLY, view.status:GetText())
+      view.status:SetText("")
+      edit(view.itemEdit, "5002"); edit(view.targetEdit, "5")
+      click(view.setButton); assert.equals(READ_ONLY, view.status:GetText())
+      assert.equals(2, Queue:GetEntries()[1].quantity); assert.same({}, Queue:GetRestockTargets())
+      assert.equals(0, #world.crafts)
+    end)
+  end)
+
+  describe("shopping list", function()
+    local api
+    before_each(function()
+      api = world.recordAuctionatorTerms()
+      world.names[1001], world.names[2002] = "Bright Ore", "Glimmer Dust"
+    end)
+    it("sends the missing reagents to Auctionator and says how many items", function()
+      add(3); MW:Show("queue")
+      local view = QT:GetView()
+      click(view.shoppingButton)
+      assert.equals(6, api.terms[1].quantity)
+      assert.equals("Shopping list updated (2 items)", view.status:GetText())
+    end)
+    it("says how many item names are still loading", function()
+      world.names[2002] = nil
+      add(1); MW:Show("queue")
+      click(QT:GetView().shoppingButton)
+      assert.is_truthy(QT:GetView().status:GetText():find("loading 1 item name", 1, true))
+    end)
+    it("says Auctionator is not available", function()
+      W.removeAuctionator(); add(1); MW:Show("queue")
+      click(QT:GetView().shoppingButton)
+      assert.equals("Auctionator not available", QT:GetView().status:GetText())
+    end)
+    it("says when nothing is missing", function()
+      MW:Show("queue")
+      click(QT:GetView().shoppingButton)
+      assert.is_truthy(QT:GetView().status:GetText():find("Nothing", 1, true))
+    end)
+  end)
+
+  describe("Craft Next", function()
+    it("says to open the profession when its window is closed", function()
+      add(1); MW:Show("queue")
+      click(QT:GetView().craftButton)
+      assert.equals("Open Sample Crafting on Main", QT:GetView().status:GetText())
+      assert.equals(0, #world.crafts)
+    end)
+    it("names the other character", function()
+      world.openProfession(2906); add(1, { charKey = "Alt-Realm" }); MW:Show("queue")
+      click(QT:GetView().craftButton)
+      assert.equals("Open Sample Crafting on Alt", QT:GetView().status:GetText())
+    end)
+    it("crafts one per click and says what is being crafted", function()
+      world.openProfession(2906); world.haveAll("Main-Realm"); add(3); MW:Show("queue")
+      click(QT:GetView().craftButton)
+      assert.equals(1, #world.crafts)
+      assert.equals("Crafting Sample Recipe 9001…", QT:GetView().status:GetText())
+    end)
+    it("says a craft is still going on while one is pending", function()
+      world.openProfession(2906); world.haveAll("Main-Realm"); add(3); MW:Show("queue")
+      click(QT:GetView().craftButton); click(QT:GetView().craftButton)
+      assert.equals(1, #world.crafts)
+      assert.is_truthy(QT:GetView().status:GetText():find("current craft", 1, true))
+    end)
+    it("says reagents are missing", function()
+      world.openProfession(2906); add(1); MW:Show("queue")
+      click(QT:GetView().craftButton)
+      assert.equals("Missing reagents — see Shopping List", QT:GetView().status:GetText())
+    end)
+    it("says when the next craft is ready", function()
+      world.openProfession(2906); world.haveAll("Main-Realm"); world.cooldown("Main-Realm", 9001, W.now + 7500)
+      add(1); MW:Show("queue")
+      click(QT:GetView().craftButton)
+      assert.equals("Next craft ready in 2h 5m", QT:GetView().status:GetText())
+    end)
+    it("says the queue is empty", function()
+      MW:Show("queue"); click(QT:GetView().craftButton)
+      assert.equals("Queue is empty", QT:GetView().status:GetText())
+    end)
+    it("clears the crafting message when the queue changes under it", function()
+      world.openProfession(2906); world.haveAll("Main-Realm"); add(3); MW:Show("queue")
+      click(QT:GetView().craftButton)
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", { itemID = world.outputOf(9001), operationID = 1 })
+      W.advance(1)
+      assert.equals("", QT:GetView().status:GetText())
+      assert.equals("2", fs_text(QT:GetView().queue.pool[1], "quantity"))
+    end)
+  end)
+
+  describe("restock editor", function()
+    it("sets a target from an item ID and shows it in the list", function()
+      MW:Show("queue")
+      local view = QT:GetView()
+      edit(view.itemEdit, "5002"); edit(view.targetEdit, "20")
+      click(view.setButton)
+      assert.same({ [5002] = 20 }, Queue:GetRestockTargets())
+      assert.equals(1, #view.restock.rows); assert.equals(1, view.restock.shown)
+      assert.is_truthy(view.restock.pool[1].text:GetText():find("item:5002", 1, true))
+      assert.is_truthy(view.restock.pool[1].text:GetText():find("20", 1, true))
+      assert.is_truthy(view.status:GetText():find("20", 1, true))
+    end)
+    it("accepts a shift-clicked item link", function()
+      MW:Show("queue")
+      local view = QT:GetView()
+      edit(view.itemEdit, "|cff0070dd|Hitem:5002::::::::|h[Ore]|h|r"); edit(view.targetEdit, "7")
+      click(view.setButton)
+      assert.same({ [5002] = 7 }, Queue:GetRestockTargets())
+    end)
+    it("says what is wrong with the input and changes nothing", function()
+      MW:Show("queue")
+      local view = QT:GetView()
+      edit(view.itemEdit, "nonsense"); edit(view.targetEdit, "7"); click(view.setButton)
+      assert.is_truthy(view.status:GetText():find("item", 1, true))
+      edit(view.itemEdit, "5002"); edit(view.targetEdit, "0"); click(view.setButton)
+      assert.is_truthy(view.status:GetText():find("target", 1, true))
+      assert.same({}, Queue:GetRestockTargets())
+    end)
+    it("sets a min profit from the editor, and an empty box removes it", function()
+      MW:Show("queue")
+      local view = QT:GetView()
+      edit(view.itemEdit, "5002"); edit(view.targetEdit, "20"); edit(view.minProfitEdit, "2g 50s")
+      click(view.setButton)
+      assert.equals(25000, Queue:GetRestockMinProfit(5002))
+      assert.is_truthy(view.status:GetText():find(ns.UI.FormatMoney(25000), 1, true))
+      edit(view.itemEdit, "5002"); edit(view.targetEdit, "20"); edit(view.minProfitEdit, "")
+      click(view.setButton)
+      assert.is_nil(Queue:GetRestockMinProfit(5002))
+      assert.same({ [5002] = 20 }, Queue:GetRestockTargets())
+    end)
+    it("says what is wrong with the min profit and changes nothing", function()
+      MW:Show("queue")
+      local view = QT:GetView()
+      edit(view.itemEdit, "5002"); edit(view.targetEdit, "20"); edit(view.minProfitEdit, "lots")
+      click(view.setButton)
+      assert.is_truthy(view.status:GetText():find("min profit", 1, true))
+      assert.same({}, Queue:GetRestockTargets())
+    end)
+    it("shows held with mail and listed", function()
+      local item = world.outputOf(9001)
+      world.items["Main-Realm"][item] = { bags = 4, bank = 0, reagentBank = 0 }
+      ns.FS.db.global.characters["Main-Realm"].mail = { time = W.now, items = {} }
+      ns.FS.db.global.auctionLog = { listings = { ["Main-Realm"] = { time = W.now, items = { [item] = 5 } } },
+        events = {}, seenMail = {} }
+      world.fakeEvaluate(9001, { allocation = {}, reagentCost = 900, profit = 5000, flags = {} })
+      Queue:SetRestock(item, 10)
+      MW:Show("queue")
+      local view = QT:GetView()
+      local row = view.restock.pool[1]
+      assert.is_truthy(row.text:GetText():find("Target 10 \194\183 held 9 (mail 0, listed 5)", 1, true))
+      assert.is_truthy(row.status:GetText():find("1 craft queued", 1, true))
+      assert.equals(1, Queue:GetEntries()[1].quantity)
+    end)
+    it("shows held without the parenthesis when mail and listings are known to be none", function()
+      local item = world.outputOf(9001)
+      world.items["Main-Realm"][item] = { bags = 4, bank = 0, reagentBank = 0 }
+      ns.FS.db.global.characters["Main-Realm"].mail = { time = W.now, items = {} }
+      ns.FS.db.global.auctionLog = { listings = { ["Main-Realm"] = { time = W.now, items = {} } }, events = {}, seenMail = {} }
+      Queue:SetRestock(item, 10)
+      MW:Show("queue")
+      local text = QT:GetView().restock.pool[1].text:GetText()
+      assert.is_truthy(text:find("Target 10 \194\183 held 4", 1, true)); assert.is_falsy(text:find("(", 1, true))
+    end)
+    it("shows an unknown mail or listing count as ?, with a tooltip line saying why", function()
+      local item = world.outputOf(9001)
+      world.items["Main-Realm"][item] = { bags = 4, bank = 0, reagentBank = 0 }
+      Queue:SetRestock(item, 10)
+      MW:Show("queue")
+      local row = QT:GetView().restock.pool[1]
+      assert.is_truthy(row.text:GetText():find("held 4 (mail ?, listed ?)", 1, true))
+      local lines = Tab.RestockTooltip(row.data)
+      local joined = table.concat(lines, "\n")
+      assert.is_truthy(joined:find("open a mailbox", 1, true)); assert.is_truthy(joined:find("Auctions tab", 1, true))
+    end)
+    it("shows why a target is not restocked", function()
+      local item = world.outputOf(9001)
+      world.fakeEvaluate(9001, { allocation = {}, reagentCost = 900, profit = 4000, flags = {} })
+      Queue:SetRestock(item, 10)
+      MW:Show("queue")
+      local view = QT:GetView()
+      local function status() return view.restock.pool[1].status:GetText() end
+      assert.is_truthy(status():find("10 crafts queued", 1, true))
+      Queue:SetRestockMinProfit(item, 5000); W.advance(1)
+      assert.is_truthy(status():find("Below min profit (" .. ns.UI.FormatMoney(4000) .. " per craft)", 1, true))
+      assert.equals(1, #view.restock.rows); assert.equals(0, #view.queue.rows)
+      world.fakeEvaluate(9001, { allocation = {}, reagentCost = 900, flags = { noPrice = true } }); Queue:SetRestockMinProfit(item, 5001); W.advance(1)
+      assert.is_truthy(status():find("Profit unknown: not restocked", 1, true))
+      Queue:SetRestockMinProfit(item, nil); Queue:SetRestock(item, nil); Queue:SetRestock(77777, 5); W.advance(1)
+      assert.is_truthy(status():find("No recipe makes this item", 1, true))
+      world.items["Main-Realm"][item] = { bags = 50, bank = 0, reagentBank = 0 }
+      Queue:SetRestock(77777, nil); Queue:SetRestock(item, 10); W.advance(1)
+      assert.is_truthy(status():find("Stocked", 1, true))
+    end)
+    it("says no crafter reaches the quality", function()
+      local item = world.outputOf(9001)
+      world.fakeEvaluate(9001, { allocation = {}, reagentCost = 900, profit = 4000, flags = { unreachableTarget = true } })
+      Queue:SetRestock(item, 10)
+      MW:Show("queue")
+      assert.is_truthy(QT:GetView().restock.pool[1].status:GetText():find("No crafter reaches this quality", 1, true))
+    end)
+    it("has a tooltip on the row with the min profit", function()
+      local item = world.outputOf(9001)
+      world.fakeEvaluate(9001, { allocation = {}, reagentCost = 900, profit = 4000, flags = {} })
+      Queue:SetRestock(item, 10); Queue:SetRestockMinProfit(item, 1000)
+      MW:Show("queue")
+      local lines = Tab.RestockTooltip(QT:GetView().restock.pool[1].data)
+      assert.is_truthy(table.concat(lines, "\n"):find("Min profit: " .. ns.UI.FormatMoney(1000) .. " per craft", 1, true))
+    end)
+    it("Remove drops the target and the computed restock entry", function()
+      Queue:SetRestock(world.outputOf(9001), 10); Queue:SetRestock(5001, 4); MW:Show("queue")
+      local view = QT:GetView()
+      assert.equals(2, #view.restock.rows)
+      click(view.restock.pool[1].remove)
+      assert.same({ [world.outputOf(9001)] = 10 }, Queue:GetRestockTargets())
+      assert.equals(1, #view.restock.rows)
+    end)
+    describe("link hook", function()
+      local savedHook, savedUtil
+      before_each(function() savedHook, savedUtil = _G.hooksecurefunc, _G.ChatFrameUtil end)
+      after_each(function() _G.hooksecurefunc, _G.ChatFrameUtil = savedHook, savedUtil end)
+
+      it("a link inserted while the item box has focus fills it, through a hook that leaves InsertLink alone", function()
+        local inserted
+        _G.hooksecurefunc = function(_, name, fn) if name == "InsertLink" then inserted = fn end end
+        local original = function() return false end
+        local util = { InsertLink = original }
+        _G.ChatFrameUtil = util
+        QT:Disable(); QT:Enable()
+        MW:Show("queue")
+        local view = QT:GetView()
+        local text
+        view.itemEdit.HasFocus = function() return true end
+        view.itemEdit.SetText = function(_, t) text = t end
+        assert.is_function(inserted)
+        inserted("|Hitem:5002::|h[Ore]|h")
+        assert.equals("|Hitem:5002::|h[Ore]|h", text)
+        assert.equals(original, util.InsertLink); assert.equals(util, _G.ChatFrameUtil)
+      end)
+    end)
+  end)
+
+  describe("Lists page", function()
+    local CL
+    local LISTS_READ_ONLY = "Saved data is from a newer version of FabricationStation; the lists are read-only."
+    local function lists_view() return QT:GetView().lists end
+    local function open_lists()
+      MW:Show("queue")
+      click(QT:GetView().sections.lists)
+      return lists_view()
+    end
+    local function status() return flat(lists_view().status:GetText()) end
+    local function tooltip_lines()
+      local lines = {}
+      local saved = _G.GameTooltip
+      _G.GameTooltip = { SetOwner = function() end, SetText = function(_, t) lines[#lines + 1] = t end,
+        AddLine = function(_, t) lines[#lines + 1] = t end, Show = function() end, Hide = function() end }
+      local area = lists_view().statusArea
+      area:GetScript("OnEnter")(area)
+      _G.GameTooltip = saved
+      return lines
+    end
+
+    before_each(function() CL = ns.FS:GetModule("CraftLists") end)
+
+    it("switches to Lists and back", function()
+      MW:Show("queue")
+      local v = QT:GetView()
+      assert.same({ { "queue", "Queue" }, { "lists", "Lists" } },
+        { { Tab.SECTIONS[1].id, Tab.SECTIONS[1].label }, { Tab.SECTIONS[2].id, Tab.SECTIONS[2].label } })
+      assert.equal("queue", Tab.GetSection())
+      assert.same({ true, false }, { v.bar:IsShown(), v.lists.panel:IsShown() })
+      add(2); MW:RefreshTab("queue")
+      click(v.sections.lists)
+      assert.equal("lists", Tab.GetSection())
+      assert.same({ false, false, false, false, true }, { v.bar:IsShown(), v.headerBar:IsShown(), v.restockPanel:IsShown(),
+        v.empty:IsShown(), v.lists.panel:IsShown() })
+      click(v.sections.queue)
+      assert.equal("queue", Tab.GetSection())
+      assert.same({ true, true, true, false }, { v.bar:IsShown(), v.headerBar:IsShown(), v.restockPanel:IsShown(),
+        v.lists.panel:IsShown() })
+      assert.equal(1, #v.queue.rows)
+      assert.is_false(Tab.SetSection("nowhere")); assert.is_false(Tab.SetSection("queue"))
+      assert.is_true(Tab.SetSection("lists")); assert.equal("lists", Tab.GetSection())
+    end)
+
+    it("shows no lists yet, and a hint", function()
+      local v = open_lists()
+      assert.equal(0, #v.lists.rows)
+      assert.is_truthy(v.empty:GetText():find("No lists yet", 1, true))
+      assert.is_false(v.rules:IsShown())
+    end)
+
+    it("creates a list from the queue", function()
+      add(2); add(3, { recipeID = 9002 })
+      local v = open_lists()
+      edit(v.nameEdit, "")
+      click(v.newButton)
+      assert.equal("Enter a name for the list", status())
+      edit(v.nameEdit, "Weekly")
+      click(v.newButton)
+      assert.equal("Made the list Weekly from the queue", status())
+      local list = CL:GetLists()[1]
+      assert.equal("Weekly", list.name)
+      assert.same({ { recipeID = 9001, charKey = "Main-Realm", quantity = 2 },
+        { recipeID = 9002, charKey = "Main-Realm", quantity = 3 } }, list.recipes)
+      assert.equal(1, #v.lists.rows); assert.equal(2, #v.recipes.rows)
+      assert.is_truthy(v.lists.pool[1].name:GetText():find("Weekly", 1, true))
+      assert.equal("2", v.lists.pool[1].count:GetText():gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""))
+      assert.same({ "Sample Recipe 9001", "Main", "2" }, { v.recipes.pool[1].name:GetText(),
+        flat(v.recipes.pool[1].character:GetText()), v.recipes.pool[1].quantity:GetText() })
+      assert.is_true(v.rules:IsShown())
+      edit(v.nameEdit, "weekly"); click(v.newButton)
+      assert.equal("A list with that name already exists", status())
+      assert.equal(1, #CL:GetLists())
+    end)
+
+    it("says when the queue has nothing to copy", function()
+      local v = open_lists()
+      edit(v.nameEdit, "Nothing"); click(v.newButton)
+      assert.equal("The queue has nothing to copy", status())
+      assert.equal(0, #CL:GetLists())
+    end)
+
+    it("shows a recipe made by the best crafter as such", function()
+      local id = CL:Create("Best"); CL:AddRecipe(id, 9001, nil, 1)
+      local v = open_lists()
+      assert.equal("best crafter", flat(v.recipes.pool[1].character:GetText()))
+    end)
+
+    it("renames the selected list", function()
+      local a, b = CL:Create("Alpha"), CL:Create("Beta")
+      local v = open_lists()
+      click(v.lists.pool[2])
+      edit(v.nameEdit, "Gamma"); click(v.renameButton)
+      assert.equal("Renamed to Gamma", status())
+      assert.same({ "Alpha", "Gamma" }, { CL:Get(a).name, CL:Get(b).name })
+      edit(v.nameEdit, "alpha"); click(v.renameButton)
+      assert.equal("A list with that name already exists", status())
+    end)
+
+    it("changes quantities and removes recipes", function()
+      local id = CL:Create("Q"); CL:AddRecipe(id, 9001, "Main-Realm", 2); CL:AddRecipe(id, 9002, "Alt-Realm", 1)
+      local v = open_lists()
+      click(v.recipes.pool[1].plus)
+      assert.equal(3, CL:Get(id).recipes[1].quantity)
+      click(v.recipes.pool[1].minus)
+      click(v.recipes.pool[1].minus)
+      assert.equal(1, CL:Get(id).recipes[1].quantity)
+      click(v.recipes.pool[1].minus)   -- to zero removes it
+      assert.equal(1, #CL:Get(id).recipes)
+      assert.equal(9002, CL:Get(id).recipes[1].recipeID)
+      click(v.recipes.pool[1].remove)
+      assert.equal(0, #CL:Get(id).recipes)
+      assert.is_truthy(v.empty:GetText():find("no recipes left", 1, true))
+    end)
+
+    it("edits the rules", function()
+      local id = CL:Create("R")
+      local v = open_lists()
+      edit(v.minProfitEdit, "2g 50s")
+      v.minProfitEdit:GetScript("OnEnterPressed")(v.minProfitEdit)
+      assert.equal(25000, CL:Get(id).rules.minProfit)
+      edit(v.minProfitEdit, "lots")
+      v.minProfitEdit:GetScript("OnEnterPressed")(v.minProfitEdit)
+      assert.equal("Enter the min profit in gold (for example 5 or 2g 50s), or leave it empty", status())
+      assert.equal(25000, CL:Get(id).rules.minProfit)
+      edit(v.minProfitEdit, "")
+      v.minProfitEdit:GetScript("OnEditFocusLost")(v.minProfitEdit)
+      assert.is_nil(CL:Get(id).rules.minProfit)
+      click(v.qualityPlus); click(v.qualityPlus)
+      assert.equal(2, CL:Get(id).rules.minQuality)
+      assert.equal("2", v.qualityText:GetText())
+      click(v.qualityMinus); click(v.qualityMinus); click(v.qualityMinus)
+      assert.is_nil(CL:Get(id).rules.minQuality)
+      assert.equal("any", v.qualityText:GetText())
+      for _ = 1, 7 do click(v.qualityPlus) end
+      assert.equal(5, CL:Get(id).rules.minQuality)
+      click(v.concButton); assert.equal("single", CL:Get(id).rules.concentration)
+      click(v.concButton); assert.equal("multi", CL:Get(id).rules.concentration)
+      click(v.concButton); assert.equal("off", CL:Get(id).rules.concentration)
+      v.optionalsCheck.GetChecked = function() return true end
+      click(v.optionalsCheck); assert.is_true(CL:Get(id).rules.useOptionals)
+      v.optionalsCheck.GetChecked = function() return false end
+      click(v.optionalsCheck); assert.is_false(CL:Get(id).rules.useOptionals)
+      assert.same({ "Concentration: off", "Concentration: single best", "Concentration: across recipes" },
+        { Tab.ConcentrationText("off"), Tab.ConcentrationText("single"), Tab.ConcentrationText("multi") })
+      assert.same({ "single", "multi", "off", "single" }, { Tab.NextConcentration("off"), Tab.NextConcentration("single"),
+        Tab.NextConcentration("multi"), Tab.NextConcentration(nil) })
+    end)
+
+    it("writes the min profit as text the box can read back", function()
+      assert.same({ "", "0g", "2g 50s", "5g", "1c", "1g 2s 3c", "3s" }, { Tab.MinProfitText(nil), Tab.MinProfitText(0),
+        Tab.MinProfitText(25000), Tab.MinProfitText(50000), Tab.MinProfitText(1), Tab.MinProfitText(10203),
+        Tab.MinProfitText(300) })
+      for _, copper in ipairs({ 0, 1, 99, 100, 10000, 10203, 25000, 123456789 }) do
+        assert.equal(copper, ns.UI.ParseMoney(Tab.MinProfitText(copper)))
+      end
+      local id = CL:Create("Shown"); CL:SetRules(id, { minProfit = 25000 })
+      MW:Show("queue")
+      local box = QT:GetView().lists.minProfitEdit
+      local shown
+      box.SetText = function(_, t) shown = t end
+      click(QT:GetView().sections.lists)
+      assert.equal("2g 50s", shown)
+    end)
+
+    it("queues a list and lists the skipped ones in the tooltip", function()
+      world.fakeEvaluate(9002, { allocation = {}, reagentCost = 100, profit = 5000, flags = {} })
+      local id = CL:Create("Go")
+      CL:AddRecipe(id, 9001, "Main-Realm", 2); CL:AddRecipe(id, 9002, "Main-Realm", 3)
+      CL:SetRules(id, { minProfit = 1000 })
+      local v = open_lists()
+      assert.equal(0, #Queue:GetEntries())   -- nothing is queued by showing the page
+      click(v.queueButton)
+      assert.equal("Queued 1 entry; 1 skipped", status())
+      local entries = Queue:GetEntries()
+      assert.equal(1, #entries)
+      assert.same({ 9002, 3, "Main-Realm" }, { entries[1].recipeID, entries[1].quantity, entries[1].charKey })
+      assert.same({ "Queued 1 entry; 1 skipped", "Sample Recipe 9001 (Main): profit unknown" }, tooltip_lines())
+      -- Nothing skipped: no second line.
+      CL:SetRules(id, {})
+      Queue:Clear()
+      click(v.queueButton)
+      assert.equal("Queued 2 entries; 0 skipped", status())
+    end)
+
+    it("says entry for one and entries for more", function()
+      world.fakeEvaluate(9001, { allocation = {}, reagentCost = 100, profit = 5000, flags = {} })
+      local id = CL:Create("One"); CL:AddRecipe(id, 9001, "Main-Realm", 4)
+      local v = open_lists()
+      click(v.queueButton)
+      assert.equal("Queued 1 entry; 0 skipped", status())
+      CL:AddRecipe(id, 9001, "Alt-Realm", 1)
+      Queue:Clear()
+      click(v.queueButton)
+      assert.equal("Queued 2 entries; 0 skipped", status())
+      CL:SetQuantity(id, 2, 0)
+      CL:AddRecipe(id, 777, "Main-Realm", 1)   -- not evaluable: skipped
+      Queue:Clear()
+      click(v.queueButton)
+      assert.equal("Queued 1 entry; 1 skipped", status())
+      Queue:Clear(); CL:SetQuantity(id, 1, 0); CL:SetQuantity(id, 1, 0)
+      click(v.queueButton)
+      assert.equal("Queued 0 entries; 0 skipped", status())
+    end)
+
+    it("names the reasons and caps the tooltip", function()
+      assert.same({ "no character can craft it", "the minimum quality cannot be reached", "profit unknown",
+        "profit below the minimum" }, { Tab.ReasonText("noCrafter"), Tab.ReasonText("unreachable"),
+        Tab.ReasonText("unknownProfit"), Tab.ReasonText("belowMinProfit") })
+      local skipped = {}
+      for i = 1, 25 do skipped[i] = { recipeID = 9001, reason = "unreachable" } end
+      local lines = Tab.SkippedTooltip("T", skipped, 3)
+      assert.equal(1 + 20 + 1 + 1, #lines)
+      assert.equal("and 5 more", lines[22])
+      assert.is_truthy(lines[23]:find("(3 without)", 1, true))
+    end)
+
+    it("says why a list was not queued", function()
+      local id = CL:Create("Off")
+      CL:AddRecipe(id, 9001, "Main-Realm", 1)
+      local v = open_lists()
+      Queue:Disable()
+      click(v.queueButton)
+      assert.equal("Not queued: the Queue is turned off", status())
+      Queue:Enable()
+      ns.FS.dbIsNewer = true
+      click(v.queueButton)
+      assert.equal(LISTS_READ_ONLY, status())
+      assert.equal(0, #Queue:GetEntries())
+    end)
+
+    it("deletes only on the second click", function()
+      local a, b = CL:Create("Doomed"), CL:Create("Spared")
+      local v = open_lists()   -- Doomed (by name) is selected first
+      click(v.deleteButton)
+      assert.equal("Click again to delete", status())
+      assert.is_not_nil(CL:Get(a))
+      -- The question is forgotten after five seconds.
+      W.advance(4); assert.equal("Click again to delete", status())
+      W.advance(2); assert.equal("", status())
+      click(v.deleteButton)
+      assert.is_not_nil(CL:Get(a))
+      -- Choosing another list forgets it too.
+      click(v.lists.pool[2])
+      assert.equal("", status())
+      click(v.deleteButton)
+      assert.is_not_nil(CL:Get(b))
+      click(v.lists.pool[1])
+      click(v.deleteButton)
+      assert.is_not_nil(CL:Get(a))
+      click(v.deleteButton)   -- the second click, on the same list
+      assert.is_nil(CL:Get(a)); assert.is_not_nil(CL:Get(b))
+      assert.equal("Deleted the list Doomed", status())
+      assert.equal(1, #v.lists.rows)
+    end)
+
+    it("changes nothing while the saved data is from a newer version", function()
+      local id = CL:Create("Keep"); CL:AddRecipe(id, 9001, "Main-Realm", 2)
+      add(1)
+      local v = open_lists()
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      ns.FS.dbIsNewer = true
+      edit(v.nameEdit, "Other")
+      click(v.newButton); assert.equal(LISTS_READ_ONLY, status())
+      click(v.renameButton); click(v.deleteButton); click(v.queueButton)
+      click(v.recipes.pool[1].plus); click(v.recipes.pool[1].remove); click(v.qualityPlus); click(v.concButton)
+      edit(v.minProfitEdit, "5g"); v.minProfitEdit:GetScript("OnEnterPressed")(v.minProfitEdit)
+      assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+      assert.equal(LISTS_READ_ONLY, status())
+    end)
+
+    it("says so when the lists module is off", function()
+      CL:Create("Hidden")
+      CL:Disable()
+      local v = open_lists()
+      assert.is_truthy(v.message:GetText():find("Craft lists are turned off", 1, true))
+      assert.same({ false, 0, 0 }, { v.newButton:IsShown(), #v.lists.rows, #v.recipes.rows })
+      -- The recipes pane and the rules row are not left live under the note.
+      assert.same({ false, false }, { v.recipes.scroll:IsShown(), v.rules:IsShown() })
+      click(QT:GetView().sections.queue); click(QT:GetView().sections.lists)
+      assert.same({ false, false }, { v.recipes.scroll:IsShown(), v.rules:IsShown() })
+      CL:Enable()
+      MW:RefreshTab("queue")
+      assert.same({ "", true, 1 }, { v.message:GetText(), v.newButton:IsShown(), #v.lists.rows })
+      assert.same({ true, true }, { v.recipes.scroll:IsShown(), v.rules:IsShown() })
+    end)
+
+    it("does not refresh the queue computations while the Lists page is shown", function()
+      local calls = 0
+      local original = Queue.GetEntries
+      MW:Show("queue")
+      Queue.GetEntries = function(...) calls = calls + 1; return original(...) end
+      click(QT:GetView().sections.lists)
+      assert.equal(0, calls)
+      MW:RefreshTab("queue")
+      assert.equal(0, calls)
+      Queue.GetEntries = original
+    end)
+  end)
+
+  -- Phase 7 Task 15: the Gather page. The world has recipe 9100 (makes reagent 1001 from 2 x 1101 at 20 each: a craft
+  -- of one costs 40c, the AH asks 100c); recipe 9001's plan is 1001 x2 and 2002 x1 (Main-Realm is the logged-in
+  -- character). OrdersPanel and FeatureLines are loaded: real CompactMoney, and the profession panel to refresh.
+  describe("Gather page", function()
+    local ALT = "Alt-Realm"
+    local DAY = 86400
+    local RED = "|cffff4040"
+    local function gather() return QT:GetView().gather end
+    local function open_gather()
+      MW:Show("queue")
+      click(QT:GetView().sections.gather)
+      return gather()
+    end
+    local function gather_status() return flat(gather().status:GetText()) end
+    local function row_data(itemID)
+      for _, r in ipairs(gather().list.rows) do if r.itemID == itemID then return r end end
+    end
+    local function row_frame(itemID)
+      for _, f in ipairs(gather().list.pool) do if f.data and f.data.itemID == itemID and f:IsShown() then return f end end
+    end
+    local function tooltip_of(frame)
+      local lines = {}
+      local saved = _G.GameTooltip
+      _G.GameTooltip = { SetOwner = function() end, SetText = function(_, t) lines[#lines + 1] = t end,
+        AddLine = function(_, t) lines[#lines + 1] = t end, Show = function() end, Hide = function() end }
+      frame:GetScript("OnEnter")(frame)
+      _G.GameTooltip = saved
+      return lines
+    end
+
+    -- Buttons that keep their text (the shared stubs make SetText a no-op), as characters_tab_spec does.
+    local function keep_button_text()
+      local real = _G.CreateFrame
+      _G.CreateFrame = function(frameType, name, parent, template)
+        local f = real(frameType, name, parent, template)
+        if frameType == "Button" then
+          local text
+          function f:SetText(t) text = t end
+          function f:GetText() return text end
+        end
+        return f
+      end
+    end
+
+    before_each(function()
+      ns, W, world = make_world({ last = "UI/FeatureLines.lua", intermediates = true })
+      keep_button_text()
+      Tab = ns.UI.QueueTab; QT = ns.FS:GetModule("QueueTab"); MW = ns.FS:GetModule("MainWindow")
+      Queue = ns.FS:GetModule("Queue")
+      world.fakeEvaluate(9001, { allocation = { { slotIndex = 1, itemID = 1001, quantity = 2 },
+        { slotIndex = 2, itemID = 2002, quantity = 1 } }, reagentCost = 900, flags = {} })
+      world.names[1001], world.names[2002] = "Bright Ore", "Glimmer Dust"
+    end)
+
+    it("is the third section button", function()
+      assert.same({ "queue", "Queue" }, { Tab.SECTIONS[1].id, Tab.SECTIONS[1].label })
+      assert.same({ "gather", "Gather" }, { Tab.SECTIONS[3].id, Tab.SECTIONS[3].label })
+      MW:Show("queue")
+      local v = QT:GetView()
+      assert.same({ false, false }, { v.gather.panel:IsShown(), v.lists.panel:IsShown() })
+      click(v.sections.gather)
+      assert.equal("gather", Tab.GetSection())
+      assert.same({ false, false, false, false, false, true }, { v.bar:IsShown(), v.headerBar:IsShown(),
+        v.restockPanel:IsShown(), v.empty:IsShown(), v.lists.panel:IsShown(), v.gather.panel:IsShown() })
+      click(v.sections.lists)
+      assert.same({ false, true }, { v.gather.panel:IsShown(), v.lists.panel:IsShown() })
+      click(v.sections.queue)
+      assert.same({ true, false, false }, { v.bar:IsShown(), v.gather.panel:IsShown(), v.lists.panel:IsShown() })
+    end)
+
+    it("words each source: kind, count and character, or kind and price", function()
+      assert.equals("Mail 4 (Alt)", Tab.SourceText({ kind = "mail", charKey = ALT, count = 4 }))
+      assert.equals("Alt 3 (Main)", Tab.SourceText({ kind = "alt", charKey = "Main-Realm", count = 3 }))
+      assert.equals("Alt ? (Main)", Tab.SourceText({ kind = "alt", charKey = "Main-Realm" }))
+      assert.equals("Warband bank 7", Tab.SourceText({ kind = "warband", count = 7 }))
+      assert.equals("Warband bank ?", Tab.SourceText({ kind = "warband" }))
+      assert.equals("Craft 40c (Main)", Tab.SourceText({ kind = "craft", charKey = "Main-Realm", unitPrice = 40 }))
+      assert.equals("Craft ? (Main)", Tab.SourceText({ kind = "craft", charKey = "Main-Realm" }))
+      assert.equals("Vendor 5s", Tab.SourceText({ kind = "vendor", unitPrice = 500 }))
+      assert.equals("Auction house 1,234g", Tab.SourceText({ kind = "ah", unitPrice = 12340000 }))
+      assert.equals("Auction house ?", Tab.SourceText({ kind = "ah" }))
+    end)
+
+    it("lists each missing reagent with its need and sources, first source first", function()
+      add(1)
+      world.chars[ALT].mail = { time = W.now - 3600, items = { [1001] = 1 } }
+      world.items[ALT][2002] = { bags = 4, bank = 0, reagentBank = 0 }
+      world.chars[ALT].itemsTime = { bags = W.now - DAY }
+      local g = open_gather()
+      assert.equals(2, #g.list.rows)
+      local ore, dust = row_data(1001), row_data(2002)
+      assert.same({ "Bright Ore", 2 }, { ore.name, ore.need })
+      assert.same({ "Glimmer Dust", 1 }, { dust.name, dust.need })
+      assert.equals("Mail 1 (Alt) \194\183 Craft 40c (Main) \194\183 Auction house 1s", flat(Tab.SourcesText(ore)))
+      assert.equals("Alt 4 (Alt) \194\183 Auction house 3s", flat(Tab.SourcesText(dust)))
+      local frame = row_frame(1001)
+      assert.equals("Bright Ore", frame.name:GetText())
+      assert.equals("2", frame.need:GetText())
+      assert.equals("Mail 1 (Alt) \194\183 Craft 40c (Main) \194\183 Auction house 1s", flat(frame.sources:GetText()))
+    end)
+
+    it("says when a reagent has no source at all, and when nothing is missing", function()
+      add(1)
+      world.prices[2002] = nil
+      local g = open_gather()
+      assert.equals("No source known", flat(Tab.SourcesText(row_data(2002))))
+      Queue:Clear(); MW:RefreshTab("queue")
+      assert.equals(0, #g.list.rows)
+      assert.equals("Nothing to gather: no reagents are missing", flat(g.empty:GetText()))
+    end)
+
+    it("shows the choice button only on rows that can be crafted", function()
+      add(1)
+      open_gather()
+      local ore, dust = row_frame(1001), row_frame(2002)
+      assert.same({ true, "Auto", true }, { ore.choiceButton:IsShown(), ore.choiceButton:GetText(), ore.queueButton:IsShown() })
+      assert.same({ false, false }, { dust.choiceButton:IsShown(), dust.queueButton:IsShown() })
+      assert.equals("Queue craft", ore.queueButton:GetText())
+    end)
+
+    it("cycles the choice and stores it", function()
+      add(1)
+      local I = ns.FS:GetModule("Intermediates")
+      open_gather()
+      local function press() click(row_frame(1001).choiceButton) end
+      press()
+      assert.same({ "craft", "Craft" }, { I:GetChoice(1001), row_frame(1001).choiceButton:GetText() })
+      assert.equals("craft", row_data(1001).choice)
+      press()
+      assert.same({ "buy", "Buy" }, { I:GetChoice(1001), row_frame(1001).choiceButton:GetText() })
+      press()
+      assert.same({ nil, "Auto" }, { I:GetChoice(1001), row_frame(1001).choiceButton:GetText() })
+      assert.same({}, ns.FS.db.global.intermediateChoices)
+    end)
+
+    it("asks the profession panel to redraw so its intermediate line follows the choice", function()
+      add(1)
+      local panel = ns.FS:GetModule("ProfessionPanel")
+      local redraws = 0
+      panel.RefreshLines = function() redraws = redraws + 1 end
+      open_gather()
+      click(row_frame(1001).choiceButton)
+      assert.equals(1, redraws)
+      panel.RefreshLines = function() error("boom") end                -- a failing redraw is isolated
+      click(row_frame(1001).choiceButton)
+      assert.equals("buy", ns.FS:GetModule("Intermediates"):GetChoice(1001))
+    end)
+
+    it("queues the reagent's craft", function()
+      add(1)
+      open_gather()
+      click(row_frame(1001).queueButton)
+      local entries = Queue:GetEntries()
+      assert.equals(2, #entries)
+      -- Recipe 9100 makes one 1001 a craft: two are needed.
+      assert.same({ 9100, 2, "Main-Realm", 1 }, { entries[2].recipeID, entries[2].quantity, entries[2].charKey,
+        entries[2].targetQuality })
+      assert.equals("Queued Sub Recipe 9100 (Main)", gather_status())
+      -- The queued craft covers the reagent: its row leaves the plan.
+      assert.is_nil(row_data(1001)); assert.is_truthy(row_data(2002))
+    end)
+
+    it("queues enough crafts for a recipe that makes several", function()
+      add(1)
+      world.fakeEvaluate(9100, { allocation = { { slotIndex = 1, itemID = 1101, quantity = 2 } }, reagentCost = 40,
+        expectedYield = 1.5, flags = {} })
+      open_gather()
+      click(row_frame(1001).queueButton)
+      assert.equals(2, Queue:GetEntries()[2].quantity)       -- ceil(2 / 1.5)
+    end)
+
+    it("marks old snapshots with their age in the tooltip", function()
+      add(1)
+      world.chars[ALT].mail = { time = W.now - 9 * DAY, items = { [1001] = 1 } }
+      world.items[ALT][1001] = { bags = 2, bank = 0, reagentBank = 0 }
+      world.chars[ALT].itemsTime = { bags = W.now - 2 * 3600 }
+      open_gather()
+      local lines = tooltip_of(row_frame(1001))
+      assert.equals("Bright Ore", lines[1])
+      assert.is_truthy(lines[2]:find(RED .. "9d ago|r", 1, true))      -- stale: past 7 days, red
+      assert.is_truthy(lines[2]:find("Mail 1 (Alt)", 1, true))
+      assert.is_truthy(lines[3]:find("Alt 2 (Alt)", 1, true)); assert.is_truthy(lines[3]:find("2h ago", 1, true))
+      assert.is_falsy(lines[3]:find(RED, 1, true))                     -- fresh: not red
+      assert.is_truthy(lines[4]:find("Craft 40c (Main)", 1, true))     -- a craft has no age
+      assert.is_falsy(lines[4]:find("ago", 1, true))
+      assert.is_truthy(lines[5]:find("Auction house", 1, true)); assert.is_truthy(lines[5]:find("1d ago", 1, true))
+      assert.equals(5, #lines)
+    end)
+
+    it("uses the Alts stale-days setting for red", function()
+      add(1)
+      world.chars[ALT].mail = { time = W.now - 2 * DAY, items = { [1001] = 1 } }
+      open_gather()
+      assert.is_falsy(tooltip_of(row_frame(1001))[2]:find(RED, 1, true))
+      ns.FS:GetModule("Alts"):Settings().staleDays = 1
+      assert.is_truthy(tooltip_of(row_frame(1001))[2]:find(RED .. "2d ago|r", 1, true))
+    end)
+
+    it("shows an unknown age in red", function()
+      add(1)
+      world.chars[ALT].mail = { items = { [1001] = 1 } }
+      open_gather()
+      assert.is_truthy(tooltip_of(row_frame(1001))[2]:find(RED .. "age unknown|r", 1, true))
+    end)
+
+    it("toggles between every character and this one", function()
+      add(1)
+      Queue:Add({ recipeID = 9001, quantity = 1, charKey = ALT })
+      local g = open_gather()
+      assert.equals("Characters: all", g.characters:GetText())
+      assert.equals(4, row_data(1001).need)
+      click(g.characters)
+      assert.equals("Characters: this one", g.characters:GetText())
+      assert.equals(2, row_data(1001).need)
+      click(g.characters)
+      assert.same({ "Characters: all", 4 }, { g.characters:GetText(), row_data(1001).need })
+    end)
+
+    it("has the Shopping List button, reporting in its own status line", function()
+      local api = world.recordAuctionatorTerms()
+      add(1)
+      local g = open_gather()
+      assert.equals("Shopping List", g.shoppingButton:GetText())
+      click(g.shoppingButton)
+      assert.equals(2, api.terms[1].quantity)
+      assert.equals("Shopping list updated (2 items)", gather_status())
+    end)
+
+    -- Review I2: after "Queue with sub-crafts" the queue crafts reagent 1001 itself, so neither Shopping List button
+    -- (this page's and the Queue page's) lists it; the sub-craft's own reagent 1101 is still to buy.
+    it("leaves out of the shopping list what queued sub-crafts make, on both pages", function()
+      local api = world.recordAuctionatorTerms()
+      world.names[1101] = "Raw Ore"
+      local subCrafts
+      for _, spec in ipairs(ns.FS:GetModule("ProfessionPanel"):CollectActions(9001, "Main-Realm")) do
+        if spec.text == "Queue with sub-crafts" then subCrafts = spec end
+      end
+      subCrafts.onClick()
+      assert.same({ 9100, 9001 }, { Queue:GetEntries()[1].recipeID, Queue:GetEntries()[2].recipeID })
+      local g = open_gather()
+      assert.is_nil(row_data(1001))
+      assert.equals(4, row_data(1101).need)
+      local function exported()
+        local out = {}
+        for _, term in ipairs(api.terms) do out[term.searchString] = term.quantity end
+        api.terms = {}
+        return out
+      end
+      click(g.shoppingButton)
+      assert.same({ ["Raw Ore"] = 4, ["Glimmer Dust"] = 1 }, exported())
+      click(QT:GetView().sections.queue)
+      click(QT:GetView().shoppingButton)
+      assert.same({ ["Raw Ore"] = 4, ["Glimmer Dust"] = 1 }, exported())
+    end)
+
+    it("says the queue is read-only and changes nothing when the saved data is from a newer version", function()
+      add(1)
+      local I = ns.FS:GetModule("Intermediates")
+      local g = open_gather()
+      ns.FS.dbIsNewer = true
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      click(row_frame(1001).choiceButton)
+      assert.equals(READ_ONLY, gather_status()); assert.is_nil(I:GetChoice(1001))
+      g.status:SetText("")
+      click(row_frame(1001).queueButton)
+      assert.equals(READ_ONLY, gather_status())
+      assert.equals(1, #Queue:GetEntries())
+      assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+    end)
+
+    it("writes nothing while the tab shows the page and its tooltips, on a fresh save", function()
+      add(1)
+      world.chars[ALT].mail = { time = W.now - 9 * DAY, items = { [1001] = 1 } }
+      assert.is_nil(ns.FS.db.global.settings.alts)
+      MW:Show("queue")                                   -- the window saves its own tab; only the page is under test
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      click(QT:GetView().sections.gather)
+      tooltip_of(row_frame(1001))
+      assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+      assert.is_nil(ns.FS.db.global.settings.alts)
+    end)
+
+    it("leaves a craft source out while Intermediates is off", function()
+      add(1)
+      ns.FS:GetModule("Intermediates"):Disable()
+      open_gather()
+      assert.is_false(row_frame(1001).choiceButton:IsShown()); assert.is_false(row_frame(1001).queueButton:IsShown())
+      assert.is_falsy(Tab.SourcesText(row_data(1001)):find("Craft", 1, true))
+    end)
+
+    it("does not compute the queue rows while the Gather page is shown", function()
+      add(1)
+      MW:Show("queue")
+      local calls = 0
+      local original = Queue.GetEntryResult
+      Queue.GetEntryResult = function(...) calls = calls + 1; return original(...) end
+      click(QT:GetView().sections.gather)
+      MW:RefreshTab("queue")
+      Queue.GetEntryResult = original
+      assert.equals(0, calls)
+    end)
+
+    it("refreshes with the queue while shown", function()
+      local g = open_gather()
+      assert.equals(0, #g.list.rows)
+      Queue:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      W.advance(1)
+      assert.equals(2, #g.list.rows)
+    end)
+  end)
+
+  describe("refreshing", function()
+    it("refreshes after a burst of FS_QUEUE_CHANGED while the tab is shown", function()
+      MW:Show("queue")
+      local view = QT:GetView()
+      local rows = view.queue.rows
+      Queue:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      Queue:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      assert.equals(0, #view.queue.rows)    -- a change made elsewhere shows after the 0.5 s debounce
+      W.advance(1)
+      assert.is_not.equals(rows, view.queue.rows)
+      assert.equals(2, #view.queue.rows)
+    end)
+    it("does not refresh while another tab is selected", function()
+      MW:Show("queue"); MW:SelectTab("dashboard")
+      local rows = QT:GetView().queue.rows
+      add(1); W.advance(1)
+      assert.equals(rows, QT:GetView().queue.rows)
+    end)
+    it("stops listening when disabled", function()
+      MW:Show("queue")
+      local rows = QT:GetView().queue.rows
+      QT:Disable(); add(1); W.advance(1)
+      assert.equals(rows, QT:GetView().queue.rows)
+    end)
+    it("isolates a failing queue read under the tab's own source", function()
+      Queue.GetEntries = function() error("boom") end
+      MW:Show("queue")
+      assert.equals("Tab:queue", ns.FS.db.global.diagnostics.errors[1].source)
+      assert.is_true(QT:IsEnabled())
+    end)
+  end)
+end)

@@ -1,0 +1,19 @@
+name: CI
+# `branches: ['**']` keeps tag pushes out of the plain push trigger: a release tag runs these jobs once, through
+# release.yml calling this workflow (workflow_call).
+on:
+  push:
+    branches: ['**']
+  pull_request: {}
+  workflow_call: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: leafo/gh-actions-lua@v13
+        with: { luaVersion: "5.1.5" }
+      - uses: leafo/gh-actions-luarocks@v6
+      - run: luarocks install busted 2.3.0-1 && luarocks install luacheck 1.2.0-1
+      - run: luacheck .
+      - run: busted

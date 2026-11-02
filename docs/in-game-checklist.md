@@ -1,0 +1,1476 @@
+# FabricationStation phases 1a, 1b, 2 and 3: in-game verification checklist
+
+Phase 1a is verified against stubs only. These checks need the real WoW client (retail, Midnight 12.1.5)
+and cannot be run in CI. Work through them in order. Checks 1-9 are the original plan checks; checks 10-15 come
+from code reviews and each name the exact thing to look for. Phase 1b (crafting) has its own section,
+[Phase 1b](#phase-1b-crafting), numbered 1b-1 to 1b-15; run it after the phase 1a checks. Phase 2 (crafting orders, customers, ledger) has
+[Phase 2](#phase-2-orders-customers-ledger), numbered P2-1 onwards; run it after phase 1b. Phase 3 (alts, planner) has
+[Phase 3](#phase-3-alts-planner), numbered P3-1 onwards; run it last.
+
+The Settings tab is the "Settings" tab in the main window (`/fs settings`). Its left-hand tree has the groups
+General, Prices, Modules and Diagnostics.
+
+## How to report results back
+
+- Paste the output of each `/dump` or `/run` (copy from chat, or from `WTF/Account/<ACCOUNT>/SavedVariables/FabricationStation.lua`
+  after a `/reload`) into a reply, next to the check number. A bare "pass" or "fail" is enough for visual checks.
+- For any failure, add the BugSack error text and what you did just before it.
+- Check 5 produces a file: commit it as `tests/fixtures/captures/<generated name>.lua` (the golden capture).
+- Check 6 compares the shipped Moxie IDs in `Data/GameData_Manual.lua` with the game; send any ID that is wrong, or
+  commit the edit yourself. Check 15 only produces edits when you regenerate for a newer client build.
+- Note any check you skipped and why.
+
+## A. Install and basic behaviour (plan checks 1-3)
+
+1. **Load.** Run `bash tools/fetch-libs.sh`, symlink the repo into `_retail_/Interface/AddOns/FabricationStation`,
+   then `/reload` with BugSack/BugGrabber enabled. Expected: no Lua errors, and the addon list shows it for
+   12.1.5 (not "out of date").
+2. **Window and launcher.** `/fs` opens the window, `/fabstation` too. The minimap button left-click toggles it
+   and right-click opens Settings. The window can be dragged, resized and closed with Escape, and its size and
+   position survive `/reload`.
+3. **API presence.** Run `/dump C_TradeSkillUI.GetAllRecipeIDs ~= nil, GetProfessions ~= nil`. Expected:
+   `true, true`. If either is false, note it; Task 7's fallback covers recipe IDs. Then run
+   `/dump select(7, GetProfessionInfo((GetProfessions())))`. Expected: your first profession's base skill
+   line ID (for example `164` for Blacksmithing), which the Scanner's dropped-profession check relies on.
+   If it is not that number, report what it is; every saved profession would otherwise be marked `dropped`.
+
+## B. Scanner and captures (plan checks 4-7)
+
+4. **Profession snapshot.** Open Midnight Blacksmithing (or any Midnight profession), wait 2 s, then run
+   `/dump FabricationStationDB.global.characters[UnitName("player").."-"..GetNormalizedRealmName()].professions`.
+   Expected: the child skill line with `skill`, `recipes`, `spec.paths`, `concentration`, `cooldowns`.
+5. **Golden capture.** Select a quality recipe and run `/fs capture`, then `/reload`, then
+   `lua tools/export_captures.lua "<WTF>/Account/<ACCOUNT>/SavedVariables/FabricationStation.lua"`.
+   Expected: one file in `tests/fixtures/captures/`. Commit it as the first golden fixture.
+   Where the file is: SavedVariables are account-wide, so the file is
+   `_retail_/WTF/Account/<ACCOUNT>/SavedVariables/FabricationStation.lua` (not under a realm or character folder).
+   `<ACCOUNT>` is your account folder's name, which can be a number such as `12345678#1`; with several, pick the
+   one whose `SavedVariables` folder was modified last. The game writes the file only on `/reload`, logout or exit,
+   so it does not exist (or holds the old data) until then. If another addon has taken `/fs`, use
+   `/fabstation capture` (the same command under the addon's own name).
+6. **Moxie currencies.** Run
+   `/run for i=1,C_CurrencyInfo.GetCurrencyListSize() do local c=C_CurrencyInfo.GetCurrencyListInfo(i) if c.name:find("Moxie") then print(c.name, C_CurrencyInfo.GetCurrencyListLink(i)) end end`.
+   The Moxie IDs are already filled in `Data/GameData_Manual.lua`; this check verifies them. Take each currency ID
+   from the link and compare it with the table: each ID must sit under its profession's child skillLineID. Send
+   any ID that differs, or any Moxie currency the table does not have.
+7. **Bank snapshot.** Open the bank, then run `/dump FabricationStationDB.global.warband.time ~= nil`.
+   Expected: `true`. Close the bank, move an item between bags, and confirm the bank counts are unchanged.
+
+## C. Prices (plan check 8)
+
+8. **Auctionator end to end.** With Auctionator installed, do an AH scan. Expected: the header (right-hand text,
+   top of the window) shows `Prices: <1m ago`, and
+   `/dump LibStub("AceAddon-3.0"):GetAddon("FabricationStation"):GetModule("Prices"):Get(<itemID>)`
+   for an item that was in the scan shows a table with `value` (copper), `source = "auction"` and `ageDays`.
+   Then disable Auctionator in the AddOns list. Expected: FabricationStation is shown as needing Auctionator and
+   does not load (it is a required dependency); re-enable Auctionator and it loads again with no errors.
+
+## D. Reference data (plan check 9)
+
+9. **GameData joins.** Check one finishing reagent's GameData effect against its in-game tooltip, and one
+   reagent's `rank` against `C_TradeSkillUI.GetItemReagentQualityByItemInfo`. These verify the
+   `CraftingReagentEffect.ProfessionEffectID` join (WoWDBDefs marks it a guess) and `rank = OrderIndex + 1`.
+   Fix `tools/gamedata/transforms.lua` and its test if either is wrong. (The shipped data is real generated data, so
+   this can run now.)
+
+## E. Extra checks from code review
+
+### Prices
+
+10. **Auctionator API v1 names.** With Auctionator enabled, list the API with
+    `/run for k,v in pairs(Auctionator.API.v1) do print(k, type(v)) end` (or `/dump Auctionator.API.v1`).
+    Look for these names, each with type `function`:
+    - Used now by `Modules/Prices.lua` (each is called as `fn("FabricationStation", itemID)`, except
+      `RegisterForDBUpdate`, which is `RegisterForDBUpdate("FabricationStation", callback)`):
+      `GetAuctionPriceByItemID`, `GetAuctionAgeByItemID`, `GetVendorPriceByItemID`, `RegisterForDBUpdate`.
+      If one is missing, prices silently fall back (no auction price, or no refresh on a new scan), so report it.
+    - Used by later phases, not called anywhere in the addon yet (shopping-list export):
+      `CreateShoppingList`, `ConvertToSearchString`. Report if either is missing or renamed, so phase 1b can adapt.
+
+### Scanner
+
+11. **Warband snapshot is not clobbered.** The scanner writes the warband snapshot only while the bank is open
+    and `C_Bank.CanViewBank(Enum.BankType.Account)` is true at the moment the debounced scan fires (0.5 s after
+    a bag/bank event). If the bank is closed first, or the warband bank is not viewable yet, it must leave the
+    saved snapshot alone. Test a fast open:
+    1. Open the bank once and wait a few seconds, close it, then run
+       `/dump FabricationStationDB.global.warband.items` and note the result (it should list your warband items)
+       and `/dump FabricationStationDB.global.warband.time`.
+    2. `/reload`, then open the bank and close it again as fast as you can, then run both dumps again.
+    Look for: the items table is not empty and not smaller than before. A new `time` with an empty or reduced
+    item list is a failure; an unchanged `time` is a pass, as is a new `time` with the same items.
+
+### Window
+
+12. **Main window layout.** Open `/fs` and look at:
+    - The title bar reads "FabricationStation" (the frame template's own title).
+    - The header strip directly under the title bar has three texts on one line: left, this character's key
+      (`Name-Realm`); centre, your gold; right, `Prices: ...` (`Prices: no Auctionator`,
+      `Prices: not scanned yet` or `Prices: <age> ago`). They must not overlap each other or the close button.
+    - The tab rail is a column on the left, starting below the header strip and running to the bottom of the
+      window; the tab content fills the area to its right. The selected tab is highlighted.
+    - The resize grip in the bottom-right corner resizes the window; the rail, header and content reflow with
+      no overflow past the border. Check at a small and a large size, and that the size survives `/reload`.
+    - The Settings tab shows the options tree inside the main window, not a separate Blizzard options window.
+      (It is also registered in Blizzard's AddOns settings panel; that is a second copy, not the tab.)
+    - Settings tab strata: with the Settings tab showing, run `/fstack` and hover the options. They must
+      report the main window's strata, `HIGH`, not `FULLSCREEN_DIALOG`. Then bring up a Blizzard popup over
+      the window (for example pick up a grey item, drop it outside your bags to get the delete confirmation,
+      then press Cancel): the popup must draw over the options, not under them.
+    - Settings tab resize: with the Settings tab showing, drag the resize grip to make the window much
+      smaller and then much larger. The options tree and its right-hand panel must follow the new size
+      each time (no options cut off at the old edge, no empty band left where the old size ended).
+    - GameData status is not in the window chrome. It appears in two places in the Settings tab, with the
+      same text in both, and on a 70688 client it must say `GameData: build 70688, up to date` (on a newer client
+      `GameData is outdated: data build 70688, game build <yours>`; all strings in check 15): Settings > General
+      (second line, after the minimap checkbox), and Settings > Diagnostics (first line).
+
+### Diagnostics and scanner state
+
+13. **`/fs capture` page guard.** First record a baseline: `/dump #FabricationStationDB.global.captures.list`.
+    Open a profession and switch to the Specializations page, then run `/fs capture`. Expected: chat prints
+    `FabricationStation: open a profession, select a recipe, then type /fs capture.` and the count is
+    unchanged (that is the message for a hidden crafting page, so it also covers the Orders page). Switch to
+    the Crafting Orders page and run it again: same message, same count. Then go to the crafting (Recipes)
+    page, select a recipe and run `/fs capture`. Expected: chat prints
+    `FabricationStation: captured <recipe name> (#<id>) — /reload, then see WTF/Account/<account>/SavedVariables/FabricationStation.lua` and
+    `/dump #FabricationStationDB.global.captures.list` is the baseline plus one.
+14. **Concentration snapshot.** On a profession with concentration, craft (or use) something that spends some,
+    then run
+    `/dump FabricationStationDB.global.characters[UnitName("player").."-"..GetNormalizedRealmName()].professions`
+    and read the `concentration` entry for the child skill line. Look for: `value` equals the in-game
+    concentration currency now, `max` equals its cap, `perCycle` and `cycleSeconds` are plausible
+    (recharge amount per cycle, and cycle length in seconds, not milliseconds), `currencyID` is the
+    concentration currency, and `time` is recent. Spend more, wait, and confirm `value` updates without a reload.
+
+### GameData
+
+15. **Generate real GameData.** On your machine, follow
+    [`tools/gamedata/README.md`](../tools/gamedata/README.md): `bash tools/gamedata/fetch.sh <version.build>`,
+    `lua tools/gamedata/generate.lua --build <version.build> --cache tools/gamedata/cache/<version.build> --out Data`,
+    then `busted && luacheck .`. Then bump the build number in `Data/GameData_Manual.lua` and `Data/OrderRewards.lua`
+    to match (for `12.1.5.70688` the number is `70688`) and re-check its Moxie currency IDs (check 6) against the
+    printed candidates.
+    `/reload` and read the status line in the Settings tab. Settings > General (second line) and
+    Settings > Diagnostics (first line) show the same text; a difference between the two is a failure.
+    The shipped data was generated for `12.1.5.70688` on 2026-10-31 (Moxie IDs filled), so on that client build
+    expect `GameData: build 70688, up to date`. On a newer client build expect
+    `GameData is outdated: data build 70688, game build <yours>`; regenerate as above. Placeholder data
+    (`generate.lua --empty`) shows `GameData not generated`.
+
+    Failure forms and what they mean:
+    - `GameData tables are from different builds: MoxieCurrency` (or another table name): that table's
+      build differs from the rest; most often `GameData_Manual.lua` was not bumped.
+    - `GameData is outdated: data build <n>, game build <m>`: the data is for another client build than the
+      one running.
+    - Still `GameData not generated`: some generated table still has no build.
+
+    Note the README's open items: the wago.tools URL and CurvePoint header style are unverified.
+
+## Phase 1b (crafting)
+
+Phase 1b (recipe evaluation, queue, profession panel, recipe-list labels, tooltips, self-check) is also verified
+against stubs only. Report results the same way as above, numbered 1b-1 to 1b-15. In the `/dump` lines,
+`FS` stands for `LibStub("AceAddon-3.0"):GetAddon("FabricationStation")`; run
+`/run FS = LibStub("AceAddon-3.0"):GetAddon("FabricationStation")` once first. Crafting settings are in
+Settings > Crafting; module toggles are in Settings > Modules.
+
+### Taint and Blizzard events
+
+1b-1. **Apply taint check.** Apply ("Apply fills the reagent slots in Blizzard's crafting window") ships off.
+    Run `/console taintLog 1` and `/reload`. First confirm the API Apply needs: run
+    `/dump Professions.CreateCraftingReagent ~= nil, Professions.CreateCraftingReagentByItemID ~= nil`; at least
+    one must be `true` (report both). Then turn on Settings > Crafting > applyWritesBlizzardSlots, open a quality
+    recipe, press Apply on the Q2 row of the panel's reagent list, and press Blizzard's Create. Log out, open
+    `Logs/taint.log` and search for `FabricationStation`. Expected: no line names FabricationStation. If one does,
+    turn the setting off again and send the log lines; Apply stays off by default until this check passes. If the
+    recipe has a required spark slot, also note whether Apply filled it.
+1b-2. **No taint from callbacks alone.** Panel, recipe-list labels and Settings > Crafting > selfCheck on, Apply
+    off, `/console taintLog 1`. Select several recipes, craft one with Blizzard's own Create button, then enter
+    combat (a training dummy is enough). Expected: no `ADDON_ACTION_BLOCKED` or `ADDON_ACTION_FORBIDDEN`
+    popup or chat line, and no `taint.log` line naming FabricationStation.
+1b-3. **Event names fire.** With the profession window open, selecting a recipe must recalibrate it and refresh
+    the panel (`ProfessionsRecipeListMixin.Event.OnRecipeSelected`), and changing a reagent rank in Blizzard's
+    quality dialog must update the panel's predicted quality and skill bar at once
+    (`Professions.TransactionUpdated` / AllocationsModified). Expected: both happen without reselecting the
+    recipe. If the panel does not react to rank changes, report it.
+
+### Queue and shopping list
+
+1b-4. **Auctionator shopping list.** Run `/dump Auctionator.API.v1.ConvertToSearchString ~= nil,
+    Auctionator.API.v1.CreateShoppingList ~= nil`. Expected: `true, true`. Queue two crafts that need reagents of
+    different ranks you do not hold, press Shopping List in the Queue tab, and open Auctionator's Shopping tab.
+    Expected: a list named `FabricationStation` with each missing reagent at the right rank (tier) and quantity
+    (the term fields used are `searchString`, `isExact`, `quantity`, `tier`). Repeat right after `/reload` with an
+    item whose name the client has not cached: the status line says `Loading item names… the list will appear in
+    Auctionator's Shopping tab (reopen the AH if it's open); press again if it doesn't appear` (or `Shopping list updated (N items); loading M item
+    names…`), and moments later, without a second press, `Shopping list updated (N items)`.
+1b-5. **Warband reagents.** With Settings > Crafting > queueUseWarband on and some reagents only in the warband
+    bank (not in bags, bank or reagent bank), queue one craft and press Craft Next at the crafting station.
+    Expected: the craft starts and uses the warband reagents. If Blizzard refuses it (reagents missing), report
+    it: Craft Next would then need to treat warband reagents as missing.
+1b-6. **Required spark slot.** Pick a recipe with a required modifying (spark) slot. Expected: the panel's and
+    Recipes tab's reagent cost and profit include the spark's price, the Queue tab lists it under Missing when you
+    have none, it is on the shopping list, and Craft Next succeeds once you hold it (the spark goes to
+    `CraftRecipe`). Also check against a real craft whether a resourcefulness proc ever refunds the spark: the
+    addon assumes it never does.
+1b-7. **Craft Next failures.** Press Craft Next away from the crafting station (or with too little concentration for
+    a concentration entry). Expected: Blizzard's error, and Craft Next answers normally on the next click. Report
+    whether the "Still crafting" (busy) answer clears at once (`UNIT_SPELLCAST_FAILED` fired) or only after 30 s.
+1b-8. **Craft Next decrements.** Queue 3 of a multicraft-capable recipe and craft until a multicraft proc: the entry
+    must lose exactly one per craft, proc or not. Queue an enchant (a recipe with no output item): its entry must lose
+    one on its cast. Start a craft and interrupt it by moving: the next Craft Next click must not answer "busy".
+
+### Performance and layout
+
+1b-9. **Recalibration CPU.** On a character with about 300 known recipes, open the profession window and craft 10
+    items in a row. Watch the frame rate (`/fps` or Blizzard's performance overlay) while the recipe scan runs.
+    Expected: no visible hitch; report the lowest frame rate seen and Settings > Crafting > scanBudgetMs.
+1b-10. **Panel layout.** At 1920×1080 and 2560×1440 UI sizes, select a recipe with five quality rows and a full
+    breakdown (nine lines). Expected: nothing overlaps or is cut off, and with the self-check line hidden (selfCheck
+    off) there is no empty gap where it would be.
+1b-11. **Row labels.** With long recipe names and Blizzard's count / skill-up markers on rows, the profit labels must not
+    overlap the text. Scroll the list and collapse/expand a category: every visible recipe row is relabelled, category
+    rows have no label, and unlearned recipes (if shown) have none.
+1b-12. **Tooltips.** With Auctionator installed, hover a crafted item: Auctionator's lines are unchanged, the
+    `Craft cost` and `Crafters` lines appear once (hover again, and in a second tooltip such as a chat link), and the
+    first hover of an item many recipes make shows no hitch. For an item quality none of your characters can reach,
+    expect `Craft cost: quality not reachable`.
+
+### Self-check and data
+
+1b-13. **Self-check.** With selfCheck on and a calibrated recipe selected, change reagent ranks. Real GameData ships
+    (the GameData status line is check 15, in section E under "GameData"): expected `Math check: OK` while you change ranks.
+    Also compare a few game thresholds with difficulty × the GameData fraction (they must agree to 1e-6) and confirm
+    the game's `concentrationCost` is a whole number:
+    `/dump C_TradeSkillUI.GetCraftingOperationInfo(<recipeID>, {}, nil, false)`.
+1b-14. **Empty GameData** (optional; the shipped GameData is real, so this needs a local empty build). Run
+    `lua tools/gamedata/generate.lua --empty --out Data` on your machine, `/reload`, and expect: every result in the
+    Recipes tab, panel, Queue tab ("~" cost) and recipe-list labels ("~") is marked as an estimate, and there are no
+    Lua errors on the first window open, the first scan and the first tooltip. Then restore the real data with
+    `git checkout Data` and `/reload`.
+1b-15. **Read-only saved data.** Make the saved data look newer: in the SavedVariables file set
+    `FabricationStationDB.global.schemaVersion` above the current one (back up the file first), then log in. Expected:
+    every queue button (Add to Queue, Clear, quantity, Remove, restock) says the queue is read-only, Calibrate (select
+    a recipe) does not persist (`/dump FabricationStationDB.global.recipeCalib` unchanged after `/reload`), and
+    restoring the backup brings everything back.
+
+## Hotfix H1 re-checks (after the first in-game test)
+
+Run these with the shipped GameData (real data for build 70688).
+
+H1-4. **Panel quality.** Select a quality recipe and fill every quality slot with its top rank.
+    Expected: the panel's first line reads `Quality: Q<n> (game)` with the same quality, skill and next-threshold as
+    Blizzard's quality meter, and the concentration line matches Blizzard's concentration cost. The header shows the
+    game's numbers (`(game)`) while the profession window is open. The per-quality rows (what-ifs worked out by the
+    addon's own math) sit under `Cheapest reagents per quality`; the header reads `(estimate)` only for a recipe the
+    addon has not calibrated yet (open the profession once first). They list every reachable quality (two or more
+    rows for a recipe whose top quality is reachable), not only Q1.
+H1-4b. **Panel quality fallback.** Select a quality recipe and fill its quality slots so that Blizzard's quality meter
+    shows a quality below the recipe's maximum with no next threshold shown (for example a recipe whose next quality
+    needs more skill than any reagent mix gives). Expected: the panel's first line is `Quality: Q<n>` **without**
+    `(game)`: when the game reports a quality below max and no next threshold, the header uses the addon's own math.
+    Report the line and Blizzard's meter side by side.
+H1-5. **Held reagents count.** Log in with the rank-2 (or top-rank) reagents of a recipe split between your bags and
+    the bank, without opening the bank this session. Queue one craft at the crafting station. Expected: the Queue tab
+    shows nothing missing and Craft Next starts the craft with the reagents you hold. Then open the bank, deposit some
+    of them into a bank tab and some into the warband bank, close the bank and `/reload`: the counts in
+    `/dump FabricationStationDB.global.characters[UnitName("player").."-"..GetNormalizedRealmName()].items[<itemID>]`
+    and `FabricationStationDB.global.warband.items[<itemID>]` match where the items are. Also report what
+    `/dump C_Item.GetItemCount(<itemID>, true, false, true, true)` says before the bank was ever opened this session
+    (the addon relies on it seeing the bank and warband bank everywhere).
+H1-5b. **Shopping list after login.** Right after logging in (item names not cached yet), queue crafts with missing
+    reagents and press Shopping List once. Expected: the status line says the names are loading, then
+    `Shopping list updated (N items)`; at the auction house, Auctionator's Shopping tab has the `FabricationStation`
+    list (close and reopen the AH window if it was already open). If the status stays on loading, press Shopping List
+    once more; report whether that second press was needed.
+H1-6. **Row labels and long names.** Scroll a recipe list with long names, craftable counts (`[3]`) and locked recipes.
+    Expected: no profit label overlaps a name or count; rows whose name runs close to the right edge show no label;
+    a locked recipe's lock icon is never covered; short rows keep their labels after scrolling and collapsing a
+    category.
+H1-8. **Capture file.** Run `/fs capture` (or `/fabstation capture`) on a selected recipe. Expected: the chat line names
+    `WTF/Account/<account>/SavedVariables/FabricationStation.lua`; after `/reload` that file contains the capture
+    (see check 5 for finding the account folder).
+
+## Phase 2 (orders, customers, ledger)
+
+Run these after the phase 1a/1b checks, on a character with a Midnight profession that gets crafting orders, at a
+crafting-orders table. Set `/console taintLog 1` before you start and `/console taintLog 0` at the end; `taint.log`
+is in `_retail_/Logs/`. The addon object for `/dump`s is `FS = LibStub("AceAddon-3.0"):GetAddon("FabricationStation")`
+(run `/run FS = LibStub("AceAddon-3.0"):GetAddon("FabricationStation")` once per session). The Orders, Customers
+and Ledger tabs are in the main window (`/fs`); Settings > Orders & Ledger holds the phase-2 options.
+
+### Acceptance run (plan Task 13 Step 5, spec §7)
+
+Run P2-1 to P2-8 in one session, with the taint log on.
+
+P2-1. **Cells on every tab.** Open the crafting-orders page and visit Public (drill into a bucket), Guild, Personal
+    and Patron. Expected: each flat order list shows the addon's profit, score and risk cells on its rows, and the
+    side panel (`FabricationStation`, right of the Professions frame) shows the filters, claims remaining and a best
+    order. The public bucket list (before drilling in) shows no cells.
+P2-2. **Claim Best Order.** On Public or Patron, press Claim Best Order once. Expected: it claims the top order that
+    has no flagged risk (the one the panel's `Best:` line named), with that one click; the result line says
+    `Claimed — open it from the order list`; while an order is claimed the button is disabled and the panel reads
+    `Best: you already have a claimed order`.
+P2-3. **Craft and fulfil.** Craft the claimed order and fulfil it. Expected: the Customers tab lists the customer
+    (patron orders have none), `/dump FabricationStationDB.global.ledger.entries` ends with a `craft` entry (negative
+    amount, `ref` = the orderID) and a `commission` entry (`ref` = the orderID, `cost` = what the craft cost), and the
+    Dashboard's "Gold this week" goes up by the commission minus the craft cost.
+P2-4. **AH sale mail.** Sell a crafted item on the AH, then take the "Auction successful" mail's money (Open All, or
+    click it). Expected: exactly one `sale` entry for it (`/dump` the last entries), with `recipeID` and `cost` when
+    you crafted that item for no order before.
+P2-5. **Personal order alert.** Have a friend (or a second account) place a personal order for you. Expected: the
+    raid-warning sound plays once and a toast reads `New personal crafting order: <profession> (<n> waiting)`, then
+    fades after about 8 s (Settings > Orders & Ledger > Alerts).
+P2-6. **Snapshot on an alt.** `/reload` onto an alt that never opened the orders page. Expected: the Orders tab shows
+    the board the first character saw, with `Orders seen <age> ago on <first character>` in its header; expired orders
+    are gone.
+P2-7. **Addon off.** Disable FabricationStation in the AddOns list and `/reload`. Expected: Blizzard's crafting-orders
+    UI looks and works exactly as without the addon (lists, tabs, claiming, crafting and fulfilling an order).
+P2-8. **Taint log.** After P2-1 to P2-7, search `taint.log` for `FabricationStation`. Expected: no lines.
+
+### Not verified from source
+
+P2-9. **Patron reward IDs.** On the Patron tab, for each order `n` run
+    `/dump C_CraftingOrders.GetCrafterOrders()[n].npcOrderRewards`. Report every reward: an `itemLink` (its
+    `item:<itemID>` and the item's name, e.g. a knowledge notebook and how many points it gives) or a
+    `currencyType` (the currency ID and name, e.g. Moxie). These go into `Data/OrderRewards.lua` (`items` as
+    `{ kind = "knowledge", points = N }`, `currencies` as `{ kind = "moxie" }`). Also
+    `/dump FabricationStationDB.global.ordersUnknownRewards`: the rewards the addon could not value.
+P2-10. **Quality scales.** For an order with a minimum quality, compare
+    `/dump C_CraftingOrders.GetCrafterOrders()[n].minQuality` with the quality Blizzard's order view shows (and the
+    addon's `Q<n>` in the Orders tab tooltip / the queue's target). Expected: the same tier number as the recipe's
+    quality (1..max) that the addon's `expectedQuality` uses. If `minQuality` is on another scale (for example 0-based,
+    or the 5-tier scale on a 2-tier recipe), report both numbers: Orders:Normalize must then map it.
+P2-11. **Sound key.** `/dump SOUNDKIT.RAID_WARNING`. Expected: a number (the alert's default sound). If nil, report
+    it, together with `/dump SOUNDKIT.READY_CHECK, SOUNDKIT.UI_PROFESSIONS_NEW_RECIPE_LEARNED`.
+P2-12. **Crafted quality of a claimed order.** With an order claimed and crafted (not yet fulfilled), run
+    `/dump C_CraftingOrders.GetClaimedOrder().outputItemHyperlink` and then
+    `/dump C_TradeSkillUI.GetItemCraftedQualityByItemInfo(C_CraftingOrders.GetClaimedOrder().outputItemHyperlink)`.
+    Expected: a link, then the quality you crafted. After fulfilling, the `commission` entry's `quality` and the
+    customer's order row show that quality. If the link is nil before fulfilment, report it (commissions then have no
+    quality and the tip benchmark falls back to all qualities).
+P2-13. **Customer-provided reagents in CraftRecipe.** Claim an order where the customer provided some reagents, then
+    craft it with Blizzard's Create button. Right after, run
+    `/dump FabricationStationDB.global.ledger.entries[#FabricationStationDB.global.ledger.entries]`. Expected: the
+    `craft` entry's `cost` covers only the reagents you paid for. To see what Blizzard passed, run before crafting
+    `/run hooksecurefunc(C_TradeSkillUI, "CraftRecipe", function(...) DevTools_Dump({...}) end)` (gone after
+    `/reload`). Report whether the dumped `craftingReagents` (3rd argument) list the customer-provided slots.
+P2-14. **Craft Next on an order with provided reagents (new in the final fix wave).** Add an order with
+    customer-provided reagents to the queue (`+` on its row, or the Orders tab) **before** claiming it, and press
+    Craft Next. Expected: the status line says `Start (claim) the order first: <recipe>` and nothing is cast; the
+    Queue tab marks the entry `[order]` (hover: `Crafting order #<id>`). Claim it and press Craft Next again.
+    Expected: the craft starts for the order. If the game rejects the cast (an error about reagents, or the craft
+    does not start), report it with the P2-13 dump: Craft Next passes the full allocation, provided slots included
+    (Blizzard's own UI leaves them out), and would then have to leave the provided slots out for order entries.
+    Finally fulfil the order. Expected: its queue entry disappears at once (and with it its reagents from the
+    Shopping List).
+
+### Board capture and claiming
+
+P2-15. **Profession window reopen.** Open a profession window, close it, open it again (also open a different
+    profession in between). Run `/etrace` filtered to `TRADE_SKILL_SHOW` (or watch `/eventtrace`). Expected:
+    `TRADE_SKILL_SHOW` fires on every opening, including the reopen of the same profession (the reopen
+    recalibration relies on it).
+P2-16. **Guild orders and the public claim limit.** Note `/dump C_CraftingOrders.GetOrderClaimInfo(C_TradeSkillUI.GetChildProfessionInfo().profession)`,
+    claim and fulfil a guild order, then dump it again. Report whether `claimsRemaining` dropped (the addon treats
+    only public orders as using a claim).
+P2-17. **Snapshot count.** `/reload`, open the orders page, visit the Personal and Patron tabs, then run
+    `/run local b=FabricationStationDB.global.orderBoards[UnitName("player").."-"..GetNormalizedRealmName()] local n=0 for _ in pairs(b and b.orders or {}) do n=n+1 end print(n)`.
+    (Since phase 7 each character keeps its own board in `orderBoards[<Name-Realm>]`; the old single `ordersSnapshot`
+    is gone after the first login of the update.) Expected: the number of orders you saw on those tabs (plus any
+    public orders you drilled into).
+P2-18. **Personal counts at login.** Log in with a personal order waiting. Run
+    `/dump FabricationStationDB.global.ordersState` right after login (before visiting a table). Expected: a
+    `personalCounts` entry for that profession, which shows `CRAFTINGORDERS_UPDATE_PERSONAL_ORDER_COUNTS` fired at
+    login. If it is missing until you open the table, report it.
+P2-19. **Secure hooks and taint.** With the taint log on, open the orders page, browse each tab, claim, craft and fulfil
+    an order (Orders hooks `OrdersPage:ShowOrders` and `C_CraftingOrders.FulfillOrder`). Expected: no
+    FabricationStation lines in `taint.log`, and no "action blocked" message.
+P2-20. **Bucket list and claim responses.** (a) On Public, the bucket list (one row per item) must show no cells and
+    `Best:` must name no public order; drill into a bucket: cells appear. That confirms `ShowBuckets` is the bucket-list
+    entry point. (b) After the bucket list is shown, `/dump #C_CraftingOrders.GetCrafterOrders()` must not list the
+    flat public orders of an earlier drill-in (report the count). (c) Claim an order with Claim Best Order and run
+    `/etrace` for `CRAFTINGORDERS_CLAIM_ORDER_RESPONSE`: report the two arguments; expected order `(result, orderID)`.
+P2-21. **Personal count event away from a table.** Stand away from any crafting table (for example in a city's
+    flight-master area) while a friend places a personal order. Expected: the sound and toast (P2-5) still come. If
+    they come only once you open a table, report it: the count event then only fires at the table.
+
+### Ledger capture
+
+P2-22. **Craft and sale entries.** (a) Craft one item for no order: the last ledger entry is a `craft` entry with a
+    negative `amount`. (b) Take several "Auction successful" mails with Open All: exactly one `sale` per mail, and
+    clicking an already emptied mail adds nothing. (c) Craft until a multicraft proc and report whether the extra items
+    came as a second `TRADE_SKILL_ITEM_CRAFTED_RESULT` with the same `operationID` (the craft entry's `quantity`
+    grows, no second entry) or inside the first result's `quantity`. (d) Report whether the invoice is still readable
+    inside the money post-hook: a sale from an invoice has `source = "invoice"` and a `buyer`; `source = "subject"`
+    means the invoice was gone. (e) Sell a stack of 5 and report the mail subject: expected
+    `Auction successful: <item> (5)` and a sale with `quantity = 5`.
+P2-23. **Cast stop vs last result.** Craft 5 of a recipe in one batch (Blizzard's Create All, or a quantity of 5).
+    With `/etrace` on `UPDATE_TRADESKILL_CAST_STOPPED` and `TRADE_SKILL_ITEM_CRAFTED_RESULT`, report whether
+    `UPDATE_TRADESKILL_CAST_STOPPED` fires before the last result. Expected: five `craft` entries either way.
+P2-24. **Interrupts.** (a) Start a 3-cast batch and move during cast 2: report whether cast 1's result arrives after
+    the interrupt, and check that the ledger has exactly one entry per finished cast. (b) Press Create twice quickly so
+    the second click fails ("Another action is in progress"): report whether `UNIT_SPELLCAST_INTERRUPTED` fired for it
+    (`/etrace`), and check the first craft is still recorded.
+
+### Board additions (row cells, side panel, order view warning)
+
+P2-25. **Cell layout and long names.** With the orders page open and the taint log on, scroll each tab's list. Expected:
+    the cells stay on their rows while scrolling. For an order whose item name is long, the cells give way to the
+    name: first the profit cell goes, then the whole strip; there is **no dark backing** behind anything, and our
+    cells never cover Blizzard's item name.
+P2-26. **Hover and placement.** Hover the `+` button and the risk cell. Expected: our tooltip shows, Blizzard's row
+    highlight still shows on the row, and Blizzard's own row tooltip still appears when you hover the rest of the row.
+    Open an order from a blocked or VIP customer (tag one in the Customers tab first): the warning line above the
+    order view does not overlap the view's title or tabs. Then switch tabs (Public → Personal → Public) and report
+    whether the cells come back at once (whether `ShowOrders`/`SetupTable` call `SetView` again, which would re-init the
+    rows).
+P2-27. **API names.** `/dump ScrollUtil.AddInitializedFrameCallback ~= nil, ScrollUtil.AddReleasedFrameCallback ~= nil`
+    (expected `true, true`), and with an order open in the detail view,
+    `/dump ProfessionsFrame.OrdersPage.OrderView.order and ProfessionsFrame.OrdersPage.OrderView.order.orderID`
+    (expected: the open order's ID; the warning reads `OrderView.order`).
+P2-28. **Unmeasurable rows and late item names.** Right after login (item names not cached), open a tab with many
+    orders. Expected: rows whose names arrive late are re-fitted within a moment (cells give way once the name shows);
+    a row the addon cannot measure keeps all its cells, and must not cover a name: report any row where it does.
+    Hide the Professions frame while the list is shown, then reopen it: cells come back, and no cells float on
+    screen while it is hidden (the ScrollBox's OnHide fires when an ancestor hides). Report whether the frame rate
+    drops while the list is open and item data keeps arriving (`ITEM_DATA_LOAD_RESULT` / `GET_ITEM_INFO_RECEIVED`
+    frequency, `/etrace`).
+
+### Customers tab
+
+P2-29. **Chips, input and the pick menu.** In the Customers tab, give a customer several tags of different lengths
+    (e.g. `VIP`, `pays well`, `WWWWWWWWWWWW`). Expected: each chip is as wide as its text (report if a chip's text is
+    cut or has a large gap: `GetStringWidth` vs `GetUnboundedStringWidth`). Type a tag with a `|` in it (e.g. `a|b`):
+    the box and the chip show `a|b` literally, never a broken colour code. With enough tags or alts for a `+N` chip,
+    open its pick menu on a customer near the bottom of the window: the menu stays inside the screen and closes on a
+    click elsewhere.
+
+## Phase 3 (alts, planner)
+
+Run these after the phase 2 checks. You need at least two characters with different Midnight professions; one of
+them should have a profession with concentration. Turn on `/console scriptErrors 1` (and BugSack) for the whole
+session. In the `/dump` and `/run` lines, `FS` stands for the addon object: run
+`/run FS = LibStub("AceAddon-3.0"):GetAddon("FabricationStation")` once per session (again after every `/reload`).
+`<Name-Realm>` is a character key as the addon writes it, for example `Aria-Silvermoon`
+(`/dump UnitName("player").."-"..GetNormalizedRealmName()` prints the logged-in one). `<id>` is a Midnight child
+skill line ID: 2906 Alchemy, 2907 Blacksmithing, 2909 Enchanting, 2910 Engineering, 2912 Herbalism, 2913 Inscription,
+2914 Jewelcrafting, 2915 Leatherworking, 2916 Mining, 2917 Skinning, 2918 Tailoring (P3-24 checks these numbers).
+The Characters tab is `/fs tab characters` and the Planner tab is `/fs tab planner`. Settings > Characters and
+Settings > Planner hold the phase-3 options; Settings > Modules has the Alts and Planner switches.
+
+The knowledge table ships from hand-authored data (`tools/gamedata/sources/knowledge_sources.csv`, rows marked
+unverified where they are), while the recipe-source and spec-effect tables are generated (build 70688), so Spec advice
+ranks paths. Some knowledge numbers can still be wrong (P3-24 to P3-31 find them), and a recipe source can read
+"Unknown" when the table and the game give none. Those are the expected degraded states, not failures.
+
+### Acceptance run (plan Task 16 Steps 2-3)
+
+Run P3-1 to P3-6 in one session.
+
+P3-1. **Character 1: knowledge and spec.** On character 1, open each of its professions once (wait 2 s after each
+    opens) and open the Specializations page once. Then finish one weekly knowledge source you have not done this
+    week (the trainer's weekly quest, or a weekly treasure). Wait a few seconds and open `/fs tab characters`.
+    Expected: character 1 is listed first, marked `•`, in its class colour. Note: below about 1320 px window width
+    the grid shows only the FIRST profession's cells (the lower skill-line ID); a second profession appears as a
+    `+1` badge on the profession cell. If the source you finished belongs to the profession shown, its KP cell went
+    down by that source's points; either way the header's "Knowledge left" sum went down, and hovering the row lists
+    every profession's knowledge, spec and concentration. The `(+N)` in a profession's Spec value
+    (`spent/max (+unspent)`, in the cell or the row tooltip) equals the unspent points in Blizzard's specialization UI.
+P3-2. **Character 2.** Log in character 2 (different professions), open each of its professions once, then log back
+    to character 1 and open `/fs tab characters`. Expected: character 2's row shows its first profession's cells
+    (hover the row for all professions' knowledge, spec and concentration, or widen the window to about 1320 px to
+    see the second slot), and its Age is the time since you logged in on it (the addon records a login, not a
+    logout, so after 30 minutes played on character 2 its Age reads at least `30m`); character 1 reads `online`.
+    Planner > Knowledge has rows for both characters' Midnight professions.
+P3-3. **Addon off.** Disable FabricationStation in the AddOns list and `/reload`. Expected: Blizzard's Professions
+    frame (recipe list, Specializations page, crafting orders) and item tooltips look and work exactly as without
+    the addon, and no item tooltip has holdings lines (design rule 2). Enable it again and `/reload`.
+P3-4. **No Lua errors.** With the addon on and Auctionator on: play a few minutes with the professions window closed,
+    then enter a dungeon (two loading screens), and open the Characters tab and every Planner section once. Then
+    disable Auctionator, `/reload` and do the same again. Expected: no Lua error at any point, Settings >
+    Diagnostics lists no errors, and Settings > Modules shows no stopped modules.
+P3-5. **Weekly reset.** Do this after the next weekly reset, or simulate it now. Pick an alt (not the logged-in
+    character) that has done at least one weekly knowledge source this week and has looted at least one one-time
+    treasure. To simulate, run
+    `/run FabricationStationDB.global.characters["<Name-Realm>"].knowledgeWeekly.time = FS:GetModule("Alts"):WeekStart() - 60`
+    (the alt's quest flags then look as if they were saved before this week's reset). Open Planner > Knowledge.
+    Expected: that alt's weekly categories (Quest, Treatise, Treasure, Drops) show nothing earned again, while its
+    One-time column keeps what it already looted; `/dump FS:GetModule("Alts"):GetAltRow("<Name-Realm>").professions[1].knowledge`
+    shows `weeklyLeft` equal to `weeklyTotal`. After a real reset, check the same before the alt logs in again.
+    Logging the alt in afterwards restores its real flags.
+P3-6. **Spec advice hitch check.** On a character with many learned recipes (a high-skill Midnight crafter, after the
+    Recipes scan has finished a few seconds after login), open Planner > Spec advice and pick that character and
+    profession with the two picker buttons; switch between the professions and back to Knowledge a few times.
+    Expected: no visible stutter or frame drop when the section opens or the picker changes, and none while it is
+    left open (advice is computed only when the section is drawn, and a second draw is memoised).
+
+### Acceptance run, continued: tabs, tooltips and widget (plan Tasks 8-15)
+
+P3-7. **Characters tab.** `/fs tab characters`. Expected: every saved character is listed, the logged-in one first
+    with `•`, names in class colours; the header sums read sensibly, and hovering the header shows its tooltip (the
+    status line under it stays empty until you search or hide a character; hovering it then shows the whole text).
+    Click a row: its detail opens under it with spec, knowledge, concentration (`full at <weekday HH:MM>`, your
+    local time; report it if a pool below max reads `fill time unknown (no regeneration data)` here or `?` after the
+    value in the grid: the game then gave no regeneration rate) and cooldown recipe names; the text is not cut off
+    and the `Hide character` button sits below it. Click the row again: the detail closes. The mouse wheel scrolls,
+    and hovering a row shows a tooltip with every value. An em dash `—` and `·` show as characters, not boxes.
+P3-8. **Minimum width.** Drag the main window to its smallest width on the Characters tab and on each Planner section.
+    Expected: lower-priority columns disappear (the Character column keeps a readable width, no text overlaps), a
+    `+1` shows on the profession cell of a character with two professions, the open detail re-wraps, the section
+    buttons and pickers do not overlap, and the values of hidden columns appear in the row tooltip. Widen it again:
+    the columns come back.
+P3-9. **Reagent search.** Type `ore` in the `Find reagent…` box. Expected: about 0.3 s after you stop typing, the grid
+    is replaced by results with item icons (not `|T…|t` text), `+N` when more than three characters hold an item, and
+    a number in the Warband column (the game's own warband-bank count, `0` when it holds none; `not scanned` shows
+    only when the game cannot count the warband bank and it was never opened). Clear the box (also with the box's
+    own clear button): the grid comes back at once. The box keeps its placeholder text and clear button.
+P3-10. **Hide a character.** Open an alt's detail and press `Hide character`. Expected: it leaves the grid, the
+    Planner and the Dashboard widget. Tick `Show hidden (1)`: it is listed marked `(hidden)`; `Show character`
+    brings it back. Hide it again and `/reload`: it stays hidden.
+P3-11. **Alts off.** Turn Alts off in Settings > Modules. Expected: the Characters tab says `Alts is turned off: turn
+    it on in Settings > Modules to see your characters`, and the Planner says `Alts is turned off`. Turn it back on.
+P3-12. **Planner sections.** `/fs tab planner`. Expected: the four section buttons (Knowledge, Concentration, Spec
+    advice, Missing recipes) switch sections and the shown one stays highlighted (if it does not look selected,
+    report it). `/reload` reopens the last section.
+P3-13. **Planner Knowledge.** Expected: one row per character and Midnight profession; a done category shows its
+    count followed by the ready-check icon (an icon, not text, inside its 44-56 px cell); Darkmoon says `closed`
+    outside the faire week (first Sunday to Saturday of the month) and an `0/3`-style count during it. Click a row:
+    the detail lists each source with its item name (an uncached item shows `item:<id>` briefly, then its name), its
+    KP and its state. The footer reads `Knowledge data: build 70688 · Weekly reset in …` and the reset time matches
+    the in-game weekly reset; hovering it says where the knowledge data comes from. On a client build other than
+    70688 an orange `Old data` marker shows at the footer's left (not cut off at minimum width) and its tooltip starts
+    `Game data build 70688 is outdated` (the knowledge data's build; the next line names your game build); the
+    Characters tab shows the same marker. With the shipped data, the Missing
+    recipes footer has no `Recipe sources: not generated ·` prefix and its tooltip says
+    `Recipe sources come from GameData build 70688`.
+P3-14. **Planner Concentration.** Expected: a full pool shows a red `Capped: concentration is full` row; with
+    Settings > Planner > "Hours before full to warn" raised to cover a filling pool, that pool shows an orange
+    `Soon: full in …` row. Click `Queue` on a plan row: the status line says
+    `Queued: N × <recipe> for <Name-Realm> (with concentration)` and the Queue tab lists the entry with concentration
+    on. Nothing is queued without a click. The Queue button fits its 52 px column without covering the Gain or
+    Caps in cells. With cap warnings but an empty plan, the message line above the footer stays on one line and
+    hovering it shows the whole text.
+P3-15. **Planner Spec advice.** Expected: the character and profession buttons cycle through characters with a
+    Midnight profession. On a character whose Specializations page was never opened it says
+    `Open this profession's specializations on <Name> to load spec data` (`<Name>` is the character name alone, no
+    realm). On a character with spec data but no profitable priced recipe in that profession it says
+    `No profitable recipes for <Name> in this profession yet: check prices or open the profession`. Otherwise it ranks
+    spec paths by profit gain per point from the shipped spec effect data (build 70688). When every gain is unknown it
+    says `No modelled spec effects for these paths and recipes` (the paths' effects are types the addon does not model,
+    such as Ingenuity, or the recipes carry no matching labels). `Spec effect data not in this GameData build
+    (not generated)` appears only when the SpecEntryEffects table itself is ungenerated.
+P3-16. **Planner Missing recipes.** After opening a Midnight profession, the list shows that character's unlearned
+    recipes with readable source text (no `|c` or `|T` codes); a recipe the game gives no source text for reads
+    `Unknown — open the profession on any character to load sources`. With the shipped data (291 Midnight recipes
+    have kind item) an entry can read `Recipe item: …`; it shows `item:<id>` briefly and the item name after a moment.
+    Turn Planner off in Settings > Modules: the tab says
+    `Planner is turned off: turn it on in Settings > Modules to see the plan`. Turn it back on.
+P3-17. **Holdings in item tooltips.** Hover a reagent that this character and an alt both hold (an ore, for example).
+    Expected: the tooltip ends with one line per character (same-realm characters by short name, for example
+    `Aria  15 (bags 5, bank 10)`; an alt whose data is over 7 days old adds `<N>d old`; an alt whose bank was never
+    scanned shows `5+ (bags 5, bank ?)`), then `Warband bank N` (only when the warband bank holds some) and
+    `Total N` (`N+` when a listed bank was never scanned; ` (warband not scanned)` is added only when the game cannot
+    count the warband bank and it was never opened). Move a stack between bags and bank (bank open) and hover again: the
+    counts follow without `/reload`; this character's numbers match its bags and bank right after moving a stack
+    even without opening the bank. Report whether the warband count is there before you opened the warband bank
+    this session. Hover an item nobody holds: no holdings lines. Turn off Settings > Characters > "Show what your
+    characters hold in item tooltips": the lines go away; turn it on and turn the Alts module off: the lines go away.
+    With Settings > Crafting > "Show the cost to craft in item tooltips" off (and Alts on), the holdings lines still
+    show.
+P3-18. **Item search from chat.** `/dump FS:GetModule("Alts"):FindItems("ore")`. Expected: the ores your characters
+    hold, with totals. Right after login it may list fewer at first (names not cached yet); run it again a moment
+    later and the rest appear.
+P3-19. **Concentration warning in chat.** With an alt whose concentration is full (or with Settings > Planner > "Hours
+    before full to warn" high enough to cover a pool), log out and back in (a `/reload` deliberately prints
+    nothing). Expected: about 10 s after the loading screen, chat shows
+    `FabricationStation: <Name-Realm> <Profession>: concentration is full` (or
+    `... concentration full in <duration>`, for example `full in 5h 12m` or `full in 2d 4h`) once; a second loading
+    screen (a portal or an instance) prints nothing more. With Settings > Planner > "Warn in chat when concentration
+    is about to be full" off, a new login prints nothing.
+P3-20. **Dashboard widget.** Expected: the Dashboard shows "Knowledge left this week" after "Gold this week"; with
+    the Dashboard open it updates a few seconds after you turn in a weekly knowledge quest (about 3 s: the quest
+    flags are read 2 s after the last quest or currency event, then the widget redraws 0.5 s later), and hiding a
+    character on the Characters tab removes its line. Hovering it lists every line plus `Click to open the Planner`;
+    a left click opens the Planner. At the smallest window a cut line still shows its `<n> KP` count. With Alts or
+    Planner turned off, the widget says `Alts is turned off` / `Planner is turned off` when the Dashboard is shown
+    again.
+P3-21. **Planner from chat.** `/dump FS:GetModule("Planner"):GetKnowledgeChecklist()`. Expected: one row per character
+    and Midnight profession (no older-expansion lines, no hidden characters), each `summary.weeklyLeft` equal to the
+    Characters tab's knowledge for that profession. After the Recipes scan has finished (a few seconds after login),
+    `/dump FS:GetModule("Planner"):GetSchedule()` lists, per character and Midnight profession with concentration,
+    crafts whose `concentrationUsed` never exceeds that character's current concentration and whose recipes the
+    Recipes tab shows with a gold-per-concentration value (no "no price" recipes); `/dump FS:GetModule("Planner"):GetCapWarnings()`
+    lists the same pools the Characters tab shows as full or nearly full. Settings shows a "Planner" options group
+    (four settings) and Settings > Modules lists Planner.
+
+### Not verified from source
+
+These game behaviours were assumed from documentation or other addons' data; report what you see.
+
+P3-22. **Calendar and week start.** (a) On a Sunday, `/dump C_DateAndTime.GetCurrentCalendarTime().weekday` prints `1`
+    (the Darkmoon window assumes 1 = Sunday; if Sunday is 0, report it). (b) `/dump C_DateAndTime.GetCurrentCalendarTime()`
+    shows `monthDay`, `weekday`, `hour` and `minute` as plain numbers (not secret values). (c)
+    `/dump FS:GetModule("Alts"):WeekStart()` equals the server time of this week's reset: compare
+    `/dump date("!%c", FS:GetModule("Alts"):WeekStart())` with the reset time you know for your region (US Tuesday
+    15:00 UTC, EU Wednesday 04:00 UTC). (d) If you can, compare `/dump time() + C_DateAndTime.GetSecondsUntilWeeklyReset() - 604800`
+    on a US realm (`/dump GetCurrentRegion()` prints 1) and an EU realm (3) with those times: the addon's fallback, used
+    only when the game cannot say, guesses them.
+P3-23. **Darkmoon Faire window.** During a faire week, confirm it opened at 00:00 server time on the first Sunday of
+    the month and closes after that Saturday, and that Planner > Knowledge's Darkmoon cell is a count, not `closed`.
+    If your realm observes daylight saving time, check a faire that starts on the first Sunday of November: it must
+    still start at 00:00 (not 23:00 or 01:00). During the faire, report whether each profession's Darkmoon quest
+    gives 3 Midnight knowledge (29506 Alchemy, 29508 Blacksmithing, 29510 Enchanting, 29511 Engineering,
+    29514 Herbalism, 29515 Inscription, 29516 Jewelcrafting, 29517 Leatherworking, 29518 Mining, 29519 Skinning,
+    29520 Tailoring).
+P3-24. **Skill line IDs.** On a Midnight crafter with the profession open, `/dump C_TradeSkillUI.GetChildProfessionInfo().professionID`.
+    Expected: the ID listed at the top of this section for that profession, and the same number is a key under
+    `/dump FabricationStationDB.global.characters["<Name-Realm>"].professions`.
+P3-25. **Spec points and ranks.** On a profession with spec points, note `spent` from
+    `/dump FS:GetModule("Alts"):GetSpecSnapshot("<Name-Realm>", <id>)` (the addon's sum of the raw ranks of every
+    path on every specialization tab) and print the game's numbers for every tab, with `<id>` replaced in the line:
+    `/run local id=<id> local c=C_ProfSpecs.GetConfigIDForSkillLine(id) for _,t in ipairs(C_ProfSpecs.GetSpecTabIDsForSkillLine(id)) do local i=(C_Traits.GetTreeCurrencyInfo(c,t,false) or {})[1] print(t,i and i.spent,i and i.quantity) end`
+    (one line per tab: tab ID, spent, unspent). If the tabs report different `spent` values, compare the snapshot's
+    `spent` with their sum; if every tab reports the same value, compare it with that value. Report the snapshot's
+    `spent`, every printed line and the number of paths you have unlocked: only if the compared numbers differ by
+    exactly the number of unlocked paths is the unlock point free (the addon then has to count display ranks; we change
+    that in code, not you). Do not change anything for a difference that does not match that rule; just report it.
+    In the same snapshot, one path's `rank` must equal the number Blizzard's specialization UI
+    shows for it, and one perk's entry in that path's `perkRanks` must equal the rank at which the UI shows it
+    unlocking (report it if it is one higher). The path names (`paths[<pathID>].name`) must match the names in the
+    specialization UI; report any that read `Path <id>`.
+P3-26. **Recipe list APIs.** (a) `/dump #C_TradeSkillUI.GetAllRecipeIDs()` prints a number (if the function is missing,
+    report it: the fallback then depends on the profession window's filters). (b) After a `/reload`, without opening
+    any profession, `/dump C_ProfSpecs.GetConfigIDForSkillLine(<id>)` is not 0 (if it is 0, path names are only
+    collected after the profession window opens; report it). (c) Pick an unlearned recipe and compare
+    `/dump C_TradeSkillUI.GetRecipeSourceText(<recipeID>)` with its `sourceText` in
+    `/dump FabricationStationDB.global.recipeCatalog[<id>][<recipeID>]`: the stored text has the same words with no
+    `|c`, `|r`, `|T`, `|A`, `|H` or `|n` codes left. Report any other escape code you see in the game's text.
+P3-27. **Knowledge flags.** With a profession open, run `/run FS:GetModule("Alts"):DebugKnowledge()`. Expected: one line
+    per knowledge source of this character's professions, `FabricationStation: <source id> <questID>=true|false ...`
+    (every quest of the source), with `<questID>=true` for exactly the sources you finished
+    (this week for weekly ones, ever for one-time ones). Also, for three sources you finished this week (for example
+    your trainer's weekly quest, 93690-93696 or 93697-93714; your treatise, 95127-95138; a weekly treasure,
+    93528-93543), `/dump C_QuestLog.IsQuestFlaggedCompleted(<questID>)` prints `true`, and for one you have not done it
+    prints `false`.
+P3-28. **First crafts and the recipe catalog.** With a profession open,
+    `/dump FabricationStationDB.global.characters["<Name-Realm>"].planning[<id>].firstCraftsPending` equals the number
+    of learned recipes that show the first-craft bonus marker in the recipe list, and
+    `/dump FabricationStationDB.global.recipeCatalog[<id>]` lists every Midnight recipe of that profession (learned or
+    not) with readable source text (`sourceText` is `""` where the game gives none, usually for learned recipes).
+    `/dump FS:GetModule("Planner"):GetMissingRecipes("<Name-Realm>", <id>)` lists
+    exactly the recipes the profession window's unlearned filter shows; for an alt with the same profession, recipes
+    that alt knows are left out even though the catalog was filled on another character.
+P3-29. **Overview row.** `/dump FS:GetModule("Alts"):GetAltRow("<Name-Realm>")` for the logged-in character.
+    Expected: `professions` lists only the Midnight lines (older expansions are counted in `olderProfessions`), each
+    profession's `concentration.now` and `.max` match the profession window, `concentration.fullAt` is roughly when it
+    will be full, and `knowledge.weeklyLeft` matches what you still have to do this week.
+P3-30. **Spec effect data** (the shipped SpecEntryEffects table is generated, so this can run now).
+    On a profession with spec points, hover the next rank of one path in the specialization UI and compare its bonus
+    with `/dump FS:GetModule("Planner"):_nodeBonus("<Name-Realm>", <id>, <pathID>, r, r + 1)` (r = the displayed
+    rank). Report whether the game's amount is per rank or cumulative, whether a perk's bonus is counted exactly when
+    crossing its displayed unlock rank, and whether multicraft/resourcefulness amounts are ratings (the addon divides
+    them by 1100/900) or percentages. Then `/dump FS:GetModule("Planner"):GetSpecAdvice("<Name-Realm>", <id>)` returns
+    up to 5 paths with a positive gain or a nil gain and status `"ok"` once prices exist; it takes well under a second,
+    and a second call is instant.
+
+### Knowledge data checks
+
+These check the hand-authored rows of `tools/gamedata/sources/knowledge_sources.csv`. Send corrections as
+"profession, quest ID, item ID, points"; after editing the CSV, regenerate with the real commands for your build
+(`--empty` would blank RecipeSources and re-stamp the build, so do not use it here). On your machine, with luajit:
+`bash tools/gamedata/fetch.sh <version.build>`, then
+`luajit tools/gamedata/generate.lua --build <version.build> --cache tools/gamedata/cache/<version.build> --out Data` and
+`luajit tools/gamedata/gen_phase3.lua --build <version.build> --cache tools/gamedata/cache/<version.build> --out Data`
+(see `tools/gamedata/README.md`). For a new build, also bump the build number in `Data/GameData_Manual.lua` and
+`Data/OrderRewards.lua`, then run `busted && luacheck .`.
+
+P3-31. **Point values.** Read the "Knowledge" amount in the item tooltip (or the points gained) for: the Alchemy weekly
+    item 263454 (table: 1, quest 93690; guides say both 1 and 2), the Engineering weekly item 263456 (table: 1, quest
+    93692) and the Tailoring item 263460 (table: 2, quest 93696); the weekly treasures 259188/259189 (Alchemy, 1),
+    259191 (Blacksmithing, 2), 259192/259193 (Enchanting, 2), 259194/259195 (Engineering, 1), 259196/259197
+    (Inscription, 2), 259198/259199 (Jewelcrafting, 2), 259200/259201 (Leatherworking, 2) and 259202/259203
+    (Tailoring, 2); the 1-point gathering drops (Enchanting 267654, Herbalism 238465, Mining 237496, Skinning 238625)
+    and Brimming Mana Shard 267655 (Enchanting, 4); and each rotating trainer quest (Enchanting 93697-93699,
+    Herbalism 93700-93704, Mining 93705-93709, Skinning 93710-93714; table: 3). Also: is Mana-Infused Bone (238626,
+    quest 88529) worth 3 or 4? Does the Inscription trainer quest 93693 give 4 points in total, or 2?
+P3-32. **Quest flags of three treasures.** After looting each, `/dump C_QuestLog.IsQuestFlaggedCompleted(<questID>)`
+    for 93535 (Engineering, Dawn Capacitor), 93536 (Inscription, Brilliant Phoenix Ink) and 93542 (Tailoring,
+    Embroidered Memento). Expected: `true`; report any that stays `false` (the quest ID is then wrong).
+P3-33. **Books.** After buying or using each book you have, check that its quest flag
+    (`/dump C_QuestLog.IsQuestFlaggedCompleted(<questID>)`) is `true` and that it gave 10 points: 93794/93795/93796
+    Beyond the Event Horizon; 92374, 93222, 93201 Skill Issue; 93411/93412 Traditions of the Haranir; 92371-92373
+    Whisper of the Loa; 92174 and 92186-92188 Echo of Abundance (its 10 points come from one source only). Also look
+    for "Demystifyin': <Profession>" books: for each one that exists, record its item ID, then use it and record the
+    quest ID in game (find it with `/dump C_QuestLog.IsQuestFlaggedCompleted(<candidate>)` before and after, or from
+    the quest-completed chat message), and the points it gave. AllTheThings' `CharacterItemDB` can suggest candidate
+    IDs, but only your in-game reading goes into the table.
+P3-34. **Recipe sources and the generator.** The generator run is done (12.1.5.70688, 2026-10-31); only the
+    spot-checks remain (to regenerate for another build, see the commands above P3-31). Check that `head -1 tools/gamedata/cache/<version.build>/SpellEffect.csv` names `EffectMiscValue[0]` or
+    `EffectMiscValue_0`, that SpellEffect.Effect 36 is LEARN_SPELL and 16 is QUEST_COMPLETE (a known recipe item
+    comes out kind `"item"` with its itemID, and the Blacksmithing weekly item 263455 completes quest 93691 with no
+    cross-check warning). The first run is expected to print cross-check warnings for the grouped drop rows that carry
+    one item for 5 quests (Enchanting 267654, Herbalism 238465, Mining 237496, Skinning 238625): the item probably
+    completes the quests one after another while the generator compares quest sets. Confirm in game before re-running
+    with `--allow-warnings`; do not just change the rows. Then, in game, spot-check RecipeSources kinds: a Midnight
+    recipe marked `"auto"` (AcquireMethod not 0) is learned automatically when you learn or level the profession; one
+    marked `"unknown"` (AcquireMethod 0, no teaching item) comes from a trainer, discovery, renown or a spec unlock.
+    Report it if AcquireMethod means something else.
+
+## Phase 4
+
+P4-1. **Long provider lines in the profession panel.** The panel's provider section (rows added through
+`ProfessionPanel:RegisterLineProvider`; the guild crafters line arrives in a later task) gives each row one line with a
+120 px right column. With a provider that returns a long left text (a long crafter list) and a right text wider than
+120 px, check that each text is cut off on a single line (no second line, no overlap with the next row or the buttons)
+and that hovering the row shows the full text in the tooltip. If the client still wraps, check
+`SetWordWrap(false)` / `SetMaxLines(1)` on the row font strings in `UI/ProfessionPanel.lua`.
+
+P4-2. **Realm flag of the chat gate.** In a capital city on a normal realm, with no instance or restriction active, run
+`/run print(C_ChatInfo.AreOutgoingAddonChatMessagesRestricted(), C_ChatInfo.InChatMessagingLockdown())`. If the first
+value is `true` there while addon messages still arrive (for example a guildmate's FabStn sync), leave
+`Gate.USE_REALM_FLAG = false` in `Modules/Social/Gate.lua` (the shipped value). If the first value is `false` in a city
+and `true` inside a dungeon or raid, setting `USE_REALM_FLAG = true` is safe and makes Comm stop earlier; report the
+readings either way.
+
+P4-3. **Lockdown between AceComm chunks.** Needs a guildmate running the addon. Start a profile sync that is big enough
+for several 255-byte chunks (a character with many recipes) and zone into a dungeon or raid while it runs. Expected: no Lua
+error in `/fs diagnostics`, the guildmate never shows a half-received profile, and after you leave the restriction (or the
+60 s back-off ends) the whole message is sent again and arrives once. Report what you saw.
+
+P4-4. **Lockdown result value.** Run `/dump Enum.SendAddonMessageResult.AddOnMessageLockdown`. Expected: `11`. Comm and
+the gate read this enum and use 11 only when the enum is missing, so a different number is fine too; report it either way.
+Also confirm AceComm's chunk callback reports the lockdown on the first refused chunk: during P4-3, `/fs diagnostics`
+should show no `Comm:Result` errors.
+
+P4-5. **Guild key at login.** Log in on a guilded character and run `/dump GetGuildInfo("player")` right after the
+loading screen and again a few seconds later. Expected: name, rank name, rank index, then the realm (nil for a guild on
+your own realm). Guild assumes the name may be nil at the first `PLAYER_ENTERING_WORLD` and starts syncing on the next
+`GUILD_ROSTER_UPDATE` / `PLAYER_GUILD_UPDATE`; then `/dump FabricationStationDB.global.guildMyChars` lists the
+character under `"<Guild>-<Realm>"`. Report when the name first appeared.
+
+P4-6. **Profile refresh cost at login.** On a character with two Midnight professions and many recipes (and an alt
+in the same guild), log in with `shareLevel = "quality"`. Expected: no visible hitch while the own profiles are built
+(the refresh is time-sliced on `scanBudgetMs`, 4 ms per frame by default) and the guild HELLO goes out 5-20 s after
+the loading screen. If there is a freeze, note how long and how many recipes the characters have.
+
+P4-7. **Two-client sync.** Two accounts in one guild, both running this build. Log in A, then B. Expected within
+about 30 s: `/dump FabricationStationDB.global.guildDirectory` on B shows A under `members` (with its `chars` hashes)
+and A's characters under `profiles` (`owner` = A, `lv` = "q", `lines` per Midnight skill line), and the reverse on A.
+Then on A turn sharing to recipes only (once Task 9's options exist, or
+`/run local G=LibStub("AceAddon-3.0"):GetAddon("FabricationStation"):GetModule("Guild") G:Settings().shareLevel="recipes" G:OnPrivacyChanged()`):
+B's copy turns `lv` = "r" with no `q`/`qc` tables. Turn sharing off: A's characters disappear from B's `profiles`.
+Report anything that stays behind, and any `Guild:*` entry in `/fs diagnostics`.
+
+P4-8. **Addon version in HELLO.** `/dump C_AddOns.GetAddOnMetadata("FabricationStation", "Version")` should print the
+packaged version (a dev checkout prints `@project-version@`); HELLO carries it (first 32 bytes) as the member's
+`addonVersion`.
+
+P4-9. **Native guild recipe query.** In a guild, take a recipeID and its skill line ID from the
+Professions window and run
+`/run print(C_GuildInfo.QueryGuildMembersForRecipe(<skillLineID>, <recipeID>))`, wait 2 s, then
+`/run print(GetGuildRecipeInfoPostQuery()); print(GetGuildRecipeMember(1))`. Expected: the first call prints the
+recipeID (GuildNative treats a nil return as "unavailable"), then `skillLineID, recipeID, numMembers` and
+`displayName, fullName, classFileName, online`; `/dump FabricationStationDB.global.guildDirectory` shows the answer under
+`native[<recipeID>]` as `{ time, skillLineID, members = { { name = "Name-Realm", classFile, online } } }`. Check whether
+offline members are listed (`online = false`) or only online ones, and whether `fullName` already carries the realm.
+Also confirm both globals exist (`/dump GetGuildRecipeInfoPostQuery, GetGuildRecipeMember`: functions, not nil); if
+either is nil the fallback reports "unavailable" and nothing else breaks. Then open Blizzard's own Professions guild
+panel on another recipe and confirm that recipe appears under `native` too (passive capture), and `/fs diagnostics`
+shows no `GuildNative` entry.
+
+P4-10. **Guild membership name format.** `/run print(C_GuildInfo.MemberExistsByName("<sameRealmMate>"), C_GuildInfo.MemberExistsByName("<sameRealmMate>-<Realm>"))`
+with a guildmate on your own realm, then the same for a guildmate on a connected realm (their name with and without
+`-Realm`). Expected: at least one form prints true for each; `Guild:IsGuildMember` tries the full `Name-Realm` first and
+`Ambiguate(name, "guild")` second. If same-realm mates only answer true to the bare name and `Ambiguate` does not give it,
+the guild crafter lines would hide their addon rows: report which forms answered true. Also check right after login
+(before the roster loaded) that rows still show (an empty roster counts as "member").
+
+P4-11. **Recipe outputs for recipes you do not know.** With no profession window open, run
+`/run print(C_TradeSkillUI.GetRecipeSchematic(<recipeID you do not know>, false).outputItemID)` (take the ID from
+`/dump FabricationStationDB.global.guildDirectory`, any recipe in a guildmate's `profiles[...].lines[...].recipes`).
+Expected: the recipe's output item ID. If it errors or prints nil, the guild tooltip line only works for recipes one of
+your characters has a cached schematic for (open that profession once); then say so in the "Guild crafters tooltip
+line" setting's description (Task 9). Also open a profession window and confirm `FabricationStationDB.global.schematics`
+did not grow by the guild recipes (the index reads `Scanner:GetCachedSchematic`, which never stores).
+Also measure the per-call cost: `/run local t=debugprofilestop() for i=1,50 do C_TradeSkillUI.GetRecipeSchematic(<recipeID>, false) end print((debugprofilestop()-t)/50)`
+prints ms per call. The index resolves guild recipes through this call in ticks bounded by `scanBudgetMs` (4 ms
+default, at least one recipe per tick, at most 200); report the number, and a hitch if one shows right after login
+in a guild with many crafters.
+
+P4-12. **Guild crafters line and panel rows.** Hover a crafted item (an output of a recipe a guildmate knows but your
+characters do not craft) in your bags or the auction house: one extra "Guild crafters" line with up to 3 names,
+"(Q3)" after names with a known quality, "+N more" beyond that; none of your own characters in it (those are on the
+existing "Crafters" line). Open the profession window on a recipe a guildmate knows: a "Guild crafters" block under the
+profit breakdown with the count on the right, then one row per crafter ("Q3, synced 2h ago", or "quality unknown" for
+rows from the native query); long names are cut off and the full line shows on hover. A name copied from an
+unverified claim reads "<char> (via <owner>)". Report any colored or broken text in a name.
+
+P4-13. **Guild tab self-test and wire size (Task 9, two characters in one guild, both running this build).** On the
+character with the most recipes run `/fs guild selftest`. Expected: `guild selftest ok: <char>, <N> bytes on the wire, <M> chunks`
+with N at most 12000 (the in-game threshold; the line adds "above the 12000 byte check" otherwise). Record N and M for
+the largest profile in the commit message or here. The hard limit is `Codec.MAX_WIRE` (16384): raise it only if a real
+profile exceeds it. Also run it with sharing turned off (Guild settings): it still reports `ok`, because it builds the largest
+profile itself (it prints "building the profile" first and the result a moment later; the build is spread over several
+frames, so check there is no hitch while it runs). `/fs guild` prints the sync status, counts and session stats; check them against the Guild tab footer.
+
+P4-14. **Guild tab lists the other account's crafters.** Log in on the second account in the same guild (this build on
+both). Within 30 s of its login the first account's Guild tab (`/fs tab guild`) lists the second account's crafters:
+one row per recipe and crafter, Q and Conc Q filled for "Recipes and expected quality" shares, "-" (em dash) for
+recipes-only shares, Source "Addon", Synced "<1m". Narrow the window to its minimum: Source, Conc Q and Synced drop out
+(in that order) and the Recipe column stays readable; the row tooltip still shows every value. Names with an unusual
+character must print as typed (no colour or texture codes).
+
+P4-15. **Sync paused in an instance.** Enter a dungeon on the sender: the Guild tab footer reads "Sync paused (instance)"
+within about a second, "Ask guild" is disabled, and nothing is sent. After leaving it sync resumes (footer "Sync: on")
+and queued messages go out. If the footer pauses for a different situation (a world quest area, a scenario) or does not
+pause in a dungeon, report which Gate reason (hover the footer) it showed.
+
+P4-16. **Ask guild.** Click a row (it is only selected: no whisper opens), then "Ask guild". Expected: the status line
+says "Asking the guild...", then "Guild answered: N can craft this" within about 5 s, and the guildmates who know the
+recipe but do not run the addon appear as extra rows with Source "Guild query" and no quality. The tab passes the skill
+line ID of the row (the profile's line key for addon rows, the answer's for cached ones) to `GuildNative:Query`; if the
+game answers nothing for a recipe the guild does know, compare that ID with `GetGuildRecipeInfoPostQuery()`'s first
+return (P4-9) and report both. With "Also use the game's guild recipe list" turned off in the Guild settings the button
+is disabled and asks nothing.
+
+P4-17. **Whisper after a click (preflight row 42).** Double-click a crafter row, or click it and then "Whisper": the
+chat box opens on `/w <name>` (for a "(via owner)" row on the owner's name). Type a word and press Enter, in the open
+world and again inside an instance. Expected: it sends with no "blocked" or "forbidden" message (the tab only calls
+`ChatFrameUtil.SendTell` from the click). A cross-realm guildmate must open the whisper as `Name-Realm`; report if the
+box opens empty or on the wrong name.
+
+P4-18. **Guild settings.** In `/fs settings` > Guild: switching "What to share" or "Which characters to share" makes
+guildmates' tabs show the change within about a minute; switching "Share my recipes with my guild" off removes your
+characters from their tab at once. "Forget this guild's crafter data" asks for confirmation, then empties your Guild tab
+until guildmates log in again. If P4-11 says recipes you do not know cannot resolve to items, say so in the description of
+"Show guild crafters in item tooltips" (Task 9 left the description neutral).
+
+P4-19. **Recipe chat-link type (Task 10, ChatMatcher).** Shift-click a recipe from the profession window into chat, then
+run `/run print((C_TradeSkillUI.GetRecipeLink(<recipeID>) or ""):gsub("|","||"))`. Note the `|H<type>:<id>|h` type
+(`enchant` or `spell`). ChatMatcher accepts both; if it prints another type, add it to the recipe-link kinds in
+`extractLinks` (`Modules/Social/ChatMatcher.lua`). Also post `LF crafter` plus a recipe link and an item link in a public
+channel: once Task 11 lands, ChatScan should name both. Also check the colour wrapper of the pasted link: ChatMatcher
+handles both `|cffRRGGBB...|r` and the named form `|cnIQ4:...|r`; if the client prints another form, `plain` or `link` will
+keep junk and `extractLinks`/`normalize` need that form added.
+
+P4-20. **Chat channel ids and secret chat (Task 11, ChatScan).** Temporarily run
+`/run local f=CreateFrame("Frame");f:RegisterEvent("CHAT_MSG_CHANNEL");f:SetScript("OnEvent",function(_,_,_,_,_,_,_,z,_,b) print(z,b) end)`
+(`/reload` removes it), then speak in General, Trade and Trade (Services) in a capital and note each `zoneChannelID`
+and channel base name. Fill `ChatScan.ZONE_CHANNEL_KIND` in `Modules/Social/ChatScan.lua` with
+`[<id>] = "general"|"trade"|"services"` (it ships empty, so only the English base-name match works until then). Then
+post `LF crafter` plus an item link of something you can craft in Trade: a toast should appear once, and again only after
+the repeat window ("Repeat window" in `/fs settings` > Chat requests) even if you repeat it in both channels. Inside a
+dungeon or other instance chat lines arrive as secret values: confirm no Lua error and no toast there
+(the error list in `/fs settings` > Diagnostics stays empty), and that scanning works again after leaving.
+
+P4-21. **Whisper from a toast click (preflight row 42).** Click Whisper on a toast: the chat box opens on
+`/w <name>` with "Hi! I can craft <link>. Send me a crafting order?" typed in and nothing is sent. Press Enter, once in
+the open world and once inside an instance. Expected: it sends with no "blocked" or "forbidden" message. A cross-realm
+sender must open the whisper as `Name-Realm`; report if the box opens on the wrong name or the link is missing.
+
+P4-22. **Non-English clients (Task 11).** On a non-English client the channel base name is localized, so the
+`L["trade"]`, `L["services"]` and `L["general"]` words (`Locales/enUS.lua`) only match once translated; until
+`ZONE_CHANNEL_KIND` is filled (P4-20) a German, French or other client sees no Trade toasts. Report the base names the
+client prints in P4-20 so the words or ids can be added. Also check that a name with a realm suffix and one without
+both reach the game's ignore list: ignore a player with `/ignore Name`, have them post a request, no toast appears.
+
+P4-23. **Setup guide, first run (Task 12).** Quit the game, delete
+`WTF/Account/<account>/SavedVariables/FabricationStation.lua`, log in and wait about five seconds: the "FabricationStation
+setup" window opens in the middle of the screen. It must have a title in the title bar (the title is set through
+`SetTitle`, else `TitleText`, else `TitleContainer.TitleText`; report if the bar is empty), a Skip button at the bottom
+left, Back / Next at the bottom right and "Step n of 7" at the bottom centre, none overlapping the inset's border or each
+other. Step through all seven steps: no text may run outside its box or over the next control (welcome, Auctionator,
+scan, optional features, prices, guild and chat, done). Skip and the X button must close it and count as Skip: it does
+not come back at the next `/reload`. (Escape and hiding the UI record nothing and keep the guide pending: see P5-3.)
+Then `/fs setup` reopens it, and closing that reopened guide again does not change anything. The window must be draggable and must not hide behind the profession window.
+
+P4-24. **Setup guide, Auctionator step (Task 12).** Run the guide three times: with Auctionator not installed
+(rename its folder), installed but disabled in the AddOns list, and enabled. Each must show its own status line and text
+("not installed", "installed but turned off", "connected"); "Check again" reads the state again after a `/reload`. With
+Auctionator loaded but its API missing (an old version) the status must say the price API is not available. Also check
+that a character without any Auctionator scan still shows "connected" (the guide only checks the API, not the data).
+
+P4-25. **Setup guide, scan step (Task 12).** On a character with two professions, one never opened this session: the
+scan step must list the character as "(this character)" with both professions, the unopened one as "open this
+profession window now" (it has no record yet; it comes from `GetProfessions()` / `GetProfessionInfo()`, the 7th return
+being the base skill line). Open that profession's window and press "Check again": it reads "scanned". Other characters
+list only their current-expansion lines (Midnight), not older expansions' lines, and show "log in to this character and
+open it" for a line without recipes. Cooking is listed when the character has it; fishing and archaeology never.
+Characters with a long name and realm must fit the row (one line, no wrapping).
+
+P4-26. **Setup guide, choices (Task 12).** On the optional-features step switch off one feature (for example Ledger) and
+press Next: its tab disappears from the main window at once and `/fs settings` > Modules shows it off. On the guild and
+chat step switch sharing off and press Next: a guild HELLO with no characters goes out (check the guildmate side with
+`/fs guild` or their Guild tab) and `/fs settings` > Guild shows "Share my recipes with my guild" off. Cycle "What to
+share" to "Recipes only" and finish: the Guild options show the same. Turn Chat scanning off: no toast appears for a
+Trade request afterwards. "Open price settings" must open the main window on the Settings tab with the Prices group
+selected (not the first group); the guide stays open next to it.
+
+P4-27. **A 25-alt sharer syncs completely (final fix wave).** On account A, share 25 or more characters with current
+professions (Settings > Guild > Which characters to share: All my characters). On account B, in the same guild, run
+`/fs settings` > Guild > "Forget this guild's crafter data", `/reload`, then log in A. Within a few minutes run
+`/fs guild` on B: the profiles count must be every shared character of A (plus any others in the guild). Report the
+count against the number A shares. If some are missing at first, wait 2 to 6 minutes (the re-request runs every two
+minutes, three times) and check again.
+
+P4-28. **The real addon-message throttle (final fix wave).** After the big sync of P4-27, run `/fs guild` on B and
+report the "received: N rate-limited, N refused, N invalid; N re-requests" line, and on A the "sent: ..." line.
+Expected: 0 rate-limited (the inbound limit is 80 messages and 256 KB per sender per minute). A non-zero re-request
+count shows the game's per-prefix throttle or a lockdown dropped DATA and the re-request recovered it; report the
+numbers either way.
+
+P4-29. **Chat box after a toast whisper (M7, final fix wave).** Earlier in the session, click Whisper on a chat-scan
+toast and send that whisper. Later, inside an instance during a boss encounter, type a normal `/say` line and a
+`/w <name>` line and press Enter on each. Expected: both send, with no "blocked" or "forbidden" message and no taint
+report from BugSack (the toast called `ChatFrameUtil.SendTellWithMessage` from addon code; the chat box must stay
+usable for the player's own sends afterwards).
+
+P4-30. **"Ask guild" in the profession window (final fix wave).** Open a profession and select a recipe that no
+guildmate running the addon has (so the panel shows no "Guild crafters" rows). Under the provider rows an "Ask guild"
+button appears. Click it: the line next to it reads "Asking the guild...", the button is disabled, then "Guild answered:
+N can craft this" and the guildmates who know it appear under "Guild crafters" with "quality unknown". Inside an
+instance the button is disabled and reads "Sync paused (instance)". Selecting other recipes or hovering items never asks
+by itself (only the click does).
+
+P4-31. **The setup guide holds guild sync until it is done (final fix wave).** On a fresh install (delete the saved
+variables as in P4-23) in a guild with a guildmate running the addon: log in and leave the guide open for a minute. On
+the guildmate run `/fs guild`: this character's profiles have not arrived (nothing was sent). Finish or skip the guide:
+within a few seconds the guildmate sees the HELLO and then the profiles. A character that already finished the guide
+syncs at login as before, and so does one with Onboarding turned off under Settings > Modules.
+
+## Phase 5
+
+P5-1. **Compact guild data after the upgrade (Task 1).** Before updating, note the size of
+`WTF/Account/<acct>/SavedVariables/FabricationStation.lua`. Update, log in, let the guild sync for a minute, `/reload`.
+Expected: `schemaVersion = 2`; each entry under `guildDirectory` has `pr` with strings like `",1230772:35,..."` and no
+`lines`; the file is clearly smaller; the Guild tab shows the same crafters as before; `/fs guild` shows no burst of
+requests after login.
+
+P5-2. **Tooltips after login in a big guild (Task 2).** In a guild with many synced guildmates, `/reload` and hover
+crafted items at once and for the next seconds. Expected: no hitch; the "Guild crafters" line appears for items
+guildmates craft, the same as later in the session.
+
+P5-3. **Hiding the UI does not skip the guide (Task 3).** Fresh saved variables (as P4-23). When the guide opens, go
+to step 3 and press Alt+Z: the guide disappears with the UI; press Alt+Z again: it is back on step 3.
+`/dump FabricationStationDB.global.onboarding` prints nil. Press Escape: it closes; `/reload`: it opens again a few
+seconds after the loading screen. Click the close button (X): `/dump` shows `skipped = true` and it does not return
+after `/reload`. (Escape on the last step "All set", after stepping there with Next, finishes the guide
+instead: see P5-9.) On a guildmate, `/fs guild` shows that nothing was received while the guide was pending.
+
+P5-4. **A cinematic or loading screen while the guide is open (Task 3).** With the guide open (fresh saved variables),
+trigger a cinematic or zone through a portal. Expected: afterwards the guide is still open (or, if the client closed
+it, it comes back at the next login), and `/dump FabricationStationDB.global.onboarding` is still nil.
+
+P5-5. **Search the Guild tab for any recipe (Task 4).** Open `/fs` > Guild, click into the search box and shift-click a
+crafted item from your bags: its link appears in the box (if not, note which of `ChatFrameUtil.InsertLink` /
+`ChatEdit_InsertLink` exists: `/dump ChatFrameUtil.InsertLink, ChatEdit_InsertLink`). The rows show who can craft it, or
+one "no known crafter" row that is selected. Type the name of a current-expansion recipe nobody on your account knows:
+a "no known crafter" row appears; click "Ask guild": "Asking the guild..." then "Guild answered: N can craft this".
+Nothing is asked before the click.
+
+P5-6. **Setup guide layout (Task 5).** `/fs setup` and step through every page. Expected: no text is cut off or
+overlaps a button, the window keeps its usual height in English, and the two buttons on "Guild and chat" show the value
+under a small heading ("What to share" / "Which characters to share"). If any text box is too short or the window is
+taller than before, note which step: either the client measured 0 for a hidden font string, or the measure was cut at
+the box's old height (the layout sets the height to 0 before it measures; a client where 0 is not "auto height" would
+still cut it). `/dump` the box's `GetStringHeight()` after `SetHeight(0)` tells the two apart.
+
+P5-7. **English text unchanged after the localization rewrite (Tasks 7-11).** In game (enUS), look at the Queue, Orders,
+Customers, Ledger, Characters and Planner tabs (all four Planner sections, the section's pickers and a click on a
+schedule row's Queue button), a recipe tooltip, the profession panel and `/fs guild`. Expected: every text reads exactly
+as before (no doubled spaces, no missing colon or bracket, no `%s` or `%d` shown).
+
+P5-8. **No duplicate profession in the guide's scan step (Task 13).** On a character whose profession was scanned by an
+older build (or any character), `/fs setup` -> "Scan your professions". Expected: each profession is listed once;
+`/dump C_TradeSkillUI.GetProfessionInfoBySkillLineID(<line>).parentProfessionID` for a current-expansion line prints its
+base profession ID even before that window was opened this session. On the "Guild and chat" step with Guild turned off
+on the previous step, the "Share my recipes" label is grey.
+
+P5-9. **The guide's hold on guild sync is visible and can end without the guide (final fix wave).** Fresh saved
+variables (as P4-23), in a guild. When the guide opens, press Escape. Open `/fs` > Guild: the footer and the line above
+the list read "Sharing with your guild waits for the setup guide. Type /fs setup to finish or skip it."; `/fs guild`
+prints "sync waiting for the setup guide" and the same sentence. Now change "What to share" under Settings > Guild:
+within a few seconds the footer reads "Sync: on" and a guildmate's `/fs guild` shows your profiles arriving; `/reload`:
+the guide opens again (it is still due). Then step through the guide with Next to "All set" and press Escape:
+`/dump FabricationStationDB.global.onboarding` shows `skipped = false`, and it does not return after `/reload`.
+
+P5-10. **Reward icons and the Reagents cover on the order rows.** Open a profession's Crafting Orders list (Patron tab,
+then Public or Personal). The Commission column's gold is gone, covered by a dark panel with the compact commission ("86g", or "?" while
+unknown) and, right of it, a patron order's rewards as 20 px icons (item or currency icon, a count bottom-right when
+above 1; "+N" counts the rewards that do not fit); the row's "i" cell lists the rewards in its tooltip too (so they
+are never lost). In the Reagents column (the 90 px one before Expiration) the
+word Blizzard writes there ("Some", "None", "All") is gone, covered by a dark panel with the reagents you must supply as
+icons, only for a reagent you are short of (the count still needed in red; white when the game cannot tell your
+count; a reagent you already own enough of has no icon). A green check means the customer provides every reagent, or you
+already own every reagent you must supply (hover it: "You have every reagent this order needs from you", then all the
+reagents with need and have; buy or sell a reagent with the list open and the panel flips between icons and check
+within a moment); a "?" means the reagents are not known (a recraft, or an order the addon
+could not evaluate); a row the addon has no score for (Orders module off) keeps Blizzard's word. Expected: no word shows
+through the panel, and the panel's colour matches the list background (if it does not, change COVER_COLOR in
+UI/OrdersPanel.lua; note the colour you see, and whether the list is one flat colour or striped: compare the panel on an
+odd and an even row). An icon with no texture shows the question mark, not a Lua error:
+`/dump C_Item.GetItemIconByID, GetItemIcon` tells which icon function exists (the addon uses the first and falls back to
+the second), and `/dump C_CurrencyInfo.GetCurrencyInfo(<currencyID>).iconFileID` is a number. A VIP, repeat or blocked row's
+tint shows on the panel too, and hovering the row (or the panel) lights the panel with a faint white highlight: note
+whether both look like the rest of the row. A dimmed row's panel is darker and its icons are as faint as the reward
+icons. An order whose customer provides everything shows the check even when the addon has no result for it
+(Blizzard's reagent state "All", or the allocation minus what is provided is empty).
+
+The icons (rewards and reagents) are 20 px with a 2 px gap, and the "+N" slot is 24 px. Check that they do not touch the
+row's top and bottom edges (rows are about 25 px tall; the icons are centred vertically), that the count (the
+NumberFontNormal font object, one size up from before) is readable on the icon without covering it, and that "+N" stays
+inside its slot. If a size is wrong, ICON_SIZE, ICON_GAP and MORE_WIDTH in UI/OrdersPanel.lua are the one line to edit
+(the specs follow them). Tooltip lines keep a 14 px inline icon.
+
+P5-11. **Where the cover sits and how it gives way.** The panel lines up with the Reagents column on every row, also after
+resizing the window and scrolling. It is only drawn over a column it can identify as Reagents: the header whose text is
+`PROFESSIONS_COLUMN_HEADER_REAGENTS` (an unverified name: `/dump PROFESSIONS_COLUMN_HEADER_REAGENTS`; if it is nil, find
+the real one with `/dump ProfessionsFrame.OrdersPage.BrowseFrame.OrderList.HeaderContainer:GetChildren()` and look at the
+headers' `:GetText()`), else the known five columns (name, Customer, Tip, Reagents 80-100 px, then the last column
+touching it), read from those header children sorted by their left edge, else from the row's own `row.cells`. On any
+other layout, or while the headers are not laid out yet (the panel then appears on the next frame), there is NO panel and Blizzard's "Some" / "None" / "All" shows: if you see no panel at all, that is why,
+so report the header children's GetLeft/GetRight/GetText. With more reagents than fit, the last slot
+reads "+N" and stays inside the panel. A long item name no longer
+takes room from the reward icons (they are in another column); it only costs the profit cell, then the strip. Dimmed rows (orders your filters hide) show both faded like
+the cells.
+
+P5-12. **The tooltips and the mouse.** Hover the Commission panel (the amount and the reward icons): "Tip: ...",
+"Consortium cut: ...", "Commission: ...", then a "Rewards" header with "<icon> <name> x<count>" lines, then a "Pays ...
+per knowledge point" or "per Moxie" line where the order has one (the row's info cell shows the same rewards). Hover the
+Reagents panel: a "Reagents to supply" header with every reagent you supply, owned ones included, as
+"<name>: need N, have M" (just "need N" when your count is unknown; red while M < N), or "The customer provides every reagent" over the check, or "Reagents unknown for this order"
+over the "?". An item the client has not cached reads "item:<id>" and becomes its name within a moment while the tooltip
+stays open (if not, note whether `/dump C_Item.RequestLoadItemDataByID` exists). Clicking an order row where the icons or
+the panel sit still opens the order, and the row beneath still highlights on hover (the addon calls
+SetPropagateMouseClicks and SetPropagateMouseMotion; `/dump CreateFrame("Frame").SetPropagateMouseMotion` tells whether
+the client has that function: if it is nil, note where the click or hover is lost). Hover the panel and note whether a
+Blizzard tooltip appears beside ours (the old cell may have its own): if it does, SetPropagateMouseMotion on the cover
+must go. Put a reagent in your bags (or use
+one up) with the list open: the red/white counts update within a moment.
+
+P5-13. **The icons setting.** Settings > Orders & Ledger > Crafting-orders window: "Show reward and reagent icons on order
+rows" is on by default. Turn it off: the Commission panel (the amount and the reward icons) and the Reagents panel
+disappear from the rows on screen at once (the cells stay, and Blizzard's gold amount in the Commission column and its
+"Some" / "None" / "All" in the Reagents column show again) and stay off after `/reload`; turn it on again and they
+return.
+
+P5-14. **The concentration cell on the order rows.** In the strip of cells on each order row there is now a small icon
+and a number between the profit and the score: the concentration the order needs to reach its minimum quality. White when
+you have enough, red when you have less (hover it: "Needs N concentration to reach the minimum quality", "You have M",
+"Worth <money> at your best gold per concentration", then "Not enough concentration" in red), a red cross when the minimum
+quality cannot be reached even with concentration, and an empty cell (the columns stay aligned) when the order needs
+none. Expected: the icon is the profession's concentration icon (the addon asks `C_TradeSkillUI.GetConcentrationCurrencyID`
+for the recipe's skill line, then `C_CurrencyInfo.GetCurrencyInfo(id).iconFileID`; if it shows a generic spell icon
+instead, one of those is missing: `/dump C_TradeSkillUI.GetConcentrationCurrencyID(<skillLineID>)` and note the answer).
+"You have M" matches the profession's concentration shown in the crafting window. With a long item name the profit cell
+goes first; the concentration cell stays with the score, risk and + cells. Dimmed rows show it faded like the cells.
+
+P5-15. **Your concentration above the order list.** On the Crafting Orders page, just above the top-left corner of the
+order list (above the search and filter row) there is a small display: the profession's concentration icon and
+"current / max" (just the number while the maximum is unknown; nothing when the character's concentration is unknown).
+Expected: it does not cover Blizzard's search box or the profession tabs; if it does, change `CONC_ANCHOR` (point,
+relPoint, x, y) in UI/OrdersPanel.lua and note where it should sit. Hover it: "Concentration: N / M", then "Full in 13h
+0m" (or "Already full"); the time is an estimate from the regeneration rate. Spend concentration on a craft: the number
+drops within a moment (CURRENCY_DISPLAY_UPDATE); leave the page open for a few minutes and the number rises by itself
+(the once-a-minute refresh). It follows the profession whose orders are shown (switch professions), and it disappears with
+the page. Settings > Modules > OrdersSidePanel turns it off with the side panel; the row-icons setting does not.
+
+P5-16. **The Commission cover.** The Commission column is found by its header text (`PROFESSIONS_COLUMN_HEADER_TIP` or
+`PROFESSIONS_COLUMN_HEADER_COMMISSION`: unverified names; `/dump` both, and if both are nil the five-column layout
+decides) or as the third of the five known columns (about 160 px). Expected: Blizzard's gold amount is not visible
+under the panel, the panel matches the list background like the Reagents panel, and the icons never touch its edges.
+On a layout where the column cannot be identified there is no panel at all (Blizzard's gold shows) and the rewards are
+only in the row's info tooltip.
+
+## Phase 6
+
+P6-1. **New recipes appear in the Guild tab search without a reload.** Search the Guild tab for a recipe once. Learn
+a recipe on this character, or have a guildmate log in with a recipe nobody else had. Expected: within 5 minutes
+(guild data) or 30 minutes (your own new recipe) the next search finds it by name, without `/reload`.
+
+P6-2. **Count identical recipe lines in your saved data (decides scope item 7).** Log out, so the file is written,
+then run this with `F` set to `WTF/Account/<acct>/SavedVariables/FabricationStation.lua`:
+
+```
+luajit -e "F = '<path>'" -e 'dofile(F) local n, d, b, db, s = 0, 0, 0, 0, {} for _, g in pairs(FabricationStationDB.global.guildDirectory or {}) do for _, p in pairs(type(g) == "table" and type(g.profiles) == "table" and g.profiles or {}) do for _, l in ipairs(type(p) == "table" and type(p.pr) == "table" and p.pr or {}) do if type(l) == "table" and type(l.r) == "string" and #l.r >= 64 then n = n + 1; b = b + #l.r; if not s[l.r] then s[l.r] = true; d = d + 1; db = db + #l.r end end end end end local f = io.open(F, "rb"); local size = #f:read("*a"); f:close() print(("%d lines, %d distinct, %d duplicate bytes, %.1f %% of the file"):format(n, d, b - db, (b - db) / size * 100))'
+```
+
+Expected: the printed percentage is well under 20 %. If it is 20 % or more, report it: item 7 (Appendix B) comes
+back.
+
+P6-3. **Guild tab footer and hints.** Fresh saved variables, then close the setup guide with Escape. Expected: the
+Guild tab footer reads "Sync: waiting for the setup guide · ..." on one line, and its tooltip and the line above the
+list give the full sentence. Search a recipe that only the game's guild list knows, with no profession known, and
+select its row. Expected: the Ask guild hint says "The profession of this recipe is not known yet". Join another
+guild, or leave and rejoin, with the same search text: the only result is selected again.
+
+P6-4. **Setup guide footer and scan list.** `/fs setup`. Expected:
+- "Step N of M" sits between Skip and Back on every step and never touches a button.
+- On "Guild and chat" with Guild turned off on the previous step, both small headings are grey.
+- On "Scan your professions", hovering a row that ends in "..." shows its full text, and the mouse wheel still scrolls
+  the list while the pointer is over a row.
+- With more characters than fit in the list, "Check again", Back, Next and Skip still click (rows scrolled out of view
+  must not cover them).
+- `/run local b = CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate"); b:SetText("x"); print(type(b:GetFontString().GetUnboundedStringWidth))`
+  prints `function` (if not, the buttons use the older width call; note it).
+
+P6-5. **Order rows after the polish.** On the crafting-orders board:
+- Hover and leave the "+" button, the risk count and the reward icons quickly several times. Expected: no error, and
+  tooltips never stay up.
+- Settings > Orders & Ledger: the row-icon option's description names the Commission column and the reagents you
+  still lack.
+- Take a patron or personal order where the customer provides a reagent at a different quality rank than the one the
+  optimiser picks (Midnight reagents have two ranks). Note whether the Reagents column still asks you for that
+  reagent; if it does, report it (the need is matched by exact item ID).
+
+P6-6. **English text unchanged after the phase 6 locale polish.** In game (enUS), look at:
+- every duration and age: Characters, Queue, Dashboard, Planner and the main window header;
+- the Orders tab Type column and a customer's order history;
+- the Ledger Type column, including a recraft;
+- a customer with linked alts ("Name-Realm (+2)") and a custom tag chip ("tag x");
+- the Recipes tab quality and flags, and the Queue tab quality ("Q2");
+- the Characters tab spec points ("12/40 (+3)");
+- Settings > Prices manual prices ("Item — 12g");
+- `/fs help`.
+
+Expected: every text reads exactly as before. There are no doubled or missing spaces, no stray brackets, and no `%s`
+or `%d` shows.
+
+## Phase 7
+
+P7-1. **Upgrade keeps the last board, and alts keep their own.** First login after the update with a phase 6 save:
+no error, and the Orders tab shows the last board under the character that saw it. Then open the same profession's
+board on a second character and run
+`/run local n=0 for _ in pairs(FabricationStationDB.global.orderBoards) do n=n+1 end print(n)`. Expected: it prints
+2.
+
+P7-2. **Patron reward IDs.** On each crafting character's patron tab, run
+`/dump C_CraftingOrders.GetCrafterOrders()[n].npcOrderRewards` for a few orders. Expected: a knowledge reward is
+either currency 3150 to 3160 (then there is nothing to add) or an item; report every item with its knowledge points,
+for `items` in `Data/OrderRewards.lua`.
+
+P7-3. **Cost per knowledge point.** In Settings > Orders & Ledger set "Most you pay per knowledge point (gold)" to 50.
+Expected: a patron order whose reagents cost more than its tip plus 50g per point shows "Reward costs too much" in its
+risks, Claim Best Order skips it, and the row tooltip says "Pays ...g per knowledge point".
+
+P7-4. **One list of every alt's orders.** Open the crafting orders board on two characters. Expected: the Orders tab
+lists both boards' orders with a Character column; "Characters: this one" shows only the logged-in character's;
+"Sort: expiring" puts the soonest first; hovering the header gives each board's age; an expired order is gone.
+
+P7-5. **Shop selected orders.** Tick three orders in the Orders tab (two characters) and press Shop selected.
+Expected: Auctionator has a list "FabricationStation Orders" with each missing reagent once, summed; the queue's own
+"FabricationStation" list is unchanged. A ticked recraft order is counted on the status line ("1 order skipped"), and at
+the 516 px window width the tick boxes stay while Character, Customer and Type are hidden.
+
+P7-6. **Taskbar flash.** In Settings > Ready alerts turn on "Flash the taskbar on new orders", alt-tab out with the crafting
+order board open on the public tab, and have a new public order appear (press Refresh or Search). Expected: the WoW
+icon flashes. `/run print(type(FlashClientIcon))` prints `function`.
+
+P7-7. **Board Refresh.** Open the public tab of the crafting order board, press Search once (so there is a first
+board), then press Refresh in the side panel. Expected: no error; when there are new orders the side panel says "N
+new matching orders: press Search on the board to see them"; Blizzard's list still works (Search, scrolling, Start)
+and shows them after Search. Also try Refresh on the guild and personal tabs. If nothing ever changes on the public
+tab, run `/dump C_CraftingOrders.GetCrafterOrders()` after a Refresh: the server may answer the public tab with
+buckets (the request is not a flat search), which FabricationStation leaves alone. Report any field Blizzard's
+`ProfessionsCraftingOrderPageMixin:RequestOrders` / `SendOrderRequest` sends that the plan lacked. (Compared on the
+`live` branch at implementation time: the same fields, plus `selectedSkillLineAbility`, which is nil for a request
+that is not a flat search, and the sorts, which Blizzard takes from the page's own sort state while the plan sends
+`sortType = 0` for both.)
+Also: press Refresh while Blizzard's spinner is showing (right after Search or a tab switch): Refresh stays greyed until
+the list is there. And after a Refresh on a list longer than one page, scroll to the bottom: rows must neither repeat
+nor go missing, the spinner must clear, and no "new matching orders" line may appear for orders you had already seen.
+
+P7-8. **Ready alerts.** In Settings > Ready alerts turn on concentration, Moxie (threshold just above your amount) and
+cooldown alerts. Expected: one chat line (and a toast with OrderAlert on) when concentration fills during play, when
+Moxie reaches the threshold, and when a cooldown comes off; none repeat until the state resets, and a /reload with a
+full pool or Moxie above the threshold says nothing. At login, 12 s after
+the loading screen, the concentration and Moxie states already true are announced once (concentration only when the
+Planner's own chat warning is off).
+
+P7-9. **Mail attachments.** Open a mailbox that holds an item mail and a COD mail, then `/reload` and run
+`/dump FabricationStationDB.global.characters["<you>"].mail`. Expected: it lists the item mail's items and not the COD
+one's. Also run `/dump GetInboxItem(1, 1)` with the item mail first in the box. Expected: the item's ID is the second
+value and its count the fourth (report the order if not).
+
+P7-10. **Own listings.** Open the AH Auctions tab. Expected: `FabricationStationDB.global.auctionLog.listings["<you>"]`
+(`/dump`) holds your active auctions with their quantities; sold ones still waiting for pickup are left out.
+
+P7-11. **Posts.** Post one item and one commodity stack. Expected: two `"post"` events in
+`FabricationStationDB.global.auctionLog.events` with the right itemIDs and quantities (and the unit price you set for
+the commodity). If none appears, report whether `AUCTION_HOUSE_AUCTION_CREATED` fires and
+whether `C_Item.GetItemID(location)` answers after `PostItem`.
+
+P7-12. **Cancels.** Cancel one of your auctions. Expected: one `"cancel"` event for it, and its quantity gone from the
+item's count in `auctionLog.listings["<you>"]`.
+
+P7-13. **Expiries.** With an expired-auction mail in the box, open the mailbox twice and `/reload`. Expected: one
+`"expire"` event for the mail's item and count. If none appears, report the mail's subject text (non-English clients:
+`/dump AUCTION_EXPIRED_MAIL_SUBJECT`). Then check that the same expiry mail is not counted again within one session:
+keep the mailbox open past the next full hour (or until the clock's hour changes) and take another item, so the box
+updates again. Expected: still one `"expire"` event for that mail. If a second one appears, `daysLeft` of
+`GetInboxHeaderInfo` is not refreshed between updates (the mail signature drifts): report it, with the two `daysLeft`
+values from `/dump select(7, GetInboxHeaderInfo(1))` taken an hour apart.
+
+P7-14. **Restock with listings.** Open the mailbox once (so the mail count is known as 0 rather than unknown) and the
+Auctions tab at the auction house once. Set a restock target of 10 for an item you have 4 of, with 5 on the AH.
+Expected: 1 craft's worth is queued, and the row says "held 9 (mail 0, listed 5)". Before the mailbox visit the row
+shows "mail ?" instead of 0. Set Min profit above the item's profit: the entry goes and the row says "Below min
+profit".
+
+P7-15. **Sales in tooltips and the Ledger.** Post an item you did not craft with FabricationStation (or any item: the
+sale is matched by the item's name, which SaleLog stores when it sees the post), let one auction of it sell and one
+expire, then collect both mails and hover the item. A sale of an item posted before this version was installed is
+not matched, because its name was never stored. Expected: "Your sales: 1 of 2 sold (50%)", "Last sale: <price> each,
+<age> ago", and "Listed now: <n>" while you have some up. The Ledger tab's Auctions page (the Auctions button above the list) shows the same
+numbers on the item's row: Sold 1, Expired 1, Rate 50%, Last sale the same price. Turn the Ledger off: Sold and Rate
+become "?" and the row tooltip says "Sales unknown: the Ledger is off". Turn "Show your sales in item tooltips" off
+(/fs settings > Orders & Ledger): the tooltip lines go.
+
+P7-16. **Craft result fields.** Craft one quality recipe with concentration, then `/reload` and
+`/dump FabricationStationDB.global.craftLog.entries[#FabricationStationDB.global.craftLog.entries]`. Expected:
+`actual.quality` matches the item you made, `game.quality` and `predicted.quality` are filled. Report whether
+`actual.concentrationSpent`, `actual.ingenuityRefund`, `actual.ingenuityProc` and a `multicraft` number from the game
+are present (a missing one stays nil; without the game's `multicraft` field it stays nil until an extra arrives).
+
+P7-17. **Multicraft extras.** Craft until a Multicraft proc. Expected: one entry for that craft with
+`actual.multicraft` equal to the extra items (and `actual.quantity` the base plus the extras), not a second entry.
+Also craft once from Blizzard's own Craft button with another recipe selected before (or a different recipe than
+FabricationStation's panel last showed): the entry's `recipeID` is the recipe actually crafted. Then start a
+"Create All" of 3 or more, stop it after the first cast (move), and recraft an item of that recipe within a minute:
+no new entry (the Ledger shows no new craft either).
+
+P7-18. **Golden fixtures from crafts.** Craft 8 recipes (the phase 1b Task 9 list: rank 1, rank 2, just under and
+over a threshold, a difficulty optional, a skill finishing reagent, an ingenuity effect, a 5-quality recipe), and include
+one craft with Concentration switched on (only a craft fixture exercises it), then `/reload`,
+then
+`lua tools/export_math_fixtures.lua "<WoW>/_retail_/WTF/Account/<ACCOUNT>/SavedVariables/FabricationStation.lua"`
+and `busted tests/math/golden_spec.lua`. Expected: at least 8 fixtures (`exported N fixtures (...)`; the line also counts
+captures without a calibration and the crafts left out, each with its reason: no schematic, no fixture, no game quality, no actual quality, no calibration), and the golden spec green.
+Report every failing assertion: each failure names the fixture and lists every field that differs ("quality: the game
+says 3, the maths say 2"). Phase 1b Task 9 Step 5 says which constant each field pins. A craft fixture also asserts
+that the game's prediction (`game.quality`) equals the quality the craft made (`actual.quality`): a mismatch there is
+reported, never loosened. The Ledger tab's Crafts page (the Crafts button above the list) shows the same crafts per
+recipe: "Quality: 3 of 4 as predicted", "Multicraft: +2 (expected +1.4)" (a "?" when the game left a number out, never 0),
+Resourcefulness procs and Concentration spent against predicted. Check it against what you made.
+
+P7-30. **Cheaper route to an order's minimum quality.** On the Orders page's Patron tab, find orders with a minimum
+quality (the gold pip) that the game says need concentration (the user's: Flask of the Shattered Sun, Potion of
+Devoured Dreams, Composite Flora). Hover each row's concentration cell, then its net and score. Expected: each shows
+either the concentration it will spend (white, or red when you have too little; the score is then below the net) or,
+when buying better reagents is cheaper, the concentration in grey with the tooltip "Buying better reagents is cheaper
+than N concentration (A vs B)" (A = the reagents bought, B = the cheaper reagents + the concentration's worth; the
+score cell is blank because it equals the net). Before your best gold per concentration is known the grey cell says
+"Could use N concentration instead of better reagents (value of concentration unknown)". Add a grey-cell order to the
+Queue: it crafts without concentration. Compare A with the reagent prices in Auctionator: A should be the higher-quality
+reagents' cost.
+
+P7-31. **Orders for recipes you have not learned.** On the Orders page, find an order (a patron order is easiest) for a
+recipe your character has not learned, whose recipe the game has shown you before (open that profession's recipe list
+once so its details are cached). Expected: its row's risk count is red and the risk tooltip lists a red "Recipe not
+learned" line followed by a grey source line as the game words it (e.g. "Vendor: Naynar Zone: Harandar"); the score
+stays "?", there is no "+" queue button; the side panel and the Orders tab have a "Recipe not learned" checkbox that
+dims or hides such orders; Claim Best Order never picks one (Orders options > claim-blocking risks has the toggle). An
+order for a recipe the game has not told the addon about yet shows no red flag. If the source line is missing for a
+recipe you know the game gives a source for, report the recipe name.
+
+P7-32. **Profit this session.** Open the Ledger tab and press Crafts. Expected: the first line above the recipe rows
+reads "This session: N crafts, profit X" (or "no profit recorded yet" before your first sale or commission since you
+logged in). Craft something, then collect an order commission or an auction sale from the mail and keep the tab open:
+within a second the line should count the craft and add the sale's profit (income minus cost). It should count every
+character's crafts since this login, not only the one you are playing. A sale whose cost the addon did not know should
+turn the profit into "~X"; the line's tooltip then says how many entries are partial and lists the order and auction
+parts. `/reload` and check that the line starts again at zero. Make the window as narrow as it goes (516 px): the line
+is cut off, and its tooltip shows all of it.
+
+P7-19. **Optionals against the game.** Pick a recipe with a skill-raising finishing reagent and a Multicraft optional.
+Expected: the side panel's "Best optionals" (Task 12) matches what the game shows when you put that reagent in
+(predicted quality in Blizzard's window); report the recipe when the predicted quality differs. This also checks that
+the optional reagent effect amounts in `OptionalReagents` are the units `Stats.ApplyOptionals` expects (skill points;
+ratings for Multicraft, Resourcefulness and Ingenuity).
+
+P7-33. **The Commission cover.** On the crafting-orders board (Patron tab, and a Public tab with tips): in each row the
+Commission column shows a dark panel instead of Blizzard's gold, with the compact commission at its left ("45g") and, on
+patron orders, the reward icons after it. Expected: no gold digits show through; the amount equals the tip less the
+consortium's cut; "?" when the commission is unknown. Hover the panel: "Tip: ...", "Consortium cut: ...",
+"Commission: ...", then "Rewards" and one line per reward, and a "Pays ... per knowledge point" or "per Moxie" line where
+the order has one. Tinted rows (VIP, repeat, blocked) tint the panel too, hovering a row lights it, and a dimmed row's
+panel is darker with fainter icons. Turn off Settings > Orders & Ledger > "Show reward and reagent icons on order rows":
+both panels go and Blizzard's Commission and Reagents columns show as normal.
+
+P7-34. **Header gold: pocket, session, expansion.** Open the main window. Expected: the centre of the header reads
+"<gold in your pocket> · session +412g · Midnight profit 1,234g", the session part being your gold now minus your gold when you
+logged in (or reloaded), signed ("+0g" before anything changed), and the last part the crafting profit of every
+character this expansion (the Ledger's own profit: sales and commissions minus their known costs). Earn or spend gold
+and craft and sell something (collect the sale from the mail) with the window open: the three parts update within a
+second (the profit after the Ledger records it); `/reload` and check that the session part starts again at +0g. A sale
+whose cost the addon did not know puts "~" before the expansion profit. Hover the centre text: the full text, then
+"Crafting profit this session: X" with "Gold change includes everything, not only crafting.", then the expansion profit
+per character and per kind (Order commission, Auction sale) and "Counted since FabricationStation recorded it."; a
+character with no profit this expansion shows "No crafting profit recorded this expansion yet" instead. The expansion
+name should be the game's own ("Midnight"). Make the window as narrow as it goes (700 px, a 516 px content area): the
+expansion part goes first, then the session part; the left (character) and right (prices) texts stay whole, and the
+tooltip still shows everything. Drag the window by the centre of the header: it still moves.
+
+P7-35. **Dashboard: top crafts by expansion.** Open the Dashboard with prices scanned and at least two expansions' recipes
+on your characters. Expected: a small button in the corner of the "Top crafts by profit" widget reads "All expansions"
+(the title is cut short next to it rather than overlapping; at the narrowest window, a 516 px content area, nothing
+overlaps and the button text is cut with "..." if the name is long). Hover it: the widget title, "Show top crafts from
+one expansion" and the full name of the current choice. Click: it goes to the newest expansion that has a profitable
+craft ("Midnight"), then older ones, then back to "All expansions", skipping an expansion with no profitable craft. With
+an expansion chosen the widget lists up to ten of its crafts (not the ones left of the overall top ten). Names should be the
+game's own ("Midnight", "The War Within"; "Expansion 9" if the game gave none). `/reload`: the choice is kept. Choose an
+expansion, then lower its prices until nothing there is profitable: the widget shows the usual empty line plus "No
+profitable crafts in <expansion>", and the button keeps that expansion.
+
+P7-20. **Craft Next with an optional.** Select a recipe with an optional or finishing reagent slot in a profession
+window with prices scanned. The side panel shows "Best optionals" (the names and "+<gain>") or "none adds profit", and
+"<n> skipped: no price or no known effect" when some had no price or no modelled effect. Press "Queue with best
+optionals": the status reads "Queued with <names>" and the Queue tab shows the entry with "Optionals: <names>" on its
+second line (the cost includes them). Put the optional in your bags and press Craft Next with that profession open.
+Expected: the craft uses it (the result shows its effect, e.g. the quality or Multicraft the item gives; the bag count of
+the optional drops by the slot's quantity). With none of it in the bags Craft Next reports the entry as missing and the
+optional is on the shopping list. This also checks that `CraftRecipe` accepts optional and finishing reagent infos built
+with `dataSlotIndex` from the cached schematic; if the craft goes through without the optional, or the game rejects the
+call, report the recipe and which slot (optional or finishing) it was.
+
+P7-21. **Lists and the plan.** Queue a few crafts for one character (more than one recipe), press "New from queue" on the
+Queue tab's Lists page with a name in the box, then set Min profit and press the concentration button until it reads
+"Concentration: single best". Clear the queue (Queue page, Clear), come back to Lists and press "Queue list".
+Expected: the profitable recipes come back as queue entries, at most one recipe per concentration pool with
+concentration up to what that character has (its remaining crafts follow as a second entry without), and the status
+reads "Queued N entries; M skipped" with the skipped recipes and their reasons in its tooltip. Delete asks for a second
+click within five seconds. Then open the Planner's Concentration section and press "Queue plan": the schedule's crafts
+are queued once with concentration, and pressing it again says "Queued 0 crafts; N were already queued". Nothing is
+ever queued without pressing a button. With "Use best optionals" ticked, the entries carry the best optionals (see
+P7-20); a long list searches only some recipes per press and the tooltip says how many went without.
+
+P7-22. **Sub-crafts.** Pick a recipe whose reagent you can craft cheaper than the AH (the panel says "crafting"). Press
+"Queue with sub-crafts", then Craft Next repeatedly. Expected: the reagent's craft comes first, then the parent, with no
+bought reagent. The Queue tab shows the reagent's craft above the parent with a leading arrow, and the status says
+"Queued 1 sub-craft first" (or the count); when another character crafts the reagent it adds "... crafts on <name>: mail
+the reagents". Pressing it while the reagents are in the bags queues nothing and says "No sub-craft needed: the
+reagents are on hand". Remove the parent
+(the Remove button, or fill its order): its sub-crafts go too, with one chat line ("Also removed 2 sub-crafts"); an
+entry you queued on its own stays.
+
+P7-23. **Socket slots and unlearned patron orders.** On the Engineering patron board, find an order for a recipe with a
+socket slot that you know (Evercore Wrist Latch, Quel'dorei Leather Optics, Quel'dorei Silken Cuffs). Expected: the
+Reagents cover shows only what Blizzard's order view asks you for (Wrist Latch: Evercore x1), a green check when you own
+it, never a red question-mark icon, and the row shows a profit instead of "?" when those reagents have prices. Own the
+reagent only in the other rank (quality): still the check, and the cover's tooltip adds the grey line "You have N of a
+different rank (quality may differ)".
+Then find an order for a recipe you have not learned, ideally one with a long name (Thalassian Competitor's Mail
+Links): the row shows a red "×" where the profit goes, with the red risk count beside it, even when the name leaves no
+room for the other cells; hover the "×": "You have not learned this recipe", then where to get it. Craft Next on a
+socket recipe crafts without a socket (none is put in, none is used).
+
+P7-36. **Where to get reagents.** Queue a craft that
+is short of three reagents: one sitting in an alt's bags (that alt seen in this session), one that a character you have
+can craft (and Intermediates is on), and one that only the auction house sells. Open Queue > Gather. Expected: one row
+per missing reagent, the name and how many are needed, and under it the sources in this order: the alt row reads
+"Alt 5 (<alt>)", the craftable one "Craft <cost> (<crafter>)" with the "Auto" and "Queue craft" buttons, the AH one
+"Auction house <price>". Hover each row: every source is listed with the age of its data ("2d ago"; red once it is older
+than the days set under Settings > Characters, or "age unknown"). Put some of the reagent in your mailbox, open the
+mailbox, and the row gains "Mail <n> (<you>)" first; with "Use reagents in the warband bank for the queue" off, a
+reagent in the warband bank shows "Warband bank <n>". Press the choice button: Auto, Craft, Buy in turn, and the side
+panel's "craft ... buy ... crafting/buying" line for a recipe using that reagent follows (open the profession window
+while you press it). "Queue craft" adds the reagent's craft to the queue (the Queue page shows it, and the reagent
+leaves the Gather list); nothing is crafted, bought or moved. "Characters: this one" limits the plan to the logged-in
+character; Shopping List sends the missing reagents to Auctionator, reporting on this page.
+
+P7-24. **Retrieve from the bank.** Queue crafts that need 5 of a reagent you hold 3 + 20 of in the bank (none in bags).
+Open the bank. Expected: a FabricationStation panel next to the bank window reads "<reagent>: 5 of 5 in the bank" and
+"Retrieve (5 left)"; nothing moves on opening the bank. Press Retrieve three times. Expected: the stack of 3 moves ("Moved
+3 <reagent>"), then 2 are split off the 20 into an empty bag slot ("Moved 2 <reagent>"), then "Everything the queue needs
+is in your bags"; pressing again quickly while a move is still landing does nothing more. Hold an item on the cursor
+and press: "Put down the item on your cursor first". In combat the button is disabled. With full bags: "Bags are full",
+and a split never leaves the item on the cursor. Repeat with the stacks in the warband bank (Settings > Crafting
+"Retrieve queue reagents from the warband bank too" on; off: the warband is left alone). Also report: does Craft Next
+craft with reagents left in the bank or warband bank (no Retrieve)? If yes, the pull matters only for moving reagents to
+mail to an alt. If UseContainerItem on a bank or warband slot does not move the stack into the bags from the button, or
+the split does not land in the empty slot, report which (P7-24 assumes both work from an addon click while the bank is
+open, that the split is on the cursor right after SplitContainerItem, and that a used bank stack shows locked until
+it lands; a move that works but reads "<reagent> did not move" breaks that last one). Do it once right after logging
+in (the first bank visit of the session): the panel should appear, at the latest after the first bag update. With the
+bank open, queue another craft that needs a banked reagent: the panel appears or gains the line without reopening.
+Put a profession bag (herb or mining) in the first bag slot with the backpack full and a general bag with room after
+it: a split of cloth or ore lands in the general bag, never "Bags are full" while it has room. With two reagents
+listed, leave room only in a profession bag that takes the second but not the first (an herb bag, an herb second):
+the next press retrieves the second reagent.
+
+P7-25. **Bank panel place.** Open the bank and switch between the character bank and the warband bank tabs. Expected:
+the panel sits next to the bank window (its top left at the window's top right) on both tabs and closes with the bank.
+If it sits at the top of the screen instead, `BankFrame` is not the 12.x bank window: report the bank window's frame
+name (`/fstack`).
+
+P7-26. **Buy at a merchant.** Queue a craft that needs a vendor reagent sold in stacks (for example 5 per purchase) and
+one sold singly, with none of either in your bags, bank or warband bank; then visit the vendor. Expected: a
+FabricationStation panel next to the merchant window lists both ("<reagent>: <n> for <price>", the stacked one rounded
+up to whole stacks) and a button "Buy <n> reagents for <total>"; nothing is bought on opening the window. Click once:
+exactly the missing count (rounded up to the stack) of each is bought, the status reads "Buying ..." and then "Bought
+<n> reagents for <price>" when everything has reached the bags, and the panel empties out. Clicking again while the
+purchase is still landing does nothing (the button stays disabled until everything bought is in your bags, or 3 s), and
+so does closing and reopening the vendor right after the click. With too little gold the button is disabled and its
+tooltip reads "Not enough gold"; in combat it is disabled.
+Also report: does `C_MerchantFrame.GetItemInfo` exist (`/dump C_MerchantFrame.GetItemInfo(1)`; if it is nil the panel is
+using `GetMerchantItemInfo`), and does its table have the `hasExtendedCost` and `stackCount` fields (a listing without
+either is skipped, so a missing field shows as no row); did `BuyMerchantItem`'s quantity count items or stacks (a
+reagent sold 5 per purchase, need 7: it should buy 10 items; if it bought 50, the quantity counts stacks and MerchantBuy
+must pass `buy / stack`); does `GetMerchantItemMaxStack` give the most items one call may buy; and is `MerchantFrame`
+the merchant window (if the panel sits at the top of the screen instead, report the window's frame name with `/fstack`).
+
+P7-27. **Request inbox.** Let a trade-chat request match (ask for something one of your characters can craft from a
+second account or alt, with ChatScan and ChatInbox on) and open the Requests tab. Expected: a row with the sender, the
+recipe, the status "open" and your character's short name under "Seen on". Select the row, press Reply, then Enter
+in the chat box (Reply only fills it). Get an answer. Expected: the entry turns "replied" and its detail shows both
+lines ("<age> ago, you: ..." and "<age> ago, they: ..."); another character of the account sees the same entry with "Seen
+on" naming the first. Leave a request unanswered: after 30 minutes (the default) it reads "expired" and drops out of
+"Show: open" (there is no timer: the change shows when you reselect the tab or on the next inbox event). Also report: does `CHAT_MSG_WHISPER_INFORM` name the target as `Name-Realm` (if the reply stays "open" and
+shows no "you" line, it does not: report the target text with a `/dump` in a `CHAT_MSG_WHISPER_INFORM` listener), and
+does a whisper in an instance (where the text is a secret value) leave everything unchanged without an error
+(`/fs settings > Diagnostics` shows none).
+
+P7-28. **Key bindings.** Open Key Bindings > AddOns > FabricationStation. Expected: it lists four bindings (Craft Next,
+Claim Best Order, Open or close FabricationStation, Reply to the latest chat request); bind a key to each. Expected:
+Craft Next crafts one queued item with its profession open (the profession panel's status line, or chat when the panel
+is hidden, says "Crafting ..."; the queue count drops by one when the craft finishes); Claim Best Order claims with the
+crafting orders board open (the side panel says "Claiming ..." and no "action blocked" or "interface action failed" error
+appears; with the board closed, chat says "Open the crafting orders board to claim an order"); the toggle opens and closes
+the window; the reply key opens the chat box on a whisper to the newest open request (nothing is sent until you press
+Enter; with none, chat says "No open chat request"). In combat the first two print "Not in combat".
+Also report: do the bindings appear under AddOns (if they are missing or sit elsewhere, say where), and does a key press
+count as the hardware event the craft and the claim need (an "action blocked" or "interface action failed" message for
+either one means it does not, and the buttons need a real mouse click). Also report: with Blizzard's "fill this order
+with your own reagents" dialog open, does pressing Enter confirm it by itself? FabricationStation has no key for it (a key
+would have to click or call a Blizzard frame, which the addon never does).
+
+P7-29. **Phase 7 smoke.** On two characters: open both boards, price a patron order, shop two selected orders, post and
+cancel an auction, craft a Multicraft recipe, queue a list, queue sub-crafts, retrieve at the bank, buy at a vendor,
+reply to a chat request with the key. Expected: no Lua error (`/console scriptErrors 1`), nothing in Settings >
+Diagnostics, and each step does what its P7 line says.
+
+P7-37. **Mail gold in chat.** Open a mailbox with two auction-sale mails and one COD mail. Take the first gold mail with
+a click, wait two seconds, then take the rest with Open All (or by clicking each). Expected: one chat line "Took <amount>
+from the mail" per burst of pickups, printed about 1.5 seconds after the last one, each with the right amount (the coin
+icons like the header gold); paying the COD shows no line and takes nothing off the next one; on closing the mailbox one
+"Mail total this visit: <amount>" line equal to the gold gained (no total when only one line was printed, or with
+Settings > Mail gold > "Show a total when you close the mailbox" off). Gold gained with the mailbox closed (a quest, a
+vendor sale) prints nothing, and nothing is ever sent to other players. Report whether `MAIL_CLOSED` closes the visit
+(else `PLAYER_INTERACTION_MANAGER_FRAME_HIDE` for the mailbox does) and whether Open All style addons fire one
+`PLAYER_MONEY` per mail.
+
+P7-38. **Math check after the mismatch fixes.** In Settings > Diagnostics clear the logged mismatches, `/reload`, then
+open each profession once so its recipes calibrate again. Pick a recipe on each crafting character that can use
+concentration, try it with no reagents, with a mix of ranks and with one slot left empty. Expected: the panel's check
+line says "Math check: OK", the concentration cost matches Blizzard's number exactly (flasks and potions on an
+alchemist with the discount nodes included), and recipes with no quality log no difficulty line. Report any new line in
+Diagnostics with its recipe; a discount can only be learned where the game charges concentration with no reagents.
+
+## Not done here
+
+`tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in
+`Data/GameData_Manual.lua` are filled (check 6 verifies them). The phase-3 knowledge CSV
+(`tools/gamedata/sources/knowledge_sources.csv`) is also left as authored: its rows change only from your P3-31 to
+P3-33 readings.

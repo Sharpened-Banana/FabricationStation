@@ -1,0 +1,51 @@
+# Strings that are deliberately not routed through ns.L. One entry per line: `file:literal` (that literal in that
+# file is fine) or `file:*` (skip the whole file). Blank lines and lines starting with # are ignored.
+
+# Addon name: a brand, never translated.
+Core/Core.lua:FabricationStation
+UI/Launcher.lua:FabricationStation
+UI/BankPull.lua:FabricationStation
+UI/MerchantBuy.lua:FabricationStation
+UI/OrdersPanel.lua:FabricationStation
+UI/ProfessionPanel.lua:FabricationStation
+
+# Module names: ids passed to SetModuleEnabled/GetModule, not display text (the label next to them is localized).
+UI/OnboardingWizard.lua:Orders
+UI/OnboardingWizard.lua:Customers
+UI/OnboardingWizard.lua:Ledger
+UI/OnboardingWizard.lua:Alts
+UI/OnboardingWizard.lua:Planner
+UI/OnboardingWizard.lua:Guild
+
+# Pure files: specs load them without Core (so ns.L is absent) or they hold text matched against game data.
+# Math/ and Data/ are outside the scanned paths; the two Modules files are listed so the intent is on record.
+Modules/CraftingData.lua:*
+Modules/PlanCalc.lua:*
+
+# ChatMatcher is a pure file (specs load it without Core): its words are chat keywords matched against player text.
+Modules/Social/ChatMatcher.lua:*
+
+# Error codes compared in code and log texts (Util.LogError / diagnostics): not shown in the UI as written.
+Core/Migrations.lua:bad schemaVersion
+Modules/Ledger.lua:Auction successful: %s
+Modules/Ledger.lua:auction sales are not recorded from mail
+Modules/Ledger.lua:that action is not recorded
+Modules/Orders.lua:hook target missing: ProfessionsFrame.OrdersPage.ShowOrders
+Modules/Orders.lua:hook target missing: ProfessionsFrame.OrdersPage.ShowBuckets
+Modules/Scanner.lua:dropped professions
+Modules/SaleLog.lua:Auction expired: %s
+Modules/SaleLog.lua:your listings are not recorded
+Modules/SaleLog.lua:expired auctions are not recorded
+Modules/SaleLog.lua:what depends on that event is not recorded
+Modules/SaleLog.lua:that action is not recorded
+Modules/CraftLog.lua:crafts are not logged correctly
+Modules/Social/Guild.lua:own profile of %s failed validation (%s); not shared
+Modules/Social/GuildOptions.lua:no codec
+Modules/Social/GuildOptions.lua:no profile
+Modules/Social/GuildOptions.lua:build failed
+
+# One-word literals that are ids, not display text (the display helpers and `or "word"` rules cannot tell).
+Modules/Planner.lua:unknown
+UI/OrdersPanel.lua:none
+UI/ProfessionPanel.lua:estimate
+Modules/Social/ChatInbox.lua:expired

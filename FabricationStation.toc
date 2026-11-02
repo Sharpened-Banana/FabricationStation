@@ -1,0 +1,104 @@
+## Interface: 120105
+## Title: FabricationStation
+## Notes: All-in-one crafting: profit, quality, concentration, queue, orders and alts.
+## Author: Sharpened Banana
+## X-License: MIT
+## Version: @project-version@
+## SavedVariables: FabricationStationDB
+## Dependencies: Auctionator
+## IconTexture: Interface\Icons\Trade_Engineering
+
+embeds.xml
+Locales\Locales.xml
+Core\Util.lua
+Core\Core.lua
+Core\Bus.lua
+Core\Migrations.lua
+Core\DB.lua
+Data\GameData.lua
+Data\GameData_Professions.lua
+Data\GameData_Reagents.lua
+Data\GameData_Difficulty.lua
+Data\GameData_Spec.lua
+Data\GameData_Manual.lua
+Data\OrderRewards.lua
+Data\GameData_Knowledge.lua
+Data\GameData_RecipeSources.lua
+Math\Quality.lua
+Math\Concentration.lua
+Math\Stats.lua
+Math\Optimizer.lua
+Math\Profit.lua
+Math\Optionals.lua
+Modules\Scanner.lua
+Modules\Prices.lua
+Modules\Diagnostics.lua
+Modules\CraftingData.lua
+Modules\Recipes.lua
+Modules\RecipeScan.lua
+Modules\Queue.lua
+Modules\QueueCraft.lua
+Modules\SelfCheck.lua
+Modules\Customers.lua
+Modules\Orders.lua
+Modules\Ledger.lua
+Modules\SaleLog.lua
+Modules\MailGold.lua
+Modules\CraftLog.lua
+Modules\PlanCalc.lua
+Modules\Alts.lua
+Modules\AltsCollector.lua
+Modules\Planner.lua
+Modules\PlannerSpec.lua
+Modules\CraftLists.lua
+Modules\Intermediates.lua
+Modules\Social\Util.lua
+Modules\Social\Gate.lua
+Modules\Social\Codec.lua
+Modules\Social\Protocol.lua
+Modules\Social\ProfileStore.lua
+Modules\Social\Comm.lua
+Modules\Social\ItemIndex.lua
+Modules\Social\RecipeIndex.lua
+Modules\Social\Guild.lua
+Modules\Social\GuildNative.lua
+Modules\Social\GuildDirectory.lua
+Modules\Social\GuildOptions.lua
+Modules\Social\ChatMatcher.lua
+Modules\Social\ChatScan.lua
+Modules\Social\ChatInbox.lua
+Modules\Onboarding.lua
+UI\Util.lua
+UI\MainWindow.lua
+UI\Tabs\Dashboard.lua
+UI\Tabs\Recipes.lua
+UI\Tabs\Queue.lua
+UI\Tabs\Orders.lua
+UI\Tabs\Customers.lua
+UI\Tabs\Ledger.lua
+UI\Widgets\ExpandGrid.lua
+UI\Tabs\ViewUtil.lua
+UI\Tabs\CharactersView.lua
+UI\Tabs\PlannerView.lua
+UI\Tabs\Characters.lua
+UI\Tabs\Planner.lua
+UI\Tabs\Guild.lua
+UI\Tabs\Requests.lua
+UI\Tabs\Settings.lua
+UI\Launcher.lua
+UI\ProfessionPanel.lua
+UI\RecipeListLabels.lua
+UI\Tooltips.lua
+UI\OrdersPanel.lua
+UI\OrderAlert.lua
+UI\OrdersWidgets.lua
+UI\OrdersOptions.lua
+UI\AltsTooltips.lua
+UI\AltsDashboard.lua
+UI\ChatToast.lua
+UI\OnboardingWizard.lua
+UI\ReadyAlerts.lua
+UI\FeatureLines.lua
+UI\BankPull.lua
+UI\MerchantBuy.lua
+UI\Bindings.lua
