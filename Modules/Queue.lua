@@ -431,9 +431,9 @@ local function per_craft(entry)
   return need
 end
 
--- Per character, what entries need beyond bags + bank + reagent bank: { [charKey] = { [itemID] = qty } }. The current
--- character's holdings are the game's own count, other characters' their snapshots (Scanner:GetOwnedCount).
-local function shortfalls(entries)
+-- Per character, what entries need before any holdings: { [charKey] = { [itemID] = qty } }, per_craft(entry) times
+-- its quantity, summed. Entries whose recipe cannot be evaluated are left out. Shared by shortfalls and GetRequired.
+local function required_of(entries)
   local required = {}
   for _, e in ipairs(entries) do
     local need = per_craft(e)
@@ -443,8 +443,14 @@ local function shortfalls(entries)
       for itemID, n in pairs(need) do r[itemID] = (r[itemID] or 0) + n * e.quantity end
     end
   end
+  return required
+end
+
+-- Per character, what entries need beyond bags + bank + reagent bank: { [charKey] = { [itemID] = qty } }. The current
+-- character's holdings are the game's own count, other characters' their snapshots (Scanner:GetOwnedCount).
+local function shortfalls(entries)
   local out = {}
-  for charKey, r in pairs(required) do
+  for charKey, r in pairs(required_of(entries)) do
     local short = {}
     for itemID, n in pairs(r) do
       local missing = n - scanner():GetOwnedCount(itemID, charKey, false)   -- the warband is taken off once, below
@@ -479,6 +485,17 @@ function Queue:GetMissingReagents(charKey)
     if charKey == nil or e.charKey == charKey then entries[#entries + 1] = e end
   end
   return missing_total(entries)
+end
+
+-- [phase 7 Task 16] { [itemID] = qty } charKey's entries (real and restock; nil = the logged-in character) need in
+-- all, before any holdings: what the missing reagents are computed from (required_of), for the bank pull. Reads only.
+function Queue:GetRequired(charKey)
+  charKey = charKey or ns.FS:CharKey()
+  local own = {}
+  for _, e in ipairs(self:GetEntries()) do
+    if e.charKey == charKey then own[#own + 1] = e end
+  end
+  return required_of(own)[charKey] or {}
 end
 
 -- The same for any list of entries (not the stored queue): { [itemID] = qty } still to get. Only entries with a number

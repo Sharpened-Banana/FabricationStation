@@ -4,6 +4,7 @@
 # Addon name: a brand, never translated.
 Core/Core.lua:FabricationStation
 UI/Launcher.lua:FabricationStation
+UI/BankPull.lua:FabricationStation
 UI/OrdersPanel.lua:FabricationStation
 UI/ProfessionPanel.lua:FabricationStation
 

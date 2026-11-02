@@ -1373,6 +1373,24 @@ while you press it). "Queue craft" adds the reagent's craft to the queue (the Qu
 leaves the Gather list); nothing is crafted, bought or moved. "Characters: this one" limits the plan to the logged-in
 character; Shopping List sends the missing reagents to Auctionator, reporting on this page.
 
+P7-24. **Retrieve from the bank.** Queue crafts that need 5 of a reagent you hold 3 + 20 of in the bank (none in bags).
+Open the bank. Expected: a FabricationStation panel next to the bank window reads "<reagent>: 5 of 5 in the bank" and
+"Retrieve (5 left)"; nothing moves on opening the bank. Press Retrieve three times. Expected: the stack of 3 moves ("Moved
+3 <reagent>"), then 2 are split off the 20 into an empty bag slot ("Moved 2 <reagent>"), then "Everything the queue needs
+is in your bags"; pressing again quickly while a move is still landing does nothing more. Hold an item on the cursor
+and press: "Put down the item on your cursor first". In combat the button is disabled. With full bags: "Bags are full",
+and a split never leaves the item on the cursor. Repeat with the stacks in the warband bank (Settings > Crafting
+"Retrieve queue reagents from the warband bank too" on; off: the warband is left alone). Also report: does Craft Next
+craft with reagents left in the bank or warband bank (no Retrieve)? If yes, the pull matters only for moving reagents to
+mail to an alt. If UseContainerItem on a bank or warband slot does not move the stack into the bags from the button, or
+the split does not land in the empty slot, report which (P7-24 assumes both work from an addon click while the bank is
+open).
+
+P7-25. **Bank panel place.** Open the bank and switch between the character bank and the warband bank tabs. Expected:
+the panel sits next to the bank window (its top left at the window's top right) on both tabs and closes with the bank.
+If it sits at the top of the screen instead, `BankFrame` is not the 12.x bank window: report the bank window's frame
+name (`/fstack`).
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

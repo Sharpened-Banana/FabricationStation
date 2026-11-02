@@ -398,6 +398,9 @@ describe("phase 3 integration", function()
       -- by tests/queue/craft_spec.lua.
       ["Modules/CraftLog.lua"] = { CraftRecipe = 1, RecraftRecipe = 1, CraftEnchant = 1, CraftSalvage = 1 },
       ["UI/OrdersPanel.lua"] = { ClaimBest = 1 },
+      -- BankPull (phase 7 Task 16): the feature test and the one call of each move, all inside BankPull:Step, pinned
+      -- by tests/ui/bank_pull_click_only_spec.lua.
+      ["UI/BankPull.lua"] = { UseContainerItem = 2, PickupContainerItem = 2 },
       ["UI/ProfessionPanel.lua"] = { CraftNext = 1 },
       ["UI/Tabs/Queue.lua"] = { CraftNext = 2 },
     }

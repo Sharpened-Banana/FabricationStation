@@ -1243,3 +1243,14 @@ L["%s %s (%s)"] = true   -- Queue tab, Gather page: a source kind, a price or "?
 L["%s ago"] = true   -- Queue tab, Gather page tooltip: how old the data behind a source is ("2d ago")
 L["No source known"] = true   -- Queue tab, Gather page: a missing reagent that no mail, character, craft, vendor or auction price can supply
 L["Nothing to gather: no reagents are missing"] = true   -- Queue tab, Gather page: empty state
+
+-- Bank pull (phase 7, Task 16)
+L["Retrieve queue reagents from the warband bank too"] = true   -- Settings > Crafting: the bank panel's Retrieve button also takes reagents from the warband bank
+L["%s: %d of %d in the bank"] = true   -- bank panel: a reagent the queue needs, how many of those still needed the bank (or warband bank) holds, and how many are still needed
+L["Retrieve (%d left)"] = true   -- bank panel: button that moves one stack from the bank into the bags; how many items are left to retrieve
+L["Moved %d %s"] = true   -- bank panel status: how many of which item the last press moved into the bags
+L["Bags are full"] = true   -- bank panel status: no free bag slot to retrieve into
+L["Put down the item on your cursor first"] = true   -- bank panel status: the player is holding an item, so nothing was moved
+L["Not in combat"] = true   -- bank panel status: nothing can be retrieved during combat
+L["Everything the queue needs is in your bags"] = true   -- bank panel status: nothing left to retrieve
+L["That stack is locked; try again"] = true   -- bank panel status: the bank stack is still being moved by the game

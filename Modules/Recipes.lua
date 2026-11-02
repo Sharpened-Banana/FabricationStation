@@ -25,6 +25,8 @@ Recipes.DEFAULTS = {
   -- Which optional and finishing reagents BestOptionals tries: "off", "simple" (one slot at a time) or "permutation"
   -- (every combination, up to Math.Optionals.MAX_COMBINATIONS; more falls back to "simple").
   optionalMode = "simple",
+  -- BankPull (phase 7 Task 16) also retrieves from the warband bank.
+  bankPullUseWarband = true,
 }
 
 -- bonusStatName -> stat key, for Math.Stats.ParseBonusStats. enUS only: other client languages get
@@ -139,6 +141,7 @@ local function build_options()
       optionalMode = choice(9, "optionalMode", L["Optional reagents"], {
         off = L["Off"], simple = L["One slot at a time"], permutation = L["Every combination (up to 64)"],
       }, { "off", "simple", "permutation" }),
+      bankPullUseWarband = toggle(10, "bankPullUseWarband", L["Retrieve queue reagents from the warband bank too"]),
     },
   }
 end

@@ -143,6 +143,13 @@ describe("FabricationStation.toc", function()
     assert.is_true(at["Modules/Intermediates.lua"] < at["UI/Util.lua"])
     assert.is_true(at["Modules/Intermediates.lua"] < at["UI/FeatureLines.lua"])
   end)
+  -- Phase 7 Task 16: the bank pull reads Queue, Recipes and Scanner at call time and comes last, after FeatureLines.
+  it("loads UI/BankPull.lua last, after UI/FeatureLines.lua", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    assert.is_true(at["UI/FeatureLines.lua"] < at["UI/BankPull.lua"])
+    assert.equals("UI/BankPull.lua", toc.files[#toc.files])
+  end)
   -- Phase 3 (Tasks 12-14): the shared view helpers before the view files, the view files before the tabs that use
   -- them, all before the Settings tab.
   it("loads the phase-3 grid, view helpers, views and tabs in order", function()

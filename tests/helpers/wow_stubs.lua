@@ -128,6 +128,9 @@ local function install(overrides)
     errors = {},  -- errors reported through geterrorhandler()
     hooks = {},   -- every hooksecurefunc call: { tbl|nil, name, fn }
     tells = {},   -- ChatFrameUtil.SendTell / SendTellWithMessage calls: { name, text|nil }
+    -- phase 7 Task 16: C_Container.UseContainerItem / SplitContainerItem / PickupContainerItem calls, in order:
+    -- { op = "use"|"split"|"pickup", bag, slot, count? (split only) }. Nothing moves.
+    containerOps = {},
   }
 
   ---------------------------------------------------------------------------
@@ -853,7 +856,21 @@ local function install(overrides)
       GetUnlockRankForPerk = retNil,
     },
     C_Traits = { GetNodeInfo = retNil, GetEntryInfo = retNil, GetDefinitionInfo = retNil, GetTreeCurrencyInfo = emptyList },
-    C_Container = { GetContainerNumSlots = retZero, GetContainerItemInfo = retNil },
+    -- phase 7 Task 16 (preflight row 15): the three item moves only record (W.containerOps); no bag has a free slot.
+    C_Container = {
+      GetContainerNumSlots = retZero, GetContainerItemInfo = retNil, GetContainerNumFreeSlots = retZero,
+      UseContainerItem = function(bag, slot)
+        W.containerOps[#W.containerOps + 1] = { op = "use", bag = bag, slot = slot }
+      end,
+      SplitContainerItem = function(bag, slot, count)
+        W.containerOps[#W.containerOps + 1] = { op = "split", bag = bag, slot = slot, count = count }
+      end,
+      PickupContainerItem = function(bag, slot)
+        W.containerOps[#W.containerOps + 1] = { op = "pickup", bag = bag, slot = slot }
+      end,
+    },
+    GetCursorInfo = retNil,   -- an empty cursor
+    ClearCursor = noop,
     -- phase 7 Task 6 (preflight row 15): inert. The sale log only post-hooks these; nothing here answers or records.
     C_AuctionHouse = {
       GetNumOwnedAuctions = retZero, GetOwnedAuctionInfo = retNil,
