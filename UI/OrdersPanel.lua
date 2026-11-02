@@ -1157,6 +1157,7 @@ local function new_cells(row)
   c.tipAmount = text(c.tipContent)
   c.tipAmount:SetSize(AMOUNT_WIDTH, STRIP_HEIGHT)
   c.tipAmount:SetJustifyH("LEFT")
+  c.tipAmount:SetWordWrap(false)   -- a long amount in the narrow cell is cut, never wrapped into the icons
   c.tipAmount:SetPoint("LEFT", c.tipCover, "LEFT", COVER_PAD, 0)
   color_text(c.tipAmount, TEXT_COLORS.white)
   c.tipBank = new_bank(c.tipContent)

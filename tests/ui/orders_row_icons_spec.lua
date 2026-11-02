@@ -228,6 +228,7 @@ describe("OrdersPanel row icons", function()
       local c = rewards_row(2)
       assert.same({ "45g", WHITE }, { c.tipAmount:GetText(), { c.tipAmount:GetTextColor() } })
       assert.same({ "LEFT", c.tipCover, "LEFT", 4, 0 }, { c.tipAmount:GetPoint(1) })
+      assert.is_false(c.tipAmount:GetWordWrap())   -- a long amount stays on one line, off the icons
       local function x(i) local _, _, _, px = c.tipSlots[i].icon:GetPoint(1); return px end
       assert.same({ X0, X0 + slot_x(2) }, { x(1), x(2) })
       assert.same({ 2, nil }, { #shown(c.tipSlots), c.tipMore:IsShown() and 1 or nil })
