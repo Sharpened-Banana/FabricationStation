@@ -418,7 +418,10 @@ local function refresh_top_crafts(frame)
   local recipes = module("Recipes")
   local results = recipes and recipes:GetRanked({ sortBy = "profit", onlyProfitable = true }) or {}
   local choice = saved_expansion()
-  local shown, options = Dashboard.ExpansionFilter(results, ns.UI.ExpansionOfRecipe, choice)
+  local memo = {}   -- one read of the scanned characters for the whole filter
+  local shown, options = Dashboard.ExpansionFilter(results, function(recipeID)
+    return ns.UI.ExpansionOfRecipe(recipeID, memo)
+  end, choice)
   frame.expansionOptions, frame.expansionChoice = options, choice
   frame.expansionLabel = expansion_label(choice)
   if frame.expansionButton then frame.expansionButton:SetText(frame.expansionLabel) end

@@ -633,6 +633,32 @@ describe("Queue", function()
       W.fire("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)            -- the second trigger finds nothing
       assert.same({ t.own, t.other }, ids())
     end)
+    -- Damaged or newer saves: a parentID cycle and a parentID that points at nothing must not hang or raise.
+    it("terminates on a parentID cycle and removes only the entries that hang on the removed one", function()
+      local entries = ns.FS.db.global.queue.entries
+      entries[1] = { id = 1, recipeID = 9001, quantity = 1, charKey = ME, parentID = 2 }   -- 1 -> 2 -> 1
+      entries[2] = { id = 2, recipeID = 9001, quantity = 1, charKey = ME, parentID = 1 }
+      entries[3] = { id = 3, recipeID = 9001, quantity = 1, charKey = ME }
+      entries[4] = { id = 4, recipeID = 9001, quantity = 1, charKey = ME, parentID = 4 }   -- its own parent
+      ns.FS.db.global.queue.nextID = 5
+      assert.has_no.errors(function() Q:Remove(1) end)
+      assert.same({ 3, 4 }, ids())
+      assert.is_truthy(chat():find("Also removed 1 sub-craft", 1, true))
+      assert.has_no.errors(function() Q:Remove(4) end)
+      assert.same({ 3 }, ids())
+    end)
+    it("treats a parentID that points at no entry as an ordinary entry", function()
+      local own = Q:Add({ recipeID = 9001, quantity = 1, charKey = ME })
+      local orphan = ns.FS.db.global.queue.nextID
+      ns.FS.db.global.queue.entries[2] = { id = orphan, recipeID = 9001, quantity = 1, charKey = ME, parentID = 999 }
+      ns.FS.db.global.queue.nextID = orphan + 1
+      assert.has_no.errors(function() Q:Remove(own) end)
+      assert.same({ orphan }, ids())                       -- not removed with an unrelated entry
+      assert.equals("", chat())
+      assert.has_no.errors(function() Q:Remove(orphan) end)
+      assert.same({}, ids())
+      assert.equals("", chat())
+    end)
     it("changes nothing while the saved data is from a newer version", function()
       local t = tree({ orderID = 777 })
       ns.FS.dbIsNewer = true

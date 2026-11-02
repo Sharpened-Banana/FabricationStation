@@ -734,7 +734,8 @@ end
 -- filter shares: RecipeSources, then the cached schematic, then what a scanned character knows) says it is the
 -- expansion's. A recipe that rule cannot place is not counted.
 local function expansion_recipes(expansion)
-  return function(recipeID) return ns.UI.ExpansionOfRecipe(recipeID) == expansion.id end
+  local memo = {}   -- one read of the scanned characters for the whole pass (the summary and its per-character rows)
+  return function(recipeID) return ns.UI.ExpansionOfRecipe(recipeID, memo) == expansion.id end
 end
 
 -- The crafting profit this expansion, for every character: the Ledger's own rule (profit_kinds) over the sales and

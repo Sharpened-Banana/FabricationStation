@@ -117,13 +117,42 @@ local function recipe_line(recipeID)
   return recipeLineIndex.map[recipeID]
 end
 
+-- recipeID -> expansionID over the recipes the scanned characters list on a line of a known expansion (a dropped
+-- profession is skipped). A recipe on lines of two expansions takes the lowest expansionID, so the answer does not depend
+-- on table order.
+local function scanned_recipe_expansions()
+  local map = {}
+  local scanner = ns.FS:GetModule("Scanner", true)
+  if not (scanner and scanner.GetCharacters and scanner.GetCharacter) then return map end
+  for _, charKey in ipairs(scanner:GetCharacters() or {}) do
+    local record = scanner:GetCharacter(charKey)
+    local professions = type(record) == "table" and record.professions
+    if type(professions) == "table" then
+      for skillLine, p in pairs(professions) do
+        local expansion = type(p) == "table" and not p.dropped and type(p.recipes) == "table"
+          and UI.ExpansionOfSkillLine(skillLine)
+        if expansion then
+          for recipeID in pairs(p.recipes) do
+            if map[recipeID] == nil or expansion < map[recipeID] then map[recipeID] = expansion end
+          end
+        end
+      end
+    end
+  end
+  return map
+end
+
 -- The expansionID a recipe belongs to: the one rule behind every view that sorts recipes by expansion (the Dashboard's
 -- "Top crafts by profit" filter, the Ledger's and the header's expansion profit). In order: the generated RecipeSources
 -- skill line of the recipe (static; no scan needed); only when that has no entry, the skill line of the schematic
--- already cached (never fetched here: this runs over every ranked result); only then a profession record of a scanned
--- character that lists the recipe on a line of a known expansion. nil when none of these knows it: such a recipe is in
--- no expansion's filter and counted nowhere, never guessed.
-function UI.ExpansionOfRecipe(recipeID)
+-- already cached (never fetched here: this runs over every ranked result); only then the recipes the scanned characters
+-- list on a line with a known expansion (what the header has always counted; the lowest expansion when two lines list
+-- it). nil when none of these knows it: such a recipe is in no expansion's filter and counted nowhere, never guessed.
+-- `memo` (optional): a table the caller makes once per pass over many recipes (one filter, one summary). The scanned map
+-- is built into it on the first recipe that needs it and reused for the rest of the pass, instead of once per recipe.
+-- Only that map is kept, never an answer, and a new pass (a new memo) reads the characters again; without a memo each
+-- call reads them itself.
+function UI.ExpansionOfRecipe(recipeID, memo)
   if recipeID == nil then return nil end
   local line = recipe_line(recipeID)
   if line then return UI.ExpansionOfSkillLine(line) end
@@ -133,21 +162,9 @@ function UI.ExpansionOfRecipe(recipeID)
     local expansion = type(schematic) == "table" and UI.ExpansionOfSkillLine(schematic.skillLineID) or nil
     if expansion then return expansion end
   end
-  if scanner and scanner.GetCharacters and scanner.GetCharacter then
-    for _, charKey in ipairs(scanner:GetCharacters() or {}) do
-      local record = scanner:GetCharacter(charKey)
-      local professions = type(record) == "table" and record.professions
-      if type(professions) == "table" then
-        for skillLine, p in pairs(professions) do
-          if type(p) == "table" and not p.dropped and type(p.recipes) == "table" and p.recipes[recipeID] then
-            local expansion = UI.ExpansionOfSkillLine(skillLine)
-            if expansion then return expansion end
-          end
-        end
-      end
-    end
-  end
-  return nil
+  memo = memo or {}
+  if memo.scanned == nil then memo.scanned = scanned_recipe_expansions() end
+  return memo.scanned[recipeID]
 end
 
 -- The display name of an expansion, shared by every place that names one (the header's profit, the Dashboard filter):
