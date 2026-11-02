@@ -878,17 +878,9 @@ local function refresh_tooltip(c)
   if c.tipping == "tip" then tip_tooltip(c) elseif c.tipping == "cover" then cover_tooltip(c) end
 end
 
--- The pointer passes through a cover to Blizzard's cell beneath (GetMouseFoci lists the cover, then the cell), and that
--- cell's OnEnter runs right after this one and takes the tooltip: an empty box with one item icon, seen in game. So ours
--- is drawn again on the next frame, while the pointer is still on the cover. Blizzard's cell is not touched.
 local function hover_enter(c, which)
   c.tipping = which
   refresh_tooltip(c)
-  C_Timer.After(0, function()
-    M.Guard(ROWS, function()
-      if c.tipping == which then refresh_tooltip(c) end
-    end)
-  end)
 end
 
 local function hover_leave(c)
@@ -914,6 +906,8 @@ end
 local function update_hover(c)
   set_shown(c.coverHover, c.rowHover == true or c.coverHovered == true)
   set_shown(c.tipHover, c.rowHover == true or c.tipHovered == true)
+  -- The pointer on a cover is not on Blizzard's row (its own highlight is off), so the row is lit from here.
+  set_shown(c.rowLit, c.coverHovered == true or c.tipHovered == true)
 end
 
 local function row_hover(c, on)
@@ -931,11 +925,12 @@ local function tip_hover(c, on)
   update_hover(c)
 end
 
--- Our overlay frames let clicks and hover through to Blizzard's row beneath (unverified API names: pcall-guarded).
-local function pass_through(frame)
-  for _, method in ipairs({ "SetPropagateMouseClicks", "SetPropagateMouseMotion" }) do
-    if type(frame[method]) == "function" then pcall(frame[method], frame, true) end
-  end
+-- A cover takes the pointer's motion (it has a tooltip of its own) and lets clicks by to Blizzard's row beneath. The
+-- motion must stop here: Blizzard's Reagents cell draws its own tooltip on OnEnter (the patron's reagents as a frame of
+-- icons, with no text), which replaced ours when the motion was passed through. (pcall-guarded like every game call here.)
+local function clicks_through(frame)
+  if type(frame.SetMouseMotionEnabled) == "function" then pcall(frame.SetMouseMotionEnabled, frame, true) end
+  if type(frame.SetMouseClickEnabled) == "function" then pcall(frame.SetMouseClickEnabled, frame, false) end
 end
 
 -- The concentration cell's tooltip: what the order needs, what you have, what it is worth, and why it is red.
@@ -1040,6 +1035,10 @@ local function new_cells(row)
   c.frame = frame
   c.tintTexture = frame:CreateTexture(nil, "BACKGROUND")
   c.tintTexture:SetAllPoints(frame)
+  c.rowLit = frame:CreateTexture(nil, "BACKGROUND", nil, 1)
+  c.rowLit:SetAllPoints(frame)
+  c.rowLit:SetColorTexture(HOVER_COLOR[1], HOVER_COLOR[2], HOVER_COLOR[3], HOVER_COLOR[4])
+  c.rowLit:Hide()
   c.dimTexture = frame:CreateTexture(nil, "OVERLAY")
   c.dimTexture:SetAllPoints(frame)
   c.dimTexture:SetColorTexture(DIM[1], DIM[2], DIM[3], DIM[4])
@@ -1133,7 +1132,7 @@ local function new_cells(row)
   c.tipCover = CreateFrame("Frame", nil, frame)
   c.tipCover:SetClipsChildren(true)
   c.tipCover:EnableMouse(true)
-  pass_through(c.tipCover)
+  clicks_through(c.tipCover)
   c.tipCover:SetScript("OnEnter", function()
     M.Guard(ROWS, function()
       tip_hover(c, true)
@@ -1178,7 +1177,7 @@ local function new_cells(row)
   c.cover = CreateFrame("Frame", nil, frame)
   c.cover:SetClipsChildren(true)
   c.cover:EnableMouse(true)
-  pass_through(c.cover)
+  clicks_through(c.cover)
   c.cover:SetScript("OnEnter", function()
     M.Guard(ROWS, function()
       cover_hover(c, true)

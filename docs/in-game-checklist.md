@@ -1044,10 +1044,8 @@ Reagents panel: a "Reagents to supply" header with every reagent you supply, own
 over the "?". An item the client has not cached reads "item:<id>" and becomes its name within a moment while the tooltip
 stays open (if not, note whether `/dump C_Item.RequestLoadItemDataByID` exists). Clicking an order row where the icons or
 the panel sit still opens the order, and the row beneath still highlights on hover (the addon calls
-SetPropagateMouseClicks and SetPropagateMouseMotion; `/dump CreateFrame("Frame").SetPropagateMouseMotion` tells whether
-the client has that function: if it is nil, note where the click or hover is lost). Hover the panel and note whether a
-Blizzard tooltip appears beside ours (the old cell may have its own): if it does, SetPropagateMouseMotion on the cover
-must go. Put a reagent in your bags (or use
+SetMouseClickEnabled(false) on the cover: motion stops at it, clicks go by; see P7-39). Hover the panel: no Blizzard
+tooltip appears (the old cell has its own, which is why the motion stops at the cover). Put a reagent in your bags (or use
 one up) with the list open: the red/white counts update within a moment.
 
 P5-13. **The icons setting.** Settings > Orders & Ledger > Crafting-orders window: "Show reward and reagent icons on order
@@ -1470,8 +1468,9 @@ Diagnostics with its recipe; a discount can only be learned where the game charg
 
 P7-39. **Cover tooltips.** On the crafting-orders board hover the green check and a short-reagent icon in the Reagents
 column, then the Commission column. Expected: FabricationStation's text tooltip each time ("You have every reagent...",
-"The customer provides...", "Reagents to supply", "Commission: ..."), with no box holding a single item icon, and at most
-one frame of flicker. A click on those cells still selects the order, and the row still highlights.
+"The customer provides...", "Reagents to supply", "Commission: ..."), with no box of item icons. Left-click on those
+cells still opens the order and right-click still shows its menu (they rely on `SetMouseClickEnabled(false)`, not
+verified here), and the whole row stays lit while the pointer is on them.
 
 ## Not done here
 
