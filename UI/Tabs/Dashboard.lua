@@ -512,7 +512,11 @@ local function refresh_queue_summary(frame)
   end
   local costs = {}
   for _, e in ipairs(entries) do costs[e.id] = queue:GetEntryCost(e.id) end
-  local model = Dashboard.QueueSummaryModel(entries, costs, queue:GetMissingReagents(nil))
+  -- The missing count is the Gather page's rule (the gathering plan's need), so a reagent that a queued sub-craft makes
+  -- is not counted as missing.
+  local need = {}
+  for _, row in ipairs(queue:GetGatheringPlan(nil)) do need[row.itemID] = row.need end
+  local model = Dashboard.QueueSummaryModel(entries, costs, need)
   local lines = {}
   lines[1] = (L["%d entries, %d crafts"]):format(model.entries, model.crafts)
   if model.totalCost ~= nil then
