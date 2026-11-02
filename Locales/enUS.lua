@@ -1287,6 +1287,8 @@ L["Chat requests are off: turn on ChatScan and ChatInbox in Settings > Modules"]
 L["No open chat requests"] = true   -- Requests tab: empty state
 L["No chat requests yet"] = true   -- Requests tab: empty state
 L["That request is no longer in the inbox"] = true   -- Requests tab status line: the request was removed meanwhile
+L["The request inbox is turned off"] = true   -- Requests tab status line: Dismiss did nothing because the inbox module is off
+L["That request is already dismissed"] = true   -- Requests tab status line: Dismiss did nothing because the request was dismissed before
 L["Request inbox"] = true   -- Settings tab group
 L["Keeps the chat requests you were matched with in the Requests tab, so you can whisper back later. Nothing is ever sent for you: answering a request only opens the chat box. Turn the whole feature off under Modules."] = true   -- quotes the label "Modules"
 L["Minutes until a request expires"] = true   -- Settings > Request inbox

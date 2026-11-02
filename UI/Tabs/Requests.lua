@@ -171,8 +171,14 @@ local function reply_notice(reason)
   return L["That request is no longer in the inbox"]
 end
 
-local function dismiss_notice()
+-- Why Dismiss did nothing: read-only data, the module is off, the request was dismissed already, or it is gone.
+local function dismiss_notice(id)
   if ns.FS.dbIsNewer then return L["Read-only: the saved data is from a newer version of the addon"] end
+  local box = inbox()
+  if not box or not box:IsEnabled() then return L["The request inbox is turned off"] end
+  for _, entry in ipairs(box:GetEntries()) do
+    if entry.id == id and entry.status == "dismissed" then return L["That request is already dismissed"] end
+  end
   return L["That request is no longer in the inbox"]
 end
 
@@ -217,7 +223,7 @@ local function render_detail(frame, row)
       local box = inbox()
       if not box then return end
       local ok = box:Dismiss(self.entryID)
-      notice = not ok and dismiss_notice() or nil
+      notice = not ok and dismiss_notice(self.entryID) or nil
       refresh()
     end))
     frame.replyButton, frame.dismissButton = reply, dismiss

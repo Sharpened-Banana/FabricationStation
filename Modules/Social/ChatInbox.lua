@@ -20,7 +20,9 @@ local ADDON_NAME, ns = ...
 -- most 24 hours old, gets an "in" or "out" line; an outgoing whisper also marks the entry replied. issecretvalue is
 -- asked of the text and the name before anything else touches them (a secret value skips the event).
 -- Expiry: an open entry older than dismissMinutes reads "expired" (stored as such when something is written); entries
--- older than keepDays go when the module is enabled and on every new request.
+-- whose newest activity (request line, status change or whisper line) is older than keepDays go when the module is
+-- enabled and on every new request. Nothing runs on a timer: expiry shows on the next read (the tab refreshes when it is
+-- selected and on every inbox event).
 --
 -- Every handler runs through ns.FS:Wrap("ChatInbox", ...), so a failure turns off only this module. No timers.
 local ChatInbox = ns.FS:NewModule("ChatInbox", "AceEvent-3.0")
@@ -137,18 +139,28 @@ local function add_line(entry, dir, text, time)
   while #entry.history > MAX_LINES do table.remove(entry.history, 1) end
 end
 
+-- The newest sign of life of an entry: its request line, its last status change or its last whisper line.
+local function activity(entry)
+  local latest = entry.time
+  if is_finite(entry.statusTime) and entry.statusTime > latest then latest = entry.statusTime end
+  local history = entry.history
+  local last = type(history) == "table" and history[#history] or nil
+  if type(last) == "table" and is_finite(last.time) and last.time > latest then latest = last.time end
+  return latest
+end
+
 local function newer(a, b)
   if a.time ~= b.time then return a.time > b.time end
   return a.id > b.id
 end
 
--- Stores expiry and drops entries older than keepDays. Returns true when something changed.
+-- Stores expiry and drops entries whose newest activity is older than keepDays. Returns true when something changed.
 local function sweep(box, now, settings)
   local changed = false
   local window, cutoff = settings.dismissMinutes * 60, now - settings.keepDays * DAY_SECONDS
   local kept = {}
   for _, entry in ipairs(box.entries) do
-    if valid(entry) and entry.time < cutoff then
+    if valid(entry) and activity(entry) < cutoff then
       changed = true
     else
       kept[#kept + 1] = entry

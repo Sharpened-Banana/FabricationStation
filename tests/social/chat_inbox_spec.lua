@@ -174,6 +174,27 @@ describe("ChatInbox", function()
     assert.equals(before + 1, changes())
   end)
 
+  it("prunes by the newest activity, so a replied thread outlives keepDays after its first request", function()
+    local HOUR = 3600
+    send(match("Thread-Realm"))
+    send(match("Quiet-Realm"))
+    W.advance(600)
+    W.fire("CHAT_MSG_WHISPER_INFORM", "hello", "Thread-Realm")           -- replied 10 minutes after the request
+    W.advance(22 * HOUR)
+    W.fire("CHAT_MSG_WHISPER", "still there?", "Thread-Realm")           -- the last line comes 22 h 10 min in
+    W.advance(6 * DAY + 3 * HOUR - 600)                                   -- the requests are 7 days 1 hour 10 minutes old
+    send(match("New-Realm"))                                              -- an add prunes
+    local senders = {}
+    for _, e in ipairs(entries()) do senders[#senders + 1] = e.sender end
+    table.sort(senders)
+    assert.same({ "New-Realm", "Thread-Realm" }, senders)                 -- Quiet had no activity since the request
+    W.advance(23 * HOUR)                                                  -- over 7 days since the last line: pruned too
+    ns.FS:SetModuleEnabled("ChatInbox", false); ns.FS:SetModuleEnabled("ChatInbox", true)
+    senders = {}
+    for _, e in ipairs(entries()) do senders[#senders + 1] = e.sender end
+    assert.same({ "New-Realm" }, senders)
+  end)
+
   describe("whispers", function()
     it("adds whisper lines and marks the entry replied", function()
       send(match("Buyer-Realm"))

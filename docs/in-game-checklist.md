@@ -1420,7 +1420,7 @@ recipe, the status "open" and your character's short name under "Seen on". Selec
 in the chat box (Reply only fills it). Get an answer. Expected: the entry turns "replied" and its detail shows both
 lines ("<age> ago, you: ..." and "<age> ago, they: ..."); another character of the account sees the same entry with "Seen
 on" naming the first. Leave a request unanswered: after 30 minutes (the default) it reads "expired" and drops out of
-"Show: open". Also report: does `CHAT_MSG_WHISPER_INFORM` name the target as `Name-Realm` (if the reply stays "open" and
+"Show: open" (there is no timer: the change shows when you reselect the tab or on the next inbox event). Also report: does `CHAT_MSG_WHISPER_INFORM` name the target as `Name-Realm` (if the reply stays "open" and
 shows no "you" line, it does not: report the target text with a `/dump` in a `CHAT_MSG_WHISPER_INFORM` listener), and
 does a whisper in an instance (where the text is a secret value) leave everything unchanged without an error
 (`/fs settings > Diagnostics` shows none).

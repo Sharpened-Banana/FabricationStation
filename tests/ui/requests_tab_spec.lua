@@ -196,6 +196,13 @@ describe("Requests tab", function()
     ns.FS.dbIsNewer = false
     Inbox:Dismiss(1)
     click(detail.dismissButton)                                           -- already dismissed
+    assert.equal("That request is already dismissed", plain(v.notice:GetText()))
+    ns.FS:SetModuleEnabled("ChatInbox", false)
+    click(detail.dismissButton)
+    assert.equal("The request inbox is turned off", plain(v.notice:GetText()))
+    ns.FS:SetModuleEnabled("ChatInbox", true)
+    ns.FS.db.global.chatInbox.entries = {}                                -- gone
+    click(detail.dismissButton)
     assert.equal("That request is no longer in the inbox", plain(v.notice:GetText()))
     assert.same({}, W.tells)
     container:GetScript("OnShow")(container)                              -- reselecting the tab starts without feedback
