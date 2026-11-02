@@ -1309,6 +1309,9 @@ L["Open or close FabricationStation"] = true   -- Key Bindings screen: the bindi
 L["Reply to the latest chat request"] = true   -- Key Bindings screen: the binding that opens the chat box on a whisper to the newest open request (nothing is sent)
 L["Open the crafting orders board to claim an order"] = true   -- chat line when the Claim Best Order key is pressed and the orders board is not open
 L["No open chat request"] = true   -- chat line when the reply key is pressed and no request is waiting for an answer
+-- Sub-crafts removed with their parent (phase 7 follow-up F2)
+L["Also removed %d sub-craft"] = true   -- chat line after you remove a queue entry (or its order is filled) and the one sub-craft queued for it goes too
+L["Also removed %d sub-crafts"] = true   -- same line when several sub-crafts go with it; %d is how many
 -- Mail gold (phase 7, Task 21)
 L["Took %s from the mail"] = true   -- chat line after you take gold from the mailbox; %s is the amount with coin icons
 L["Mail total this visit: %s"] = true   -- chat line when the mailbox closes after more than one "Took ..." line; %s is the total gold taken

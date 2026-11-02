@@ -1351,7 +1351,9 @@ P7-22. **Sub-crafts.** Pick a recipe whose reagent you can craft cheaper than th
 bought reagent. The Queue tab shows the reagent's craft above the parent with a leading arrow, and the status says
 "Queued 1 sub-craft first" (or the count); when another character crafts the reagent it adds "... crafts on <name>: mail
 the reagents". Pressing it while the reagents are in the bags queues nothing and says "No sub-craft needed: the
-reagents are on hand".
+reagents are on hand". Remove the parent
+(the Remove button, or fill its order): its sub-crafts go too, with one chat line ("Also removed 2 sub-crafts"); an
+entry you queued on its own stays.
 
 P7-23. **Socket slots and unlearned patron orders.** On the Engineering patron board, find an order for a recipe with a
 socket slot that you know (Evercore Wrist Latch, Quel'dorei Leather Optics, Quel'dorei Silken Cuffs). Expected: the

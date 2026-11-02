@@ -570,6 +570,81 @@ describe("Queue", function()
     end)
   end)
 
+  -- Phase 7 follow-up F2 (review M3): a sub-craft exists only for its parent, so it goes with the parent.
+  describe("sub-crafts go with their parent", function()
+    local ME = "Main-Realm"
+    -- parent <- child <- grandchild, plus a separately queued entry of the same recipe (no parentID) and one other.
+    local function tree(opts)
+      opts = opts or {}
+      local own = Q:Add({ recipeID = 9001, quantity = 1, charKey = ME })
+      local parent = Q:Add({ recipeID = 9001, quantity = 2, charKey = ME, orderID = opts.orderID })
+      local child = Q:Add({ recipeID = 9001, quantity = 3, charKey = ME, parentID = parent }, { before = parent })
+      local grand = Q:Add({ recipeID = 9001, quantity = 6, charKey = ME, parentID = child }, { before = child })
+      local other = Q:Add({ recipeID = 9001, quantity = 4, charKey = "Alt-Realm" })
+      return { own = own, parent = parent, child = child, grand = grand, other = other }
+    end
+    local function ids()
+      local out = {}
+      for i, e in ipairs(Q:GetEntries()) do out[i] = e.id end
+      return out
+    end
+    local function chat() return table.concat(W.printed, "\n") end
+
+    it("removes the children and grandchildren with the parent and says how many", function()
+      local t = tree()
+      local n = #world.messages("FS_QUEUE_CHANGED")
+      Q:Remove(t.parent)
+      assert.same({ t.own, t.other }, ids())
+      assert.equals(n + 1, #world.messages("FS_QUEUE_CHANGED"))
+      assert.is_truthy(chat():find("Also removed 2 sub-crafts", 1, true))
+    end)
+    it("says 'sub-craft' for one child", function()
+      local parent = Q:Add({ recipeID = 9001, quantity = 2, charKey = ME })
+      Q:Add({ recipeID = 9001, quantity = 3, charKey = ME, parentID = parent }, { before = parent })
+      Q:Remove(parent)
+      assert.equals(0, #Q:GetEntries())
+      assert.is_truthy(chat():find("Also removed 1 sub-craft", 1, true))
+      assert.is_falsy(chat():find("sub-crafts", 1, true))
+    end)
+    it("takes a sub-craft's own sub-crafts with it but never its parent", function()
+      local t = tree()
+      Q:Remove(t.child)
+      assert.same({ t.own, t.parent, t.other }, ids())     -- its own child goes with it
+      assert.is_truthy(chat():find("Also removed 1 sub-craft", 1, true))
+      W.printed = {}
+      Q:Remove(t.parent)
+      assert.same({ t.own, t.other }, ids())
+      assert.equals("", chat())
+    end)
+    it("keeps an entry queued on its own, even of the same recipe, and says nothing when no child goes", function()
+      local own = Q:Add({ recipeID = 9001, quantity = 1, charKey = ME })
+      local same = Q:Add({ recipeID = 9001, quantity = 1, charKey = ME })
+      Q:Remove(same)
+      assert.same({ own }, ids())
+      assert.equals("", chat())
+    end)
+    it("removes the children when filling the parent's order removes the parent", function()
+      local t = tree({ orderID = 777 })
+      local n = #world.messages("FS_QUEUE_CHANGED")
+      ns.FS:SendMessage("FS_ORDER_FULFILLED", { orderID = 777 })
+      assert.same({ t.own, t.other }, ids())
+      assert.equals(n + 1, #world.messages("FS_QUEUE_CHANGED"))
+      assert.is_truthy(chat():find("Also removed 2 sub-crafts", 1, true))
+      W.fire("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)            -- the second trigger finds nothing
+      assert.same({ t.own, t.other }, ids())
+    end)
+    it("changes nothing while the saved data is from a newer version", function()
+      local t = tree({ orderID = 777 })
+      ns.FS.dbIsNewer = true
+      local n = #world.messages("FS_QUEUE_CHANGED")
+      Q:Remove(t.parent)
+      ns.FS:SendMessage("FS_ORDER_FULFILLED", { orderID = 777 })
+      assert.same({ t.own, t.grand, t.child, t.parent, t.other }, ids())
+      assert.equals(n, #world.messages("FS_QUEUE_CHANGED"))
+      assert.equals("", chat())
+    end)
+  end)
+
   describe("fulfilled crafting orders", function()
     it("removes the fulfilled order's entries only, with one FS_QUEUE_CHANGED", function()
       local plain = Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })

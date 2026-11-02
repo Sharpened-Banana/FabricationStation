@@ -119,3 +119,6 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     - Orders with a long item name keep a minimal set of cells instead of losing all of them.
     - Fixed: the SaleLog error after winning an auction.
     - Taking gold from the mailbox prints how much in chat, with a total when you close it. It can be turned off.
+    - The Dashboard's queue summary no longer counts a reagent that your queued sub-crafts make as missing.
+    - Removing a queue entry, or filling its order, also removes the sub-crafts queued for it, and a chat line says
+      how many.

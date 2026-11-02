@@ -1,4 +1,5 @@
 local ADDON_NAME, ns = ...
+local L = ns.L
 
 -- Queue: the crafts the player wants to make (entries), restock targets that top an item up to a
 -- count, and what the queue needs (missing reagents, costs). Entries live in db.global.queue
@@ -229,14 +230,55 @@ local function find_index(q, id)
   return nil
 end
 
--- Removes the stored entry `id`; unknown ids (and restock entries) are ignored.
+-- Removes from q.entries the entries `gone` (a set of stored entry tables) plus, again and again, every entry whose
+-- parentID is the id of one already going (a sub-craft exists only for the entry it feeds, so it goes with it, its own
+-- sub-crafts too). An entry queued on its own (no parentID) is never taken this way. Returns how many entries went
+-- besides the ones named in `gone`.
+local function remove_with_children(q, gone)
+  local named, goneIDs = {}, {}
+  for e in pairs(gone) do
+    named[e] = true
+    if type(e.id) == "number" then goneIDs[e.id] = true end
+  end
+  local grew = true
+  while grew do
+    grew = false
+    for _, e in ipairs(q.entries) do
+      if type(e) == "table" and not gone[e] and type(e.parentID) == "number" and goneIDs[e.parentID] then
+        gone[e] = true
+        if type(e.id) == "number" then goneIDs[e.id] = true end
+        grew = true
+      end
+    end
+  end
+  local kept, children = {}, 0
+  for _, e in ipairs(q.entries) do
+    if gone[e] then
+      if not named[e] then children = children + 1 end
+    else
+      kept[#kept + 1] = e
+    end
+  end
+  q.entries = kept
+  return children
+end
+
+-- One chat line when sub-crafts went with the entry that needed them (two whole keys: no plural built from parts).
+local function say_children_removed(n)
+  if n < 1 then return end
+  ns.FS:Print((n == 1 and L["Also removed %d sub-craft"] or L["Also removed %d sub-crafts"]):format(n))
+end
+
+-- Removes the stored entry `id` and the sub-crafts queued for it (recursively; one chat line says how many); unknown ids
+-- (and restock entries) are ignored.
 function Queue:Remove(id)
   local q = store()
   if not q then return end
   local i = find_index(q, id)
   if not i then return end
-  table.remove(q.entries, i)
+  local children = remove_with_children(q, { [q.entries[i]] = true })
   changed(self)
+  say_children_removed(children)
 end
 
 -- Sets the number of crafts of a stored entry; 0 or less removes it.
@@ -762,13 +804,14 @@ local function remove_order_entries(orderID)
   if orderID == nil then return end
   local q = store()
   if not q then return end
-  local kept, removed = {}, false
+  local gone, any = {}, false
   for _, e in ipairs(q.entries) do
-    if type(e) == "table" and e.orderID == orderID then removed = true else kept[#kept + 1] = e end
+    if type(e) == "table" and e.orderID == orderID then gone[e] = true; any = true end
   end
-  if not removed then return end
-  q.entries = kept
+  if not any then return end
+  local children = remove_with_children(q, gone)
   changed(Queue)
+  say_children_removed(children)
 end
 
 -- ns.Msg.ORDER_FULFILLED(fulfilled): sent by Orders for a fulfilment it saw clicked.
