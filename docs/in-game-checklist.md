@@ -1341,6 +1341,13 @@ are queued once with concentration, and pressing it again says "Queued 0 crafts;
 ever queued without pressing a button. With "Use best optionals" ticked, the entries carry the best optionals (see
 P7-20); a long list searches only some recipes per press and the tooltip says how many went without.
 
+P7-22. **Sub-crafts.** Pick a recipe whose reagent you can craft cheaper than the AH (the panel says "crafting"). Press
+"Queue with sub-crafts", then Craft Next repeatedly. Expected: the reagent's craft comes first, then the parent, with no
+bought reagent. The Queue tab shows the reagent's craft above the parent with a leading arrow, and the status says
+"Queued 1 sub-craft first" (or the count); when another character crafts the reagent it adds "... crafts on <name>: mail
+the reagents". Pressing it while the reagents are in the bags queues nothing and says "No sub-craft needed: the
+reagents are on hand".
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

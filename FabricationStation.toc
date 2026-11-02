@@ -50,6 +50,7 @@ Modules\AltsCollector.lua
 Modules\Planner.lua
 Modules\PlannerSpec.lua
 Modules\CraftLists.lua
+Modules\Intermediates.lua
 Modules\Social\Util.lua
 Modules\Social\Gate.lua
 Modules\Social\Codec.lua

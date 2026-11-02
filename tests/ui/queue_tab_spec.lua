@@ -24,6 +24,14 @@ describe("Queue tab model", function()
     assert.same({ "Crafting order #42" }, T.RowTooltip(rows[1]))
     assert.is_nil(T.RowTooltip(rows[2]))
   end)
+  -- Phase 7 Task 14: a sub-craft queued for another entry's reagent.
+  it("starts a sub-craft's name with an arrow", function()
+    local rows = T.BuildRows({ { id = 2, recipeID = 9001, quantity = 1, charKey = "A-B", parentID = 1 },
+      { id = 1, recipeID = 9001, quantity = 1, charKey = "A-B" } }, {}, {}, {}, 0)
+    assert.same({ 1, nil }, { rows[1].parentID, rows[2].parentID })
+    assert.equals("\226\134\179 Sample Recipe 9001", T.CellTexts(rows[1]).name)
+    assert.equals("Sample Recipe 9001", T.CellTexts(rows[2]).name)
+  end)
 end)
 
 describe("Queue tab", function()

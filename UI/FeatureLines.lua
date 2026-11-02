@@ -8,7 +8,7 @@ local L = ns.L
 -- Item tooltips: Tooltips:RegisterLineProvider(id, fn(itemID) -> { {left, right} }) for
 --   "saleLog"  SaleLog:TooltipLines(itemID): "Your sales", "Last sale", "Listed now".
 -- Crafting side panel (ProfessionPanel:RegisterLineProvider / RegisterLineAction), registered in this order: Task 12's
--- "optionals" row and "queueOptionals" button, then Task 14's "intermediates".
+-- "optionals" row and "queueOptionals" button, then Task 14's "intermediates" rows and "queueSubCrafts" button.
 --
 -- Errors: a provider runs under pcall; a failure is logged once per session per provider as source
 -- "FeatureLines:<id>" (Diagnostics lists it under that name; a tooltip that fails again every hover would otherwise
@@ -127,6 +127,113 @@ function FeatureLines.OptionalAction(recipeID, charKey)
   return spec
 end
 
+---------------------------------------------------------------------------
+-- Crafting side panel: intermediates (phase 7, Task 14)
+---------------------------------------------------------------------------
+
+FeatureLines.MAX_INTERMEDIATE_ROWS = 6
+local DOT = " \194\183 "
+
+local function money_or_unknown(copper)
+  if type(copper) ~= "number" then return "?" end
+  return ns.UI.FormatMoney(copper)
+end
+
+-- Intermediates:Resolve for the panel's recipe, or nil while the module is off or without a schematic.
+local function resolution(recipeID, charKey)
+  local intermediates = ns.FS:GetModule("Intermediates", true)
+  if not intermediates or not intermediates:IsEnabled() then return nil end
+  return intermediates:Resolve(recipeID, charKey), intermediates
+end
+
+local function row_state(row)
+  if row.cycle then return L["buy only (cycle)"] end
+  if row.choice == "craft" then return L["crafting"] end
+  return L["buying"]
+end
+
+-- One row per craftable reagent (at most MAX_INTERMEDIATE_ROWS, then "+N more"): its craft cost, its buy price and
+-- what the plan does; then the saving per craft when crafting some of them is cheaper.
+function FeatureLines.IntermediateLines(recipeID, charKey)
+  local res = resolution(recipeID, charKey)
+  if not res or #res.rows == 0 then return {} end
+  local out = {}
+  for i, row in ipairs(res.rows) do
+    if i > FeatureLines.MAX_INTERMEDIATE_ROWS then
+      out[#out + 1] = { L["+%d more"]:format(#res.rows - FeatureLines.MAX_INTERMEDIATE_ROWS), "" }
+      break
+    end
+    out[#out + 1] = { item_name(row.itemID), L["craft %s \194\183 buy %s \194\183 %s"]:format(
+      money_or_unknown(row.craft and row.craft.unit), money_or_unknown(row.buy), row_state(row)) }
+  end
+  if type(res.saving) == "number" and res.saving > 0 then
+    out[#out + 1] = { L["With intermediates"], L["saves %s per craft"]:format(ns.UI.FormatMoney(res.saving)) }
+  end
+  return out
+end
+
+local lastSubCrafts   -- { recipeID, charKey, text }: what the panel last queued with sub-crafts (session only)
+
+local function short_name(charKey)
+  return tostring(charKey):match("^([^-]+)") or tostring(charKey)
+end
+
+-- The status after a click: how many sub-crafts went first, and which of them another character makes.
+local function sub_crafts_text(queued, charKey)
+  local n = #queued.subIDs
+  local text = n == 1 and L["Queued 1 sub-craft first"] or L["Queued %d sub-crafts first"]:format(n)
+  local queue = ns.FS:GetModule("Queue", true)
+  local scanner = ns.FS:GetModule("Scanner", true)
+  local wanted = {}
+  for _, id in ipairs(queued.subIDs) do wanted[id] = true end
+  local items, chars, seenChar = {}, {}, {}
+  for _, e in ipairs(queue and queue:GetEntries() or {}) do
+    if wanted[e.id] and e.charKey ~= charKey then
+      local schematic = scanner and scanner:GetSchematic(e.recipeID)
+      local outputs = schematic and schematic.outputItemIDs or {}
+      local itemID = outputs[e.targetQuality or 1] or outputs[1]
+      items[#items + 1] = itemID and item_name(itemID) or (schematic and schematic.name) or tostring(e.recipeID)
+      if not seenChar[e.charKey] then
+        seenChar[e.charKey] = true
+        chars[#chars + 1] = short_name(e.charKey)
+      end
+    end
+  end
+  if #items > 0 then
+    text = text .. DOT .. L["%s crafts on %s: mail the reagents"]:format(ns.UI.JoinList(items), ns.UI.JoinList(chars))
+  end
+  return text
+end
+
+-- The "Queue with sub-crafts" button: nil while the module is off or without a craftable reagent. Enabled when a
+-- reagent is chosen to craft and the queue is writable; the click queues one craft of the recipe with its sub-crafts
+-- ahead of it (Intermediates:QueueSubCrafts), nothing else.
+function FeatureLines.SubCraftAction(recipeID, charKey)
+  local res, intermediates = resolution(recipeID, charKey)
+  if not res or #res.rows == 0 then return nil end
+  local crafting = false
+  for _, row in ipairs(res.rows) do
+    if row.choice == "craft" and row.craft then crafting = true end
+  end
+  local canWrite = writable()
+  local spec = { text = L["Queue with sub-crafts"], enabled = crafting and canWrite,
+    onClick = function()
+      if not crafting or not writable() then return end
+      local queued, reason = intermediates:QueueSubCrafts({ recipeID = recipeID, quantity = 1, charKey = charKey })
+      if queued then
+        lastSubCrafts = { recipeID = recipeID, charKey = charKey, text = sub_crafts_text(queued, charKey) }
+      elseif reason == "nothing" then
+        lastSubCrafts = { recipeID = recipeID, charKey = charKey, text = L["No sub-craft needed: the reagents are on hand"] }
+      end
+    end }
+  if not canWrite then
+    spec.status = L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
+  elseif lastSubCrafts and lastSubCrafts.recipeID == recipeID and lastSubCrafts.charKey == charKey then
+    spec.status = lastSubCrafts.text
+  end
+  return spec
+end
+
 function FeatureLines:OnInitialize()
   local tooltips = ns.FS:GetModule("Tooltips", true)
   if tooltips then
@@ -144,6 +251,13 @@ function FeatureLines:OnInitialize()
     end)
     panel:RegisterLineAction("queueOptionals", function(recipeID, charKey)
       return guarded("queueOptionals", function() return FeatureLines.OptionalAction(recipeID, charKey) end)
+    end)
+    panel:RegisterLineProvider("intermediates", function(recipeID, charKey)
+      local lines = guarded("intermediates", function() return FeatureLines.IntermediateLines(recipeID, charKey) end)
+      return type(lines) == "table" and lines or {}
+    end)
+    panel:RegisterLineAction("queueSubCrafts", function(recipeID, charKey)
+      return guarded("queueSubCrafts", function() return FeatureLines.SubCraftAction(recipeID, charKey) end)
     end)
   end
 end

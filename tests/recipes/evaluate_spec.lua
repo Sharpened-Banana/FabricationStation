@@ -537,4 +537,50 @@ describe("Recipes:Evaluate", function()
       assert.same({}, alloc)
     end)
   end)
+
+  -- Phase 7 Task 14: crafted-reagent costs passed down by Intermediates.
+  describe("reagentPrices", function()
+    it("reagentPrices overrides reagent prices without touching the cache", function()
+      local base = R:Evaluate(9001, "Main-Realm", { targetQuality = 1 })
+      assert.equals(3000, base.reagentCost)                                  -- 10 x 100 + 5 x 200 + 2 x 500
+      local cheap = R:Evaluate(9001, "Main-Realm", { targetQuality = 1, reagentPrices = { [1001] = 40 } })
+      assert.equals(2400, cheap.reagentCost)                                 -- 10 x 40 + 1000 + 1000
+      assert.equals(base.expectedSale, cheap.expectedSale)
+      assert.are_not.equal(cheap, R:Evaluate(9001, "Main-Realm", { targetQuality = 1, reagentPrices = { [1001] = 40 } }))
+      assert.equals(base, R:Evaluate(9001, "Main-Realm", { targetQuality = 1 }))   -- the cached plain result untouched
+    end)
+
+    it("is not stored: a plain call after it evaluates at market prices", function()
+      local cheap = R:Evaluate(9001, "Main-Realm", { targetQuality = 1, reagentPrices = { [1001] = 40 } })
+      local base = R:Evaluate(9001, "Main-Realm", { targetQuality = 1 })
+      assert.are_not.equal(cheap, base)
+      assert.equals(3000, base.reagentCost)
+      assert.equals(base, R:Evaluate(9001, "Main-Realm", { targetQuality = 1 }))
+    end)
+
+    it("never prices an output, and an overridden reagent is never stale or aged", function()
+      world.prices[1001].ageDays, world.prices[5002].ageDays = 9, 1
+      local plain = R:Evaluate(9001, "Main-Realm", { targetQuality = 1 })
+      assert.is_true(plain.flags.stalePrice); assert.equals(9, plain.priceAgeDays)
+      local r = R:Evaluate(9001, "Main-Realm", { targetQuality = 1, reagentPrices = { [1001] = 40, [5001] = 1, [5002] = 1 } })
+      assert.is_false(r.flags.stalePrice); assert.equals(1, r.priceAgeDays)
+      assert.equals(plain.expectedSale, r.expectedSale)
+    end)
+
+    it("an empty or non-table reagentPrices is a plain (cached) call", function()
+      local base = R:Evaluate(9001, "Main-Realm", {})
+      assert.equals(base, R:Evaluate(9001, "Main-Realm", { reagentPrices = {} }))
+      assert.equals(base, R:Evaluate(9001, "Main-Realm", { reagentPrices = 5 }))
+    end)
+
+    it("applies with extraStats, and keeps the caller's tables", function()
+      local prices = { [1001] = 40 }
+      local opts = { targetQuality = 1, reagentPrices = prices, extraStats = { skill = 50 } }
+      local base = R:Evaluate(9001, "Main-Realm", { targetQuality = 1 })
+      local r = R:Evaluate(9001, "Main-Realm", opts)
+      assert.equals(2400, r.reagentCost); assert.equals(base.skill + 50, r.skill)
+      assert.same({ targetQuality = 1, reagentPrices = { [1001] = 40 }, extraStats = { skill = 50 } }, opts)
+      assert.equals(prices, opts.reagentPrices)
+    end)
+  end)
 end)

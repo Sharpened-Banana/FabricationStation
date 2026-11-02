@@ -50,6 +50,10 @@
 --   recordAuctionatorTerms()  wraps the stub Auctionator v1 and returns { terms, lists }: terms are
 --               copies of the ConvertToSearchString terms, lists are { caller, name, searchStrings }
 --               of CreateShoppingList calls. Call it again after replacing the Auctionator global.
+-- opts.intermediates (phase 7 Task 14): adds recipe 9100 (no qualities, skill line 2906, known by both characters)
+-- that makes reagent 1001 from 2 x 1101 (price 20); world.addRecipe(recipeID, outputItemID, reagents) adds more such
+-- one-slot recipes ({ { itemID, quantity } }, one basic slot each) for the specs that build reagent graphs, known by
+-- both characters, and refreshes the item index.
 -- Blizzard_Professions (Task 16): install_wow_stubs removes the globals a previous fake_professions_frame installed.
 -- opts.professions = fake_professions_frame opts builds those frames before the addon boots (so modules enable with
 -- Blizzard_Professions already loaded; `loaded` defaults to true) and stores the handle as world.form.
@@ -122,6 +126,17 @@ local function sample_schematic(recipeID, outputs, now)
     },
     isConcentrationCapable = true, name = "Sample Recipe " .. recipeID, icon = 134400, recipeType = 1,
     supportsQualities = true, craftingDataID = CRAFTING_DATA_ID, build = 70575, time = now,
+  }
+end
+
+-- A recipe without qualities that makes one item from basic slots { { itemID, quantity } } (one slot each).
+local function simple_schematic(recipeID, outputItemID, reagents, now)
+  local slots = {}
+  for i, r in ipairs(reagents) do slots[i] = slot(i, r[2], { r[1] }, 20 + i, 1) end
+  return {
+    recipeID = recipeID, skillLineID = SKILL_LINE, outputItemIDs = { [1] = outputItemID }, maxQuality = 1,
+    baseDifficulty = 100, quantityMin = 1, quantityMax = 1, reagentSlots = slots, isConcentrationCapable = false,
+    name = "Sub Recipe " .. recipeID, icon = 134400, recipeType = 1, supportsQualities = false, build = 70575, time = now,
   }
 end
 
@@ -235,6 +250,10 @@ local function make_world(opts)
     prices[outputs[2]] = { value = BASE_PRICES[5002] + (k - 1) * 5000, source = "auction", ageDays = 1 }
     itemCraftingData[outputs[1]], itemCraftingData[outputs[2]] = CRAFTING_DATA_ID, CRAFTING_DATA_ID
   end
+  if opts.intermediates then
+    schematics[9100] = simple_schematic(9100, 1001, { { 1101, 2 } }, W.now)
+    prices[1101] = { value = 20, source = "auction", ageDays = 1 }
+  end
   define_game_data(ns, itemCraftingData)
 
   local form
@@ -344,6 +363,13 @@ local function make_world(opts)
     local s = world.schematics[recipeID]
     return s and { professionID = s.skillLineID } or nil
   end)
+
+  function world.addRecipe(recipeID, outputItemID, reagents)
+    world.schematics[recipeID] = simple_schematic(recipeID, outputItemID, reagents, W.now)
+    for _, charKey in ipairs(CHARS) do world.chars[charKey].professions[SKILL_LINE].recipes[recipeID] = true end
+    ns.FS:SendMessage("FS_RECIPES_CHANGED")
+    return world.schematics[recipeID]
+  end
 
   function world.openProfession(skillLineID) world.openLine = skillLineID end
   -- Blizzard's transaction for the self-check: what CreateCraftingReagentInfoTbl returns (infos), for recipeID

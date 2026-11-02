@@ -47,6 +47,7 @@ local TONES = { good = { 0.25, 1, 0.25 }, bad = { 1, 0.25, 0.25 }, warn = { 1, 0
 local READ_ONLY = L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
 local DAY, HOUR, MINUTE = 86400, 3600, 60
 local DOT = "  \194\183  "   -- between the parts of a row's second line
+local SUB_CRAFT_MARK = "\226\134\179 "   -- before the name of a sub-craft (an entry made for a later entry's reagent)
 
 -- Left to right; the flexible recipe column takes the width the fixed ones leave over. Missing reagents
 -- and the cooldown wait are a second line under each row.
@@ -158,7 +159,7 @@ function Tab.BuildRows(entries, costs, missing, readyAt, now, results)
       missingText = missing_text(missing[e.id]), optionalsText = optionals_text(e.optionalItemIDs),
       unplacedText = unplaced_text(e, r), cost = costs[e.id],
       readyText = (type(ready) == "number" and ready > now) and L["ready in %s"]:format(Tab.FormatDuration(ready - now)) or "",
-      isRestock = e.isRestock == true, orderID = e.orderID,
+      isRestock = e.isRestock == true, orderID = e.orderID, parentID = e.parentID,
       estimated = flags.estimated == true, stale = flags.stalePrice == true, unreachable = flags.unreachableTarget == true,
       priceAge = type(r) == "table" and r.priceAgeDays or nil,
     }
@@ -179,8 +180,10 @@ function Tab.SecondLine(row)
 end
 
 -- The display text of one row's cells, by column key.
+-- [phase 7 Task 14] A sub-craft (an entry with a parentID: it makes a reagent of a later entry) starts with an arrow.
 function Tab.CellTexts(row)
   local name = row.name
+  if row.parentID ~= nil then name = SUB_CRAFT_MARK .. name end
   if row.isRestock then name = name .. "  " .. color(DIM, L["[restock]"]) end
   if row.orderID ~= nil then name = name .. "  " .. color(DIM, L["[order]"]) end
   if row.unreachable then name = name .. "  " .. color(WARN, L["[quality unreachable]"]) end

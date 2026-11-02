@@ -51,6 +51,21 @@ describe("Queue", function()
       ns.FS.db.global.queue.entries[1] = { id = 7, recipeID = 9001, quantity = 1, charKey = "Main-Realm" }
       assert.equals(8, Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" }))
     end)
+    -- Phase 7 Task 14: sub-crafts go ahead of the entry that needs them.
+    it("inserts an entry before another", function()
+      local a = Q:Add({ recipeID = 9001, quantity = 1, charKey = "Main-Realm" })
+      local b = Q:Add({ recipeID = 9001, quantity = 2, charKey = "Main-Realm" })
+      local c = Q:Add({ recipeID = 9001, quantity = 3, charKey = "Main-Realm", parentID = b }, { before = b })
+      local d = Q:Add({ recipeID = 9001, quantity = 4, charKey = "Main-Realm", parentID = "x" }, { before = 999 })
+      local ids = {}
+      for i, e in ipairs(Q:GetEntries()) do ids[i] = e.id end
+      assert.same({ a, c, b, d }, ids)
+      assert.equals(b, Q:GetEntries()[2].parentID)
+      assert.is_nil(Q:GetEntries()[4].parentID)            -- not a number: not stored
+      assert.is_nil(Q:GetEntries()[1].parentID)
+      assert.is_nil(ns.FS.db.global.queue.entries[1].parentID)
+    end)
+
     it("defaults the character and rejects bad entries", function()
       local id = Q:Add({ recipeID = 9001, quantity = 2 })
       assert.equals("Main-Realm", Q:GetEntries()[1].charKey)

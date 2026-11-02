@@ -1210,3 +1210,16 @@ L["Queue plan"] = true   -- Planner tab, Concentration section: button that adds
 L["Add every row's crafts to the Queue, with concentration"] = true   -- Planner tab: tooltip of Queue plan
 L["Queued 1 craft; %d were already queued"] = true   -- Planner tab: the same status when exactly one craft was added
 L["Queued %d crafts; %d were already queued"] = true   -- Planner tab: status after Queue plan; crafts added, crafts of rows that were already in the queue
+
+-- Intermediate crafts (phase 7, Task 14)
+L["craft %s \194\183 buy %s \194\183 %s"] = true   -- profession side panel, one row per reagent some recipe makes: the cost to craft one, the price to buy one, then "crafting", "buying" or "buy only (cycle)"
+L["crafting"] = true   -- profession side panel, reagent row: the plan crafts this reagent (cheaper, or the player's choice)
+L["buying"] = true   -- profession side panel, reagent row: the plan buys this reagent
+L["buy only (cycle)"] = true   -- profession side panel, reagent row: crafting it would need the item being made, so it is bought
+L["With intermediates"] = true   -- profession side panel: row label before the saving from crafting reagents
+L["saves %s per craft"] = true   -- profession side panel: money saved on one craft by crafting reagents instead of buying them
+L["Queue with sub-crafts"] = true   -- profession side panel: button that queues the recipe with the crafts of its reagents ahead of it
+L["Queued 1 sub-craft first"] = true   -- profession side panel: status after Queue with sub-crafts, exactly one reagent craft queued ahead
+L["Queued %d sub-crafts first"] = true   -- profession side panel: status after Queue with sub-crafts; reagent crafts queued ahead of the recipe
+L["%s crafts on %s: mail the reagents"] = true   -- profession side panel: added to the status; the reagents another character crafts, and that character
+L["No sub-craft needed: the reagents are on hand"] = true   -- profession side panel: status when Queue with sub-crafts finds every reagent already held

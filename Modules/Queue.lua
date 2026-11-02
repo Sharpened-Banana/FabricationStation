@@ -188,7 +188,10 @@ end
 -- Returns the new id, or nil
 -- for an invalid entry or while the saved data is read-only. An entry with an orderID belongs to that crafting
 -- order: Craft Next crafts it only while the order is claimed, and FS_ORDER_FULFILLED removes it.
-function Queue:Add(entry)
+-- [phase 7 Task 14] entry.parentID (stored only when it is a number): the id of the entry this one makes a reagent
+-- for (Intermediates' sub-crafts). opts.before = a stored entry's id inserts the new entry at that entry's index, so
+-- it comes first in queue order (Craft Next's order); an unknown id appends, as without opts.
+function Queue:Add(entry, opts)
   if type(entry) ~= "table" or type(entry.recipeID) ~= "number" then return nil end
   local quantity = positive_int(entry.quantity)
   if not quantity or not writable() then return nil end
@@ -201,12 +204,20 @@ function Queue:Add(entry)
     end
   end
   q.nextID = nextID + 1
-  q.entries[#q.entries + 1] = {
+  local stored = {
     id = nextID, recipeID = entry.recipeID, quantity = quantity, charKey = entry.charKey or ns.FS:CharKey(),
     targetQuality = entry.targetQuality, useConcentration = entry.useConcentration, orderID = entry.orderID,
     providedReagents = type(entry.providedReagents) == "table" and copy_map(entry.providedReagents) or nil,
     optionalItemIDs = clean_optionals(entry.optionalItemIDs),
+    parentID = type(entry.parentID) == "number" and entry.parentID or nil,
   }
+  local at
+  if type(opts) == "table" and opts.before ~= nil then
+    for i, e in ipairs(q.entries) do
+      if type(e) == "table" and e.id == opts.before then at = i; break end
+    end
+  end
+  table.insert(q.entries, at or #q.entries + 1, stored)
   changed(self)
   return nextID
 end

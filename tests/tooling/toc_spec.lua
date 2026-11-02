@@ -131,6 +131,18 @@ describe("FabricationStation.toc", function()
     end
     assert.is_true(at["Modules/CraftLists.lua"] < at["UI/Util.lua"])
   end)
+  -- Phase 7 Task 14: Intermediates reads Recipes, Scanner, Prices and Queue at call time and loads before the UI
+  -- (FeatureLines draws its rows).
+  it("loads Modules/Intermediates.lua after Modules/CraftLists.lua and before UI/Util.lua", function()
+    local at = {}
+    for i, f in ipairs(toc.files) do at[f] = i end
+    assert.is_truthy(at["Modules/Intermediates.lua"])
+    for _, dep in ipairs({ "Modules/Recipes.lua", "Modules/Queue.lua", "Modules/CraftLists.lua" }) do
+      assert.is_true(at[dep] < at["Modules/Intermediates.lua"], dep)
+    end
+    assert.is_true(at["Modules/Intermediates.lua"] < at["UI/Util.lua"])
+    assert.is_true(at["Modules/Intermediates.lua"] < at["UI/FeatureLines.lua"])
+  end)
   -- Phase 3 (Tasks 12-14): the shared view helpers before the view files, the view files before the tabs that use
   -- them, all before the Settings tab.
   it("loads the phase-3 grid, view helpers, views and tabs in order", function()

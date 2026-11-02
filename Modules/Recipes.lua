@@ -444,8 +444,10 @@ local function owned_count(itemID, charKey, excludeWarband)
 end
 
 -- RecipeInput and the PriceResults behind it for recipeID on charKey (schematic nil = fetch it). nil without
--- a schematic.
-local function build(recipeID, charKey, o, optionalItemIDs, schematic)
+-- a schematic. reagentPrices (nil = none): { [itemID] = copper } used instead of Prices:Get for reagents, as
+-- { value, source = "craft" }; an item that is also one of the recipe's outputs keeps its market price (outputs are
+-- never overridden).
+local function build(recipeID, charKey, o, optionalItemIDs, schematic, reagentPrices)
   schematic = schematic or scanner():GetSchematic(recipeID)
   if not schematic then return nil end
   local calib = Recipes:GetCalibration(charKey, recipeID)
@@ -453,9 +455,16 @@ local function build(recipeID, charKey, o, optionalItemIDs, schematic)
 
   local P = prices()
   local results, values, owned = {}, {}, o.ownedReagentsFree and {} or nil
+  local outputs = {}
+  for _, itemID in pairs(schematic.outputItemIDs or {}) do outputs[itemID] = true end
   local function price(itemID, reagent)
     if itemID == nil or results[itemID] then return end
-    results[itemID] = P:Get(itemID) or {}
+    local override = reagent and reagentPrices and not outputs[itemID] and reagentPrices[itemID]
+    if type(override) == "number" and override == override and override >= 0 and override < math.huge then
+      results[itemID] = { value = override, source = "craft" }
+    else
+      results[itemID] = P:Get(itemID) or {}
+    end
     values[itemID] = results[itemID].value
     if reagent and owned then owned[itemID] = owned_count(itemID, charKey, o.excludeWarband) end
   end
@@ -499,8 +508,8 @@ end
 -- extraStats (phase 3 spec what-if, nil = none): { skill, multicraft, resourcefulness, ingenuity } added through
 -- 1b's own optional-reagent path as a free pseudo-optional (Stats.ApplyOptionals adds skill and converts the
 -- ratings with Stats.RATING_PER_UNIT; price 0 adds no cost), so Math needs no change.
-local function evaluate(recipeID, charKey, o, schematic, extraStats)
-  local input, ctx = build(recipeID, charKey, o, o.optionalItemIDs, schematic)
+local function evaluate(recipeID, charKey, o, schematic, extraStats, reagentPrices)
+  local input, ctx = build(recipeID, charKey, o, o.optionalItemIDs, schematic, reagentPrices)
   if not input then return nil end
   -- [phase 7 Task 11] Only the requested optionals that Math.Optionals.Place puts in a slot are applied (EvaluateCraft
   -- applies every listed one), so the effects and cost are exactly optionalAllocation's. A requested itemID the
@@ -580,14 +589,20 @@ end
 -- cached key, sorted; absent or empty = a plain call sharing its cache entry). A requested itemID the schematic does
 -- not list makes the result unpriced with flags.unknownOptional. RecipeResult.optionalAllocation =
 -- { { slotIndex, itemID, quantity } } places them ({} for a plain call).
+-- [phase 7 Task 14] opts.reagentPrices = { [itemID] = copper } prices those reagents (never the outputs) at the given
+-- copper instead of Prices:Get; their PriceResult is { value, source = "craft" } (never stale, no age). Read like
+-- extraStats, before full_opts: a non-empty table makes the call uncached (it neither reads nor writes the cache);
+-- with both, both apply. An empty or non-table value is a plain call.
 function Recipes:Evaluate(recipeID, charKey, opts)
   charKey = charKey or ns.FS:CharKey()
   local schematic = scanner():GetSchematic(recipeID)
   if not schematic then return nil end
   local extraStats = type(opts) == "table" and type(opts.extraStats) == "table" and next(opts.extraStats) ~= nil
     and opts.extraStats or nil
+  local reagentPrices = type(opts) == "table" and type(opts.reagentPrices) == "table"
+    and next(opts.reagentPrices) ~= nil and opts.reagentPrices or nil
   local o = full_opts(opts)
-  if extraStats then return evaluate(recipeID, charKey, o, schematic, extraStats) end
+  if extraStats or reagentPrices then return evaluate(recipeID, charKey, o, schematic, extraStats, reagentPrices) end
   local version = prices():GetVersion()
   if version ~= cachePriceVersion then
     cache, cachePriceVersion = {}, version
