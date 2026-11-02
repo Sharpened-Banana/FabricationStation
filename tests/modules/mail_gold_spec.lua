@@ -126,6 +126,41 @@ describe("MailGold", function()
     assert.equal(1, #W.printed)
   end)
 
+  -- Final review (T21 triage): the visit's edges.
+  it("prints the total exactly once when both close events fire after two lines", function()
+    W.fire("MAIL_SHOW")
+    gain(10 * G); W.advance(2); gain(5 * G); W.advance(2)
+    W.fire("MAIL_CLOSED")
+    W.fire("PLAYER_INTERACTION_MANAGER_FRAME_HIDE", MAIL_INFO)   -- the second close of the same visit
+    W.advance(5)
+    assert.same({ took(10 * G), took(5 * G), total(15 * G) }, W.printed)
+  end)
+
+  it("totals the gold gained at a mailbox with COD payments, not the net change", function()
+    W.fire("MAIL_SHOW")
+    spend(30 * G); gain(10 * G); W.advance(2)
+    spend(2 * G); gain(4 * G); W.advance(2)
+    W.fire("MAIL_CLOSED")
+    assert.same({ took(10 * G), took(4 * G), total(14 * G) }, W.printed)
+  end)
+
+  it("carries nothing from one single-line visit to the next", function()
+    W.fire("MAIL_SHOW"); gain(10 * G); W.advance(2); W.fire("MAIL_CLOSED")
+    W.fire("MAIL_SHOW"); gain(5 * G); W.advance(2); W.fire("MAIL_CLOSED")
+    assert.same({ took(10 * G), took(5 * G) }, W.printed)   -- one line each: no total
+  end)
+
+  it("keeps the pending gain when the mailbox is shown again while open", function()
+    W.fire("MAIL_SHOW")
+    gain(10 * G); W.advance(2)
+    gain(3 * G)                          -- still waiting for its 1.5 s
+    W.fire("MAIL_SHOW")                  -- no close event came: the old visit ends first
+    assert.same({ took(10 * G), took(3 * G), total(13 * G) }, W.printed)
+    gain(1 * G); W.advance(2)            -- the new visit counts from here
+    W.fire("MAIL_CLOSED")
+    assert.same({ took(10 * G), took(3 * G), total(13 * G), took(1 * G) }, W.printed)
+  end)
+
   it("never counts money when GetMoney is unknown", function()
     W.fire("MAIL_SHOW")
     local real = money

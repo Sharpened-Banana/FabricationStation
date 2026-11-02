@@ -18,7 +18,9 @@ local L = ns.L
 -- newer version, so nothing is created or written then). Every handler runs through ns.FS:Wrap("MailGold", ...); the
 -- one timer is the Debounce key "mailGold.print", cancelled in OnDisable.
 --
--- Turned on while the mailbox is already open, the module starts counting at the next MAIL_SHOW. In game: P7-37.
+-- A MAIL_SHOW while the mailbox is already open ends that visit first (its pending line and total are printed). Turned
+-- off, the module drops a gain it has not printed yet. Turned on while the mailbox is already open, the module starts
+-- counting at the next MAIL_SHOW. In game: P7-37.
 local MailGold = ns.FS:NewModule("MailGold", "AceEvent-3.0")
 
 MailGold.SETTINGS_DEFAULTS = { showTotal = true }
@@ -75,7 +77,12 @@ local function flush()
   ns.FS:Print(L["Took %s from the mail"]:format(format_money(amount)))
 end
 
+local on_close
+
+-- MAIL_SHOW: a new visit. Shown again while still open (no close event came), the old visit ends first, so its
+-- pending gain and its total are printed, not dropped.
 local function on_show()
+  if open then on_close() end
   reset_visit()
   open = true
   baseline = money_now()
@@ -91,7 +98,7 @@ local function on_money()
   baseline = now
 end
 
-local function on_close()
+on_close = function()
   if not open then return end
   open = false
   flush()
