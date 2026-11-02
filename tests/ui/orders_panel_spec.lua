@@ -418,7 +418,8 @@ describe("OrdersPanel on the crafting orders page", function()
       assert.same({ "all", true, true, true, true }, state(rows():GetCells(short)))
       assert.same({ "noProfit", true, false, true, true }, state(rows():GetCells(mid)))   -- the icon costs the profit cell
       assert.same({ "noProfit", true, false, true, true }, state(rows():GetCells(medium)))
-      assert.same({ "none", false, false, true, false }, state(rows():GetCells(long)))
+      -- No room for the core: the blocked risk keeps its count in the minimal tier ([risk] [+]), without the icon.
+      assert.same({ "minimal", true, false, true, false }, state(rows():GetCells(long)))
       assert.same({}, form.assignedFields)
     end)
     -- The score cell repeats the profit when no concentration is charged: with the profit cell visible, only the

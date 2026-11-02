@@ -300,8 +300,11 @@ describe("OrdersPanel row icons", function()
       local long = 268 - LY.CORE_WIDTH + 1 - 8
       local a, b = cells_of(row_for(plain, geometry(long))), cells_of(row_for(rich, geometry(long)))
       assert.same({ a.fit, a.strip:IsShown() }, { b.fit, b.strip:IsShown() })
+      -- Without room for the core, the rich row keeps its info cell (which lists the rewards): the minimal tier.
       local c = cells_of(row_for(rich, geometry(268 - LY.CORE_WIDTH + 40)))
-      assert.same({ "none", false, true }, { c.fit, c.strip:IsShown(), c.tipCover:IsShown() })
+      assert.same({ "minimal", true, true }, { c.fit, c.strip:IsShown(), c.tipCover:IsShown() })
+      local d = cells_of(row_for(rich, geometry(268 - LY.MINIMAL_WIDTH + 1)))
+      assert.same({ "none", false, true }, { d.fit, d.strip:IsShown(), d.tipCover:IsShown() })
     end)
 
     describe("tooltip", function()

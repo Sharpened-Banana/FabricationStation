@@ -7,7 +7,8 @@ local L = ns.L
 --                     hide, a strip of cells (net profit, concentration, score, risk count with a tooltip, Add to Queue;
 --                     the concentration cell is a small icon and the concentration the order needs to reach its minimum
 --                     quality, red when you have less, a red cross when it cannot be reached, empty when none is
---                     needed; the score cell is blank while it would only repeat the profit shown beside it), a cover over
+--                     needed; the score cell is blank while it would only repeat the profit shown beside it; a recipe the
+--                     character has not learned shows a red cross, with its own tooltip, instead of profit and score), a cover over
 --                     Blizzard's Commission cell that replaces its gold with the compact commission and 20 px icons
 --                     for the rewards of a patron order ("+N" counts those that do not fit; its tooltip gives the
 --                     full commission, the rewards and what the order costs per knowledge point or Moxie; the info
@@ -36,7 +37,8 @@ local L = ns.L
 -- (OnInitializedFrame), and again in a re-fit pass on the next frame (1a's Debounce, coalesced) after rows were
 -- initialised or item data arrived while the list is on screen, since Blizzard can write the name after our callback.
 -- The cell strip sits at the right of the item-name column and gives way to the name (H1-6): the profit cell goes
--- first, then the whole strip; our cells never cover Blizzard's item name. The rewards are not in this column:
+-- first, then all but the risk / info cell, [+] and a not-learned recipe's cross (the "minimal" tier), then the whole
+-- strip; our cells never cover Blizzard's item name. The rewards are not in this column:
 -- they are in the Commission cover (a column identified like the Reagents column, failing closed: no column, no cover,
 -- and Blizzard's gold shows), the icons that fit right of the amount, the last visible slot becoming "+N".
 -- The Reagents cover is replaced, not edited: Blizzard's cell and its text are never written (no SetText, SetAlpha or
@@ -88,12 +90,18 @@ local CONC_SLOT = CONC_WIDTH + CELL_GAP
 local CORE_WIDTH = SCORE_CORE + CONC_SLOT
 local WARN_SLOT, PROFIT_SLOT = WARN_SIZE + CELL_GAP, CELL_WIDTH + CELL_GAP
 local STRIP_WIDTH = CORE_WIDTH + WARN_SLOT + PROFIT_SLOT
+-- A recipe the character has not learned (the notLearned risk) shows a red cross in the score cell's slot, right of
+-- [conc], in place of the profit and the score (both hidden). When the core has no room, the "minimal" tier keeps only
+-- [risk] [+] and, for such a recipe, the cross beside them: MINIMAL_WIDTH (+ LEARN_SLOT).
+-- (One table: the main chunk is at Lua 5.1's 200-locals limit.)
+local LEARN = { WIDTH = 12, SLOT = 12 + CELL_GAP, MINIMAL = ADD_SIZE + CELL_GAP + RISK_WIDTH }
 local PAD, GAP = 6, 4
 local ICON_SIZE, ICON_GAP, MORE_WIDTH = 20, 2, 24   -- row icons: 20 px, 2 px apart; the "+N" slot has a width of its own
 M.ICON_SIZE, M.ICON_GAP, M.MORE_WIDTH = ICON_SIZE, ICON_GAP, MORE_WIDTH   -- read-only (the specs derive their geometry)
 -- The strip's measures, read-only (the specs derive their geometry from them).
 M.LAYOUT = { CORE_WIDTH = CORE_WIDTH, SCORE_CORE = SCORE_CORE, CONC_SLOT = CONC_SLOT, WARN_SLOT = WARN_SLOT,
-  PROFIT_SLOT = PROFIT_SLOT, STRIP_WIDTH = STRIP_WIDTH, PAD = PAD, GAP = GAP, CELL_GAP = CELL_GAP, FIXED_COLUMNS = FIXED_COLUMNS }
+  PROFIT_SLOT = PROFIT_SLOT, STRIP_WIDTH = STRIP_WIDTH, PAD = PAD, GAP = GAP, CELL_GAP = CELL_GAP, FIXED_COLUMNS = FIXED_COLUMNS,
+  MINIMAL_WIDTH = LEARN.MINIMAL, LEARN_SLOT = LEARN.SLOT }
 local TOOLTIP_ICON = 14                               -- the inline icon in a tooltip line (keeps the line height)
 local UNKNOWN_ICON = 134400                           -- the question mark, for an icon the client cannot give
 -- The Reagents cover's padding inside Blizzard's cell.
@@ -1034,6 +1042,29 @@ local function new_cells(row)
   c.conc:SetScript("OnEnter", function() M.Guard(ROWS, conc_tooltip, c) end)
   c.conc:SetScript("OnLeave", function() M.Guard(ROWS, hide_tooltip) end)
 
+  -- The cross of a recipe the character has not learned, in the score cell's slot (right-aligned beside [risk]).
+  c.learn = CreateFrame("Frame", nil, strip)
+  c.learn:SetSize(LEARN.WIDTH, STRIP_HEIGHT)
+  c.learn:SetPoint("RIGHT", strip, "RIGHT", -(ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP), 0)
+  c.learn:EnableMouse(true)
+  c.learnText = text(c.learn)
+  c.learnText:SetAllPoints(c.learn)
+  c.learnText:SetJustifyH("RIGHT")
+  c.learnText:SetText("\195\151")   -- a multiplication sign, as the concentration cell's unreachable mark
+  color_text(c.learnText, TEXT_COLORS.red)
+  -- Its tooltip says so, then where to get the recipe (when a source is known).
+  c.learn:SetScript("OnEnter", function()
+    M.Guard(ROWS, function()
+      local lines = { { text = L["You have not learned this recipe"], color = TEXT_COLORS.red } }
+      local O, view = orders(), c.view
+      local source = type(view) == "table" and O and O.RecipeSource and O.RecipeSource(view.recipeID) or nil
+      if source then lines[#lines + 1] = { text = source, color = TEXT_COLORS.grey } end
+      show_tooltip(c.learn, lines)
+    end)
+  end)
+  c.learn:SetScript("OnLeave", function() M.Guard(ROWS, hide_tooltip) end)
+  c.learn:Hide()
+
   c.warn = strip:CreateTexture(nil, "OVERLAY")
   c.warn:SetTexture(WARNING_ICON)
   c.warn:SetSize(WARN_SIZE, WARN_SIZE)
@@ -1149,11 +1180,12 @@ end
 
 -- Places the strip at the right of the item-name column (measured read-only; Blizzard's fixed columns otherwise) and
 -- makes it give way to Blizzard's item name (hotfix H1-6 rule: our cells never cover the name). With room for
--- everything: "all"; else without the profit cell (score, risk and the warning icon stay): "noProfit"; else no strip
--- at all: "none" (the side panel and the Orders tab still carry the numbers). A row that cannot be measured keeps
--- everything. Also returns the space reserved right of the item-name column. Only getters are called on Blizzard's
--- row, its item-name cell and that cell's Text.
-local function fit(c, row, warn)
+-- everything: "all"; else without the profit cell (score, risk and the warning icon stay): "noProfit"; else, when the
+-- row has a minimal tier (`minimal`: its width, nil for none), only [risk] [+] (and a not-learned recipe's cross):
+-- "minimal"; else no strip at all: "none" (the side panel and the Orders tab still carry the numbers). A row that
+-- cannot be measured keeps everything. Also returns the space reserved right of the item-name column. Only getters
+-- are called on Blizzard's row, its item-name cell and that cell's Text.
+local function fit(c, row, warn, minimal)
   local itemCell = type(row.cells) == "table" and child(row.cells, 1) or nil
   local reserve = FIXED_COLUMNS
   local rowRight, cellRight = read_number(row, "GetRight"), read_number(itemCell, "GetRight")
@@ -1171,6 +1203,7 @@ local function fit(c, row, warn)
   local function fits(width) return nameEnd + GAP <= stripRight - width end
   if fits(core + PROFIT_SLOT) then return "all", reserve end
   if fits(core) then return "noProfit", reserve end
+  if minimal and fits(minimal) then return "minimal", reserve end
   return "none", reserve
 end
 
@@ -1350,17 +1383,24 @@ end
 
 -- Fits a row's strip to Blizzard's item name as it is now (see fit) and shows the parts that have room.
 function apply_fit(c, row)
-  c.fit = fit(c, row, c.blocked)
-  c.warnShown = c.blocked == true and c.fit ~= "none"
+  -- The minimal tier exists for a row with something to say: its risk / info cell, or a not-learned recipe's cross.
+  local minimal = (c.riskShown or c.notLearned) and LEARN.MINIMAL + (c.notLearned and LEARN.SLOT or 0) or nil
+  c.fit = fit(c, row, c.blocked, minimal)
+  local core = c.fit == "all" or c.fit == "noProfit"
+  c.warnShown = c.blocked == true and core
   set_shown(c.warn, c.warnShown)
+  set_shown(c.conc, core)
   c.conc:ClearAllPoints()
   c.conc:SetPoint("RIGHT", c.strip, "RIGHT", -(SCORE_CORE + CELL_GAP + (c.warnShown and WARN_SLOT or 0)), 0)
   c.profit:ClearAllPoints()
   c.profit:SetPoint("RIGHT", c.strip, "RIGHT", -(CORE_WIDTH + CELL_GAP + (c.warnShown and WARN_SLOT or 0)), 0)
-  set_shown(c.profit, c.fit == "all")
+  set_shown(c.profit, c.fit == "all" and not c.notLearned)
   -- The score cell repeats the profit when no concentration is charged: blank it (it keeps its slot) while the profit
   -- cell is shown beside it with the same text. Otherwise it keeps its text, the only number left once the profit gives way.
   c.score:SetText(c.fit == "all" and c.scoreText == c.profitText and "" or c.scoreText)
+  -- A not-learned recipe's cross takes the score cell's slot, in every tier that shows a strip.
+  set_shown(c.score, core and not c.notLearned)
+  set_shown(c.learn, c.notLearned == true and c.fit ~= "none")
   set_shown(c.strip, c.fit ~= "none")
   render_tip_cover(c, row)
   render_cover(c, row)
@@ -1486,12 +1526,17 @@ local function show_row(row, elementData)
   c.score:SetText(c.scoreText)   -- (apply_fit blanks it when it would only repeat the profit shown beside it)
   color_text(c.score, sign_color(view.score))
   c.rewardAll = M.RewardEntries(view)
-  if model.riskCount > 0 or #c.notes > 0 or #c.rewardAll > 0 then
+  c.riskShown = model.riskCount > 0 or #c.notes > 0 or #c.rewardAll > 0
+  if c.riskShown then
     c.riskCount:SetText(model.riskCount > 0 and tostring(model.riskCount) or "i")
     color_text(c.riskCount, model.riskCount > 0 and TEXT_COLORS.red or TEXT_COLORS.grey)
     c.risk:Show()
   else
     c.risk:Hide()
+  end
+  c.notLearned = false
+  for _, risk in ipairs(type(view.risks) == "table" and view.risks or {}) do
+    if risk == "notLearned" then c.notLearned = true end
   end
   set_shown(c.add, M.QueueEntry(view) ~= nil and ns.FS:GetModule("Queue", true) ~= nil)
 
