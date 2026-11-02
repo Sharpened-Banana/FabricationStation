@@ -1468,6 +1468,11 @@ line says "Math check: OK", the concentration cost matches Blizzard's number exa
 alchemist with the discount nodes included), and recipes with no quality log no difficulty line. Report any new line in
 Diagnostics with its recipe; a discount can only be learned where the game charges concentration with no reagents.
 
+P7-39. **Cover tooltips.** On the crafting-orders board hover the green check and a short-reagent icon in the Reagents
+column, then the Commission column. Expected: FabricationStation's text tooltip each time ("You have every reagent...",
+"The customer provides...", "Reagents to supply", "Commission: ..."), with no box holding a single item icon, and at most
+one frame of flicker. A click on those cells still selects the order, and the row still highlights.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

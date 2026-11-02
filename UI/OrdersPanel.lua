@@ -878,9 +878,17 @@ local function refresh_tooltip(c)
   if c.tipping == "tip" then tip_tooltip(c) elseif c.tipping == "cover" then cover_tooltip(c) end
 end
 
+-- The pointer passes through a cover to Blizzard's cell beneath (GetMouseFoci lists the cover, then the cell), and that
+-- cell's OnEnter runs right after this one and takes the tooltip: an empty box with one item icon, seen in game. So ours
+-- is drawn again on the next frame, while the pointer is still on the cover. Blizzard's cell is not touched.
 local function hover_enter(c, which)
   c.tipping = which
   refresh_tooltip(c)
+  C_Timer.After(0, function()
+    M.Guard(ROWS, function()
+      if c.tipping == which then refresh_tooltip(c) end
+    end)
+  end)
 end
 
 local function hover_leave(c)

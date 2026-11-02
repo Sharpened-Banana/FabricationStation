@@ -126,3 +126,4 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
       so costs and the reagents-or-concentration choice match what the game charges.
     - Reagent skill counts in whole points and leaves empty slots out, as the game does.
     - The math check no longer reports a difficulty on recipes that have no quality.
+    - Hovering the Reagents and Commission columns shows our tooltip, not Blizzard's empty box with one item icon.
