@@ -202,11 +202,14 @@ function CraftingData.AllocationFromReagentInfo(schematic, infos)
 end
 
 -- The row of an optional or finishing slot that can take a chosen item: { slotIndex, kind, quantity, itemIDs }, or nil
--- for any other slot (basic, allocated - IsAllocated: a required spark - or without reagents). The one rule behind
+-- for any other slot (basic, allocated - IsAllocated: a required spark -, without reagents or without a dataSlotIndex).
+-- The one rule behind
 -- BuildInput's optionalSlots and OptionalSlots.
 local function optional_slot_row(slot)
   if type(slot) ~= "table" or (slot.kind ~= "optional" and slot.kind ~= "finishing") then return nil end
   if CraftingData.IsAllocated(slot) then return nil end
+  -- A slot with no dataSlotIndex cannot be sent to CraftRecipe, so it is never offered: what is scored is what is sent.
+  if slot.dataSlotIndex == nil then return nil end
   local itemIDs = {}
   for i, itemID in ipairs(type(slot.reagents) == "table" and slot.reagents or EMPTY) do itemIDs[i] = itemID end
   if #itemIDs == 0 then return nil end

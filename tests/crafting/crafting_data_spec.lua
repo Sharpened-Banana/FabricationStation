@@ -89,6 +89,30 @@ describe("CraftingData", function()
     end)
   end)
 
+  describe("OptionalSlots", function()
+    it("lists the optional and finishing slots that can take a chosen item, the rows BuildInput offers Place", function()
+      local schematic = { reagentSlots = {
+        { slotIndex = 1, dataSlotIndex = 4, kind = "basic", reagents = { 1002 }, quantity = 2 },
+        { slotIndex = 2, dataSlotIndex = 5, kind = "optional", required = true, reagents = { 7101 } },    -- a spark
+        { slotIndex = 3, dataSlotIndex = 6, kind = "optional", reagents = { 7001, 7002 }, quantity = 2 },
+        { slotIndex = 4, dataSlotIndex = 7, kind = "finishing", reagents = {} },
+        { slotIndex = 5, dataSlotIndex = 8, kind = "finishing", reagents = { 7002 } } } }
+      local expected = { { slotIndex = 3, kind = "optional", quantity = 2, itemIDs = { 7001, 7002 } },
+        { slotIndex = 5, kind = "finishing", quantity = 1, itemIDs = { 7002 } } }
+      assert.same(expected, CD.OptionalSlots(schematic))
+      assert.same(expected, CD.BuildInput(gd, { schematic = schematic, professionSkill = 100, optionalItemIDs = {} }).optionalSlots)
+    end)
+    it("never offers a slot without a dataSlotIndex, so nothing is scored that cannot be sent", function()
+      local schematic = { reagentSlots = {
+        { slotIndex = 3, kind = "optional", reagents = { 7001 } },
+        { slotIndex = 5, dataSlotIndex = 8, kind = "finishing", reagents = { 7002 } } } }
+      assert.same({ 5 }, { CD.OptionalSlots(schematic)[1].slotIndex })
+      assert.equals(1, #CD.OptionalSlots(schematic))
+      assert.equals(1, #CD.BuildInput(gd, { schematic = schematic, professionSkill = 100, optionalItemIDs = {} }).optionalSlots)
+    end)
+    it("is empty without a schematic", function() assert.same({}, CD.OptionalSlots(nil)) end)
+  end)
+
   describe("required non-basic slots", function()
     it("maps a required modifying slot's reagent to an allocation row, an optional one to optionalItemIDs", function()
       local schematic = { reagentSlots = {

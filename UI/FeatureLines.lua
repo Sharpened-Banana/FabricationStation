@@ -79,12 +79,17 @@ local function writable()
   return ns.FS.db ~= nil and not ns.FS.dbIsNewer
 end
 
--- The "Best optionals" rows: the pick with its gain (or that none adds profit), then how many were left out.
+-- The "Best optionals" rows: the pick with its gain, or that none adds profit (only when the search ran: with an
+-- unknown plain profit it says so instead), then how many were left out.
 function FeatureLines.OptionalLines(recipeID, charKey)
   local best = best_optionals(recipeID, charKey)
   if not best then return {} end
   local out = {}
-  if #best.itemIDs > 0 then
+  local base = best.base
+  if type(base) ~= "table" or type(base.profit) ~= "number" then
+    -- The plain craft has no profit (a price is missing), so the search could not rank anything: unknown, not "none".
+    out[1] = { L["Best optionals"], L["profit unknown (prices missing)"] }
+  elseif #best.itemIDs > 0 then
     out[1] = { L["Best optionals"], L["%s (+%s)"]:format(names_of(best.itemIDs), ns.UI.FormatMoney(best.gain)) }
   else
     out[1] = { L["Best optionals"], L["none adds profit"] }

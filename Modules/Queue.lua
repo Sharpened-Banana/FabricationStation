@@ -72,14 +72,15 @@ local function copy_entry(e)
   return out
 end
 
--- [phase 7 Task 12] The optional/finishing itemIDs an entry carries: number IDs, each once, ascending, at most
+-- [phase 7 Task 12] The optional/finishing itemIDs an entry carries: positive whole finite numbers, each once, ascending, at most
 -- MAX_OPTIONALS (the lowest); nil when none are left.
 local MAX_OPTIONALS = 8
 local function clean_optionals(list)
   if type(list) ~= "table" then return nil end
   local out, seen = {}, {}
   for _, itemID in ipairs(list) do
-    if type(itemID) == "number" and itemID == itemID and not seen[itemID] then
+    if type(itemID) == "number" and itemID >= 1 and itemID < math.huge and itemID == math.floor(itemID)
+      and not seen[itemID] then
       seen[itemID] = true
       out[#out + 1] = itemID
     end

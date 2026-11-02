@@ -47,6 +47,14 @@ describe("FeatureLines: optionals in the profession panel", function()
     assert.is_false(action().enabled)   -- no pick: the button is there but off
   end)
 
+  it("does not claim that nothing adds profit while the plain craft's profit is unknown", function()
+    world.prices[5001], world.prices[5002] = nil, nil; world.bumpPriceVersion()
+    local shown = lines()
+    assert.same({ "Best optionals", "profit unknown (prices missing)" }, shown[1])
+    for _, line in ipairs(shown) do assert.are_not.equal("none adds profit", line[2]) end
+    assert.is_false(action().enabled)
+  end)
+
   it("counts what it skipped", function()
     world.prices[7001] = nil; world.bumpPriceVersion()
     local shown = lines()
