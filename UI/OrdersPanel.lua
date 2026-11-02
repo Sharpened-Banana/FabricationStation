@@ -95,7 +95,7 @@ local STRIP_WIDTH = CORE_WIDTH + WARN_SLOT + PROFIT_SLOT
 -- [conc], in place of the profit and the score (both hidden). When the core has no room, the "minimal" tier keeps only
 -- [risk] [+] and, for such a recipe, the cross beside them: MINIMAL_WIDTH (+ LEARN_SLOT).
 -- (One table: the main chunk is at Lua 5.1's 200-locals limit.)
-local LEARN = { WIDTH = 12, SLOT = 12 + CELL_GAP, MINIMAL = ADD_SIZE + CELL_GAP + RISK_WIDTH }
+local LEARN = { WIDTH = 24, SLOT = 24 + CELL_GAP, MINIMAL = ADD_SIZE + CELL_GAP + RISK_WIDTH, FONT_SIZE = 26 }
 local PAD, GAP = 6, 4
 local ICON_SIZE, ICON_GAP, MORE_WIDTH = 20, 2, 24   -- row icons: 20 px, 2 px apart; the "+N" slot has a width of its own
 M.ICON_SIZE, M.ICON_GAP, M.MORE_WIDTH = ICON_SIZE, ICON_GAP, MORE_WIDTH   -- read-only (the specs derive their geometry)
@@ -1086,8 +1086,12 @@ local function new_cells(row)
   c.learn:SetSize(LEARN.WIDTH, STRIP_HEIGHT)
   c.learn:SetPoint("RIGHT", strip, "RIGHT", -(ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP), 0)
   c.learn:EnableMouse(true)
-  c.learnText = text(c.learn)
-  c.learnText:SetAllPoints(c.learn)
+  -- A large cross (the user asked for it to be much bigger than the cell text): a big outlined font when the client
+  -- takes SetFont, else the largest standard font object.
+  c.learnText = text(c.learn, "GameFontNormalHuge")
+  local fontPath = type(STANDARD_TEXT_FONT) == "string" and STANDARD_TEXT_FONT or nil
+  if fontPath and c.learnText.SetFont then pcall(c.learnText.SetFont, c.learnText, fontPath, LEARN.FONT_SIZE, "OUTLINE") end
+  c.learnText:SetPoint("RIGHT", c.learn, "RIGHT", 0, 0)
   c.learnText:SetJustifyH("RIGHT")
   c.learnText:SetText("\195\151")   -- a multiplication sign, as the concentration cell's unreachable mark
   color_text(c.learnText, TEXT_COLORS.red)
