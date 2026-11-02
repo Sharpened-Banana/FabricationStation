@@ -74,7 +74,8 @@ function M.Compare(prediction, opInfo)
 
   local difficulty
   if type(opInfo.baseDifficulty) == "number" then difficulty = opInfo.baseDifficulty + (opInfo.bonusDifficulty or 0) end
-  check("difficulty", prediction.difficulty, difficulty, EXACT)
+  -- A recipe with no quality has no difficulty: the game reports base 0 and bonus 1 on every one of them.
+  if opInfo.isQualityCraft ~= false then check("difficulty", prediction.difficulty, difficulty, EXACT) end
 
   check("quality", prediction.expectedQuality, opInfo[M.QUALITY_FIELD], 0)
   check("lowerThreshold", prediction.lowerThreshold, opInfo.lowerSkillThreshold, EXACT)

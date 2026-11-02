@@ -81,6 +81,17 @@ describe("SelfCheck compare", function()
     assert.same({ { field = "quality", expected = 1, actual = 2 } },
       ns.SelfCheck.Compare(PREDICTION, game({ quality = 2 })))
   end)
+
+  it("ignores the difficulty of a recipe with no quality", function()
+    -- Logged in game on every such recipe: base difficulty 0, bonus difficulty 1, isQualityCraft false.
+    local prediction = { skill = 190, difficulty = 0 }
+    local info = game({ baseSkill = 100, bonusSkill = 90, baseDifficulty = 0, bonusDifficulty = 1, isQualityCraft = false })
+    assert.same({}, Compare(prediction, info))
+  end)
+  it("still compares the difficulty of a quality recipe", function()
+    local m = Compare(PREDICTION, game({ bonusDifficulty = 1, isQualityCraft = true }))
+    assert.same({ "difficulty" }, fields_of(m))
+  end)
 end)
 
 describe("SelfCheck run", function()
