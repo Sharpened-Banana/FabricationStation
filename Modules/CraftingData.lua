@@ -131,13 +131,18 @@ function CraftingData.OptionalStats(gd, itemID, kind)
   return stats
 end
 
--- Whether a schematic slot is part of the required allocation (a Math slot): every basic slot, and every
--- required optional/finishing slot (a "spark": a modifying reagent the recipe cannot be crafted without).
--- A slot whose reagents list is empty (currency-only, or nothing listed) never is.
+-- Whether a schematic slot is part of the required allocation (a Math slot): every basic slot the schematic does not
+-- mark as not required, and every required optional/finishing slot (a "spark": a modifying reagent the recipe cannot
+-- be crafted without). A slot whose reagents list is empty (currency-only, or nothing listed) never is.
+-- A basic slot with required = false is an Automatic reagent slot (Scanner files Enum.CraftingReagentType.Automatic as
+-- kind "basic", automatic = true): the Midnight socket slot (246211 / 246212 / 274478 / 274479) of recipes such as
+-- Evercore Wrist Latch. The craft does not need it, so it is neither costed nor asked of the crafter, and it is not
+-- offered as an optional either (tests/orders/automatic_slot_spec.lua). A basic slot without the field stays allocated.
 function CraftingData.IsAllocated(slot)
   if type(slot) ~= "table" then return false end
   if type(slot.reagents) == "table" and #slot.reagents == 0 then return false end
-  return slot.kind == "basic" or slot.required == true
+  if slot.kind == "basic" then return slot.required ~= false end
+  return slot.required == true
 end
 
 -- A function mapping one Blizzard-style reagent info ({ reagent, dataSlotIndex, quantity } and, where the caller has
