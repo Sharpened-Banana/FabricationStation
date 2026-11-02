@@ -44,6 +44,7 @@ local STATUS_TEXT = {
   locked = L["That stack is locked; try again"],
 }
 
+local bankOpen = false   -- BANKFRAME_OPENED seen and no BANKFRAME_CLOSED since (BankPull's own: review I1)
 local inFlight = false   -- a move was made and the bags have not updated since (at most FLIGHT_SECONDS)
 local flight             -- the stack the last "moved" press used: { itemID, count, bag, slot }, until the lock ends
 local skipped = {}       -- [itemID] = true: the game did not make its last move this bank visit
@@ -69,10 +70,9 @@ local BANK_NAMES = { "CharacterBankTab_1", "CharacterBankTab_2", "CharacterBankT
 local WARBAND_NAMES = { "AccountBankTab_1", "AccountBankTab_2", "AccountBankTab_3", "AccountBankTab_4",
   "AccountBankTab_5" }
 
-local function bank_open()
-  local S = ns.FS:GetModule("Scanner", true)
-  return S ~= nil and S.bankOpen == true
-end
+-- The bank is open: BankPull's own flag, set and cleared by its own BANKFRAME_OPENED/BANKFRAME_CLOSED handlers. It
+-- never reads Scanner.bankOpen: AceEvent runs one event's handlers in an unspecified order (review I1).
+local function bank_open() return bankOpen end
 
 -- The container reads Plan and Step use exist (the three moves, the cursor calls and ClearCursor are checked in Step).
 local function reads_ready()
@@ -456,12 +456,14 @@ end
 
 -- BANKFRAME_OPENED: a new visit (no row skipped), and the panel when the bank holds something the queue needs.
 local function on_bank_opened()
+  bankOpen = true
   skipped = {}
   if BankPull.view then BankPull.view.frame:Hide() end
   update()
 end
 
 local function on_bank_closed()
+  bankOpen = false
   skipped = {}
   ns.FS:CancelDebounce(REFRESH_KEY)
   if BankPull.view then BankPull.view.frame:Hide() end
@@ -491,6 +493,6 @@ function BankPull:OnDisable()
   ns.FS:CancelDebounce(REFRESH_KEY)
   self:UnregisterAllEvents()
   self:UnregisterAllMessages()
-  inFlight, flight, skipped = false, nil, {}
+  bankOpen, inFlight, flight, skipped = false, false, nil, {}
   if self.view then self.view.frame:Hide() end
 end

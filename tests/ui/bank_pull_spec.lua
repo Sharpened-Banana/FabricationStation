@@ -157,7 +157,6 @@ describe("BankPull", function()
     requiredItems = {}
     install_containers()
     spy_debounces()
-    ns.FS:GetModule("Scanner").bankOpen = true
     realBit = rawget(_G, "bit")
     _G.bit = { band = band }
   end)
@@ -198,6 +197,8 @@ describe("BankPull", function()
   end)
 
   describe("Step", function()
+    before_each(open_bank)                                 -- the bank is open: BankPull's own flag
+
     it("never moves more than the shortfall over repeated presses", function()
       required(1001, 5); bank_stacks(1001, { 3, 20 }); bags(1001, 0)
       assert.equals("moved", BP:Step().status)            -- the stack of 3
@@ -235,7 +236,7 @@ describe("BankPull", function()
 
     it("is closed without the bank", function()
       required(1001, 5); bank_stacks(1001, { 3 })
-      ns.FS:GetModule("Scanner").bankOpen = false
+      W.fire("BANKFRAME_CLOSED")
       assert.same({ status = "closed" }, BP:Step())
       assert.same({}, W.containerOps)
     end)
@@ -350,11 +351,16 @@ describe("BankPull", function()
       for key in pairs(pending) do assert.is_nil(key:match("^bankPull%."), key) end
       assert.is_false(view().frame:IsShown())
       ns.FS:SetModuleEnabled("BankPull", true)
+      -- The open flag went with the module too (as MerchantBuy's): the module saw no BANKFRAME_OPENED since.
+      assert.same({ status = "closed" }, BP:Step())
+      open_bank()
       assert.same({ status = "moved", itemID = 1001, count = 3 }, BP:Step())   -- the lock went with the module
     end)
   end)
 
   describe("bag families", function()
+    before_each(open_bank)                                 -- the bank is open: BankPull's own flag
+
     local HERB, CLOTH = 32, 1024
 
     before_each(function()
@@ -390,6 +396,8 @@ describe("BankPull", function()
   end)
 
   describe("rows that cannot move", function()
+    before_each(open_bank)                                 -- the bank is open: BankPull's own flag
+
     it("tries the next reagent when the first one's stacks are all locked", function()
       required(1001, 5); required(2002, 2)
       bank_stacks(1001, { 3 }, true); bank_stacks(2002, { 2 })
@@ -488,6 +496,24 @@ describe("BankPull", function()
       assert.is_true(view().frame:IsShown())
       W.advance(5)
       assert.same({}, W.containerOps); assert.equals(0, cleared)
+    end)
+
+    -- Review I1: the real AceEvent dispatches one event's handlers in next() order over a table keyed by the module
+    -- objects, so BankPull's BANKFRAME_OPENED handler may run before Scanner's. The stub dispatches by __order: a
+    -- lower one puts BankPull first. The second visit finds the bank unchanged (no scan change, no queue change).
+    it("shows the panel on every visit when its handlers run before Scanner's", function()
+      BP.__order = -1
+      required(1001, 5); bank_stacks(1001, { 3, 20 })
+      open_bank()
+      assert.is_true(view() ~= nil and view().frame:IsShown(), "first visit")
+      W.advance(5)
+      W.fire("BANKFRAME_CLOSED"); W.advance(5)
+      assert.is_false(view().frame:IsShown())
+      open_bank()
+      assert.is_true(view().frame:IsShown(), "second visit")
+      W.advance(5)
+      assert.is_true(view().frame:IsShown(), "second visit, after the bank scan")
+      assert.same({}, W.containerOps)
     end)
 
     it("stays hidden on BANKFRAME_OPENED when the bank holds nothing the queue needs", function()
