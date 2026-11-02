@@ -1425,6 +1425,20 @@ shows no "you" line, it does not: report the target text with a `/dump` in a `CH
 does a whisper in an instance (where the text is a secret value) leave everything unchanged without an error
 (`/fs settings > Diagnostics` shows none).
 
+P7-28. **Key bindings.** Open Key Bindings > AddOns > FabricationStation. Expected: it lists four bindings (Craft Next,
+Claim Best Order, Open or close FabricationStation, Reply to the latest chat request); bind a key to each. Expected:
+Craft Next crafts one queued item with its profession open (the profession panel's status line, or chat when the panel
+is hidden, says "Crafting ..."; the queue count drops by one when the craft finishes); Claim Best Order claims with the
+crafting orders board open (the side panel says "Claiming ..." and no "action blocked" or "interface action failed" error
+appears; with the board closed, chat says "Open the crafting orders board to claim an order"); the toggle opens and closes
+the window; the reply key opens the chat box on a whisper to the newest open request (nothing is sent until you press
+Enter; with none, chat says "No open chat request"). In combat the first two print "Not in combat".
+Also report: do the bindings appear under AddOns (if they are missing or sit elsewhere, say where), and does a key press
+count as the hardware event the craft and the claim need (an "action blocked" or "interface action failed" message for
+either one means it does not, and the buttons need a real mouse click). Also report: with Blizzard's "fill this order
+with your own reagents" dialog open, does pressing Enter confirm it by itself? FabricationStation has no key for it (a key
+would have to click or call a Blizzard frame, which the addon never does).
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

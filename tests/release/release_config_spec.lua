@@ -229,9 +229,20 @@ describe("release configuration", function()
         assert.is_false(ignores(entry, shipped), shipped .. " ignored by " .. entry)
       end
     end
-    for _, f in ipairs({ "LICENSE", "README.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "Locales/Locales.xml" }) do
+    for _, f in ipairs({ "LICENSE", "README.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md", "Locales/Locales.xml",
+      "Bindings.xml" }) do
       assert.truthy(io.open(f), f)
     end
+  end)
+
+  -- Bindings.xml sits in the addon root, outside the TOC (the client loads it from there), so the TOC-only checks do
+  -- not see it: it must exist, be packaged (not ignored by .pkgmeta) and not be listed in the TOC.
+  it("ships Bindings.xml", function()
+    assert.truthy(io.open("Bindings.xml"), "Bindings.xml")
+    for _, entry in ipairs(ignore_entries(read(".pkgmeta"))) do
+      assert.is_false(ignores(entry, "Bindings.xml"), "Bindings.xml ignored by " .. entry)
+    end
+    assert.is_nil(read("FabricationStation.toc"):find("Bindings.xml", 1, true))
   end)
 
   it("has release TOC metadata and only existing files, locales before core", function()

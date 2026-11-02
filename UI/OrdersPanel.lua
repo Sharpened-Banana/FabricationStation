@@ -2122,6 +2122,15 @@ function SidePanel:SetResult(message, tone)
   set_result(message, tone)
 end
 
+-- The Claim Best Order key binding (UI/Bindings.lua): clicks the claim button itself, so the claim still runs from its
+-- OnClick handler, as a hardware event. True when the panel is on and shown with the button enabled (the click was
+-- made), else false and nothing happens. Orders:ClaimBest is not named here.
+function M.ClickClaim()
+  if not (side and SidePanel:IsEnabled() and side.frame:IsShown() and side.claimEnabled) then return false end
+  side.claim:Click()
+  return true
+end
+
 -- Test and diagnostics access: the built widgets (nil before the first attach).
 function SidePanel:GetView() return side end
 function SidePanel:GetConcDisplay() return concDisplay end

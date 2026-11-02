@@ -100,3 +100,4 @@ UI\ReadyAlerts.lua
 UI\FeatureLines.lua
 UI\BankPull.lua
 UI\MerchantBuy.lua
+UI\Bindings.lua

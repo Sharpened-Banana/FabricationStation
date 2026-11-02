@@ -302,6 +302,8 @@ local function install(overrides)
     function f:IsVisible() return shown end
     function f:SetScript(event, fn) scripts[event] = fn end
     function f:GetScript(event) return scripts[event] end
+    -- Button:Click(): runs the OnClick handler as the client does for a click (no mouse button, not a key down).
+    function f:Click(button) local handler = scripts.OnClick; if handler then handler(f, button or "LeftButton", false) end end
     -- Runs after any existing handler instead of replacing it, as in the client.
     function f:HookScript(event, fn)
       local existing = scripts[event]

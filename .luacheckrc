@@ -3,7 +3,9 @@ max_line_length = false
 exclude_files = { "Libs/", ".lua/", ".luarocks/", ".release/", "tools/gamedata/cache/", "tests/fixtures/" }
 ignore = { "211/ADDON_NAME", "212/self" }
 stds.wow = {
-  globals = { "FabricationStationDB", "UISpecialFrames" },
+  globals = { "FabricationStationDB", "UISpecialFrames", "FabricationStation_Binding", "BINDING_HEADER_FABRICATIONSTATION",
+    "BINDING_NAME_FABRICATIONSTATION_CRAFTNEXT", "BINDING_NAME_FABRICATIONSTATION_CLAIMBEST",
+    "BINDING_NAME_FABRICATIONSTATION_TOGGLE", "BINDING_NAME_FABRICATIONSTATION_REPLYLATEST" },
   read_globals = { "LibStub", "STANDARD_TEXT_FONT", "GetItemInfo", "Auctionator", "C_TradeSkillUI", "C_CraftingOrders", "C_Item", "C_CurrencyInfo",
     "C_ProfSpecs", "C_Traits", "C_Container", "C_Bank", "C_AddOns", "C_Timer", "C_DateAndTime", "Enum", "CreateFrame", "UIParent", "GameTooltip",
     "GetServerTime", "GetBuildInfo", "GetMoney", "GetMoneyString", "UnitName", "UnitClass", "GetRealmName",

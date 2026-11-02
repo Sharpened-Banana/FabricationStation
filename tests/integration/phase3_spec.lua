@@ -398,6 +398,10 @@ describe("phase 3 integration", function()
       -- by tests/queue/craft_spec.lua.
       ["Modules/CraftLog.lua"] = { CraftRecipe = 1, RecraftRecipe = 1, CraftEnchant = 1, CraftSalvage = 1 },
       ["UI/OrdersPanel.lua"] = { ClaimBest = 1 },
+      -- Bindings (phase 7 Task 19): the craft button's log source ("Bindings:CraftNext") and its one call, both in the
+      -- button's OnClick handler (tests/queue/craft_spec.lua). The claim key names neither ClaimBest nor ClaimOrder:
+      -- it clicks the claim button (OrdersPanel.ClickClaim).
+      ["UI/Bindings.lua"] = { CraftNext = 2 },
       -- BankPull (phase 7 Task 16): the feature test and the one call of each move, all inside BankPull:Step, pinned
       -- by tests/ui/bank_pull_click_only_spec.lua.
       ["UI/BankPull.lua"] = { UseContainerItem = 2, PickupContainerItem = 2 },

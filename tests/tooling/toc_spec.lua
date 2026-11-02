@@ -150,12 +150,19 @@ describe("FabricationStation.toc", function()
     assert.is_true(at["UI/FeatureLines.lua"] < at["UI/BankPull.lua"])
     assert.is_true(at["UI/BankPull.lua"] < at["UI/MerchantBuy.lua"])
   end)
-  -- Phase 7 Task 17: the merchant panel reads Queue, Scanner and ns.UI.FormatMoney at call time and comes last.
-  it("loads UI/MerchantBuy.lua last, after UI/BankPull.lua and UI/Util.lua", function()
+  -- Phase 7 Task 17: the merchant panel reads Queue, Scanner and ns.UI.FormatMoney at call time and comes after the
+  -- bank panel; Task 19's UI/Bindings.lua follows it.
+  it("loads UI/MerchantBuy.lua after UI/BankPull.lua and UI/Util.lua, before UI/Bindings.lua", function()
     local at = {}
     for i, f in ipairs(toc.files) do at[f] = i end
     assert.is_true(at["UI/Util.lua"] < at["UI/MerchantBuy.lua"])
-    assert.equals("UI/MerchantBuy.lua", toc.files[#toc.files])
+    assert.is_true(at["UI/MerchantBuy.lua"] < at["UI/Bindings.lua"])
+  end)
+  -- Phase 7 Task 19: the key bindings look every module up at call time and come last; Bindings.xml is not listed (the
+  -- client loads it from the addon root).
+  it("loads UI/Bindings.lua last and does not list Bindings.xml", function()
+    assert.equals("UI/Bindings.lua", toc.files[#toc.files])
+    for _, f in ipairs(toc.files) do assert.is_false(f:find("Bindings.xml", 1, true) ~= nil, f) end
   end)
   -- Phase 7 Task 18: the chat inbox loads after ChatScan (it reads its whisper template at call time) and before the UI;
   -- the Requests tab after the Guild tab and the grid, before the Settings tab.

@@ -1,30 +1,40 @@
 -- Structural rule (design rule 3, no automation): ChatInbox:Reply, the one function that fills the chat box with a
 -- whisper to a requester, is called only as a `:Reply(` call directly inside a SetScript("OnClick", function ... end)
--- handler (the Requests tab's Reply button; Task 19 adds the key binding's handler to ALLOWED), never from an event,
--- timer, message or a closure nested in the handler, and never passed on as a value. ChatFrameUtil.SendTellWithMessage
--- stays out of ChatInbox's capture path; nothing in ChatInbox sends chat (SendChatMessage). The scan and its rules are
--- tests/helpers/click_only.lua's. That scan matches a string containing the name as well, so the button's own label
--- (the exact string "Reply", a locale key) is the one string it is told to leave alone here.
+-- handler (the Requests tab's Reply button), or as a `:Reply(` call directly inside `run`, the key binding's one entry
+-- point in UI/Bindings.lua (Task 19; a key press is the player's act), never from an event, timer, message or a
+-- closure nested in either, and never passed on as a value. ChatFrameUtil.SendTellWithMessage stays out of
+-- ChatInbox's capture path; nothing in ChatInbox sends chat (SendChatMessage). The scan and its rules are
+-- tests/helpers/click_only.lua's. That scan matches a string containing the name as well, so the locale lookups of the
+-- button's label and the binding's name (L["Reply"], L["Reply to the latest chat request"]) are the strings it is told
+-- to leave alone here.
 local click_only = require("tests.helpers.click_only")
 
 local INBOX = "Modules/Social/ChatInbox.lua"
-local ALLOWED = { "UI/Tabs/Requests.lua" }
-local LABEL = '"Reply"'
+-- file -> where a :Reply( call may sit, directly (never in a closure nested in it): true = a SetScript("OnClick", ...)
+-- handler; a string = the header of the one function that may hold it.
+local ALLOWED = { ["UI/Tabs/Requests.lua"] = true, ["UI/Bindings.lua"] = "function run(" }
 
--- A reference to Reply, judged as click_only.referenced_only_from_onclick judges it, except that the locale lookup
--- L["Reply"] (the tokens before the string are `L` and `[`) is not a reference. A bracketed key anywhere else
+-- A reference to Reply, judged as click_only.referenced_only_from_onclick judges it, except that a locale lookup
+-- L["Reply"] or L["Reply to the latest chat request"] (a string starting with Reply, the tokens before it `L` and `[`,
+-- `]` after it) is not a reference: the string is looked up, never called. A bracketed key anywhere else
 -- (box["Reply"](box, 1), local f = box["Reply"]) stays a reference and fails the rule. A key built at run time
 -- (box[name]) cannot be detected by any token scan.
 local function is_locale_label(text, r)
-  if r.call or r.definition or text:sub(r.pos, r.pos + #LABEL - 1) ~= LABEL then return false end
+  if r.call or r.definition then return false end
+  local quote = text:sub(r.pos, r.pos)
+  if quote ~= '"' and quote ~= "'" then return false end
   local before = text:sub(1, r.pos - 1)
-  return before:match("L%[%s*$") ~= nil and before:match("[%w_]L%[%s*$") == nil
+  if before:match("L%[%s*$") == nil or before:match("[%w_]L%[%s*$") ~= nil then return false end
+  local close = r.pos + 1
+  while close <= #text and text:sub(close, close) ~= quote do
+    close = close + (text:sub(close, close) == "\\" and 2 or 1)
+  end
+  local after = text:sub(close + 1)
+  return after:match("^%s*%]") ~= nil and after:match("^%s*%]%s*%(") == nil
 end
 
 -- text -> calls ("line"), bad (messages), for one file's source.
 local function judge(file, text, calls, bad)
-  local allowed = {}
-  for _, p in ipairs(ALLOWED) do allowed[p] = true end
   local refs, depth = click_only.references_in(text, "Reply")
   if depth ~= 0 then bad[#bad + 1] = file .. ": unbalanced blocks (scanner out of step)" end
   for _, r in ipairs(refs) do
@@ -34,11 +44,15 @@ local function judge(file, text, calls, bad)
       if r.definition then
         fine = file == INBOX
       else
-        fine = allowed[file] and r.fn and r.fn.onClick and r.call
+        local rule = ALLOWED[file]
+        fine = rule and r.call and r.fn
+        if fine then
+          if rule == true then fine = r.fn.onClick else fine = click_only.header_matches(r.fn, rule) end
+        end
       end
       if not fine then
         bad[#bad + 1] = file .. ":" .. r.line .. " references Reply other than as a :Reply( call directly in an"
-          .. " OnClick handler"
+          .. " OnClick handler (or in the binding's run)"
       end
     end
   end
@@ -52,11 +66,12 @@ local function check()
 end
 
 describe("click-only chat inbox reply", function()
-  it("references ChatInbox:Reply only from an OnClick handler", function()
+  it("references ChatInbox:Reply only from an OnClick handler and the binding's run", function()
     local ok, message, calls = check()
     assert.is_true(ok, message)
-    assert.equal(1, #calls, "expected exactly one :Reply( call, got: " .. table.concat(calls, ", "))
-    assert.truthy(calls[1]:find("^UI/Tabs/Requests%.lua:"))
+    assert.equal(2, #calls, "expected exactly two :Reply( calls, got: " .. table.concat(calls, ", "))
+    assert.truthy(calls[1]:find("^UI/Bindings%.lua:"))
+    assert.truthy(calls[2]:find("^UI/Tabs/Requests%.lua:"))
   end)
 
   it("defines ChatInbox:Reply in Modules/Social/ChatInbox.lua", function()
@@ -102,5 +117,39 @@ describe("click-only chat inbox reply", function()
     assert.equal(0, bad_count('button:SetText(L["Reply"])'))
     assert.equal(0, bad_count('button:SetText(L[ "Reply" ])'))
     assert.equal(0, bad_count('button:SetScript("OnClick", function(self) box:Reply(self.id) end)'))
+  end)
+
+  it("accepts the locale lookup of a longer key starting with Reply, only as a lookup", function()
+    local function bad_count(source)
+      local calls, bad = {}, {}
+      judge("UI/Bindings.lua", source, calls, bad)
+      return #bad
+    end
+    assert.equal(0, bad_count('BINDING_NAME_X = L["Reply to the latest chat request"]'))
+    assert.equal(0, bad_count("local t = L['Reply to the latest chat request']"))
+    assert.equal(0, bad_count('local t = L["Reply to \\"x\\" now"]:format(1)'))
+    assert.equal(1, bad_count('local t = L["Reply to the latest chat request"](1)'))
+    assert.equal(1, bad_count('local t = box["Reply to the latest chat request"]'))
+    assert.equal(1, bad_count('local t = boxL["Reply to"]'))
+    assert.equal(1, bad_count('local t = "Reply to the latest chat request"'))
+    assert.equal(1, bad_count('local t = f("Reply to the latest chat request")'))
+  end)
+
+  it("lets UI/Bindings.lua call Reply only directly in run", function()
+    local function bad_count(file, source)
+      local calls, bad = {}, {}
+      judge(file, source, calls, bad)
+      return #bad, #calls
+    end
+    assert.same({ 0, 1 }, { bad_count("UI/Bindings.lua", "local function run(id)\n  if x then inbox:Reply(1) end\nend") })
+    assert.same({ 1, 1 }, { bad_count("UI/Bindings.lua",
+      "local function run(id)\n  C_Timer.After(1, function() inbox:Reply(1) end)\nend") })
+    assert.same({ 1, 1 }, { bad_count("UI/Bindings.lua", "local function later() inbox:Reply(1) end") })
+    assert.same({ 1, 1 }, { bad_count("UI/Bindings.lua",
+      'button:SetScript("OnClick", function() inbox:Reply(1) end)') })
+    assert.same({ 1, 0 }, { bad_count("UI/Bindings.lua", "local function run(id) pcall(inbox.Reply, inbox, 1) end") })
+    assert.same({ 1, 1 }, { bad_count("UI/Bindings.lua", "local function run_later(id) inbox:Reply(1) end") })
+    assert.same({ 1, 1 }, { bad_count("UI/Tabs/Requests.lua", "local function run(id) inbox:Reply(1) end") })
+    assert.same({ 1, 1 }, { bad_count("UI/Other.lua", "local function run(id) inbox:Reply(1) end") })
   end)
 end)
