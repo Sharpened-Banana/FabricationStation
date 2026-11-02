@@ -53,6 +53,16 @@ function Alts:Settings()
   return settingsTable(self.SETTINGS_DEFAULTS, fill)
 end
 
+-- The same settings for a read that must write nothing: a filled copy of the saved table (the defaults when none is
+-- saved yet), so a read never creates db.global.settings.alts. While the saved data is from a newer version it is
+-- Settings() itself (that writes nothing and carries this session's changes, such as a hidden character).
+function Alts:PeekSettings()
+  if ns.FS.dbIsNewer then return self:Settings() end
+  local g = ns.FS.db and ns.FS.db.global
+  local stored = g and type(g.settings) == "table" and g.settings.alts
+  return fill(type(stored) == "table" and ns.Util.DeepCopy(stored) or {}, self.SETTINGS_DEFAULTS)
+end
+
 ---------------------------------------------------------------------------
 -- Overview (AltRow), knowledge state and concentration pools
 ---------------------------------------------------------------------------
@@ -90,7 +100,7 @@ local function character(charKey)
 end
 
 local function hidden_set()
-  local h = Alts:Settings().hidden
+  local h = Alts:PeekSettings().hidden
   return type(h) == "table" and h or {}
 end
 
@@ -517,7 +527,7 @@ end
 -- non-number itemID.
 function Alts:GetHoldings(itemID)
   if not is_number(itemID) then return nil end
-  return holdings(itemID, holdings_ctx(self:Settings(), ns.FS:Now()), true)
+  return holdings(itemID, holdings_ctx(self:PeekSettings(), ns.FS:Now()), true)
 end
 
 local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end

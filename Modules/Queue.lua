@@ -540,7 +540,7 @@ end
 local function visible_characters()
   local S = scanner()
   local alts = enabled_module("Alts")
-  local hidden = alts and alts:Settings().hidden
+  local hidden = alts and alts:PeekSettings().hidden
   if type(hidden) ~= "table" then hidden = {} end
   local out = {}
   for _, charKey in ipairs(S and S:GetCharacters() or {}) do

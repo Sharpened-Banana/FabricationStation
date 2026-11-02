@@ -1151,6 +1151,18 @@ describe("Queue tab", function()
       assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
     end)
 
+    it("writes nothing while the tab shows the page and its tooltips, on a fresh save", function()
+      add(1)
+      world.chars[ALT].mail = { time = W.now - 9 * DAY, items = { [1001] = 1 } }
+      assert.is_nil(ns.FS.db.global.settings.alts)
+      MW:Show("queue")                                   -- the window saves its own tab; only the page is under test
+      local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+      click(QT:GetView().sections.gather)
+      tooltip_of(row_frame(1001))
+      assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+      assert.is_nil(ns.FS.db.global.settings.alts)
+    end)
+
     it("leaves a craft source out while Intermediates is off", function()
       add(1)
       ns.FS:GetModule("Intermediates"):Disable()

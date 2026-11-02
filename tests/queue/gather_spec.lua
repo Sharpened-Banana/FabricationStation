@@ -213,12 +213,32 @@ describe("Queue gathering plan", function()
     end)
   end)
 
-  it("reads only: nothing is written and no message is sent", function()
-    Q:GetGatheringPlan()                                      -- Alts creates its settings table on first use
+  it("reads only: the very first plan writes nothing and sends no message", function()
+    -- A fresh save has no settings.alts: Alts must not create it for a read.
+    assert.is_nil(ns.FS.db.global.settings.alts)
     local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
     local sent = #world.messages("FS_QUEUE_CHANGED")
     Q:GetGatheringPlan(); Q:GetGatheringPlan(ME)
     assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+    assert.is_nil(ns.FS.db.global.settings.alts)
     assert.equals(sent, #world.messages("FS_QUEUE_CHANGED"))
+  end)
+
+  it("reads only while the saved data is from a newer version", function()
+    world.chars[ALT].mail = { time = W.now, items = { [1001] = 4 } }
+    world.items[ALT][1001] = { bags = 5, bank = 0, reagentBank = 0 }
+    ns.FS.dbIsNewer = true
+    local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+    local row = row_of(Q:GetGatheringPlan(), 1001)
+    assert.is_truthy(source_of(row, "alt")); assert.is_truthy(source_of(row, "mail"))
+    assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))
+  end)
+
+  it("honours the saved hidden characters without writing", function()
+    world.items[ALT][1001] = { bags = 5, bank = 0, reagentBank = 0 }
+    ns.FS.db.global.settings.alts = { hidden = { [ALT] = true } }
+    local before = ns.Util.DeepCopy(ns.FS.db.global, 30)
+    assert.is_nil(source_of(row_of(Q:GetGatheringPlan(), 1001), "alt"))
+    assert.same(before, ns.Util.DeepCopy(ns.FS.db.global, 30))      -- not even filled with the other defaults
   end)
 end)

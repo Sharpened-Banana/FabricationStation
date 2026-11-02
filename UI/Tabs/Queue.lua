@@ -1266,7 +1266,7 @@ end
 -- Seconds after which a snapshot reads as old: Alts' stale days setting.
 function Tab.StaleSeconds()
   local alts = module("Alts")
-  local settings = alts and alts:Settings()
+  local settings = alts and alts:PeekSettings()
   local days = type(settings) == "table" and settings.staleDays or nil
   return (type(days) == "number" and days or DEFAULT_STALE_DAYS) * DAY
 end
