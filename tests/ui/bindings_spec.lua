@@ -18,7 +18,7 @@ describe("Bindings", function()
     for _, line in ipairs(W.printed) do if line == text then n = n + 1 end end
     return n
   end
-  local function proxy() return _G.FabricationStationCraftNextProxy end
+  local function proxy() return _G.FabricationStationQueueCraftProxy end
 
   -- The profession panel stand-in: shown or not, recording what the binding shows through SetStatus.
   local function panel(shown)

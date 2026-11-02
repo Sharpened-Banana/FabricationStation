@@ -11,8 +11,9 @@ local L = ns.L
 --   replyLatest  ChatInbox:Reply on the newest open request: it fills the chat box and sends nothing
 --
 -- No automation (design rule 3): one key press does one thing. In combat the first two print "Not in combat" and do
--- nothing. Own frames only (rule 7): the binding clicks FabricationStation's buttons, never a Blizzard frame, and calls
--- no Blizzard function for the player (so a key cannot confirm Blizzard's own dialogs either).
+-- nothing. Own frames only (rule 7): the binding clicks FabricationStation's own buttons; it clicks no Blizzard frame
+-- and writes no field of one (so a key cannot confirm Blizzard's own dialogs either). The protected calls behind the
+-- two clicks run from the buttons' OnClick handlers, as for a mouse click.
 -- Errors: the entry point runs under ns.FS:SafeCall("Bindings:Run", ...), a log-only source (no module is turned off,
 -- nothing is raised into the key handler); the craft button logs as "Bindings:CraftNext".
 -- Unverified in game: P7-28 (Bindings.xml category="ADDONS" lists the bindings under AddOns; a key press that calls
@@ -77,11 +78,12 @@ local function show_craft_text(text, tone)
   end
 end
 
--- The own button a Craft Next key press clicks. Its name is built from pieces because tests/queue/craft_spec.lua
--- checks line by line that every line naming Queue's craft method sits in an OnClick handler; the button's name is
--- not a reference to it.
-local PROXY_NAME = ("%sCraft%sProxy"):format(ADDON_NAME, "Next")
-local proxy = CreateFrame("Button", PROXY_NAME, UIParent)
+-- The own button a Craft Next key press clicks. Its global name must not contain the craft method's name:
+-- tests/queue/craft_spec.lua checks line by line that every line naming it sits in an OnClick handler, and a name that
+-- contained it would trip that scan. Building the craft method's name at run time (a format, a concatenation, a bracketed
+-- key) to get around the scan is forbidden: the rule exists so the scan can see every reference.
+-- tests/ui/bindings_click_only_spec.lua pins who may click this button and who may call `run`.
+local proxy = CreateFrame("Button", "FabricationStationQueueCraftProxy", UIParent)
 proxy:Hide()
 -- The only reference to the protected action in this file: one craft per click, nothing else runs it.
 proxy:SetScript("OnClick", ns.FS:Wrap("Bindings:CraftNext", function()
@@ -115,9 +117,6 @@ local function run(id)
     if not entry or not inbox:Reply(entry.id) then say(L["No open chat request"]) end
   end
 end
-
-Bindings.Run = run
-Bindings.PROXY_NAME = PROXY_NAME
 
 -- The global every <Binding> in Bindings.xml calls.
 function FabricationStation_Binding(id)
