@@ -5,8 +5,8 @@ local L = ns.L
 -- bags that the bank (and, with settings.crafting.bankPullUseWarband and a viewable warband bank, the warband bank)
 -- holds, and a Retrieve button that moves one stack, or splits one, into the bags per press.
 --
--- No automation (design rule 3): BankPull:RetrieveOne is the only caller of C_Container.UseContainerItem, SplitContainerItem
--- and PickupContainerItem, and it is called only from the Retrieve button's OnClick handler
+-- No automation (design rule 3): BankPull:RetrieveOne is the only caller of C_Container.UseContainerItem,
+-- SplitContainerItem and PickupContainerItem, and it is called only from the Retrieve button's OnClick handler
 -- (tests/ui/bank_pull_click_only_spec.lua). One press makes at most one move; after it nothing moves until the next
 -- BAG_UPDATE_DELAYED or 3 s (the in-flight lock). Opening the bank, a bag update or a queue change only shows or
 -- redraws the panel. Besides the three moves RetrieveOne reads only GetContainerNumSlots, GetContainerItemInfo,
@@ -74,7 +74,8 @@ local WARBAND_NAMES = { "AccountBankTab_1", "AccountBankTab_2", "AccountBankTab_
 -- never reads Scanner.bankOpen: AceEvent runs one event's handlers in an unspecified order (review I1).
 local function bank_open() return bankOpen end
 
--- The container reads Plan and RetrieveOne use exist (the three moves, the cursor calls and ClearCursor are checked in RetrieveOne).
+-- The container reads Plan and RetrieveOne use exist (the three moves, the cursor calls and ClearCursor are checked
+-- in RetrieveOne).
 local function reads_ready()
   return type(C_Container) == "table" and type(C_Container.GetContainerNumSlots) == "function"
     and type(C_Container.GetContainerItemInfo) == "function"
