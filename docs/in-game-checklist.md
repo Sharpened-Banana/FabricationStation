@@ -1487,6 +1487,12 @@ hides, and nothing overlaps the Use concentration / Add to Queue / Craft Next bu
 lines, report any overlap). Close the window: the content goes back to the top and the table returns. A Lua error here
 turns off only the panel.
 
+P7-43. **Panel size.** Open a profession. Expected: the panel is wider than before and as tall as the crafting window.
+Drag the grip at its bottom-right corner: it follows, within 300-700 wide and 450-1200 tall, and stays attached to the
+crafting window when that moves. Close and reopen, then `/reload`: the size stays. Right-click the grip: back to the
+default. Report whether the grip works (`PanelResizeButtonTemplate`, as the main window's) and whether it covers the
+"Math check" line.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

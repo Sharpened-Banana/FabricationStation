@@ -318,7 +318,7 @@ describe("ProfessionPanel attach", function()
     W.fire("ADDON_LOADED", "Blizzard_Professions")
     local frame = _G.FabricationStationProfessionPanel
     assert.is_table(frame); assert.equals("BackdropTemplate", frame.template); assert.equals(UIParent, frame:GetParent())
-    assert.equals(300, frame:GetWidth())
+    assert.equals(340, frame:GetWidth())
     assert.same({ "TOPLEFT", ProfessionsFrame, "TOPRIGHT", 2, 0 }, { frame:GetPoint(1) })
     W.fire("ADDON_LOADED", "Blizzard_Professions")
     assert_attached_once(ns, form)
@@ -732,6 +732,87 @@ describe("ProfessionPanel under the Crafting Results window", function()
   it("writes nothing on Blizzard's frames", function()
     boot()
     log:open(450); log:close()
+    assert.same({}, form.assignedFields)
+  end)
+end)
+
+describe("ProfessionPanel size", function()
+  local ns, W, form, view
+  local function boot(stored)
+    ns, W = make_world({ last = "UI/ProfessionPanel.lua" })
+    form = fake_professions_frame()
+    if stored then ns.FS.db.global.settings.professionPanel = stored end
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    view = ns.FS:GetModule("ProfessionPanel"):GetView()
+  end
+  local function saved() return ns.FS.db.global.settings.professionPanel end
+  local function anchors()
+    local out = {}
+    for i = 1, view.frame:GetNumPoints() do
+      local point, relativeTo, relativePoint = view.frame:GetPoint(i)
+      out[i] = { point, relativeTo == _G.ProfessionsFrame, relativePoint }
+    end
+    return out
+  end
+  local FOLLOWS = { { "TOPLEFT", true, "TOPRIGHT" }, { "BOTTOMLEFT", true, "BOTTOMRIGHT" } }
+  local TOP_ONLY = { { "TOPLEFT", true, "TOPRIGHT" } }
+  local function release(button)
+    view.resizeGrip:GetScript("OnMouseUp")(view.resizeGrip, button or "LeftButton")
+  end
+  after_each(function() fake_professions_frame.reset() end)
+
+  it("starts wider than it was, as tall as the crafting window", function()
+    boot()
+    assert.equals(340, view.frame:GetWidth())
+    assert.same(FOLLOWS, anchors())
+  end)
+  it("has a grip that keeps the sizes in range", function()
+    boot()
+    assert.is_truthy(view.resizeGrip)
+  end)
+  it("opens at the size you dragged it to, still attached to the crafting window", function()
+    boot({ width = 420, height = 900 })
+    assert.same({ 420, 900 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+    assert.same(TOP_ONLY, anchors())
+  end)
+  it("saves the size on release and attaches again", function()
+    boot()
+    view.frame:ClearAllPoints(); view.frame:SetPoint("TOPLEFT", _G.UIParent, "BOTTOMLEFT", 10, 10)  -- StartSizing does this
+    view.frame:SetSize(500.4, 880.6)
+    release()
+    assert.same({ width = 500, height = 881 }, saved())
+    assert.same({ 500, 881 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+    assert.same(TOP_ONLY, anchors())
+  end)
+  it("goes back to the default on a right-click", function()
+    boot({ width = 420, height = 900 })
+    release("RightButton")
+    assert.is_nil(saved().width); assert.is_nil(saved().height)
+    assert.equals(340, view.frame:GetWidth())
+    assert.same(FOLLOWS, anchors())
+  end)
+  it("reads a size out of range or of the wrong type as the nearest good one or none", function()
+    boot({ width = 5000, height = 10 })
+    assert.same({ 700, 450 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+    fake_professions_frame.reset()
+    boot({ width = "wide", height = false })
+    assert.equals(340, view.frame:GetWidth())
+    assert.same(FOLLOWS, anchors())
+  end)
+  it("writes nothing while the saved data is from a newer version", function()
+    boot()
+    ns.FS.dbIsNewer = true
+    local before = ns.Util and ns.Util.DeepCopy and ns.Util.DeepCopy(ns.FS.db.global.settings) or nil
+    view.frame:SetSize(500, 880)
+    release()
+    assert.is_nil(saved() and saved().width)
+    if before then assert.same(before, ns.FS.db.global.settings) end
+    assert.equals(500, view.frame:GetWidth())   -- it still takes this session
+  end)
+  it("writes nothing on Blizzard's frames", function()
+    boot({ width = 420, height = 900 })
+    view.frame:SetSize(500, 880)
+    release()
     assert.same({}, form.assignedFields)
   end)
 end)

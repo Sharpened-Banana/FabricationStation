@@ -422,6 +422,8 @@ Module `"Diagnostics"` (`coreModule`):
 
 **[phase 7, player feedback]** While `ProfessionsFrame.CraftingPage.CraftingOutputLog` is shown (post-hooked OnShow/OnHide, read only), `ProfessionPanel` starts its content below that window and hides the reagent-per-quality table.
 
+**[phase 7, player feedback]** `ProfessionPanel` size: `settings.professionPanel = { width|nil (300-700), height|nil (450-1200) }`, default 340 wide and as tall as `ProfessionsFrame`; `GetView().resizeGrip`; right-click clears both. A dragged size stays anchored to `ProfessionsFrame`'s top right.
+
 ## SelfCheck (1b)
 
 Module `"SelfCheck"`; `ns.SelfCheck.QUALITY_FIELD = "craftingQuality"`; `ns.SelfCheck.Compare(prediction, opInfo) -> { { field, expected, actual } }`; `SelfCheck:Run(recipeID) -> mismatches`; `SelfCheck:GetSessionCount() -> integer`. Logs each distinct mismatch once per session through `Diagnostics:LogMismatch`. **[phase 7 quality mismatches]** `Compare` skips the difficulty when `opInfo.isQualityCraft == false`: the game reports base 0 and bonus 1 on every recipe with no quality.

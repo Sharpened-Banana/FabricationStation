@@ -1319,3 +1319,4 @@ L["Mail gold"] = true   -- options tab name
 L["Show the gold you take from the mailbox in chat"] = true   -- Settings > Mail gold: switch for the module
 L["Show a total when you close the mailbox"] = true   -- Settings > Mail gold
 L["Adds one line with all the gold you took during the visit, when you took gold more than once."] = true
+L["Drag to resize. Right-click for the default size."] = true

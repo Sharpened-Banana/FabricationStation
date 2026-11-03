@@ -131,3 +131,4 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     - An order whose patron reagents land above its minimum quality no longer reads as unreachable, or as needing
       concentration.
     - While Blizzard's Crafting Results window is open, the profession panel moves below it and hides its reagent table.
+    - The profession panel is wider and has a resize grip; right-click the grip for the default size.

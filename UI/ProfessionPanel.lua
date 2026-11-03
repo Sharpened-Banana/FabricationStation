@@ -18,6 +18,9 @@ local L = ns.L
 -- move. While it shows, the panel's content starts below it and gives up the reagent-per-quality table (Apply is not
 -- what you reach for mid-craft), so the numbers stay readable. It is read and post-hooked only.
 --
+-- Size: the grip drags it (settings.professionPanel = { width, height }), a right-click on the grip goes back to the
+-- default: WIDTH wide and as tall as ProfessionsFrame. A dragged size stays attached to ProfessionsFrame's top right.
+--
 -- Attachment: AttachIfReady() runs from ADDON_LOADED("Blizzard_Professions") and from OnEnable when the addon is
 -- already loaded; `attached` makes it register once. Every hook body runs in ns.FS:SafeCall("ProfessionPanel", ...),
 -- so an error turns off this module only (1a's rule for toggleable modules) and never reaches Blizzard's code.
@@ -43,7 +46,8 @@ local TRANSACTION_UPDATED = "Professions.TransactionUpdated"
 local SOURCE = "ProfessionPanel"
 local REFRESH_KEY, REFRESH_DELAY = "professionPanel.refresh", 0.5
 
-local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 300, 10, 14, 22, 24
+local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 340, 10, 14, 22, 24
+local MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT = 300, 700, 450, 1200
 local PROVIDER_RIGHT_WIDTH = 120   -- the right-hand column of a provider line; longer texts go to the row tooltip
 local ACTION_BUTTON_WIDTH = 90     -- an action's button; its status line takes the rest of the row
 local MAX_QUALITY_ROWS = 5
@@ -1122,11 +1126,63 @@ local function build_body(frame, created)
   created.actions.frame:Hide()
 end
 
+local sizeSettings = ns.Util.SettingsAccessor("professionPanel")
+local function size_settings()
+  return sizeSettings({}, function(stored) return stored end)
+end
+
+local function in_range(value, low, high)
+  if type(value) ~= "number" then return nil end
+  return math.max(low, math.min(high, value))
+end
+
+-- Attaches the panel to ProfessionsFrame at the saved size (also after a drag: StartSizing re-anchors the frame).
+local function apply_size(frame)
+  local saved = size_settings()
+  local height = in_range(saved.height, MIN_HEIGHT, MAX_HEIGHT)
+  frame:ClearAllPoints()
+  frame:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", 2, 0)
+  frame:SetWidth(in_range(saved.width, MIN_WIDTH, MAX_WIDTH) or WIDTH)
+  if height then
+    frame:SetHeight(height)
+  else
+    frame:SetPoint("BOTTOMLEFT", ProfessionsFrame, "BOTTOMRIGHT", 2, 0)
+  end
+end
+
+-- The template's own mouse-up handler ends the drag; this hook runs after it.
+local function on_grip_released(frame, mouseButton)
+  local saved = size_settings()
+  if mouseButton == "RightButton" then
+    saved.width, saved.height = nil, nil
+  else
+    saved.width = math.floor(frame:GetWidth() + 0.5)
+    saved.height = math.floor(frame:GetHeight() + 0.5)
+  end
+  apply_size(frame)
+end
+
+local function build_grip(frame, created)
+  frame:SetResizable(true)
+  frame:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+  local grip = CreateFrame("Button", nil, frame, "PanelResizeButtonTemplate")
+  grip:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -4, 4)
+  grip:Init(frame, MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+  grip:HookScript("OnMouseUp", function(_, mouseButton)
+    ns.FS:SafeCall(SOURCE, on_grip_released, frame, mouseButton)
+  end)
+  grip:HookScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(L["Drag to resize. Right-click for the default size."], 1, 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  grip:HookScript("OnLeave", function() GameTooltip:Hide() end)
+  created.resizeGrip = grip
+end
+
 local function build()
   local frame = CreateFrame("Frame", "FabricationStationProfessionPanel", UIParent, "BackdropTemplate")
-  frame:SetWidth(WIDTH)
-  frame:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", 2, 0)
-  frame:SetPoint("BOTTOMLEFT", ProfessionsFrame, "BOTTOMRIGHT", 2, 0)
+  apply_size(frame)
   frame:SetBackdrop(BACKDROP)
   frame:SetBackdropColor(0, 0, 0, 0.85)
   frame:Hide()
@@ -1142,6 +1198,7 @@ local function build()
 
   build_body(frame, created)
   build_controls(frame, created)
+  build_grip(frame, created)
   view = created
 end
 
