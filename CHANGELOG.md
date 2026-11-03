@@ -135,3 +135,5 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     - The profession panel opens below where the Crafting Results window appears, so that window no longer covers it.
       It is wider, can be dragged anywhere and has a resize grip. A lock button beside the grip keeps its size and
       position in every session until you unlock it; right-click the grip for the default.
+    - The profession panel is compact: the profit breakdown and the extra lines fold into one row each (hover to read
+      them, click to keep them open), its extra buttons sit behind a More button, and its background is solid.

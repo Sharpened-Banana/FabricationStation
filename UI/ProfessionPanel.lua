@@ -33,6 +33,11 @@ local L = ns.L
 -- installed once per session and do nothing while the module is off. Apply is off by default
 -- (Recipes.DEFAULTS.applyWritesBlizzardSlots) until the in-game taint check has passed; the panel says so.
 --
+-- Compact layout: the summary stays on the panel and the rest is one hover or click away. The profit breakdown and the
+-- provider lines fold into one row each (the tooltip lists them, a click keeps them open in every session,
+-- professionPanel.breakdownOpen / detailsOpen), and the provider actions live behind the More button beside Craft Next.
+-- What does not fit above the buttons folds for the moment, the reagent table first.
+--
 -- Display rules (same as the tabs): a nil profit is "no price" (never 0g); noPrice with a profit shows the profit and
 -- "some prices missing"; estimated results say "estimate"; a target quality the reagents cannot reach (the result
 -- crafts a lower one) says "quality unreachable"; the price age is shown; money goes through ns.UI.FormatMoney.
@@ -54,7 +59,8 @@ local REFRESH_KEY, REFRESH_DELAY = "professionPanel.refresh", 0.5
 local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 340, 10, 14, 22, 24
 local MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT, DEFAULT_HEIGHT = 300, 700, 450, 1200, 480
 local PROVIDER_RIGHT_WIDTH = 120   -- the right-hand column of a provider line; longer texts go to the row tooltip
-local ACTION_BUTTON_WIDTH = 90     -- an action's button; its status line takes the rest of the row
+local ACTION_BUTTON_WIDTH = 160    -- an action's button (its label fits); its status line takes the rest of the row
+local PLUS_ICON, MINUS_ICON = "Interface\\Buttons\\UI-PlusButton-Up", "Interface\\Buttons\\UI-MinusButton-Up"
 local MAX_QUALITY_ROWS = 5
 local RESULTS_GAP, RESULTS_HEIGHT = 6, 290   -- below the results window; its height when it cannot be measured (Blizzard's)
 local SECONDS_PER_DAY = 86400
@@ -62,8 +68,9 @@ local EM_DASH, TIMES = "\226\128\148", "\195\151"
 local READ_ONLY = L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
 local TONES = { good = { 0.25, 1, 0.25 }, bad = { 1, 0.25, 0.25 }, warn = { 1, 0.82, 0 }, plain = { 1, 1, 1 },
   dim = { 0.62, 0.62, 0.62 } }
+M.BACKGROUND_COLOR = { 0.05, 0.05, 0.06, 1 }   -- solid: the world and name plates must not show through the text
 local BACKDROP = {
-  bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+  bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
   tile = true, tileSize = 16, edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 },
 }
 
@@ -528,6 +535,11 @@ end
 
 local render_actions   -- below
 
+local sizeSettings = ns.Util.SettingsAccessor("professionPanel")
+local function size_settings()
+  return sizeSettings({}, function(stored) return stored end)
+end
+
 local function render_provider_lines()
   local section = view and view.providerLines
   if not section then return end
@@ -545,8 +557,12 @@ local function render_provider_lines()
     section.pool[i].frame:Hide(); section.pool[i].left:Hide(); section.pool[i].right:Hide()
   end
   section.count = #lines
-  section.frame:SetHeight(math.max(1, #lines * LINE))
-  if #lines > 0 then section.frame:Show() else section.frame:Hide() end
+  view.detailsLines = lines
+  view.detailsToggle.right:SetText(tostring(#lines))
+  if #lines > 0 then view.detailsToggle:Show() else view.detailsToggle:Hide() end
+  local open = #lines > 0 and view.detailsShown == true
+  section.frame:SetHeight(open and #lines * LINE or 1)
+  if open then section.frame:Show() else section.frame:Hide() end
 end
 
 -- A click on an action's button: runs the spec it was drawn from when that spec was enabled, then redraws the section.
@@ -606,12 +622,17 @@ function render_actions()
   end
   section.count = #specs
   section.frame:SetHeight(math.max(1, #specs * ROW))
-  if #specs > 0 then section.frame:Show() else section.frame:Hide() end
+  view.morePopup:SetHeight(math.max(1, #specs * ROW) + 12)
+  if #specs > 0 then
+    section.frame:Show(); view.moreButton:Show()
+  else
+    section.frame:Hide(); view.moreButton:Hide(); view.morePopup:Hide()
+  end
 end
 
-local too_short_for_table, apply_size   -- below
--- Rough heights of the panel's fixed parts, for too_short_for_table.
-local TOP_BLOCK, TABLE_HEADER, BREAKDOWN_HEADER, BOTTOM_BLOCK = 110, 38, 22, 134
+local apply_size   -- below
+-- Rough heights of the panel's fixed parts, for fold_plan.
+local TOP_BLOCK, TABLE_HEADER, FOLD_ROW, BOTTOM_BLOCK = 112, 36, 20, 134
 
 -- The results window's CraftingPage field, or nil on a client without it.
 local function results_log()
@@ -654,30 +675,40 @@ local function results_clearance()
   return top - bottom * scale + RESULTS_GAP
 end
 
--- Starts the content below the results window while it is open; true then (the condensed layout).
+-- Starts the content below the results window while it covers the panel; returns how far.
 local function place_content()
   local clearance = results_clearance()
   view.title:ClearAllPoints()
   view.title:SetPoint("TOPLEFT", view.frame, "TOPLEFT", PAD, -(PAD + clearance))
   view.title:SetPoint("TOPRIGHT", view.frame, "TOPRIGHT", -PAD, -(PAD + clearance))
-  return clearance > 0
+  return clearance
 end
 
--- Whether the panel's height leaves no room for the reagent table above the buttons (a height that cannot be read: it does).
-function too_short_for_table()
+-- What to show of the optional parts: what was left open, while it fits above the buttons, then the reagent table (never
+-- under the results window). A height that cannot be read fits everything.
+local function fold_plan(clearance)
+  local saved = size_settings()
+  local details = view.providerLines.count or 0
+  local showBreakdown, showDetails = saved.breakdownOpen == true, saved.detailsOpen == true and details > 0
+  local showTable = clearance == 0
   local height = read_edge(view.frame, "GetHeight")
-  if not height then return false end
-  local rows = #model.perQualityRows
-  local providerRows, actionRows = view.providerLines.count or 0, view.actions.count or 0
-  local needed = TOP_BLOCK + TABLE_HEADER + rows * (ROW + 2) + BREAKDOWN_HEADER + #model.breakdownRows * LINE
-    + (providerRows > 0 and providerRows * LINE + 6 or 0) + (actionRows > 0 and actionRows * ROW + 4 or 0) + BOTTOM_BLOCK
-  return height < needed
+  if not height then return showTable, showBreakdown, showDetails end
+  local room = height - clearance - TOP_BLOCK - FOLD_ROW - (details > 0 and FOLD_ROW or 0) - BOTTOM_BLOCK
+  local function fits(cost)
+    if room < cost then return false end
+    room = room - cost
+    return true
+  end
+  showBreakdown = showBreakdown and fits(#model.breakdownRows * LINE + 4)
+  showDetails = showDetails and fits(details * LINE + 2)
+  showTable = showTable and fits(TABLE_HEADER + #model.perQualityRows * (ROW + 2))
+  return showTable, showBreakdown, showDetails
 end
 
 local function render()
   if not view then return end
   view.applyEnabled = apply_allowed()
-  local underResults = place_content()
+  local clearance = place_content()
   if not recipeID then
     model = nil
     view.title:SetText("FabricationStation")
@@ -693,7 +724,10 @@ local function render()
     return
   end
   model = M.BuildModel(result, live)
-  local condensed = underResults or too_short_for_table()
+  render_provider_lines()   -- fold_plan needs their count
+  local showTable, showBreakdown, showDetails = fold_plan(clearance)
+  local condensed = not showTable
+  view.detailsShown = showDetails
   view.empty:Hide(); view.body:Show()
   view.quality:SetText(model.qualityText)
   view.bar:SetValue(model.barFill)
@@ -724,9 +758,24 @@ local function render()
       row:Hide()
     end
   end
-  view.breakdownHeader:ClearAllPoints()
-  view.breakdownHeader:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -6)
+  view.breakdownToggle:ClearAllPoints()
+  view.breakdownToggle:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -6)
+  view.breakdownToggle:SetPoint("RIGHT", view.body, "RIGHT", 0, 0)
+  view.breakdownToggle.icon:SetTexture(showBreakdown and MINUS_ICON or PLUS_ICON)
+  for _, row in ipairs(model.breakdownRows) do
+    if row.label == L["Profit"] then
+      view.breakdownToggle.right:SetText(row.value)
+      set_tone(view.breakdownToggle.right, row.tone)
+    end
+  end
   set_lines(view.lines, model.breakdownRows)
+  if showBreakdown then
+    view.lines.frame:Show()
+  else
+    view.lines.frame:SetHeight(1)
+    view.lines.frame:Hide()
+  end
+  view.detailsToggle.icon:SetTexture(showDetails and MINUS_ICON or PLUS_ICON)
   render_provider_lines()
 end
 
@@ -1048,6 +1097,37 @@ local function create_quality_row(parent)
   return row
 end
 
+-- One row of the compact layout: [+] label ... value; the tooltip lists what it folds, a click keeps it open.
+local function fold_row(parent, label, settingKey, tooltip_rows)
+  local row = CreateFrame("Button", nil, parent)
+  row:SetHeight(LINE)
+  row.icon = row:CreateTexture(nil, "ARTWORK")
+  row.icon:SetSize(12, 12)
+  row.icon:SetPoint("LEFT", row, "LEFT", 0, 0)
+  row.icon:SetTexture(PLUS_ICON)
+  row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  row.label:SetPoint("LEFT", row.icon, "RIGHT", 4, 0)
+  row.label:SetText(label)
+  row.right = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.right:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+  row.right:SetJustifyH("RIGHT")
+  row:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
+    local saved = size_settings()
+    saved[settingKey] = saved[settingKey] ~= true and true or nil
+    render()
+  end))
+  row:SetScript("OnEnter", function(self)
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(label)
+    for _, line in ipairs(tooltip_rows()) do GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, 1, 1, 1) end
+    GameTooltip:AddLine(L["Click to keep this open or fold it."], 0.62, 0.62, 0.62, true)
+    GameTooltip:Show()
+  end)
+  row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+  return row
+end
+
 local function build_controls(frame, created)
   created.checkLine = text(frame)
   created.checkLine:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", PAD, PAD)
@@ -1071,6 +1151,27 @@ local function build_controls(frame, created)
     local r = queue and queue:CraftNext()
     show_craft_result(r)
   end))
+
+  -- The provider actions, behind one button: they need more room than the row of buttons has.
+  created.moreButton = button(frame, L["More"], 70, BUTTON_ROW - 2)
+  created.moreButton:SetPoint("LEFT", created.craftButton, "RIGHT", 6, 0)
+  created.moreButton:Hide()
+  created.morePopup = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+  created.morePopup:SetPoint("BOTTOMLEFT", created.craftButton, "TOPLEFT", -2, 4)
+  created.morePopup:SetPoint("RIGHT", frame, "RIGHT", -PAD + 2, 0)
+  created.morePopup:SetFrameLevel((frame:GetFrameLevel() or 0) + 20)
+  created.morePopup:SetBackdrop(BACKDROP)
+  created.morePopup:SetBackdropColor(unpack(M.BACKGROUND_COLOR))
+  created.morePopup:EnableMouse(true)
+  created.morePopup:Hide()
+  created.moreButton:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
+    if created.morePopup:IsShown() then created.morePopup:Hide() else created.morePopup:Show() end
+  end))
+  -- Buttons other modules add through RegisterLineAction (Guild's "Ask guild"); hidden while none applies.
+  created.actions = { frame = CreateFrame("Frame", nil, created.morePopup), pool = {}, count = 0 }
+  created.actions.frame:SetPoint("TOPLEFT", created.morePopup, "TOPLEFT", 6, -6)
+  created.actions.frame:SetPoint("RIGHT", created.morePopup, "RIGHT", -6, 0)
+  created.actions.frame:Hide()
 
   created.addButton = button(frame, L["Add to Queue"], 110, BUTTON_ROW - 2)
   created.addButton:SetPoint("BOTTOMLEFT", created.craftButton, "TOPLEFT", 0, 4)
@@ -1147,26 +1248,24 @@ local function build_body(frame, created)
     previous = row
   end
 
-  created.breakdownHeader = text(body, "GameFontNormalSmall")
-  created.breakdownHeader:SetText(L["Profit per craft"])
+  created.breakdownToggle = fold_row(body, L["Profit per craft"], "breakdownOpen", function()
+    local out = {}
+    for i, row in ipairs(model and model.breakdownRows or {}) do out[i] = { row.label, row.value } end
+    return out
+  end)
   created.lines = { frame = CreateFrame("Frame", nil, body), pool = {} }
-  stack(created.lines.frame, created.breakdownHeader, 4)
+  stack(created.lines.frame, created.breakdownToggle, 4)
   created.lines.frame:SetPoint("RIGHT", body, "RIGHT", 0, 0)
-  -- Rows other modules add through RegisterLineProvider; hidden while no provider has lines.
+  -- Rows other modules add through RegisterLineProvider, folded behind their own row; hidden while no provider has lines.
+  created.detailsToggle = fold_row(body, L["More details"], "detailsOpen", function()
+    return created.detailsLines or {}
+  end)
+  stack(created.detailsToggle, created.lines.frame, 6)
+  created.detailsToggle:Hide()
   created.providerLines = { frame = CreateFrame("Frame", nil, body), pool = {}, count = 0 }
-  stack(created.providerLines.frame, created.lines.frame, 6)
+  stack(created.providerLines.frame, created.detailsToggle, 2)
   created.providerLines.frame:SetPoint("RIGHT", body, "RIGHT", 0, 0)
   created.providerLines.frame:Hide()
-  -- Buttons other modules add through RegisterLineAction (Guild's "Ask guild"); hidden while none applies.
-  created.actions = { frame = CreateFrame("Frame", nil, body), pool = {}, count = 0 }
-  stack(created.actions.frame, created.providerLines.frame, 4)
-  created.actions.frame:SetPoint("RIGHT", body, "RIGHT", 0, 0)
-  created.actions.frame:Hide()
-end
-
-local sizeSettings = ns.Util.SettingsAccessor("professionPanel")
-local function size_settings()
-  return sizeSettings({}, function(stored) return stored end)
 end
 
 local function in_range(value, low, high)
@@ -1297,7 +1396,7 @@ local function build()
   local frame = CreateFrame("Frame", "FabricationStationProfessionPanel", UIParent, "BackdropTemplate")
   apply_size(frame)
   frame:SetBackdrop(BACKDROP)
-  frame:SetBackdropColor(0, 0, 0, 0.85)
+  frame:SetBackdropColor(unpack(M.BACKGROUND_COLOR))
   frame:Hide()
 
   local created = { frame = frame, applyEnabled = false }

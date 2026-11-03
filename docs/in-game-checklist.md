@@ -1500,6 +1500,15 @@ Click the lock beside the grip: the icon shows locked, the grip goes and the pan
 switch character: same size and place, still locked. Click it again: the icon shows unlocked, the grip and the drag return,
 and nothing moves. Report whether both lock icons show (`Interface\\Buttons\\LockButton-Locked-Up` and `-Unlocked-Up`).
 
+P7-44. **Compact panel.** Open a profession and select a recipe. Expected: a solid background with nothing showing through;
+"Profit per craft" is one row with [+] and the profit on the right, and hovering it lists Reagents, Sale, Multicraft and the
+rest. Click it: the lines stay open, also after `/reload`; click again to fold. "More details" does the same for Best
+optionals and the sub-craft lines, with their count on the right. Beside Craft Next, More opens "Queue with best
+optionals", "Queue with sub-crafts" and "Ask guild" with their whole labels, above the other buttons; each still works and
+its status shows beside it. Use concentration is never covered. Open everything and make the panel small, or craft with it
+under Crafting Results: what does not fit folds, the reagent table first, and comes back when there is room. Report whether
+the +/- icons show (`Interface\\Buttons\\UI-PlusButton-Up`, `UI-MinusButton-Up`).
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

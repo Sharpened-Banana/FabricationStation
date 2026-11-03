@@ -1324,3 +1324,6 @@ L["Lock size and position"] = true   -- profession panel: the lock button's tool
 L["Unlock size and position"] = true   -- profession panel: the lock button's tooltip title
 L["The panel keeps this size and position, in every session, until you unlock it."] = true
 L["The size and position are locked. Unlock them to change the panel again."] = true
+L["More"] = true   -- profession panel: the button that opens the extra actions
+L["More details"] = true   -- profession panel: the folded row of extra lines
+L["Click to keep this open or fold it."] = true   -- profession panel: tooltip of a folded row

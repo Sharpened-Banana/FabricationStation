@@ -115,6 +115,9 @@ describe("phase4 extension points", function()
       P:RegisterLineProvider("a", function(id) return { { "Guild", "Bob (Q3)" }, { "Alt", tostring(id) } } end)
       form.selectRecipe({ recipeID = 9001 })
       local section = P:GetView().providerLines
+      assert.is_true(P:GetView().detailsToggle:IsShown())   -- folded behind it until clicked
+      local toggle = P:GetView().detailsToggle
+      toggle:GetScript("OnClick")(toggle)
       assert.is_true(section.frame:IsShown())
       assert.are.same({ { "Guild", "Bob (Q3)" }, { "Alt", "9001" } }, texts(section.pool, 2))
       assert.is_true(section.pool[1].left:IsShown())
