@@ -40,7 +40,7 @@ local L = ns.L
 --
 -- Crafting results: the CraftResults module replaces Blizzard's results window on this page, and its list fills the room
 -- between the fold rows and the buttons, newest on top, one row per craft (the mouse wheel scrolls, the tooltip spells a
--- row out). Once there are results they outrank the reagent table. With that module off, Blizzard's window is back and
+-- row out), under a session profit line (CraftResults:SessionProfit). Once there are results they outrank the reagent table. With that module off, Blizzard's window is back and
 -- the panel starts below it again, as described above.
 --
 -- Display rules (same as the tabs): a nil profit is "no price" (never 0g); noPrice with a profit shows the profit and
@@ -64,7 +64,7 @@ local REFRESH_KEY, REFRESH_DELAY = "professionPanel.refresh", 0.5
 local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 340, 10, 14, 22, 24
 local MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT, DEFAULT_HEIGHT = 300, 700, 300, 1200, 480
 local OWN_RESULTS_HEIGHT = 640     -- about the crafting window's height: the list needs the room, nothing opens over it
-local RESULT_ROW, RESULTS_HEADER, RESULTS_GAP_ABOVE, RESULT_ROWS_UNMEASURED = 18, 18, 8, 5
+local RESULT_ROW, RESULTS_HEADER, RESULTS_GAP_ABOVE, RESULT_ROWS_UNMEASURED = 18, 34, 8, 5   -- the header: title and total
 local PROVIDER_RIGHT_WIDTH = 120   -- the right-hand column of a provider line; longer texts go to the row tooltip
 local ACTION_BUTTON_WIDTH = 160    -- an action's button (its label fits); its status line takes the rest of the row
 local PLUS_ICON, MINUS_ICON = "Interface\\Buttons\\UI-PlusButton-Up", "Interface\\Buttons\\UI-MinusButton-Up"
@@ -749,6 +749,20 @@ local function draw_results()
   end
 end
 
+-- The session profit line: a loss in red, a gain in green, unknown as a word or a dash and never 0.
+local function render_session_profit()
+  local section, total = view.results, module("CraftResults"):SessionProfit()
+  section.missing = total.missing
+  section.totalLabel:SetText(total.missing > 0 and L["Session profit (some prices missing)"] or L["Session profit"])
+  if total.profit then
+    section.totalValue:SetText(ns.UI.FormatMoney(total.profit))
+    set_tone(section.totalValue, total.profit > 0 and "good" or total.profit < 0 and "bad" or "plain")
+  else
+    section.totalValue:SetText(total.missing > 0 and L["no price"] or EM_DASH)
+    set_tone(section.totalValue, "dim")
+  end
+end
+
 -- Shows up to maxRows of the list below `tail`; nothing while there are no results or no room.
 local function render_results(tail, maxRows)
   local section = view.results
@@ -763,6 +777,7 @@ local function render_results(tail, maxRows)
   section.frame:SetPoint("RIGHT", view.frame, "RIGHT", -PAD, 0)
   section.frame:SetHeight(RESULTS_HEADER + math.min(count, maxRows) * RESULT_ROW)
   section.header:SetText(L["Crafting results (%d)"]:format(count))
+  render_session_profit()
   section.frame:Show()
   draw_results()
 end
@@ -1327,6 +1342,27 @@ local function build_results(frame, created)
     local results = module("CraftResults")
     if results then results:Clear() end
   end))
+  section.total = CreateFrame("Button", nil, section.frame)
+  section.total:SetHeight(LINE)
+  section.total:SetPoint("TOPLEFT", section.frame, "TOPLEFT", 0, -16)
+  section.total:SetPoint("RIGHT", section.frame, "RIGHT", 0, 0)
+  section.totalValue = text(section.total, nil, "RIGHT")
+  section.totalValue:SetPoint("RIGHT", section.total, "RIGHT", 0, 0)
+  section.totalLabel = text(section.total)
+  section.totalLabel:SetPoint("LEFT", section.total, "LEFT", 0, 0)
+  section.total:SetScript("OnEnter", function(self)
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(L["Session profit"])
+    GameTooltip:AddLine(L["What the items in this list would sell for now after the auction cut, minus what their reagents cost. Crafts for orders are left out. It counts from when you logged in or last cleared the list."], 1, 1, 1, true)
+    local missing = section.missing or 0
+    if missing > 0 then
+      GameTooltip:AddLine((missing == 1 and L["%d craft has no price or only part of its cost."]
+        or L["%d crafts have no price or only part of their cost."]):format(missing), 1, 0.82, 0, true)
+    end
+    GameTooltip:Show()
+  end)
+  section.total:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
   section.frame:EnableMouseWheel(true)
   section.frame:SetScript("OnMouseWheel", ns.FS:Wrap(SOURCE, function(_, delta)
     section.offset = section.offset - delta

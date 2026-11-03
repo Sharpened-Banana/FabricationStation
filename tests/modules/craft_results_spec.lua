@@ -263,6 +263,121 @@ describe("CraftResults", function()
     end)
   end)
 
+  describe("the session profit", function()
+    local ledgerEntries, prices, queries
+    local function start()
+      ledgerEntries, prices, queries = {}, { [100] = 10000 }, 0
+      ns, W = P2.boot({})
+      P2.fake_module(ns, "Ledger", {
+        IsEnabled = function() return true end,
+        Query = function(_, filter)
+          queries = queries + 1
+          local out = {}
+          for _, entry in ipairs(ledgerEntries) do
+            if entry.type == filter.type and entry.time >= filter.since then out[#out + 1] = entry end
+          end
+          return out
+        end,
+      })
+      P2.fake_module(ns, "Prices", { Get = function(_, id) return { value = prices[id] } end })
+      ns.Math = ns.Math or {}
+      ns.Math.Profit = ns.Math.Profit or { AH_CUT = 0.95 }
+      P2.load(ns, { "Modules/CraftResults.lua" })
+      M = ns.FS:GetModule("CraftResults")
+    end
+    local function crafted(fields)
+      local entry = { type = "craft", time = ns.FS:Now(), itemID = 100, quantity = 2, amount = -15000 }
+      for key, value in pairs(fields or {}) do entry[key] = value end
+      ledgerEntries[#ledgerEntries + 1] = entry
+      return entry
+    end
+    local function changed() ns.FS:SendMessage(ns.Msg.LEDGER_CHANGED) end
+
+    before_each(start)
+
+    it("is unknown, not 0, before anything is crafted", function()
+      assert.is_nil(M:SessionProfit().profit)
+      assert.equals(0, M:SessionProfit().counted)
+    end)
+    it("adds up what the items sell for after the auction cut, minus their cost", function()
+      crafted({ quantity = 2, amount = -15000 })     -- 2 x 1g x 0.95 = 19000, so +4000
+      crafted({ quantity = 1, amount = -12000 })     -- 9500, so -2500
+      changed()
+      assert.equals(1500, M:SessionProfit().profit)
+      assert.equals(2, M:SessionProfit().counted)
+    end)
+    it("goes negative when the crafts lose money", function()
+      crafted({ quantity = 1, amount = -50000 })
+      changed()
+      assert.equals(-40500, M:SessionProfit().profit)
+    end)
+    it("counts multicraft extras, which the Ledger adds to the craft's quantity", function()
+      local entry = crafted({ quantity = 1, amount = 0 })
+      changed()
+      assert.equals(9500, M:SessionProfit().profit)
+      entry.quantity = 3
+      changed()
+      assert.equals(28500, M:SessionProfit().profit)
+    end)
+    it("says when a craft has no price, and leaves it out", function()
+      crafted({ quantity = 1, amount = -1000 })
+      crafted({ itemID = 999, quantity = 1, amount = -5000 })
+      changed()
+      assert.same({ 8500, 1, 1 }, { M:SessionProfit().profit, M:SessionProfit().counted, M:SessionProfit().missing })
+    end)
+    it("is unknown when no craft has a price", function()
+      crafted({ itemID = 999 })
+      changed()
+      assert.same({ nil, 0, 1 }, { M:SessionProfit().profit, M:SessionProfit().counted, M:SessionProfit().missing })
+    end)
+    it("flags a craft whose cost is only partly known, keeping what is known", function()
+      crafted({ quantity = 1, amount = -1000, incomplete = true })
+      changed()
+      assert.same({ 8500, 1 }, { M:SessionProfit().profit, M:SessionProfit().missing })
+    end)
+    it("leaves out crafts for orders", function()
+      crafted({ ref = 55, quantity = 1, amount = -50000 })
+      changed()
+      assert.is_nil(M:SessionProfit().profit)
+      assert.equals(0, M:SessionProfit().missing)
+    end)
+    it("leaves out crafts from before this session", function()
+      crafted({ time = ns.FS:Now() - 100 })
+      changed()
+      assert.is_nil(M:SessionProfit().profit)
+    end)
+    it("starts again when the list is cleared", function()
+      crafted()
+      changed()
+      assert.is_number(M:SessionProfit().profit)
+      W.advance(2)
+      M:Clear()
+      assert.is_nil(M:SessionProfit().profit)
+      crafted({ quantity = 1, amount = 0 })
+      changed()
+      assert.equals(9500, M:SessionProfit().profit)
+    end)
+    it("follows the prices", function()
+      crafted({ quantity = 1, amount = 0 })
+      changed()
+      assert.equals(9500, M:SessionProfit().profit)
+      prices[100] = 20000
+      ns.FS:SendMessage(ns.Msg.PRICES_CHANGED)
+      assert.equals(19000, M:SessionProfit().profit)
+    end)
+    it("does not read the whole Ledger again until something changed", function()
+      crafted(); changed()
+      M:SessionProfit(); M:SessionProfit(); M:SessionProfit()
+      assert.equals(1, queries)
+    end)
+    it("is unknown with the Ledger off", function()
+      local ledger = ns.FS:GetModule("Ledger")
+      ledger.IsEnabled = function() return false end
+      crafted(); changed()
+      assert.is_nil(M:SessionProfit().profit)
+    end)
+  end)
+
   describe("turned off", function()
     it("collects nothing and drops what it had", function()
       fire(); settle()

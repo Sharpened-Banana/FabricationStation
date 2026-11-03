@@ -1520,6 +1520,12 @@ Crafting works as before and nothing errors, also in BugSack. On the orders page
 an order. Turn off Settings > Crafting results: the list goes, the next craft opens Blizzard's window, and after closing and
 reopening a panel you never moved starts below it. Turn it on again: Blizzard's window stays closed from the next craft.
 
+P7-46. **Session profit.** Craft a recipe that has prices a few times on the Recipes page. Expected: "Session profit" under the
+Crafting results heading, red for a loss and green for a gain. After one craft of N items with no multicraft or saved reagents,
+it matches N x the item's price x 0.95 minus the reagent cost; a craft with saved reagents or multicraft comes out better. Hover
+it: the tooltip explains what it counts. Clear the list: the line starts again with the next craft. An unpriced item says "no
+price" or "(some prices missing)", never 0. `/reload` starts a new session. An order's craft does not change it.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

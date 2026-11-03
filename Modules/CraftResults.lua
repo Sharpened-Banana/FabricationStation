@@ -12,6 +12,13 @@ local L = ns.L
 --     saved? = { { itemID?|currencyID?, quantity } }, bonuses? = { same } }
 -- What a craft did not give is left out, never 0. GetEntries() is newest first, at most MAX_ENTRIES, and nothing is saved.
 --
+-- SessionProfit() totals the Ledger's craft entries since the module started or the list was last cleared: what the items
+-- would sell for now after the auction cut, minus what the Ledger says their reagents cost (it already takes off what
+-- resourcefulness returned, and adds multicraft extras to the entry's quantity). It is a value, not gold received; the
+-- Ledger's own profit still counts sales only. Crafts for orders are left out, as what they earn is the commission. A
+-- craft with no price is left out and counted in `missing`, as is one whose cost is only partly known, whose known part
+-- stays in. Nothing to count is nil, never 0. The Ledger is only read again after a change.
+--
 -- Blizzard's window: SyncBlizzardWindow stops the Recipes page's copy from listening to those events while this module
 -- and the panel both run, so it never opens, and gives the events back as soon as either stops. That is the only thing
 -- done to it; it reads no field and writes none, and with no events it stays as it is before a first craft. The copy on
@@ -30,6 +37,8 @@ local entries = {}          -- newest first
 local parents, rewards = {}, {}   -- results waiting for the batch to settle, in the order they came
 local running = false
 local silenced = false      -- Blizzard's window is not listening because of us
+local since                 -- when the session profit starts counting
+local sessionProfit         -- the last total; nil after something changed
 
 local function positive(value)
   return type(value) == "number" and value > 0 and value or nil
@@ -87,6 +96,7 @@ local function flush()
     end
   end
   parents, rewards = {}, {}
+  sessionProfit = nil
   CraftResults:SendMessage(ns.Msg.CRAFT_RESULTS_CHANGED)
 end
 
@@ -108,7 +118,36 @@ end
 
 function CraftResults:Clear()
   entries = {}
+  since, sessionProfit = ns.FS:Now(), nil
   self:SendMessage(ns.Msg.CRAFT_RESULTS_CHANGED)
+end
+
+local function total_session_profit()
+  local out = { counted = 0, missing = 0 }
+  local ledger, prices = ns.FS:GetModule("Ledger", true), ns.FS:GetModule("Prices", true)
+  if not (since and ledger and ledger:IsEnabled() and prices) then return out end
+  local total = 0
+  for _, craft in ipairs(ledger:Query({ type = "craft", since = since })) do
+    if craft.ref == nil then
+      local price = prices:Get(craft.itemID).value
+      local quantity = positive(craft.quantity)
+      if price and quantity and type(craft.amount) == "number" then
+        total = total + math.floor(price * quantity * ns.Math.Profit.AH_CUT + 0.5) + craft.amount
+        out.counted = out.counted + 1
+        if craft.incomplete then out.missing = out.missing + 1 end
+      else
+        out.missing = out.missing + 1
+      end
+    end
+  end
+  if out.counted > 0 then out.profit = total end
+  return out
+end
+
+-- { profit = copper|nil, counted, missing } for what the list covers (see the top of this file).
+function CraftResults:SessionProfit()
+  sessionProfit = sessionProfit or total_session_profit()
+  return sessionProfit
 end
 
 ---------------------------------------------------------------------------
@@ -232,6 +271,10 @@ end
 
 function CraftResults:OnEnable()
   running = true
+  since, sessionProfit = ns.FS:Now(), nil
+  local function changed() sessionProfit = nil end
+  self:RegisterMessage(ns.Msg.LEDGER_CHANGED, changed)
+  self:RegisterMessage(ns.Msg.PRICES_CHANGED, changed)
   local wrapped = ns.FS:Wrap(SOURCE, on_result)
   -- Registered protected: a client that does not know an event must not stop the module.
   for _, event in ipairs({ ITEM_EVENT, CURRENCY_EVENT }) do
@@ -245,8 +288,10 @@ end
 function CraftResults:OnDisable()
   running = false
   self:UnregisterAllEvents()
+  self:UnregisterAllMessages()
   ns.FS:CancelDebounce(FLUSH_KEY)
   parents, rewards, entries = {}, {}, {}
+  since, sessionProfit = nil, nil
   self:SyncBlizzardWindow()
   self:SendMessage(ns.Msg.CRAFT_RESULTS_CHANGED)
 end
