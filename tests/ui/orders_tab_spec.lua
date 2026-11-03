@@ -401,6 +401,35 @@ describe("Orders tab frames", function()
     assert.is_false(v.pool[1].queue:IsShown()); assert.is_false(v.pool[2].queue:IsShown())
   end)
 
+  it("builds cleanly when reading the list's width makes the game lay it out", function()
+    -- The client runs OnSizeChanged inside GetWidth when the list has not been laid out yet.
+    local createFrame = _G.CreateFrame
+    local ran = 0
+    _G.CreateFrame = function(frameType, ...)
+      local frame = createFrame(frameType, ...)
+      if frameType == "ScrollFrame" then
+        local hook = frame.HookScript
+        frame.HookScript = function(self, event, fn)
+          if event == "OnSizeChanged" then
+            local getWidth = self.GetWidth
+            self.GetWidth = function(me)
+              self.GetWidth = getWidth
+              ran = ran + 1
+              fn(me, 500)
+              return 500
+            end
+          end
+          return hook(self, event, fn)
+        end
+      end
+      return frame
+    end
+    open()
+    _G.CreateFrame = createFrame
+    assert.equals(1, ran)
+    assert.same({}, ns.FS.db.global.diagnostics.errors)
+  end)
+
   describe("selecting orders to shop for", function()
     local function two_boards()
       local me = view({ orderID = 10, score = 100 })

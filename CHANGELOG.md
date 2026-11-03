@@ -141,3 +141,4 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
       page, so nothing opens over the panel. Blizzard's window comes back if you turn this off in Settings; the orders
       page keeps it for now.
     - The results list shows a session profit, gain or loss: what you crafted would sell for now, minus what it cost.
+    - Opening the Orders tab no longer logs an error in Diagnostics.
