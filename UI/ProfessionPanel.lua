@@ -12,7 +12,8 @@ local L = ns.L
 -- Apply's (a click, and only while the crafting setting applyWritesBlizzardSlots is on): the same transaction calls
 -- Blizzard's own quality dialog makes.
 --
--- The panel shows while ProfessionsFrame and its CraftingPage (the Recipes tab) are both shown.
+-- The panel shows while ProfessionsFrame and its CraftingPage (the Recipes tab) are both shown. On the Crafting Orders
+-- tab it stays as the crafting results list alone, once there are results (see "Crafting results" below).
 --
 -- Blizzard's Crafting Results window (CraftingPage.CraftingOutputLog) opens over the top of the panel beside it and is
 -- not ours to move. While it covers the panel, the panel's content starts below it and gives up the reagent-per-quality table (Apply is not
@@ -42,6 +43,11 @@ local L = ns.L
 -- between the fold rows and the buttons, newest on top, one row per craft (the mouse wheel scrolls, the tooltip spells a
 -- row out), under a session profit line (CraftResults:SessionProfit). Once there are results they outrank the reagent table. With that module off, Blizzard's window is back and
 -- the panel starts below it again, as described above.
+--
+-- On the orders page none of the recipe's numbers or buttons apply, so the panel (view.ordersView) is the list and its
+-- session profit only, with no grip or lock: the side panel's height, WIDTH wide, beside the side panel while that
+-- shows, else at ProfessionsFrame's edge. It does not use or change the saved size and place, and goes back to them on
+-- the Recipes page.
 --
 -- Display rules (same as the tabs): a nil profit is "no price" (never 0g); noPrice with a profit shows the profit and
 -- "some prices missing"; estimated results say "estimate"; a target quality the reagents cannot reach (the result
@@ -96,7 +102,7 @@ M.APPLY_REFUSED = {
 
 local view           -- built frames (once per session), nil before the first attach
 local attached       -- the callbacks are registered (reset by OnDisable)
-local hooked         -- the ProfessionsFrame and CraftingPage OnShow/OnHide hooks are installed (once per session)
+local hooked         -- the OnShow/OnHide hooks on ProfessionsFrame and its pages are installed (once per session)
 local attachedForm   -- the schematic form the AllocationsModified callback is registered on
 local recipeID       -- the selected recipe
 local result         -- Recipes:Evaluate for it (the optimiser)
@@ -639,7 +645,7 @@ function render_actions()
   end
 end
 
-local apply_size   -- below
+local apply_size, show_lock   -- below
 -- Rough heights of the panel's fixed parts, for fold_plan.
 local TOP_BLOCK, TABLE_HEADER, FOLD_ROW, BOTTOM_BLOCK = 118, 38, 22, 133
 
@@ -681,6 +687,7 @@ end
 
 -- How far below the panel's top the results window ends, in the panel's units; 0 while it is closed.
 local function results_clearance()
+  if view.ordersView then return 0 end   -- that window is on the Recipes page
   local log = results_log()
   if not (log and type(log.IsShown) == "function" and log:IsShown()) then return 0 end
   local top, bottom = read_edge(view.frame, "GetTop"), read_edge(log, "GetBottom")
@@ -784,17 +791,23 @@ local function render_results(tail, maxRows)
   draw_results()
 end
 
--- The list's rows while no recipe's numbers are shown, in what is left below the title.
+-- The list's rows while no recipe's numbers are shown, in what is left below the title (and the buttons, if shown).
 local function rows_without_recipe()
   local height = read_edge(view.frame, "GetHeight")
-  if not height then return RESULT_ROWS_UNMEASURED end
-  return math.floor((height - 40 - BOTTOM_BLOCK - RESULTS_GAP_ABOVE - RESULTS_HEADER) / RESULT_ROW)
+  if not height or height <= 0 then return RESULT_ROWS_UNMEASURED end
+  local bottom = view.ordersView and 0 or BOTTOM_BLOCK
+  return math.floor((height - 40 - bottom - RESULTS_GAP_ABOVE - RESULTS_HEADER) / RESULT_ROW)
 end
 
 local function render()
   if not view then return end
   view.applyEnabled = apply_allowed()
   local clearance = place_content()
+  if view.ordersView then
+    view.title:SetText("FabricationStation")
+    render_results(view.title, rows_without_recipe())
+    return
+  end
   if not recipeID then
     model = nil
     view.title:SetText("FabricationStation")
@@ -939,23 +952,70 @@ function Panel:RefreshLines()
   render_provider_lines()
 end
 
--- Shows the panel while ProfessionsFrame and its CraftingPage are shown; picks up the recipe the form already shows.
+local function recipes_page_shown()
+  local page = ProfessionsFrame and ProfessionsFrame.CraftingPage
+  return type(page) == "table" and page:IsShown()
+end
+
+-- ProfessionsFrame.OrdersPage, or nil on a client without it.
+local function orders_page()
+  local page = ProfessionsFrame and ProfessionsFrame.OrdersPage
+  return type(page) == "table" and page or nil
+end
+
+-- The panel as the list alone, or back as the whole panel.
+local function set_orders_view(on)
+  if view.ordersView == on then return end
+  view.ordersView = on
+  if on then
+    view.morePopup:Hide()
+    for _, part in ipairs({ view.body, view.empty, view.controls, view.status, view.checkLine, view.resizeGrip,
+      view.lockButton }) do part:Hide() end
+  else
+    view.controls:Show()
+    view.status:Show()
+    view.lockButton:Show()
+    show_lock(view)
+    if (view.checkLine:GetText() or "") ~= "" then view.checkLine:Show() end
+  end
+end
+
+-- Beside the side panel while it holds the place at ProfessionsFrame's edge (only over the order list).
+local function place_on_orders_page(frame)
+  local browse = orders_page().BrowseFrame
+  local sideModule = module("OrdersSidePanel")
+  local besideSide = type(browse) == "table" and browse:IsShown() and sideModule and sideModule:IsEnabled()
+  local anchor = besideSide and _G.FabricationStationOrdersPanel or ProfessionsFrame
+  frame:ClearAllPoints()
+  frame:SetPoint("TOPLEFT", anchor, "TOPRIGHT", 2, 0)
+  frame:SetPoint("BOTTOMLEFT", anchor, "BOTTOMRIGHT", 2, 0)
+  frame:SetWidth(WIDTH)
+end
+
+-- Shows the panel while ProfessionsFrame and its CraftingPage are shown, picking up the recipe the form already shows,
+-- and the list alone while the orders page is shown and there are results.
 local function sync_visibility()
   if not view then return end
-  local frame = ProfessionsFrame
-  local page = frame and frame.CraftingPage
-  if not (frame and frame:IsShown() and type(page) == "table" and page:IsShown()) then
+  if not (ProfessionsFrame and ProfessionsFrame:IsShown()) then
     view.frame:Hide()
-    return
-  end
-  apply_size(view.frame)   -- the results window has its real size by now
-  view.frame:Show()
-  local form = schematic_form()
-  local info = form and form.GetRecipeInfo and form:GetRecipeInfo()
-  if type(info) == "table" and type(info.recipeID) == "number" and info.recipeID ~= recipeID then
-    select_recipe(info)
+  elseif recipes_page_shown() then
+    set_orders_view(false)
+    apply_size(view.frame)   -- the results window has its real size by now
+    view.frame:Show()
+    local form = schematic_form()
+    local info = form and form.GetRecipeInfo and form:GetRecipeInfo()
+    if type(info) == "table" and type(info.recipeID) == "number" and info.recipeID ~= recipeID then
+      select_recipe(info)
+    else
+      evaluate()
+    end
+  elseif orders_page() and orders_page():IsShown() and results_count() > 0 then
+    set_orders_view(true)
+    place_on_orders_page(view.frame)
+    view.frame:Show()
+    render()
   else
-    evaluate()
+    view.frame:Hide()
   end
 end
 
@@ -983,16 +1043,16 @@ local on_allocations_changed = guarded(function()
   update_live()
   render()
 end)
-local on_frame_show = guarded(sync_visibility)
-local on_frame_hide = guarded(function() if view then view.frame:Hide() end end)
+-- A page can show before the one it replaces hides, so every change asks again what is shown.
+local on_frame_change = guarded(sync_visibility)
 local on_results_window = guarded(function() if view then render() end end)
 local on_results_changed = guarded(function()
   if not view then return end
   view.results.offset = 0
-  render()
+  if recipes_page_shown() then render() else sync_visibility() end
 end)
 local on_data_changed = guarded(function()
-  if recipeID and shown() then
+  if recipeID and shown() and not view.ordersView then
     ns.FS:Debounce(REFRESH_KEY, REFRESH_DELAY, guarded(evaluate))
   end
 end)
@@ -1066,7 +1126,7 @@ function Panel:SetCheckLine(text, tone)
   text = text or ""
   view.checkLine:SetText(text)
   set_tone(view.checkLine, tone)
-  if text == "" then view.checkLine:Hide() else view.checkLine:Show() end
+  if text == "" or view.ordersView then view.checkLine:Hide() else view.checkLine:Show() end
 end
 
 local function read_only()
@@ -1470,6 +1530,7 @@ end
 
 -- Where a drag left the panel, from ProfessionsFrame's top right. Edges that cannot be read leave the saved place.
 local function on_drag_stopped(frame)
+  if view.ordersView then return end
   frame:StopMovingOrSizing()
   local saved = size_settings()
   local left, top = read_edge(frame, "GetLeft"), read_edge(frame, "GetTop")
@@ -1501,7 +1562,7 @@ local function on_grip_released(frame, mouseButton)
 end
 
 -- Shows what the saved lock says: the grip only while unlocked, and the lock's icon.
-local function show_lock(created)
+function show_lock(created)
   local locked = size_settings().locked == true
   if locked then created.resizeGrip:Hide() else created.resizeGrip:Show() end
   created.lockIcon:SetTexture(locked and "Interface\\Buttons\\LockButton-Locked-Up"
@@ -1551,7 +1612,7 @@ local function build_grip(frame, created)
   frame:EnableMouse(true)
   frame:RegisterForDrag("LeftButton")
   frame:SetScript("OnDragStart", function(self)
-    if size_settings().locked ~= true then self:StartMoving() end
+    if size_settings().locked ~= true and not created.ordersView then self:StartMoving() end
   end)
   frame:SetScript("OnDragStop", function(self) ns.FS:SafeCall(SOURCE, on_drag_stopped, self) end)
   frame:SetResizable(true)
@@ -1609,10 +1670,14 @@ function Panel:AttachIfReady()
   local results = module("CraftResults")
   if results then results:SyncBlizzardWindow(true) end
   if not hooked then
-    ProfessionsFrame:HookScript("OnShow", on_frame_show)
-    ProfessionsFrame:HookScript("OnHide", on_frame_hide)
-    ProfessionsFrame.CraftingPage:HookScript("OnShow", on_frame_show)
-    ProfessionsFrame.CraftingPage:HookScript("OnHide", on_frame_hide)
+    local orders = orders_page()
+    for _, part in ipairs({ ProfessionsFrame, ProfessionsFrame.CraftingPage, orders or false,
+      orders and orders.BrowseFrame or false }) do
+      if part then
+        part:HookScript("OnShow", on_frame_change)
+        part:HookScript("OnHide", on_frame_change)
+      end
+    end
     local log = results_log()
     if log and type(log.HookScript) == "function" then
       log:HookScript("OnShow", on_results_window)

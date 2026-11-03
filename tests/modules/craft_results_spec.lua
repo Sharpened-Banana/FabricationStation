@@ -1,5 +1,5 @@
 -- CraftResults keeps this session's craft results for the profession panel, and stops Blizzard's Crafting Results
--- window on the Recipes page while the panel shows them.
+-- window on the Recipes and orders pages while the panel shows them.
 local P2 = require("tests.helpers.phase2")
 
 describe("CraftResults", function()
@@ -223,10 +223,23 @@ describe("CraftResults", function()
       M:SyncBlizzardWindow()
       assert.same({}, log.registered)
     end)
-    it("keeps the one on the orders page, where the panel is not", function()
+    it("stops the one on the orders page too, where the panel shows the list as well", function()
       open_professions(); panel_module(true)
       M:SyncBlizzardWindow()
+      assert.same({}, ordersLog.registered)
+    end)
+    it("gives the one on the orders page back with the other", function()
+      open_professions(); panel_module(true)
+      M:SyncBlizzardWindow()
+      M:SyncBlizzardWindow(false)
       assert.is_true(ordersLog.registered.TRADE_SKILL_ITEM_CRAFTED_RESULT)
+      assert.is_true(ordersLog.registered.TRADE_SKILL_CURRENCY_REWARD_RESULT)
+    end)
+    it("still stops the Recipes page's one on a client with no orders page window", function()
+      open_professions(); panel_module(true)
+      _G.ProfessionsFrame.OrdersPage = nil
+      M:SyncBlizzardWindow()
+      assert.same({}, log.registered)
     end)
     it("leaves it alone while the panel is off", function()
       open_professions(); panel_module(false)

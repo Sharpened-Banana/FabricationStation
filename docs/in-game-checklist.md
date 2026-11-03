@@ -1526,6 +1526,13 @@ it matches N x the item's price x 0.95 minus the reagent cost; a craft with save
 it: the tooltip explains what it counts. Clear the list: the line starts again with the next craft. An unpriced item says "no
 price" or "(some prices missing)", never 0. `/reload` starts a new session. An order's craft does not change it.
 
+P7-47. **Crafting results on the Crafting Orders tab.** Craft something on the Recipes page, then open the Crafting Orders tab.
+Expected: the panel stays as the results list and session profit only, with no recipe numbers or buttons, beside the side panel
+over the order list and at the window's edge while an order is open. Craft an order: its result joins the list, Blizzard's own
+Crafting Results window does not open, and the session profit does not change. With an empty list the tab shows no panel until
+the first craft; Clear closes it. Back on the Recipes page: the whole panel at your saved size and place. Turn CraftResults off:
+Blizzard's window is back on both tabs.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

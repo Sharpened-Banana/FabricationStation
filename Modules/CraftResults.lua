@@ -19,10 +19,10 @@ local L = ns.L
 -- craft with no price is left out and counted in `missing`, as is one whose cost is only partly known, whose known part
 -- stays in. Nothing to count is nil, never 0. The Ledger is only read again after a change.
 --
--- Blizzard's window: SyncBlizzardWindow stops the Recipes page's copy from listening to those events while this module
--- and the panel both run, so it never opens, and gives the events back as soon as either stops. That is the only thing
--- done to it; it reads no field and writes none, and with no events it stays as it is before a first craft. The copy on
--- the orders page keeps working: the panel is not shown there. In game: P7-45.
+-- Blizzard's window: SyncBlizzardWindow stops both copies (the Recipes page's and the order view's) from listening to
+-- those events while this module and the panel both run, so they never open, and gives the events back as soon as either
+-- stops. That is the only thing done to them; it reads no field and writes none, and with no events they stay as they
+-- are before a first craft. The panel shows the list on both pages. In game: P7-45, P7-47.
 local CraftResults = ns.FS:NewModule("CraftResults", "AceEvent-3.0")
 
 CraftResults.COLLECT_DELAY = 0.35
@@ -235,32 +235,42 @@ end
 -- Blizzard's window
 ---------------------------------------------------------------------------
 
-local function blizzard_window()
+-- The copies of the window this client has: the Recipes page's and the order view's.
+local function blizzard_windows()
   local frame = ProfessionsFrame
   local page = type(frame) == "table" and frame.CraftingPage or nil
-  local log = type(page) == "table" and page.CraftingOutputLog or nil
-  if type(log) == "table" and type(log.UnregisterEvent) == "function" and type(log.RegisterEvent) == "function" then
-    return log
+  local orders = type(frame) == "table" and frame.OrdersPage or nil
+  local orderView = type(orders) == "table" and orders.OrderView or nil
+  local windows = {}
+  for _, holder in ipairs({ page or false, orderView or false }) do
+    local log = type(holder) == "table" and holder.CraftingOutputLog or nil
+    if type(log) == "table" and type(log.UnregisterEvent) == "function" and type(log.RegisterEvent) == "function" then
+      windows[#windows + 1] = log
+    end
   end
-  return nil
+  return windows
 end
 
 -- panelOn says whether the panel runs, for the panel's own OnEnable and OnDisable; left out, it is asked.
 function CraftResults:SyncBlizzardWindow(panelOn)
-  local log = blizzard_window()
-  if not log then return end
+  local windows = blizzard_windows()
+  if #windows == 0 then return end
   if panelOn == nil then
     local panel = ns.FS:GetModule(PANEL, true)
     panelOn = panel ~= nil and panel:IsEnabled()
   end
   local wanted = running and panelOn
   if wanted and not silenced then
-    log:UnregisterEvent(ITEM_EVENT)
-    log:UnregisterEvent(CURRENCY_EVENT)
+    for _, log in ipairs(windows) do
+      log:UnregisterEvent(ITEM_EVENT)
+      log:UnregisterEvent(CURRENCY_EVENT)
+    end
     silenced = true
   elseif silenced and not wanted then
-    log:RegisterEvent(ITEM_EVENT)
-    log:RegisterEvent(CURRENCY_EVENT)
+    for _, log in ipairs(windows) do
+      log:RegisterEvent(ITEM_EVENT)
+      log:RegisterEvent(CURRENCY_EVENT)
+    end
     silenced = false
   end
 end
