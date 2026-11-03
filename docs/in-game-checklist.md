@@ -1524,12 +1524,13 @@ P7-46. **Session profit.** Craft a recipe that has prices a few times on the Rec
 Crafting results heading, red for a loss and green for a gain. After one craft of N items with no multicraft or saved reagents,
 it matches N x the item's price x 0.95 minus the reagent cost; a craft with saved reagents or multicraft comes out better. Hover
 it: the tooltip explains what it counts. Clear the list: the line starts again with the next craft. An unpriced item says "no
-price" or "(some prices missing)", never 0. `/reload` starts a new session. An order's craft does not change it.
+price" or "(some prices missing)", never 0. `/reload` starts a new session. An order's craft does not change it until you hand the order in: then the total moves by the
+commission minus that order's reagent cost, right away, without its reward items.
 
 P7-47. **Crafting results on the Crafting Orders tab.** Craft something on the Recipes page, then open the Crafting Orders tab.
 Expected: the panel stays as the results list and session profit only, with no recipe numbers or buttons, beside the side panel
-over the order list and at the window's edge while an order is open. Craft an order: its result joins the list, Blizzard's own
-Crafting Results window does not open, and the session profit does not change. With an empty list the tab shows no panel until
+over the order list and at the window's edge while an order is open. Craft an order: its result joins the list and Blizzard's own
+Crafting Results window does not open. With an empty list the tab shows no panel until
 the first craft; Clear closes it. Back on the Recipes page: the whole panel at your saved size and place. Turn CraftResults off:
 Blizzard's window is back on both tabs.
 

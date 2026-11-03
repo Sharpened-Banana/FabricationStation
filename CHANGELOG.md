@@ -139,7 +139,8 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
       them, click to keep them open), its extra buttons sit behind a More button, and its background is solid.
     - Crafting results now appear in a list inside the profession panel, in place of Blizzard's window, so nothing opens
       over the panel. Blizzard's window comes back if you turn this off in Settings.
-    - The results list shows a session profit, gain or loss: what you crafted would sell for now, minus what it cost.
+    - The results list shows a session profit, gain or loss: what you crafted would sell for now, plus the commissions
+      of orders you handed in, minus what the reagents cost.
     - The results list stays on screen on the Crafting Orders tab, where it replaces Blizzard's window too.
     - The profession panel's text is a step larger, and its checkbox and buttons a little smaller.
     - Finishing reagents no longer count as raising a recipe's difficulty, which made their quality, concentration and

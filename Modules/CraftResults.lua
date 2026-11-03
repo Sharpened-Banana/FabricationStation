@@ -12,12 +12,15 @@ local L = ns.L
 --     saved? = { { itemID?|currencyID?, quantity } }, bonuses? = { same } }
 -- What a craft did not give is left out, never 0. GetEntries() is newest first, at most MAX_ENTRIES, and nothing is saved.
 --
--- SessionProfit() totals the Ledger's craft entries since the module started or the list was last cleared: what the items
--- would sell for now after the auction cut, minus what the Ledger says their reagents cost (it already takes off what
--- resourcefulness returned, and adds multicraft extras to the entry's quantity). It is a value, not gold received; the
--- Ledger's own profit still counts sales only. Crafts for orders are left out, as what they earn is the commission. A
--- craft with no price is left out and counted in `missing`, as is one whose cost is only partly known, whose known part
--- stays in. Nothing to count is nil, never 0. The Ledger is only read again after a change.
+-- SessionProfit() totals the Ledger's entries since the module started or the list was last cleared. A craft counts what
+-- the items would sell for now after the auction cut, minus what the Ledger says their reagents cost (it already takes
+-- off what resourcefulness returned, and adds multicraft extras to the entry's quantity). It is a value, not gold
+-- received; the Ledger's own profit is unchanged. A craft for an order is not counted itself: the order counts when it is
+-- handed in, as its commission minus the entry's cost (that order's crafts), so nothing shows for an order still open and
+-- its reagents count once. Its reward items are not counted. A craft with no price is left out and counted in `missing`,
+-- as is one whose cost is only partly known, or a commission with an unknown or partial cost, whose known part stays in.
+-- Nothing to count is nil, never 0. The Ledger is only read again after a change, and SESSION_PROFIT_CHANGED says when
+-- the total may differ.
 --
 -- Blizzard's window: SyncBlizzardWindow stops both copies (the Recipes page's and the order view's) from listening to
 -- those events while this module and the panel both run, so they never open, and gives the events back as soon as either
@@ -138,6 +141,16 @@ local function total_session_profit()
       else
         out.missing = out.missing + 1
       end
+    end
+  end
+  for _, order in ipairs(ledger:Query({ type = "commission", since = since })) do
+    if type(order.amount) == "number" then
+      local cost = type(order.cost) == "number" and order.cost or nil
+      total = total + order.amount - (cost or 0)
+      out.counted = out.counted + 1
+      if not cost or order.incomplete then out.missing = out.missing + 1 end
+    else
+      out.missing = out.missing + 1
     end
   end
   if out.counted > 0 then out.profit = total end
@@ -282,7 +295,11 @@ end
 function CraftResults:OnEnable()
   running = true
   since, sessionProfit = ns.FS:Now(), nil
-  local function changed() sessionProfit = nil end
+  -- Sent from here, once the old total is gone: the order listeners of one message are called in is not promised.
+  local function changed()
+    sessionProfit = nil
+    self:SendMessage(ns.Msg.SESSION_PROFIT_CHANGED)
+  end
   self:RegisterMessage(ns.Msg.LEDGER_CHANGED, changed)
   self:RegisterMessage(ns.Msg.PRICES_CHANGED, changed)
   local wrapped = ns.FS:Wrap(SOURCE, on_result)

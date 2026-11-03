@@ -1051,6 +1051,9 @@ local on_results_changed = guarded(function()
   view.results.offset = 0
   if recipes_page_shown() then render() else sync_visibility() end
 end)
+local on_session_profit = guarded(function()
+  if shown() and view.results.frame:IsShown() then render_session_profit() end
+end)
 local on_data_changed = guarded(function()
   if recipeID and shown() and not view.ordersView then
     ns.FS:Debounce(REFRESH_KEY, REFRESH_DELAY, guarded(evaluate))
@@ -1423,7 +1426,7 @@ local function build_results(frame, created)
     if not GameTooltip then return end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:SetText(L["Session profit"])
-    GameTooltip:AddLine(L["What the items in this list would sell for now after the auction cut, minus what their reagents cost. Crafts for orders are left out. It counts from when you logged in or last cleared the list."], 1, 1, 1, true)
+    GameTooltip:AddLine(L["What the items you crafted would sell for now after the auction cut, plus the commissions of orders you handed in, minus what the reagents cost. An order's reward items are not counted. It counts from when you logged in or last cleared the list."], 1, 1, 1, true)
     local missing = section.missing or 0
     if missing > 0 then
       GameTooltip:AddLine((missing == 1 and L["%d craft has no price or only part of its cost."]
@@ -1731,6 +1734,7 @@ function Panel:OnEnable()
   self:RegisterMessage(ns.Msg.DATA_CHANGED, on_data_changed)
   self:RegisterMessage(ns.Msg.RECIPES_CHANGED, on_data_changed)
   self:RegisterMessage(ns.Msg.CRAFT_RESULTS_CHANGED, on_results_changed)
+  self:RegisterMessage(ns.Msg.SESSION_PROFIT_CHANGED, on_session_profit)
   if C_AddOns.IsAddOnLoaded(PROFESSIONS_ADDON) and ProfessionsFrame then
     ns.FS:SafeCall(SOURCE, self.AttachIfReady, self)
   end
