@@ -69,7 +69,7 @@ describe("CraftLog capture", function()
       assert.equals(3, #seen)
       assert.same(PATRON.reagentInfo, seen[3])
       assert.same(PATRON.reagentInfo, e.fixture.reagents[3])
-      assert.is_true(e.fixture.orderReagents)
+      assert.is_true(e.fixture.exactReagents)
     end)
     it("does not change Blizzard's table", function()
       claim(77)
@@ -80,14 +80,27 @@ describe("CraftLog capture", function()
       claim(78)
       local e, seen = log_order_craft()
       assert.equals(2, #seen)
-      assert.is_nil(e.fixture.orderReagents)
+      assert.is_nil(e.fixture.exactReagents)
     end)
     it("does not ask for an order on a craft without one", function()
       claim(77)
       craft(9001, reagents, false); result({ itemID = 5002, quantity = 1, craftingQuality = 2, operationID = 12 })
       local e = CL:GetEntries()[1]
       assert.equals(2, #e.fixture.reagents)
-      assert.is_nil(e.fixture.orderReagents)
+      assert.is_true(e.fixture.exactReagents)
+    end)
+    it("asks the game with a currency reagent the craft spends", function()
+      boot()
+      local money = { reagent = { currencyID = 3443 }, dataSlotIndex = 2, quantity = 80 }
+      local scanner, sent = ns.FS:GetModule("Scanner"), nil
+      local ask = scanner.GetLiveOperationInfo
+      scanner.GetLiveOperationInfo = function(self, recipeID, allocation, conc, optionals, currencies)
+        sent = currencies
+        return ask(self, recipeID, allocation, conc, optionals, currencies)
+      end
+      craft(9001, { reagents[1], reagents[2], money }, false)
+      scanner.GetLiveOperationInfo = ask
+      assert.same({ money }, sent)
     end)
   end)
 

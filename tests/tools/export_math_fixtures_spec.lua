@@ -142,17 +142,22 @@ describe("tools/export_math_fixtures.lua", function()
     g.captures.list[1].calib = nil
     assert.is_nil(run_and_read(g, "capture_9001_1.lua"))
   end)
-  it("marks an order craft logged without the patron's reagents", function()
+  it("marks an order craft logged without all its reagents", function()
     local g = global()
     g.craftLog.entries[1].orderID = 77
-    assert.is_true(run_and_read(g, "craft_9001_1.lua").patronReagentsMissing)
+    assert.is_true(run_and_read(g, "craft_9001_1.lua").reagentsMissing)
   end)
-  it("does not mark an order craft logged with them, or a craft for no order", function()
+  it("marks a craft spending a currency that was logged without it", function()
     local g = global()
-    assert.is_nil(run_and_read(g, "craft_9001_1.lua").patronReagentsMissing)
+    table.insert(g.craftLog.entries[1].fixture.reagents, { reagent = { currencyID = 3443 }, quantity = 80, dataSlotIndex = 2 })
+    assert.is_true(run_and_read(g, "craft_9001_1.lua").reagentsMissing)
+  end)
+  it("does not mark a craft logged with all its reagents, or a plain old craft", function()
+    local g = global()
+    assert.is_nil(run_and_read(g, "craft_9001_1.lua").reagentsMissing)
     g.craftLog.entries[1].orderID = 77
-    g.craftLog.entries[1].fixture.orderReagents = true
-    assert.is_nil(run_and_read(g, "craft_9001_1.lua").patronReagentsMissing)
+    g.craftLog.entries[1].fixture.exactReagents = true
+    assert.is_nil(run_and_read(g, "craft_9001_1.lua").reagentsMissing)
   end)
   it("prints the skipped counts", function()
     local code, s = run(write_sv(global()) .. " " .. outdir())

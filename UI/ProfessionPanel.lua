@@ -890,10 +890,10 @@ local function update_live()
   if not t or not t.CreateCraftingReagentInfoTbl then return end
   if transaction_recipe(schematic_form(), t) ~= recipeID then return end
   local recipes = module("Recipes")
-  local allocation, optionalItemIDs = recipes:FromCraftingReagentInfo(recipeID, t:CreateCraftingReagentInfoTbl())
+  local allocation, optionalItemIDs, currencies = recipes:FromCraftingReagentInfo(recipeID, t:CreateCraftingReagentInfoTbl())
   local concentrating = t.IsApplyingConcentration and t:IsApplyingConcentration() and true or false
   local scanner = module("Scanner")
-  local info = scanner and scanner:GetLiveOperationInfo(recipeID, allocation, concentrating, optionalItemIDs)
+  local info = scanner and scanner:GetLiveOperationInfo(recipeID, allocation, concentrating, optionalItemIDs, currencies)
   local schematic = scanner and scanner:GetSchematic(recipeID)
   live = M.GameHeader(info, schematic and schematic.maxQuality, concentrating)
   if live then return end

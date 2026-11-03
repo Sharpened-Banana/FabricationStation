@@ -555,7 +555,7 @@ end
 
 -- The game's CraftingOperationInfo for `allocation` (plus the optional/finishing itemIDs, when given) on the current
 -- character, or nil while the recipe's profession window is closed or the call fails.
-function Scanner:GetLiveOperationInfo(recipeID, allocation, applyConcentration, optionalItemIDs)
+function Scanner:GetLiveOperationInfo(recipeID, allocation, applyConcentration, optionalItemIDs, currencyInfos)
   local line = recipe_line(recipeID)
   if not line or not self:IsProfessionOpen(line) then return nil end
   local schematic = self:GetSchematic(recipeID)
@@ -565,6 +565,8 @@ function Scanner:GetLiveOperationInfo(recipeID, allocation, applyConcentration, 
     for _, extra in ipairs(self:OptionalReagentInfos(recipeID, place_optionals(schematic, optionalItemIDs))) do
       infos[#infos + 1] = extra
     end
+    -- A currency a slot spends is no allocation or optional item, but the game counts it too.
+    for _, row in ipairs(currencyInfos or {}) do infos[#infos + 1] = row end
     return C_TradeSkillUI.GetCraftingOperationInfo(recipeID, infos, nil, applyConcentration and true or false)
   end)
   if ok then return info end

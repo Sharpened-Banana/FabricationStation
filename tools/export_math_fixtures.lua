@@ -16,7 +16,8 @@
 --     (the cached one, schematics[recipeID]), calib = fixture.calib, reagents = fixture.reagents, operationInfo = {
 --     craftingQuality = game.quality, concentrationCost, baseSkill, bonusSkill, baseDifficulty, bonusDifficulty,
 --     lowerSkillThreshold, upperSkillTreshold }, actualQuality = actual.quality, applyConcentration,
---     patronReagentsMissing? (an order's craft logged before CraftLog added the patron's reagents), gameData }. An
+--     reagentsMissing? (an order's craft or one spending a currency, logged before the predictions counted those
+--     reagents: no fixture.exactReagents), gameData }. An
 --     entry is skipped, and counted by its first reason in this order: "no fixture" (older than the newest 100),
 --     "no game quality" (no game prediction, or one without a quality), "no actual quality" (the craft's quality is
 --     unknown), "no schematic" (none cached), "no calibration" (its fixture holds none).
@@ -186,6 +187,13 @@ local skippedCaptures, skippedNoSchematic = 0, 0
 local craftSkips = { noFixture = 0, noGame = 0, noActual = 0, noCalibration = 0 }
 local chosen = {}   -- [name] = true: the names this run writes
 
+local function spends_currency(reagents)
+  for _, info in ipairs(reagents) do
+    if type(info) == "table" and type(info.reagent) == "table" and info.reagent.currencyID ~= nil then return true end
+  end
+  return false
+end
+
 local function add(kind, recipeID, id, fixture)
   local okSer, text = pcall(serialize, fixture)
   if not okSer then fail(("%s %d does not serialize: %s"):format(kind, id, tostring(text))) end
@@ -252,7 +260,7 @@ for i, entry in ipairs(crafts) do
           source = "craft", recipeID = entry.recipeID, schematic = schematic, calib = entry.fixture.calib,
           reagents = reagents, operationInfo = operationInfo, actualQuality = actual.quality,
           applyConcentration = entry.applyConcentration == true,
-          patronReagentsMissing = (entry.orderID ~= nil and entry.fixture.orderReagents ~= true) or nil,
+          reagentsMissing = ((entry.orderID ~= nil or spends_currency(reagents)) and entry.fixture.exactReagents ~= true) or nil,
           gameData = recipe_game_data(schematic, reagents, entry.fixture.calib),
         })
       end

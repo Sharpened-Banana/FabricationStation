@@ -12,7 +12,7 @@
 --     applyConcentration, as the craft log made it. With concentration the game's skill and thresholds already hold the
 --     points it adds, which the maths' numbers for the allocation do not, so those three are not compared (SelfCheck
 --     leaves them out for the same reason); its quality, its cost and the quality the craft made still are. A fixture with
---     patronReagentsMissing does not compare the quality the craft made (see Golden.compare).
+--     reagentsMissing does not compare the quality the craft made (see Golden.compare).
 local Golden = {}
 
 -- Fields a craft's operationInfo may lack by design; every other field is required for a craft too.
@@ -26,9 +26,9 @@ local function is_number(v) return type(v) == "number" end
 function Golden.predict(f)
   install_wow_stubs(); local ns = load_addon({}, "Modules/CraftingData.lua")
   for tbl, rows in pairs(f.gameData) do ns.GameData.Define(tbl, 1, rows) end
-  local input = ns.CraftingData.BuildInput(ns.GameData, { schematic = f.schematic, calib = f.calib, prices = {},
-    useConcentration = f.source == "craft" and f.applyConcentration == true or nil })
   local alloc, opt = ns.CraftingData.AllocationFromReagentInfo(f.schematic, f.reagents)
+  local input = ns.CraftingData.BuildInput(ns.GameData, { schematic = f.schematic, calib = f.calib, prices = {},
+    optionalItemIDs = opt, useConcentration = f.source == "craft" and f.applyConcentration == true or nil })
   return ns.Math.Profit.EvaluateAllocation(input, alloc, opt), input
 end
 
@@ -69,9 +69,9 @@ function Golden.compare(f, r, input)
   if present("concentrationCost") and op.concentrationCost > 0 and input.concentration.curve then
     equals("concentrationCost", op.concentrationCost, r.concentrationCostForAllocation)
   end
-  -- An old order's fixture: the game and the maths were asked about the crafter's own reagents, so both can be compared,
-  -- but the craft also used the patron's and may rightly have made more.
-  if f.source == "craft" and is_number(op.craftingQuality) and f.patronReagentsMissing ~= true then
+  -- An old fixture whose prediction lacked reagents (a patron's, a currency): the game and the maths were asked about the
+  -- same ones, so both can be compared, but the craft also used the others and may rightly have made another quality.
+  if f.source == "craft" and is_number(op.craftingQuality) and f.reagentsMissing ~= true then
     -- The game's prediction against what the craft made (P7-18 reports a mismatch; it never loosens this).
     equals("actual quality (game prediction, craft result)", op.craftingQuality, f.actualQuality)
   end

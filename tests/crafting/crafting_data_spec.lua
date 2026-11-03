@@ -63,6 +63,20 @@ describe("CraftingData", function()
       assert.is_nil(CD.CraftingDataIDFor(gd, {}))
       assert.is_nil(CD.CraftingDataIDFor(gd, nil))
     end)
+    it("a finishing reagent's maxDifficultyAdjustment does not raise the difficulty (P7-18: the game's stayed at 530)", function()
+      gd.Define("ReagentQuality", 70575, { [8101] = { rank = 1, categoryID = 1, maxDifficultyAdjustment = 100, reagentEffectPct = 100 } })
+      gd.Define("OptionalReagents", 70575, { [8101] = { categoryID = 1, effects = { { type = "skill", amount = 5 } } } })
+      assert.same({ skill = 5 }, CD.OptionalStats(gd, 8101, "finishing"))
+    end)
+    it("keeps a currency reagent apart, for asking the game", function()
+      local schematic = { reagentSlots = { { slotIndex = 1, dataSlotIndex = 1, kind = "basic", quantity = 5, reagents = { 1002 } },
+        { slotIndex = 2, dataSlotIndex = 2, kind = "optional", quantity = 80, reagents = {} } } }
+      local money = { reagent = { currencyID = 3443 }, dataSlotIndex = 2, quantity = 80 }
+      local allocation, optionals, currencies = CD.AllocationFromReagentInfo(schematic,
+        { { reagent = { itemID = 1002 }, dataSlotIndex = 1, quantity = 5 }, money })
+      assert.equals(1, #allocation); assert.same({}, optionals)
+      assert.same({ money }, currencies)
+    end)
     it("optional stats sum mapped effects and combine with increasedifficulty", function()
       gd.Define("ReagentQuality", 70575, { [8001] = { rank = 1, categoryID = 1, maxDifficultyAdjustment = 10, reagentEffectPct = 0 } })
       gd.Define("OptionalReagents", 70575, { [8001] = { categoryID = 1, effects = {
