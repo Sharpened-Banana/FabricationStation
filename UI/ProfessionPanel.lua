@@ -61,10 +61,11 @@ local TRANSACTION_UPDATED = "Professions.TransactionUpdated"
 local SOURCE = "ProfessionPanel"
 local REFRESH_KEY, REFRESH_DELAY = "professionPanel.refresh", 0.5
 
-local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 340, 10, 14, 22, 24
+local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 340, 10, 16, 22, 24
+local BODY_FONT, HEADING_FONT = "GameFontHighlight", "GameFontNormal"
 local MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT, DEFAULT_HEIGHT = 300, 700, 300, 1200, 480
 local OWN_RESULTS_HEIGHT = 640     -- about the crafting window's height: the list needs the room, nothing opens over it
-local RESULT_ROW, RESULTS_HEADER, RESULTS_GAP_ABOVE, RESULT_ROWS_UNMEASURED = 18, 34, 8, 5   -- the header: title and total
+local RESULT_ROW, RESULTS_HEADER, RESULTS_GAP_ABOVE, RESULT_ROWS_UNMEASURED = 18, 36, 8, 5   -- the header: title and total
 local PROVIDER_RIGHT_WIDTH = 120   -- the right-hand column of a provider line; longer texts go to the row tooltip
 local ACTION_BUTTON_WIDTH = 160    -- an action's button (its label fits); its status line takes the rest of the row
 local PLUS_ICON, MINUS_ICON = "Interface\\Buttons\\UI-PlusButton-Up", "Interface\\Buttons\\UI-MinusButton-Up"
@@ -477,8 +478,8 @@ local function line_at(lines, i)
   if line then return line end
   local parent = lines.frame
   line = {
-    left = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"),
-    right = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"),
+    left = parent:CreateFontString(nil, "OVERLAY", BODY_FONT),
+    right = parent:CreateFontString(nil, "OVERLAY", BODY_FONT),
   }
   line.left:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -(i - 1) * LINE)
   line.left:SetJustifyH("LEFT")
@@ -514,8 +515,8 @@ local function provider_row_at(section, i)
   frame:EnableMouse(true)
   row = {
     frame = frame,
-    left = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"),
-    right = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"),
+    left = frame:CreateFontString(nil, "OVERLAY", BODY_FONT),
+    right = frame:CreateFontString(nil, "OVERLAY", BODY_FONT),
   }
   row.right:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
   row.right:SetWidth(PROVIDER_RIGHT_WIDTH)
@@ -591,7 +592,7 @@ local function action_row_at(section, i)
   b:SetSize(ACTION_BUTTON_WIDTH, ROW - 2)
   b:SetPoint("LEFT", frame, "LEFT", 0, 0)
   b:SetMotionScriptsWhileDisabled(true)
-  row = { frame = frame, button = b, status = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall") }
+  row = { frame = frame, button = b, status = frame:CreateFontString(nil, "OVERLAY", BODY_FONT) }
   row.status:SetPoint("LEFT", b, "RIGHT", 6, 0)
   row.status:SetPoint("RIGHT", frame, "RIGHT", 0, 0)
   row.status:SetJustifyH("LEFT")
@@ -639,7 +640,7 @@ end
 
 local apply_size   -- below
 -- Rough heights of the panel's fixed parts, for fold_plan.
-local TOP_BLOCK, TABLE_HEADER, FOLD_ROW, BOTTOM_BLOCK = 112, 36, 20, 134
+local TOP_BLOCK, TABLE_HEADER, FOLD_ROW, BOTTOM_BLOCK = 118, 38, 22, 140
 
 -- The results window's CraftingPage field, or nil on a client without it.
 local function results_log()
@@ -1134,7 +1135,7 @@ end
 ---------------------------------------------------------------------------
 
 local function text(parent, font, justify)
-  local fs = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
+  local fs = parent:CreateFontString(nil, "OVERLAY", font or BODY_FONT)
   fs:SetJustifyH(justify or "LEFT")
   return fs
 end
@@ -1162,7 +1163,7 @@ local function create_quality_row(parent)
   row.apply:SetMotionScriptsWhileDisabled(true)
   row.profit = text(row, nil, "RIGHT")
   row.profit:SetPoint("RIGHT", row.apply, "LEFT", -6, 0)
-  row.profit:SetWidth(90)
+  row.profit:SetWidth(110)
   row.cost = text(row, nil, "RIGHT")
   row.cost:SetPoint("RIGHT", row.profit, "LEFT", -6, 0)
   row.cost:SetPoint("LEFT", row.label, "RIGHT", 4, 0)
@@ -1198,13 +1199,13 @@ local function fold_row(parent, label, settingKey, tooltip_rows)
   local row = CreateFrame("Button", nil, parent)
   row:SetHeight(LINE)
   row.icon = row:CreateTexture(nil, "ARTWORK")
-  row.icon:SetSize(12, 12)
+  row.icon:SetSize(14, 14)
   row.icon:SetPoint("LEFT", row, "LEFT", 0, 0)
   row.icon:SetTexture(PLUS_ICON)
-  row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  row.label = row:CreateFontString(nil, "OVERLAY", HEADING_FONT)
   row.label:SetPoint("LEFT", row.icon, "RIGHT", 4, 0)
   row.label:SetText(label)
-  row.right = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.right = row:CreateFontString(nil, "OVERLAY", BODY_FONT)
   row.right:SetPoint("RIGHT", row, "RIGHT", 0, 0)
   row.right:SetJustifyH("RIGHT")
   row:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
@@ -1330,12 +1331,12 @@ local function build_results(frame, created)
   local section = { frame = CreateFrame("Frame", nil, frame), rows = {}, offset = 0, maxRows = 0 }
   section.new_row = function(index) return result_row(section, index) end
   section.frame:Hide()
-  section.header = text(section.frame, "GameFontNormalSmall")
+  section.header = text(section.frame, HEADING_FONT)
   section.header:SetPoint("TOPLEFT", section.frame, "TOPLEFT", 0, 0)
   section.clear = CreateFrame("Button", nil, section.frame)
-  section.clear:SetSize(50, 14)
+  section.clear:SetSize(50, 16)
   section.clear:SetPoint("TOPRIGHT", section.frame, "TOPRIGHT", 0, 0)
-  local clearLabel = text(section.clear, "GameFontNormalSmall", "RIGHT")
+  local clearLabel = text(section.clear, HEADING_FONT, "RIGHT")
   clearLabel:SetPoint("RIGHT", section.clear, "RIGHT", 0, 0)
   clearLabel:SetText(L["Clear"])
   section.clear:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
@@ -1344,7 +1345,7 @@ local function build_results(frame, created)
   end))
   section.total = CreateFrame("Button", nil, section.frame)
   section.total:SetHeight(LINE)
-  section.total:SetPoint("TOPLEFT", section.frame, "TOPLEFT", 0, -16)
+  section.total:SetPoint("TOPLEFT", section.frame, "TOPLEFT", 0, -18)
   section.total:SetPoint("RIGHT", section.frame, "RIGHT", 0, 0)
   section.totalValue = text(section.total, nil, "RIGHT")
   section.totalValue:SetPoint("RIGHT", section.total, "RIGHT", 0, 0)
@@ -1400,7 +1401,7 @@ local function build_body(frame, created)
   created.flags = text(body)
   stack(created.flags, created.concentration, 2)
 
-  created.qualityHeader = text(body, "GameFontNormalSmall")
+  created.qualityHeader = text(body, HEADING_FONT)
   stack(created.qualityHeader, created.flags, 8)
   created.qualityHeader:SetText(L["Cheapest reagents per quality"])
   created.applyNote = text(body)
