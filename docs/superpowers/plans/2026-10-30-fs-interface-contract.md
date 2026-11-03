@@ -422,7 +422,7 @@ Module `"Diagnostics"` (`coreModule`):
 
 **[phase 7, player feedback]** While `ProfessionsFrame.CraftingPage.CraftingOutputLog` is shown (post-hooked OnShow/OnHide, read only), `ProfessionPanel` starts its content below that window and hides the reagent-per-quality table.
 
-**[phase 7, player feedback]** `ProfessionPanel` size and place: `settings.professionPanel = { width|nil (300-700), height|nil (450-1200), x|nil, y|nil, locked|nil }`; x and y are from `ProfessionsFrame`'s top right, so a moved panel comes along with it. Default: 340 wide, as tall as `ProfessionsFrame`, beside it. The panel drags with the left button; `GetView().resizeGrip` drags the size, and a right-click on it clears the size and place. `GetView().lockButton` saves the current size and sets `locked`: the grip hides and the panel neither drags nor resizes until it is clicked again. The results-window layout applies only while that window really covers the panel.
+**[phase 7, player feedback]** `ProfessionPanel` size and place: `settings.professionPanel = { width|nil (300-700), height|nil (450-1200), x|nil, y|nil, locked|nil }`; x and y are from `ProfessionsFrame`'s top right, so a moved panel comes along with it. Default: 340 wide, 480 tall, beside `ProfessionsFrame` and starting just below `CraftingOutputLog`'s height (hidden or not). The reagent table hides when the panel is too short for it. The panel drags with the left button; `GetView().resizeGrip` drags the size, and a right-click on it clears the size and place. `GetView().lockButton` saves the current size and sets `locked`: the grip hides and the panel neither drags nor resizes until it is clicked again. The results-window layout applies only while that window really covers the panel.
 
 ## SelfCheck (1b)
 

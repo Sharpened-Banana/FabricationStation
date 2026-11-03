@@ -1487,8 +1487,11 @@ hides, and nothing overlaps the Use concentration / Add to Queue / Craft Next bu
 lines, report any overlap). Close the window: the content goes back to the top and the table returns. A Lua error here
 turns off only the panel.
 
-P7-43. **Panel size and position.** Open a profession. Expected: the panel is wider than before, beside the crafting window
-and as tall as it. Drag the grip at its bottom-right corner: it follows, within 300-700 wide and 450-1200 tall. Drag the
+P7-43. **Panel size and position.** Open a profession. Right-click the panel's grip once if you dragged its size before this
+build. Expected: the panel is wider than before and starts right below where Crafting Results opens; craft something and
+that window sits above the panel, covering none of it (report the gap if the window's height was misread). If the crafting
+window sits low on the screen, the panel may be pushed up to stay on screen: move or size it. A panel too short for the
+reagent table hides it. Drag the grip at its bottom-right corner: it follows, within 300-700 wide and 450-1200 tall. Drag the
 panel by an empty part: it moves, stays on the screen, and comes along when you then move the crafting window. Close and
 reopen, then `/reload`: size and place stay. Move it clear of where Crafting Results opens and craft: the window covers
 nothing and the panel keeps its reagent table. Right-click the grip: back to the default. Report whether the grip works

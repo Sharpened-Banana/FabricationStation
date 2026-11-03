@@ -132,5 +132,6 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
       concentration.
     - While Blizzard's Crafting Results window covers the profession panel, the panel's content moves below it and its
       reagent table hides.
-    - The profession panel is wider, can be dragged anywhere and has a resize grip. A lock button beside the grip keeps
-      its size and position in every session until you unlock it; right-click the grip for the default.
+    - The profession panel opens below where the Crafting Results window appears, so that window no longer covers it.
+      It is wider, can be dragged anywhere and has a resize grip. A lock button beside the grip keeps its size and
+      position in every session until you unlock it; right-click the grip for the default.

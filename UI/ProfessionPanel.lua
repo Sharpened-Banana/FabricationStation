@@ -20,7 +20,9 @@ local L = ns.L
 --
 -- Size and place: the grip drags the size, and dragging the panel moves it (settings.professionPanel = { width, height,
 -- x, y }, x and y from ProfessionsFrame's top right, so it comes along when that moves). A right-click on the grip goes
--- back to the default: WIDTH wide, as tall as ProfessionsFrame, beside it. The lock button beside the grip saves the size
+-- back to the default: WIDTH wide, DEFAULT_HEIGHT tall, starting below where the results window opens (that window is
+-- hidden until a craft, but has its size), so it never covers the panel. A panel too short for the reagent table gives it
+-- up, as it does under the results window. The lock button beside the grip saves the size
 -- the panel has, hides the grip and stops the dragging, in every session (professionPanel.locked), until it is clicked
 -- again. Moved clear of the results window, the panel keeps its full layout.
 --
@@ -50,11 +52,11 @@ local SOURCE = "ProfessionPanel"
 local REFRESH_KEY, REFRESH_DELAY = "professionPanel.refresh", 0.5
 
 local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 340, 10, 14, 22, 24
-local MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT = 300, 700, 450, 1200
+local MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT, DEFAULT_HEIGHT = 300, 700, 450, 1200, 480
 local PROVIDER_RIGHT_WIDTH = 120   -- the right-hand column of a provider line; longer texts go to the row tooltip
 local ACTION_BUTTON_WIDTH = 90     -- an action's button; its status line takes the rest of the row
 local MAX_QUALITY_ROWS = 5
-local RESULTS_GAP, RESULTS_HEIGHT = 6, 300   -- below the results window; its height when it cannot be measured
+local RESULTS_GAP, RESULTS_HEIGHT = 6, 290   -- below the results window; its height when it cannot be measured (Blizzard's)
 local SECONDS_PER_DAY = 86400
 local EM_DASH, TIMES = "\226\128\148", "\195\151"
 local READ_ONLY = L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
@@ -607,6 +609,10 @@ function render_actions()
   if #specs > 0 then section.frame:Show() else section.frame:Hide() end
 end
 
+local too_short_for_table, apply_size   -- below
+-- Rough heights of the panel's fixed parts, for too_short_for_table.
+local TOP_BLOCK, TABLE_HEADER, BREAKDOWN_HEADER, BOTTOM_BLOCK = 110, 38, 22, 134
+
 -- The results window's CraftingPage field, or nil on a client without it.
 local function results_log()
   local frame = ProfessionsFrame
@@ -620,6 +626,17 @@ local function read_edge(frame, method)
   if type(frame[method]) ~= "function" then return nil end
   local ok, value = pcall(frame[method], frame)
   return ok and type(value) == "number" and value or nil
+end
+
+-- The default panel's offset from ProfessionsFrame's top: just below the results window, open or not.
+local function below_results()
+  local log = results_log()
+  local height = log and read_edge(log, "GetHeight") or nil
+  if height and height > 0 then
+    local scale = (read_edge(log, "GetEffectiveScale") or 1) / (read_edge(view and view.frame or log, "GetEffectiveScale") or 1)
+    return -(height * scale + RESULTS_GAP)
+  end
+  return -(RESULTS_HEIGHT + RESULTS_GAP)
 end
 
 -- How far below the panel's top the results window ends, in the panel's units; 0 while it is closed.
@@ -646,10 +663,21 @@ local function place_content()
   return clearance > 0
 end
 
+-- Whether the panel's height leaves no room for the reagent table above the buttons (a height that cannot be read: it does).
+function too_short_for_table()
+  local height = read_edge(view.frame, "GetHeight")
+  if not height then return false end
+  local rows = #model.perQualityRows
+  local providerRows, actionRows = view.providerLines.count or 0, view.actions.count or 0
+  local needed = TOP_BLOCK + TABLE_HEADER + rows * (ROW + 2) + BREAKDOWN_HEADER + #model.breakdownRows * LINE
+    + (providerRows > 0 and providerRows * LINE + 6 or 0) + (actionRows > 0 and actionRows * ROW + 4 or 0) + BOTTOM_BLOCK
+  return height < needed
+end
+
 local function render()
   if not view then return end
   view.applyEnabled = apply_allowed()
-  local condensed = place_content()
+  local underResults = place_content()
   if not recipeID then
     model = nil
     view.title:SetText("FabricationStation")
@@ -665,6 +693,7 @@ local function render()
     return
   end
   model = M.BuildModel(result, live)
+  local condensed = underResults or too_short_for_table()
   view.empty:Hide(); view.body:Show()
   view.quality:SetText(model.qualityText)
   view.bar:SetValue(model.barFill)
@@ -777,6 +806,7 @@ local function sync_visibility()
     view.frame:Hide()
     return
   end
+  apply_size(view.frame)   -- the results window has its real size by now
   view.frame:Show()
   local form = schematic_form()
   local info = form and form.GetRecipeInfo and form:GetRecipeInfo()
@@ -1145,19 +1175,14 @@ local function in_range(value, low, high)
 end
 
 -- Attaches the panel to ProfessionsFrame at the saved size (also after a drag: StartSizing re-anchors the frame).
-local function apply_size(frame)
+function apply_size(frame)
   local saved = size_settings()
   local height = in_range(saved.height, MIN_HEIGHT, MAX_HEIGHT)
   local moved = type(saved.x) == "number" and type(saved.y) == "number"
-  local x, y = moved and saved.x or 2, moved and saved.y or 0
   frame:ClearAllPoints()
-  frame:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", x, y)
+  frame:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", moved and saved.x or 2, moved and saved.y or below_results())
   frame:SetWidth(in_range(saved.width, MIN_WIDTH, MAX_WIDTH) or WIDTH)
-  if height then
-    frame:SetHeight(height)
-  else
-    frame:SetPoint("BOTTOMLEFT", ProfessionsFrame, "BOTTOMRIGHT", x, y)
-  end
+  frame:SetHeight(height or DEFAULT_HEIGHT)
 end
 
 local function save_current_size(frame, saved)
