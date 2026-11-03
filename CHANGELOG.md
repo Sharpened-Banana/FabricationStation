@@ -143,3 +143,5 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
     - The results list shows a session profit, gain or loss: what you crafted would sell for now, minus what it cost.
     - The profession panel's text is a step larger, and its checkbox and buttons a little smaller.
     - Opening the Orders tab no longer logs an error in Diagnostics.
+    - The Crafts page's prediction for an order's craft now counts the patron's reagents, so a craft they lift above the
+      prediction no longer reads as a miss.

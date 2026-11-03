@@ -74,7 +74,8 @@ describe("tools/export_math_fixtures.lua", function()
         { id = 1, recipeID = 9001, charKey = "Main-Realm", schematic = schematic(9001), reagents = reagent_infos(),
           operationInfo = { craftingQuality = 2, baseSkill = 500, bonusSkill = 20, baseDifficulty = 700, bonusDifficulty = 0,
             lowerSkillThreshold = 500, upperSkillTreshold = 700, concentrationCost = 0 },
-          operationInfoConcentration = { craftingQuality = 3 }, applyConcentration = false, predictedQuality = 2 },
+          operationInfoConcentration = { craftingQuality = 3 }, applyConcentration = false, predictedQuality = 2,
+          calib = calib(500) },
         { id = 2, recipeID = 9002, charKey = "Main-Realm", schematic = schematic(9002), reagents = reagent_infos(),
           operationInfo = { craftingQuality = 1 } },
       } },
@@ -120,6 +121,39 @@ describe("tools/export_math_fixtures.lua", function()
     assert.is_table(craft.gameData)
   end)
 
+  -- Exports `g`; the fixture `name` as a table, or nil when it was not written.
+  local function run_and_read(g, name)
+    local out = outdir()
+    local code, log = run(write_sv(g) .. " " .. out)
+    assert.equals(0, code, log)
+    if not slurp(out .. "/" .. name) then return nil end
+    return dofile(out .. "/" .. name)
+  end
+
+  it("uses the calibration a capture kept, not one from a later day", function()
+    local g = global()
+    g.captures.list[2] = nil
+    g.captures.list[1].calib = calib(450)
+    g.recipeCalib["Main-Realm"][9001] = calib(500)
+    assert.equals(450, run_and_read(g, "capture_9001_1.lua").calib.baseSkill)
+  end)
+  it("skips a capture that kept no calibration, even when one is saved now", function()
+    local g = global()
+    g.captures.list[1].calib = nil
+    assert.is_nil(run_and_read(g, "capture_9001_1.lua"))
+  end)
+  it("marks an order craft logged without the patron's reagents", function()
+    local g = global()
+    g.craftLog.entries[1].orderID = 77
+    assert.is_true(run_and_read(g, "craft_9001_1.lua").patronReagentsMissing)
+  end)
+  it("does not mark an order craft logged with them, or a craft for no order", function()
+    local g = global()
+    assert.is_nil(run_and_read(g, "craft_9001_1.lua").patronReagentsMissing)
+    g.craftLog.entries[1].orderID = 77
+    g.craftLog.entries[1].fixture.orderReagents = true
+    assert.is_nil(run_and_read(g, "craft_9001_1.lua").patronReagentsMissing)
+  end)
   it("prints the skipped counts", function()
     local code, s = run(write_sv(global()) .. " " .. outdir())
     assert.equals(0, code)
@@ -220,7 +254,7 @@ describe("tools/export_math_fixtures.lua", function()
   it("stops when two fixtures would have the same name", function()
     local g = global()
     g.captures.list[3] = { id = 1, recipeID = 9001, charKey = "Main-Realm", schematic = schematic(9001),
-      reagents = reagent_infos(), operationInfo = { craftingQuality = 1 } }   -- the same id twice
+      reagents = reagent_infos(), operationInfo = { craftingQuality = 1 }, calib = calib(500) }   -- the same id twice
     local out = outdir()
     local code, s = run(write_sv(g) .. " " .. out)
     assert.equals(1, code); assert.is_truthy(s:find("capture_9001_1.lua", 1, true))

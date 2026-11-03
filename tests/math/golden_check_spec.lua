@@ -96,6 +96,35 @@ describe("golden fixture comparison", function()
         assert.is_truthy(text(Golden.check(f)):find(field .. ": missing", 1, true), field)
       end
     end)
+    it("does not compare the skill points a concentrated craft adds, but still its quality and cost", function()
+      local f = matching("craft")
+      f.applyConcentration = true
+      local r = Golden.predict(f)
+      f.operationInfo.craftingQuality, f.actualQuality = r.expectedQuality, r.expectedQuality
+      f.operationInfo.concentrationCost = r.concentrationCostForAllocation
+      f.operationInfo.bonusSkill = 625
+      f.operationInfo.lowerSkillThreshold, f.operationInfo.upperSkillTreshold = 725, 725
+      assert.same({}, Golden.check(f))
+      f.operationInfo.concentrationCost = f.operationInfo.concentrationCost + 1
+      assert.is_truthy(text(Golden.check(f)):find("concentrationCost", 1, true))
+      f.operationInfo.concentrationCost = r.concentrationCostForAllocation
+      f.operationInfo.craftingQuality = r.expectedQuality + 1
+      assert.is_truthy(text(Golden.check(f)):find("quality: the game", 1, true))
+    end)
+    it("compares a capture's skill even with concentration: it asks the game without it", function()
+      local f = matching("capture")
+      f.applyConcentration = true
+      f.operationInfo.bonusSkill = 625
+      assert.is_truthy(text(Golden.check(f)):find("skill: the game", 1, true))
+    end)
+    it("lets an old order's craft make more than predicted, still comparing the rest", function()
+      local f = matching("craft")
+      f.patronReagentsMissing = true
+      f.actualQuality = f.actualQuality + 1
+      assert.same({}, Golden.check(f))
+      f.operationInfo.craftingQuality = f.operationInfo.craftingQuality + 1
+      assert.is_truthy(text(Golden.check(f)):find("quality: the game", 1, true))
+    end)
     it("fails when the craft made another quality than the game predicted", function()
       local f = matching("craft")
       f.actualQuality = f.actualQuality + 1
