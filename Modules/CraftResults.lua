@@ -17,10 +17,11 @@ local L = ns.L
 -- off what resourcefulness returned, and adds multicraft extras to the entry's quantity). It is a value, not gold
 -- received; the Ledger's own profit is unchanged. A craft for an order is not counted itself: the order counts when it is
 -- handed in, as its commission minus the entry's cost (that order's crafts), so nothing shows for an order still open and
--- its reagents count once. Its reward items are not counted. A craft with no price is left out and counted in `missing`,
--- as is one whose cost is only partly known, or a commission with an unknown or partial cost, whose known part stays in.
--- Nothing to count is nil, never 0. The Ledger is only read again after a change, and SESSION_PROFIT_CHANGED says when
--- the total may differ.
+-- its reagents count once. Its reward items add the value they had when it was handed in, unless the setting says
+-- commission only (settings.craftResults.orderProfit). A craft with no price is left out and counted in `missing`, as is
+-- one whose cost is only partly known, or a commission with an unknown or partial cost or a reward with no price, whose
+-- known part stays in. Nothing to count is nil, never 0. The Ledger is only read again after a change, and
+-- SESSION_PROFIT_CHANGED says when the total may differ.
 --
 -- Blizzard's window: SyncBlizzardWindow stops both copies (the Recipes page's and the order view's) from listening to
 -- those events while this module and the panel both run, so they never open, and gives the events back as soon as either
@@ -125,11 +126,28 @@ function CraftResults:Clear()
   self:SendMessage(ns.Msg.CRAFT_RESULTS_CHANGED)
 end
 
+local settingsTable = ns.Util.SettingsAccessor("craftResults")
+local SETTINGS_DEFAULTS = { orderProfit = "rewards" }
+
+local function fill(target, defaults)
+  for key, default in pairs(defaults) do
+    if type(target[key]) ~= type(default) then target[key] = default end
+  end
+  return target
+end
+
+local function settings() return settingsTable(SETTINGS_DEFAULTS, fill) end
+
+-- Whether an order's reward items count in the session profit. Only an exact "commission" turns them off.
+function CraftResults:CountsOrderRewards()
+  return settings().orderProfit ~= "commission"
+end
+
 local function total_session_profit()
   local out = { counted = 0, missing = 0 }
   local ledger, prices = ns.FS:GetModule("Ledger", true), ns.FS:GetModule("Prices", true)
   if not (since and ledger and ledger:IsEnabled() and prices) then return out end
-  local total = 0
+  local total, withRewards = 0, CraftResults:CountsOrderRewards()
   for _, craft in ipairs(ledger:Query({ type = "craft", since = since })) do
     if craft.ref == nil then
       local price = prices:Get(craft.itemID).value
@@ -146,9 +164,15 @@ local function total_session_profit()
   for _, order in ipairs(ledger:Query({ type = "commission", since = since })) do
     if type(order.amount) == "number" then
       local cost = type(order.cost) == "number" and order.cost or nil
-      total = total + order.amount - (cost or 0)
+      local reward, rewardMissing = 0, false
+      if withRewards then
+        reward = type(order.rewardsValue) == "number" and order.rewardsValue or 0
+        rewardMissing = order.rewardsUnpriced == true
+          or (order.rewardsValue ~= nil and type(order.rewardsValue) ~= "number")
+      end
+      total = total + order.amount + reward - (cost or 0)
       out.counted = out.counted + 1
-      if not cost or order.incomplete then out.missing = out.missing + 1 end
+      if not cost or order.incomplete or rewardMissing then out.missing = out.missing + 1 end
     else
       out.missing = out.missing + 1
     end
@@ -292,16 +316,17 @@ end
 -- Lifecycle
 ---------------------------------------------------------------------------
 
+-- Sent from here, once the old total is gone: the order listeners of one message are called in is not promised.
+local function session_profit_changed()
+  sessionProfit = nil
+  CraftResults:SendMessage(ns.Msg.SESSION_PROFIT_CHANGED)
+end
+
 function CraftResults:OnEnable()
   running = true
   since, sessionProfit = ns.FS:Now(), nil
-  -- Sent from here, once the old total is gone: the order listeners of one message are called in is not promised.
-  local function changed()
-    sessionProfit = nil
-    self:SendMessage(ns.Msg.SESSION_PROFIT_CHANGED)
-  end
-  self:RegisterMessage(ns.Msg.LEDGER_CHANGED, changed)
-  self:RegisterMessage(ns.Msg.PRICES_CHANGED, changed)
+  self:RegisterMessage(ns.Msg.LEDGER_CHANGED, session_profit_changed)
+  self:RegisterMessage(ns.Msg.PRICES_CHANGED, session_profit_changed)
   local wrapped = ns.FS:Wrap(SOURCE, on_result)
   -- Registered protected: a client that does not know an event must not stop the module.
   for _, event in ipairs({ ITEM_EVENT, CURRENCY_EVENT }) do
@@ -339,6 +364,21 @@ function CraftResults.BuildOptions()
           return module ~= nil and module:IsEnabled()
         end,
         set = function(_, value) ns.FS:SetModuleEnabled("CraftResults", value) end,
+      },
+      orderProfit = {
+        type = "select", order = 2, width = "double", name = L["Orders in the session profit"],
+        desc = L["What a handed-in order adds to the session profit, before its reagent cost. Reward items count at the value the Orders tab gives them, not as gold received."],
+        values = {
+          rewards = L["Commission and reward items"],
+          commission = L["Commission only"],
+        },
+        sorting = { "rewards", "commission" },
+        disabled = function() return ns.FS.dbIsNewer == true end,
+        get = function() return CraftResults:CountsOrderRewards() and "rewards" or "commission" end,
+        set = function(_, value)
+          settings().orderProfit = value
+          if running then session_profit_changed() end
+        end,
       },
     },
   }

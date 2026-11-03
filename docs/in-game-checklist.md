@@ -1534,6 +1534,11 @@ Crafting Results window does not open. With an empty list the tab shows no panel
 the first craft; Clear closes it. Back on the Recipes page: the whole panel at your saved size and place. Turn CraftResults off:
 Blizzard's window is back on both tabs.
 
+P7-48. **Orders in the session profit.** Hand in an order with a reward item. Expected: the session profit rises by its commission plus
+the reward's value, minus its reagent cost, and the hover text mentions reward items. In Settings > Crafting results choose "Commission
+only": the total drops by the reward's value at once and the hover text says rewards are not counted. Hand in an order with a reward
+that has no price while rewards count: the label says "(some prices missing)". The choice survives `/reload`.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

@@ -1426,7 +1426,9 @@ local function build_results(frame, created)
     if not GameTooltip then return end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:SetText(L["Session profit"])
-    GameTooltip:AddLine(L["What the items you crafted would sell for now after the auction cut, plus the commissions of orders you handed in, minus what the reagents cost. An order's reward items are not counted. It counts from when you logged in or last cleared the list."], 1, 1, 1, true)
+    GameTooltip:AddLine(module("CraftResults"):CountsOrderRewards()
+      and L["What the items you crafted would sell for now after the auction cut, plus the commissions and reward items of orders you handed in, minus what the reagents cost. Reward items count at the value the Orders tab gives them, not as gold received. It counts from when you logged in or last cleared the list."]
+      or L["What the items you crafted would sell for now after the auction cut, plus the commissions of orders you handed in, minus what the reagents cost. An order's reward items are not counted. It counts from when you logged in or last cleared the list."], 1, 1, 1, true)
     local missing = section.missing or 0
     if missing > 0 then
       GameTooltip:AddLine((missing == 1 and L["%d craft has no price or only part of its cost."]

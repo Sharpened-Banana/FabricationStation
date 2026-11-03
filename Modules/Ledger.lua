@@ -711,7 +711,8 @@ function Ledger:OnOrderFulfilled(_, fulfilled)
   self:Add({
     type = "commission", amount = amount, tip = fulfilled.tip, recipeID = fulfilled.recipeID,
     itemID = fulfilled.itemID, quality = fulfilled.quality, customer = fulfilled.customer,
-    orderType = fulfilled.orderType, ref = orderID, rewardsValue = fulfilled.rewardsValue, cost = cost,
+    orderType = fulfilled.orderType, ref = orderID, rewardsValue = fulfilled.rewardsValue,
+    rewardsUnpriced = fulfilled.rewardsUnpriced, cost = cost,
     incomplete = incomplete or nil, estimated = estimated or nil, recraft = recraft or nil, time = fulfilled.time,
     charKey = fulfilled.charKey,
   })

@@ -56,6 +56,11 @@ describe("Ledger capture", function()
     local c = L:Query({type="commission"})[1]
     assert.same({450000, 20000, 500000, 777}, {c.amount, c.cost, c.tip, c.ref})
   end)
+  it("keeps a commission's reward value and whether a reward had no price", function()
+    L:OnOrderFulfilled("FS_ORDER_FULFILLED", {orderID=5, recipeID=4444, tip=1000, commission=900, rewardsValue=60000, rewardsUnpriced=true, time=1000})
+    local c = L:Query({type="commission"})[1]
+    assert.same({60000, true}, {c.rewardsValue, c.rewardsUnpriced})
+  end)
   it("records an AH sale from the invoice with cost basis", function()
     craft(nil); craft(nil)   -- costBasis 60000 / 4
     inv[1] = {"seller", "Potion of Foo", "Buyer", 1000000, 0, 20000, 50000, 0, 0, 0, 5, false}

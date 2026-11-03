@@ -1371,7 +1371,7 @@ function Orders:OnFulfillClicked(orderID, _, _)
   end
   if type(input) ~= "table" or orderID == nil then return end
   local tip = input.tipAmount
-  local rewardsValue, rewards = self:ValueRewards(input.rewards, orderID)
+  local rewardsValue, rewards, rewardsUnpriced = self:ValueRewards(input.rewards, orderID)
   pending[orderID] = { at = now, fulfilled = {
     orderID = orderID,
     orderType = input.orderType,
@@ -1385,6 +1385,7 @@ function Orders:OnFulfillClicked(orderID, _, _)
     commission = type(tip) == "number" and tip - number_or(input.consortiumCut, 0) or nil,
     rewards = rewards,
     rewardsValue = rewardsValue,
+    rewardsUnpriced = rewardsUnpriced or nil,
     isRecraft = input.isRecraft == true or nil,   -- the Ledger records a recraft's commission without a cost
   } }
 end
