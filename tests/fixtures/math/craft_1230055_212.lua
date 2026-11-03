@@ -476,8 +476,8 @@ return {
 		lowerSkillThreshold = 150,
 		upperSkillTreshold = 240,
 	},
-	patronReagentsMissing = true,
 	reagents = {},
+	reagentsMissing = true,
 	recipeID = 1230055,
 	schematic = {
 		baseDifficulty = 300,

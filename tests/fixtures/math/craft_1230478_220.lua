@@ -334,7 +334,6 @@ return {
 		lowerSkillThreshold = 0,
 		upperSkillTreshold = 555,
 	},
-	patronReagentsMissing = true,
 	reagents = {
 		{
 			dataSlotIndex = 1,
@@ -358,6 +357,7 @@ return {
 			},
 		},
 	},
+	reagentsMissing = true,
 	recipeID = 1230478,
 	schematic = {
 		baseDifficulty = 555,
