@@ -1389,3 +1389,26 @@ describe("ProfessionPanel text size", function()
     assert.is_nil(source:find("GameFontNormalSmall", 1, true))
   end)
 end)
+
+describe("ProfessionPanel controls", function()
+  after_each(function() fake_professions_frame.reset() end)
+
+  it("are a little smaller than the rest of the panel, all together", function()
+    local ns, W = make_world({ last = "UI/ProfessionPanel.lua" })
+    fake_professions_frame()
+    local createFrame = _G.CreateFrame
+    _G.CreateFrame = function(...)
+      local frame = createFrame(...)
+      frame.SetScale = function(self, scale) self.scale = scale end
+      return frame
+    end
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    _G.CreateFrame = createFrame
+    local view = ns.FS:GetModule("ProfessionPanel"):GetView()
+    assert.equals(0.9, view.controls.scale)
+    for _, key in ipairs({ "craftButton", "moreButton", "addButton", "quantityBox", "targetButton", "concentrationCheck" }) do
+      assert.equals(view.controls, view[key]:GetParent(), key)
+    end
+    assert.equals(view.frame, view.morePopup:GetParent())   -- its labels stay whole at the panel's own size
+  end)
+end)

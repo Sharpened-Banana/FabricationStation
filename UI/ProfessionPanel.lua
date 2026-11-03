@@ -63,6 +63,7 @@ local REFRESH_KEY, REFRESH_DELAY = "professionPanel.refresh", 0.5
 
 local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 340, 10, 16, 22, 24
 local BODY_FONT, HEADING_FONT = "GameFontHighlight", "GameFontNormal"
+local CONTROLS_SCALE = 0.9         -- the checkbox and buttons at the bottom, a little smaller than the panel's text
 local MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT, DEFAULT_HEIGHT = 300, 700, 300, 1200, 480
 local OWN_RESULTS_HEIGHT = 640     -- about the crafting window's height: the list needs the room, nothing opens over it
 local RESULT_ROW, RESULTS_HEADER, RESULTS_GAP_ABOVE, RESULT_ROWS_UNMEASURED = 18, 36, 8, 5   -- the header: title and total
@@ -640,7 +641,7 @@ end
 
 local apply_size   -- below
 -- Rough heights of the panel's fixed parts, for fold_plan.
-local TOP_BLOCK, TABLE_HEADER, FOLD_ROW, BOTTOM_BLOCK = 118, 38, 22, 140
+local TOP_BLOCK, TABLE_HEADER, FOLD_ROW, BOTTOM_BLOCK = 118, 38, 22, 133
 
 -- The results window's CraftingPage field, or nil on a client without it.
 local function results_log()
@@ -1239,8 +1240,15 @@ local function build_controls(frame, created)
   created.status:SetHeight(LINE * 2)
   created.status:SetJustifyV("TOP")
 
-  created.craftButton = button(frame, L["Craft Next"], 120, BUTTON_ROW - 2)
-  created.craftButton:SetPoint("BOTTOMLEFT", created.status, "TOPLEFT", 0, 4)
+  -- One scaled parent, so the buttons, their text and the checkbox's label shrink together.
+  local controls = CreateFrame("Frame", nil, frame)
+  controls:SetSize(1, 1)
+  controls:SetScale(CONTROLS_SCALE)
+  controls:SetPoint("BOTTOMLEFT", created.status, "TOPLEFT", 0, 4)
+  created.controls = controls
+
+  created.craftButton = button(controls, L["Craft Next"], 120, BUTTON_ROW - 2)
+  created.craftButton:SetPoint("BOTTOMLEFT", controls, "BOTTOMLEFT", 0, 0)
   -- The only reference to the protected action: one craft per click, nothing else runs it.
   created.craftButton:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
     if read_only() then return end
@@ -1250,7 +1258,7 @@ local function build_controls(frame, created)
   end))
 
   -- The provider actions, behind one button: they need more room than the row of buttons has.
-  created.moreButton = button(frame, L["More"], 70, BUTTON_ROW - 2)
+  created.moreButton = button(controls, L["More"], 70, BUTTON_ROW - 2)
   created.moreButton:SetPoint("LEFT", created.craftButton, "RIGHT", 6, 0)
   created.moreButton:Hide()
   created.morePopup = CreateFrame("Frame", nil, frame, "BackdropTemplate")
@@ -1270,11 +1278,11 @@ local function build_controls(frame, created)
   created.actions.frame:SetPoint("RIGHT", created.morePopup, "RIGHT", -6, 0)
   created.actions.frame:Hide()
 
-  created.addButton = button(frame, L["Add to Queue"], 110, BUTTON_ROW - 2)
+  created.addButton = button(controls, L["Add to Queue"], 110, BUTTON_ROW - 2)
   created.addButton:SetPoint("BOTTOMLEFT", created.craftButton, "TOPLEFT", 0, 4)
   created.addButton:SetScript("OnClick", ns.FS:Wrap(SOURCE, add_to_queue))
 
-  created.quantityBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+  created.quantityBox = CreateFrame("EditBox", nil, controls, "InputBoxTemplate")
   created.quantityBox:SetSize(34, 20)
   created.quantityBox:SetPoint("LEFT", created.addButton, "RIGHT", 10, 0)
   created.quantityBox:SetAutoFocus(false)
@@ -1284,18 +1292,18 @@ local function build_controls(frame, created)
   created.quantityBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
   created.quantityBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
 
-  created.targetButton = button(frame, M.TargetLabel(target), 100, BUTTON_ROW - 2)
+  created.targetButton = button(controls, M.TargetLabel(target), 100, BUTTON_ROW - 2)
   created.targetButton:SetPoint("LEFT", created.quantityBox, "RIGHT", 6, 0)
   created.targetButton:SetScript("OnClick", ns.FS:Wrap(SOURCE, cycle_target))
 
-  created.concentrationCheck = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
+  created.concentrationCheck = CreateFrame("CheckButton", nil, controls, "UICheckButtonTemplate")
   created.concentrationCheck:SetSize(BUTTON_ROW, BUTTON_ROW)
   created.concentrationCheck:SetPoint("BOTTOMLEFT", created.addButton, "TOPLEFT", -4, 2)
   created.concentrationCheck:SetScript("OnClick", ns.FS:Wrap(SOURCE, function(self)
     useConcentration = self:GetChecked() and true or false
     evaluate()
   end))
-  local checkLabel = text(frame)
+  local checkLabel = text(controls)
   checkLabel:SetPoint("LEFT", created.concentrationCheck, "RIGHT", 2, 0)
   checkLabel:SetText(L["Use concentration"])
 end
