@@ -323,6 +323,13 @@ Note: a full profession scan announces its spec, concentration and Moxie changes
 - `tests/helpers/wow_stubs.lua` frames gained `Click(button)` (runs the `OnClick` script as `(frame, button or "LeftButton", false)`).
 - Unverified (P7-28): `category="ADDONS"` lists the bindings under AddOns; a key press that calls `Button:Click()` on an addon button runs `C_CraftingOrders.ClaimOrder` and `C_TradeSkillUI.CraftRecipe` as a hardware event; whether Blizzard's own "fill this order with your own reagents" dialog already confirms on Enter.
 
+## CraftResults (player request after phase 7)
+
+- `Modules/CraftResults.lua`: toggleable module `CraftResults` (on by default; TOC after `Modules\MailGold.lua`). Session only, saves nothing. `CraftResults:GetEntries()` newest first, at most `MAX_ENTRIES` (100): `{ hyperlink?, itemID?, currencyID?, quantity?, multicraft?, concentrationSpent?, ingenuityRefund?, operationID?, saved? = { {itemID?|currencyID?, quantity?} }, bonuses? = same }`; what a craft did not give is left out, never 0. `CraftResults:Clear()`. `CraftResults.RowModel(entry) -> { icon?, text, extra, hyperlink?, tooltip = { lines } }`. Sends `ns.Msg.CRAFT_RESULTS_CHANGED` (no payload).
+- Reads `TRADE_SKILL_ITEM_CRAFTED_RESULT` and `TRADE_SKILL_CURRENCY_REWARD_RESULT`, collected for `COLLECT_DELAY` (0.35 s, debounce key `craftResults.flush`). A `firstCraftReward` goes on the craft with its `operationID`, else on a line of its own.
+- `CraftResults:SyncBlizzardWindow(panelOn?)`: calls `UnregisterEvent` for those two events on `ProfessionsFrame.CraftingPage.CraftingOutputLog` while this module and ProfessionPanel both run, `RegisterEvent` when either stops (only if it stopped them). The one deliberate exception to "only read and hook Blizzard's frames": it writes no field. `OrdersPage.OrderView.CraftingOutputLog` is left alone, as the panel is not shown there.
+- ProfessionPanel: `view.results = { frame, header, clear, rows, offset, maxRows }`. With the module on, a panel never moved starts at y = 0, `OWN_RESULTS_HEIGHT` (640) tall; off, below Blizzard's window, `DEFAULT_HEIGHT` tall. `MIN_HEIGHT` is 300 (was 450). `fold_plan` reserves room for a header and two rows before the reagent table once there are results. In game: P7-45.
+
 ## MailGold (phase 7 Task 21)
 
 - `Modules/MailGold.lua`: toggleable module `MailGold` (on by default; TOC right after `Modules\SaleLog.lua`, before the UI). No exports beyond `MailGold:Settings()`, `MailGold.SETTINGS_DEFAULTS = { showTotal = true }` (`SettingsAccessor("mailGold")`, `showTotal` a boolean) and `MailGold.PRINT_DELAY = 1.5`. Saves nothing but those settings; while `dbIsNewer` the accessor's session-only copy is used, so no table is created and `db.global` is unchanged.

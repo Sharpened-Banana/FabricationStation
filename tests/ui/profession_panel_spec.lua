@@ -319,7 +319,7 @@ describe("ProfessionPanel attach", function()
     local frame = _G.FabricationStationProfessionPanel
     assert.is_table(frame); assert.equals("BackdropTemplate", frame.template); assert.equals(UIParent, frame:GetParent())
     assert.equals(340, frame:GetWidth())
-    assert.same({ "TOPLEFT", ProfessionsFrame, "TOPRIGHT", 2, -296 }, { frame:GetPoint(1) })
+    assert.same({ "TOPLEFT", ProfessionsFrame, "TOPRIGHT", 2, 0 }, { frame:GetPoint(1) })
     W.fire("ADDON_LOADED", "Blizzard_Professions")
     assert_attached_once(ns, form)
     assert.same({}, form.assignedFields)
@@ -761,8 +761,10 @@ describe("ProfessionPanel size", function()
   end
   after_each(function() fake_professions_frame.reset() end)
 
-  it("starts wider than it was, below where the Crafting Results window opens", function()
+  it("starts wider than it was, below where Blizzard's Crafting Results window opens", function()
     boot()
+    ns.FS:SetModuleEnabled("CraftResults", false)
+    form.hide(); form.show()
     assert.equals(340, view.frame:GetWidth())
     assert.equals(480, view.frame:GetHeight())
     local _, _, _, x, y = view.frame:GetPoint(1)
@@ -774,6 +776,7 @@ describe("ProfessionPanel size", function()
     form = fake_professions_frame()
     form.raw(_G.ProfessionsFrame.CraftingPage).CraftingOutputLog = {
       HookScript = function() end, IsShown = function() return false end, GetHeight = function() return 340 end }
+    ns.FS:SetModuleEnabled("CraftResults", false)
     W.fire("ADDON_LOADED", "Blizzard_Professions")
     view = ns.FS:GetModule("ProfessionPanel"):GetView()
     local _, _, _, _, y = view.frame:GetPoint(1)
@@ -816,7 +819,7 @@ describe("ProfessionPanel size", function()
   end)
   it("reads a size out of range or of the wrong type as the nearest good one or none", function()
     boot({ width = 5000, height = 10 })
-    assert.same({ 700, 450 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+    assert.same({ 700, 300 }, { view.frame:GetWidth(), view.frame:GetHeight() })
     fake_professions_frame.reset()
     boot({ width = "wide", height = false })
     assert.equals(340, view.frame:GetWidth())
@@ -1165,5 +1168,163 @@ describe("ProfessionPanel compact layout", function()
       assert.is_false(view.lines.frame:IsShown())
       assert.is_true(saved().breakdownOpen)     -- only folded for now
     end)
+  end)
+end)
+
+-- Our own crafting results replace Blizzard's window on the Recipes page: a list in the panel, so nothing opens over it.
+describe("ProfessionPanel crafting results", function()
+  local ns, W, form, P, view, lines, R
+  local LINK = "|cff0070dd|Hitem:241300::|h[Light's Potential]|h|r"
+  local function fake_log()
+    local log = { registered = { TRADE_SKILL_ITEM_CRAFTED_RESULT = true, TRADE_SKILL_CURRENCY_REWARD_RESULT = true } }
+    function log:UnregisterEvent(event) self.registered[event] = nil end
+    function log:RegisterEvent(event) self.registered[event] = true end
+    function log:HookScript() end
+    function log:IsShown() return false end
+    return log
+  end
+  local log
+  local function boot(stored)
+    ns, W = make_world({ last = "UI/ProfessionPanel.lua" })
+    form = fake_professions_frame()
+    log = fake_log()
+    form.raw(_G.ProfessionsFrame.CraftingPage).CraftingOutputLog = log
+    for i = #form.assignedFields, 1, -1 do form.assignedFields[i] = nil end   -- that was the spec playing Blizzard
+    if stored then ns.FS.db.global.settings.professionPanel = stored end
+    lines = {}
+    _G.GameTooltip = { SetOwner = function() end, Show = function() end, Hide = function() end,
+      SetHyperlink = function(_, link) lines[#lines + 1] = link end,
+      SetText = function(_, t) lines[#lines + 1] = t end, AddLine = function(_, t) lines[#lines + 1] = t end,
+      AddDoubleLine = function(_, l, r) lines[#lines + 1] = l .. "=" .. r end }
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    P = ns.FS:GetModule("ProfessionPanel")
+    R = ns.FS:GetModule("CraftResults")
+    view = P:GetView()
+  end
+  local function select() form.selectRecipe({ recipeID = 9001 }) end
+  local function craft(n, fields)
+    for i = 1, n or 1 do
+      local data = { itemID = 241300, hyperlink = LINK, quantity = i, multicraft = 0, operationID = i }
+      for key, value in pairs(fields or {}) do data[key] = value end
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", data)
+    end
+    W.advance(R.COLLECT_DELAY + 0.01)
+  end
+  local function resize(height)
+    view.frame:SetSize(340, height)
+    view.resizeGrip:GetScript("OnMouseUp")(view.resizeGrip, "LeftButton")
+  end
+  local function visible_rows()
+    local n = 0
+    for _, row in ipairs(view.results.rows) do if row:IsShown() then n = n + 1 end end
+    return n
+  end
+  after_each(function() fake_professions_frame.reset() end)
+
+  it("stops Blizzard's window on the Recipes page when the panel attaches", function()
+    boot()
+    assert.same({}, log.registered)
+  end)
+  it("writes nothing on Blizzard's frames for that", function()
+    boot()
+    assert.same({}, form.assignedFields)
+  end)
+  it("gives the window back when the panel is turned off", function()
+    boot()
+    ns.FS:SetModuleEnabled("ProfessionPanel", false)
+    assert.is_true(log.registered.TRADE_SKILL_ITEM_CRAFTED_RESULT)
+  end)
+  it("starts beside the top of the crafting window, as nothing opens over it now", function()
+    boot()
+    local _, _, _, x, y = view.frame:GetPoint(1)
+    assert.same({ 2, 0 }, { x, y })
+    assert.equals(640, view.frame:GetHeight())
+  end)
+  it("keeps where you left it", function()
+    boot({ x = 0, y = -17, width = 392, height = 639 })
+    local _, _, _, x, y = view.frame:GetPoint(1)
+    assert.same({ 0, -17 }, { x, y })
+    assert.same({ 392, 639 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+  end)
+  it("shows no list until something is crafted", function()
+    boot(); select()
+    assert.is_false(view.results.frame:IsShown())
+  end)
+  it("shows a craft as a row, with the newest on top", function()
+    boot(); select()
+    craft(2)
+    assert.is_true(view.results.frame:IsShown())
+    assert.equals(2, visible_rows())
+    assert.is_truthy(view.results.rows[1].text:GetText():find("\195\1512", 1, true))
+    assert.is_nil(view.results.rows[2].text:GetText():find("\195\151", 1, true))
+  end)
+  it("counts the crafts in its header", function()
+    boot(); select()
+    craft(3)
+    assert.equals("Crafting results (3)", view.results.header:GetText())
+  end)
+  it("shows the item and what the craft gave in the row's tooltip", function()
+    boot(); select()
+    craft(1, { multicraft = 2 })
+    local row = view.results.rows[1]
+    row:GetScript("OnEnter")(row)
+    assert.same({ LINK, "Multicraft: 2 extra" }, lines)
+  end)
+  it("still shows the list with no recipe selected", function()
+    boot()
+    craft(1)
+    assert.is_true(view.results.frame:IsShown())
+    assert.equals(1, visible_rows())
+  end)
+  it("is cleared by its Clear button", function()
+    boot(); select()
+    craft(2)
+    view.results.clear:GetScript("OnClick")(view.results.clear)
+    assert.is_false(view.results.frame:IsShown())
+    assert.same({}, R:GetEntries())
+  end)
+  it("fits its rows into the room above the buttons, and scrolls to the rest", function()
+    boot(); select()
+    view.frame.GetTop = function() return 800 end
+    resize(400)
+    craft(30)
+    local shownRows = visible_rows()
+    assert.is_true(shownRows >= 2 and shownRows < 30)
+    local first = view.results.rows[1].text:GetText()
+    view.results.frame:GetScript("OnMouseWheel")(view.results.frame, -1)
+    assert.is_not.equal(first, view.results.rows[1].text:GetText())
+    view.results.frame:GetScript("OnMouseWheel")(view.results.frame, 1)
+    view.results.frame:GetScript("OnMouseWheel")(view.results.frame, 1)
+    assert.equals(first, view.results.rows[1].text:GetText())
+  end)
+  it("goes back to the newest when a new craft comes in", function()
+    boot(); select()
+    craft(30)
+    view.results.frame:GetScript("OnMouseWheel")(view.results.frame, -1)
+    assert.equals(1, view.results.offset)
+    craft(1)
+    assert.equals(0, view.results.offset)
+  end)
+  it("gives up the reagent table before the list when room is short", function()
+    boot({ width = 340, height = 370 }); select()
+    craft(5)
+    assert.is_false(view.qualityHeader:IsShown())
+    assert.is_true(view.results.frame:IsShown())
+    assert.is_true(visible_rows() >= 2)
+  end)
+  it("can be made shorter than before, now there is less to fit", function()
+    boot({ width = 340, height = 320 })
+    assert.equals(320, view.frame:GetHeight())
+  end)
+  it("hides the list and goes back to the old place when our results are turned off", function()
+    boot(); select()
+    craft(2)
+    ns.FS:SetModuleEnabled("CraftResults", false)
+    assert.is_false(view.results.frame:IsShown())
+    assert.is_true(log.registered.TRADE_SKILL_ITEM_CRAFTED_RESULT)
+    form.hide(); form.show()
+    local _, _, _, _, y = view.frame:GetPoint(1)
+    assert.equals(-296, y)
+    assert.equals(480, view.frame:GetHeight())
   end)
 end)

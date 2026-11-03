@@ -1509,6 +1509,17 @@ its status shows beside it. Use concentration is never covered. Open everything 
 under Crafting Results: what does not fit folds, the reagent table first, and comes back when there is room. Report whether
 the +/- icons show (`Interface\\Buttons\\UI-PlusButton-Up`, `UI-MinusButton-Up`).
 
+P7-45. **Crafting results in the panel.** On the Recipes page, craft something several times, some with Create All.
+Expected: Blizzard's Crafting Results window never opens; "Crafting results (n)" appears in the panel under the fold rows,
+newest on top, with the item's icon, coloured name and quantity. A craft with multicraft shows "+n extra", one with saved
+reagents shows "Saved" with their icons and counts, one with ingenuity shows "Ingenuity", and a first craft shows "Bonus"; the
+row's tooltip shows the item and spells these out. Compare a few rows with the game's chat lines and report any difference
+(the payload's multicraft, concentration and ingenuity fields are unverified, P7-16). With many rows, the mouse wheel scrolls
+and a new craft goes back to the top; Clear empties the list. Make the panel short: the reagent table goes before the list.
+Crafting works as before and nothing errors, also in BugSack. On the orders page Blizzard's window still opens when you craft
+an order. Turn off Settings > Crafting results: the list goes, the next craft opens Blizzard's window, and after closing and
+reopening a panel you never moved starts below it. Turn it on again: Blizzard's window stays closed from the next craft.
+
 ## Not done here
 
 `tests/fixtures/captures/` is intentionally untouched; it needs your in-game result from check 5. The Moxie IDs in

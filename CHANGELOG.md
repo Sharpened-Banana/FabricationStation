@@ -137,3 +137,6 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
       position in every session until you unlock it; right-click the grip for the default.
     - The profession panel is compact: the profit breakdown and the extra lines fold into one row each (hover to read
       them, click to keep them open), its extra buttons sit behind a More button, and its background is solid.
+    - Crafting results now appear in a list inside the profession panel, in place of Blizzard's window on the Recipes
+      page, so nothing opens over the panel. Blizzard's window comes back if you turn this off in Settings; the orders
+      page keeps it for now.

@@ -99,7 +99,8 @@ local PAIRS = {
 local EXEMPT = {
   { "the label with a suffix or prefix: another label, or part of the same control's text", {
     "Show hidden (%d)", "Whisper text", "Apply failed", "Expiring soon (minutes)", "Crafting-orders window",
-    "Crafting %s\226\128\166", "Crafting order #%s", "Crafting\226\128\166" } },
+    "Crafting %s\226\128\166", "Crafting order #%s", "Crafting\226\128\166", "Crafting results", "Crafting results (%d)",
+    "Replaces Blizzard's Crafting Results window on the Recipes page. Turn this off to get Blizzard's window back." } },
   { "Guild as the feature or the order type, and sentences about it, not the tab or a button", {
     "Guild answered: %d can craft this", "Guild answered: nobody knows this recipe", "Guild sync",
     "Guild sync is turned off", "Guild sync is turned off: turn it on in Settings > Modules", "Guild: %s", "Guild crafter directory",

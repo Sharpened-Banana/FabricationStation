@@ -4,7 +4,7 @@
 -- phase 7 event source writes while the saved data is from a newer version.
 
 local TOGGLEABLE = { "SaleLog", "CraftLog", "CraftLists", "Intermediates", "ChatInbox", "ReadyAlerts", "MerchantBuy",
-  "BankPull", "MailGold" }
+  "BankPull", "MailGold", "CraftResults" }
 local CORE = { "FeatureLines", "RequestsTab", "Bindings" }
 
 -- Every debounce key a toggleable module cancels in OnDisable (grep CancelDebounce in the module). The disable test
@@ -16,6 +16,7 @@ local OWNED_KEYS = {
   MerchantBuy = { "merchantBuy.flight", "merchantBuy.refresh" },
   BankPull = { "bankPull.flight", "bankPull.refresh" },
   MailGold = { "mailGold.print" },
+  CraftResults = { "craftResults.flush" },
 }
 
 -- The prefixes of those keys, for "nothing of this module ran while it was off".
@@ -25,6 +26,7 @@ local OWNED_PREFIXES = {
   MerchantBuy = { "merchantBuy." },
   BankPull = { "bankPull." },
   MailGold = { "mailGold." },
+  CraftResults = { "craftResults." },
 }
 
 -- Records which debounce keys are pending and how often each one ran. Installed on ns.FS before W.boot, so the
