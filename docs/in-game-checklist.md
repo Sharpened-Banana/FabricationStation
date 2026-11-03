@@ -1487,11 +1487,15 @@ hides, and nothing overlaps the Use concentration / Add to Queue / Craft Next bu
 lines, report any overlap). Close the window: the content goes back to the top and the table returns. A Lua error here
 turns off only the panel.
 
-P7-43. **Panel size.** Open a profession. Expected: the panel is wider than before and as tall as the crafting window.
-Drag the grip at its bottom-right corner: it follows, within 300-700 wide and 450-1200 tall, and stays attached to the
-crafting window when that moves. Close and reopen, then `/reload`: the size stays. Right-click the grip: back to the
-default. Report whether the grip works (`PanelResizeButtonTemplate`, as the main window's) and whether it covers the
-"Math check" line.
+P7-43. **Panel size and position.** Open a profession. Expected: the panel is wider than before, beside the crafting window
+and as tall as it. Drag the grip at its bottom-right corner: it follows, within 300-700 wide and 450-1200 tall. Drag the
+panel by an empty part: it moves, stays on the screen, and comes along when you then move the crafting window. Close and
+reopen, then `/reload`: size and place stay. Move it clear of where Crafting Results opens and craft: the window covers
+nothing and the panel keeps its reagent table. Right-click the grip: back to the default. Report whether the grip works
+(`PanelResizeButtonTemplate`, as the main window's) and whether it covers the "Math check" line.
+Click the lock beside the grip: the icon shows locked, the grip goes and the panel no longer drags. `/reload`, log out, or
+switch character: same size and place, still locked. Click it again: the icon shows unlocked, the grip and the drag return,
+and nothing moves. Report whether both lock icons show (`Interface\\Buttons\\LockButton-Locked-Up` and `-Unlocked-Up`).
 
 ## Not done here
 

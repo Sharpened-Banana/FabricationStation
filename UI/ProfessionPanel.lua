@@ -14,12 +14,15 @@ local L = ns.L
 --
 -- The panel shows while ProfessionsFrame and its CraftingPage (the Recipes tab) are both shown.
 --
--- Blizzard's Crafting Results window (CraftingPage.CraftingOutputLog) opens over the top of the panel and is not ours to
--- move. While it shows, the panel's content starts below it and gives up the reagent-per-quality table (Apply is not
+-- Blizzard's Crafting Results window (CraftingPage.CraftingOutputLog) opens over the top of the panel beside it and is
+-- not ours to move. While it covers the panel, the panel's content starts below it and gives up the reagent-per-quality table (Apply is not
 -- what you reach for mid-craft), so the numbers stay readable. It is read and post-hooked only.
 --
--- Size: the grip drags it (settings.professionPanel = { width, height }), a right-click on the grip goes back to the
--- default: WIDTH wide and as tall as ProfessionsFrame. A dragged size stays attached to ProfessionsFrame's top right.
+-- Size and place: the grip drags the size, and dragging the panel moves it (settings.professionPanel = { width, height,
+-- x, y }, x and y from ProfessionsFrame's top right, so it comes along when that moves). A right-click on the grip goes
+-- back to the default: WIDTH wide, as tall as ProfessionsFrame, beside it. The lock button beside the grip saves the size
+-- the panel has, hides the grip and stops the dragging, in every session (professionPanel.locked), until it is clicked
+-- again. Moved clear of the results window, the panel keeps its full layout.
 --
 -- Attachment: AttachIfReady() runs from ADDON_LOADED("Blizzard_Professions") and from OnEnable when the addon is
 -- already loaded; `attached` makes it register once. Every hook body runs in ns.FS:SafeCall("ProfessionPanel", ...),
@@ -626,7 +629,12 @@ local function results_clearance()
   local top, bottom = read_edge(view.frame, "GetTop"), read_edge(log, "GetBottom")
   if not (top and bottom) then return RESULTS_HEIGHT + RESULTS_GAP end
   local scale = (read_edge(log, "GetEffectiveScale") or 1) / (read_edge(view.frame, "GetEffectiveScale") or 1)
-  return math.max(0, top - bottom * scale) + RESULTS_GAP
+  -- Moved clear of the window (beside it or below it), there is nothing to get out from under.
+  local left, right = read_edge(view.frame, "GetLeft"), read_edge(view.frame, "GetRight")
+  local logLeft, logRight = read_edge(log, "GetLeft"), read_edge(log, "GetRight")
+  if left and right and logLeft and logRight and (logRight * scale <= left or logLeft * scale >= right) then return 0 end
+  if top <= bottom * scale then return 0 end
+  return top - bottom * scale + RESULTS_GAP
 end
 
 -- Starts the content below the results window while it is open; true then (the condensed layout).
@@ -1140,29 +1148,109 @@ end
 local function apply_size(frame)
   local saved = size_settings()
   local height = in_range(saved.height, MIN_HEIGHT, MAX_HEIGHT)
+  local moved = type(saved.x) == "number" and type(saved.y) == "number"
+  local x, y = moved and saved.x or 2, moved and saved.y or 0
   frame:ClearAllPoints()
-  frame:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", 2, 0)
+  frame:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", x, y)
   frame:SetWidth(in_range(saved.width, MIN_WIDTH, MAX_WIDTH) or WIDTH)
   if height then
     frame:SetHeight(height)
   else
-    frame:SetPoint("BOTTOMLEFT", ProfessionsFrame, "BOTTOMRIGHT", 2, 0)
+    frame:SetPoint("BOTTOMLEFT", ProfessionsFrame, "BOTTOMRIGHT", x, y)
   end
+end
+
+local function save_current_size(frame, saved)
+  saved.width = math.floor(frame:GetWidth() + 0.5)
+  saved.height = math.floor(frame:GetHeight() + 0.5)
+end
+
+-- Where a drag left the panel, from ProfessionsFrame's top right. Edges that cannot be read leave the saved place.
+local function on_drag_stopped(frame)
+  frame:StopMovingOrSizing()
+  local saved = size_settings()
+  local left, top = read_edge(frame, "GetLeft"), read_edge(frame, "GetTop")
+  local right, frameTop = read_edge(ProfessionsFrame, "GetRight"), read_edge(ProfessionsFrame, "GetTop")
+  if saved.locked ~= true and left and top and right and frameTop then
+    local scale = (read_edge(ProfessionsFrame, "GetEffectiveScale") or 1) / (read_edge(frame, "GetEffectiveScale") or 1)
+    saved.x = math.floor(left - right * scale + 0.5)
+    saved.y = math.floor(top - frameTop * scale + 0.5)
+    save_current_size(frame, saved)
+  end
+  apply_size(frame)
+  render()   -- it may have moved out from under the results window, or under it
 end
 
 -- The template's own mouse-up handler ends the drag; this hook runs after it.
 local function on_grip_released(frame, mouseButton)
   local saved = size_settings()
+  if saved.locked == true then
+    apply_size(frame)
+    return
+  end
   if mouseButton == "RightButton" then
-    saved.width, saved.height = nil, nil
+    saved.width, saved.height, saved.x, saved.y = nil, nil, nil, nil
   else
-    saved.width = math.floor(frame:GetWidth() + 0.5)
-    saved.height = math.floor(frame:GetHeight() + 0.5)
+    save_current_size(frame, saved)
   end
   apply_size(frame)
+  render()
+end
+
+-- Shows what the saved lock says: the grip only while unlocked, and the lock's icon.
+local function show_lock(created)
+  local locked = size_settings().locked == true
+  if locked then created.resizeGrip:Hide() else created.resizeGrip:Show() end
+  created.lockIcon:SetTexture(locked and "Interface\\Buttons\\LockButton-Locked-Up"
+    or "Interface\\Buttons\\LockButton-Unlocked-Up")
+end
+
+local function lock_tooltip(owner)
+  if not GameTooltip then return end
+  local locked = size_settings().locked == true
+  GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+  GameTooltip:SetText(locked and L["Unlock size and position"] or L["Lock size and position"])
+  GameTooltip:AddLine(locked and L["The size and position are locked. Unlock them to change the panel again."]
+    or L["The panel keeps this size and position, in every session, until you unlock it."], 1, 1, 1, true)
+  GameTooltip:Show()
+end
+
+local function toggle_lock(frame, created, owner)
+  local saved = size_settings()
+  if saved.locked == true then
+    saved.locked = nil
+  else
+    save_current_size(frame, saved)
+    saved.locked = true
+    apply_size(frame)
+  end
+  show_lock(created)
+  if GameTooltip and GameTooltip.GetOwner and GameTooltip:GetOwner() == owner then lock_tooltip(owner) end
+end
+
+local function build_lock(frame, created)
+  local lock = CreateFrame("Button", nil, frame)
+  lock:SetSize(16, 16)
+  lock:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -22, 4)
+  created.lockIcon = lock:CreateTexture(nil, "ARTWORK")
+  created.lockIcon:SetAllPoints(lock)
+  lock:SetScript("OnClick", function(self) ns.FS:SafeCall(SOURCE, toggle_lock, frame, created, self) end)
+  lock:SetScript("OnEnter", function(self) ns.FS:SafeCall(SOURCE, lock_tooltip, self) end)
+  lock:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+  created.lockButton = lock
+  show_lock(created)
 end
 
 local function build_grip(frame, created)
+  -- Dragging the panel moves it. The panel takes the mouse for that; its own buttons still get their clicks.
+  frame:SetMovable(true)
+  frame:SetClampedToScreen(true)
+  frame:EnableMouse(true)
+  frame:RegisterForDrag("LeftButton")
+  frame:SetScript("OnDragStart", function(self)
+    if size_settings().locked ~= true then self:StartMoving() end
+  end)
+  frame:SetScript("OnDragStop", function(self) ns.FS:SafeCall(SOURCE, on_drag_stopped, self) end)
   frame:SetResizable(true)
   frame:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
   local grip = CreateFrame("Button", nil, frame, "PanelResizeButtonTemplate")
@@ -1173,7 +1261,7 @@ local function build_grip(frame, created)
   end)
   grip:HookScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetText(L["Drag to resize. Right-click for the default size."], 1, 1, 1, 1, true)
+    GameTooltip:SetText(L["Drag to resize. Right-click for the default size and position."], 1, 1, 1, 1, true)
     GameTooltip:Show()
   end)
   grip:HookScript("OnLeave", function() GameTooltip:Hide() end)
@@ -1199,6 +1287,7 @@ local function build()
   build_body(frame, created)
   build_controls(frame, created)
   build_grip(frame, created)
+  build_lock(frame, created)
   view = created
 end
 
