@@ -924,6 +924,8 @@ local function build(container)
   local child = CreateFrame("Frame", nil, scroll)
   child:SetSize(1, 1)
   scroll:SetScrollChild(child)
+  -- Before the GetWidth below: reading the width can run OnSizeChanged, so update_rows, and `view` is already set.
+  created.scroll, created.child = scroll, child
   scroll:EnableMouseWheel(true)
   scroll:SetScript("OnMouseWheel", ns.FS:Wrap(SOURCE, on_mouse_wheel))
   scroll:SetScript("OnVerticalScroll", ns.FS:Wrap(SOURCE, update_rows))
@@ -933,7 +935,6 @@ local function build(container)
   end)
   local width = scroll:GetWidth()
   if width and width > 0 then child:SetWidth(width) end
-  created.scroll, created.child = scroll, child
 
   created.empty = container:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
   created.empty:SetPoint("TOPLEFT", container, "TOPLEFT", PAD + 4, -(scrollTop + 8))

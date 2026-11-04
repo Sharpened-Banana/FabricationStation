@@ -46,6 +46,64 @@ describe("CraftLog capture", function()
     assert.same({}, CL:GetEntries())
   end)
 
+  describe("a craft for an order", function()
+    local PATRON = { reagentInfo = { reagent = { itemID = 3001 }, dataSlotIndex = 13, quantity = 2 }, slotIndex = 3, source = 0 }
+    local function claim(orderID)
+      boot({ stubs = { C_CraftingOrders = { GetClaimedOrder = function()
+        return { orderID = orderID, reagents = { PATRON } }
+      end } } })
+    end
+    local function log_order_craft()
+      local recipes, seen = ns.FS:GetModule("Recipes"), nil
+      local read = recipes.FromCraftingReagentInfo
+      recipes.FromCraftingReagentInfo = function(self, recipeID, infos) seen = infos; return read(self, recipeID, infos) end
+      craft(9001, reagents, false, 1, 77)
+      recipes.FromCraftingReagentInfo = read
+      result({ itemID = 5002, quantity = 1, craftingQuality = 2, operationID = 11 })
+      return CL:GetEntries()[1], seen
+    end
+
+    it("predicts with the patron's reagents, which CraftRecipe does not pass", function()
+      claim(77)
+      local e, seen = log_order_craft()
+      assert.equals(3, #seen)
+      assert.same(PATRON.reagentInfo, seen[3])
+      assert.same(PATRON.reagentInfo, e.fixture.reagents[3])
+      assert.is_true(e.fixture.exactReagents)
+    end)
+    it("does not change Blizzard's table", function()
+      claim(77)
+      log_order_craft()
+      assert.equals(2, #reagents)
+    end)
+    it("does not take the reagents of another claimed order", function()
+      claim(78)
+      local e, seen = log_order_craft()
+      assert.equals(2, #seen)
+      assert.is_nil(e.fixture.exactReagents)
+    end)
+    it("does not ask for an order on a craft without one", function()
+      claim(77)
+      craft(9001, reagents, false); result({ itemID = 5002, quantity = 1, craftingQuality = 2, operationID = 12 })
+      local e = CL:GetEntries()[1]
+      assert.equals(2, #e.fixture.reagents)
+      assert.is_true(e.fixture.exactReagents)
+    end)
+    it("asks the game with a currency reagent the craft spends", function()
+      boot()
+      local money = { reagent = { currencyID = 3443 }, dataSlotIndex = 2, quantity = 80 }
+      local scanner, sent = ns.FS:GetModule("Scanner"), nil
+      local ask = scanner.GetLiveOperationInfo
+      scanner.GetLiveOperationInfo = function(self, recipeID, allocation, conc, optionals, currencies)
+        sent = currencies
+        return ask(self, recipeID, allocation, conc, optionals, currencies)
+      end
+      craft(9001, { reagents[1], reagents[2], money }, false)
+      scanner.GetLiveOperationInfo = ask
+      assert.same({ money }, sent)
+    end)
+  end)
+
   it("logs a craft with FabricationStation's and the game's prediction", function()
     craft(9001, reagents, false); result({ itemID = 5002, quantity = 1, craftingQuality = 2, operationID = 11 })
     local e = CL:GetEntries()[1]

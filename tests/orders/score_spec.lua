@@ -87,14 +87,14 @@ describe("Orders scoring", function()
     end
     O:ScoreInput(input({provided={[300]=2}}), ctx())
     -- The plain plan reaches the target: the concentration route to it is asked for too, to compare (Task 10b).
-    assert.same({ {4444, "Me-Silvermoon", {targetQuality=2, providedReagents={[300]=2}}},
-      {4444, "Me-Silvermoon", {targetQuality=2, providedReagents={[300]=2}, useConcentration=true}} }, calls)
+    assert.same({ {4444, "Me-Silvermoon", {targetQuality=2, providedReagents={[300]=2}, atLeastTarget=true}},
+      {4444, "Me-Silvermoon", {targetQuality=2, providedReagents={[300]=2}, useConcentration=true, atLeastTarget=true}} }, calls)
     calls = {}
     O:ScoreInput(input({minQuality=1}), ctx())
     assert.same({ {4444, "Me-Silvermoon", {providedReagents={}}} }, calls)   -- quality 1 needs no target
     calls = {}
     O:ScoreInput(input({minQuality=4}), ctx())
-    assert.equal(2, #calls); assert.same({targetQuality=4, providedReagents={}, useConcentration=true}, calls[2][3])
+    assert.equal(2, #calls); assert.same({targetQuality=4, providedReagents={}, useConcentration=true, atLeastTarget=true}, calls[2][3])
     assert.is_nil(calls[2][3].ownedReagentsFree)   -- 1a's costing setting applies
   end)
 

@@ -35,6 +35,7 @@
 -- form helpers:
 --   show() / hide()       set ProfessionsFrame's shown state and run its OnShow / OnHide script chain
 --   showPage() / hidePage()  the same for ProfessionsFrame.CraftingPage (the Recipes tab vs the other tabs)
+--   showOrdersPage() / hideOrdersPage()  the same for ProfessionsFrame.OrdersPage (the Crafting Orders tab)
 --   selectRecipe(info)    recipeInfo = info, then EventRegistry "ProfessionsRecipeListMixin.Event.OnRecipeSelected"
 --   allocate(infos)       reagentInfos = infos, then the form's AllocationsModified callbacks (as Blizzard fires them)
 --   transactionUpdated()  EventRegistry "Professions.TransactionUpdated" with the transaction
@@ -274,6 +275,7 @@ local function fake_professions_frame(opts)
     form.orderView = read_only("OrderView", orderView)
     rawset(ordersPage, "OrderView", form.orderView)
   end
+  ordersPage:Hide()   -- the Recipes tab is the one that opens
   form.ordersPage = read_only("OrdersPage", ordersPage)
   rawset(frame, "OrdersPage", form.ordersPage)
   form.craftingPage = recorded("CraftingPage", page)
@@ -313,6 +315,16 @@ local function fake_professions_frame(opts)
     form.craftingPage:Hide()
     local script = form.craftingPage:GetScript("OnHide")
     if script then script(form.craftingPage) end
+  end
+  function form.showOrdersPage()
+    form.raw(form.ordersPage):Show()
+    local script = form.ordersPage:GetScript("OnShow")
+    if script then script(form.ordersPage) end
+  end
+  function form.hideOrdersPage()
+    form.raw(form.ordersPage):Hide()
+    local script = form.ordersPage:GetScript("OnHide")
+    if script then script(form.ordersPage) end
   end
   function form.selectRecipe(info)
     form.recipeInfo = info

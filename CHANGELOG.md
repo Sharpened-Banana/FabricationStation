@@ -126,3 +126,27 @@ it has not yet been verified in the game client; see `docs/in-game-checklist.md`
       so costs and the reagents-or-concentration choice match what the game charges.
     - Reagent skill counts in whole points and leaves empty slots out, as the game does.
     - The math check no longer reports a difficulty on recipes that have no quality.
+    - Hovering the Reagents and Commission columns shows our tooltip, not Blizzard's box of the patron's reagents.
+    - An order for a recipe you have not learned keeps its red × even when a long item name leaves no room for more.
+    - An order whose patron reagents land above its minimum quality no longer reads as unreachable, or as needing
+      concentration.
+    - While Blizzard's Crafting Results window covers the profession panel, the panel's content moves below it and its
+      reagent table hides.
+    - The profession panel opens below where the Crafting Results window appears, so that window no longer covers it.
+      It is wider, can be dragged anywhere and has a resize grip. A lock button beside the grip keeps its size and
+      position in every session until you unlock it; right-click the grip for the default.
+    - The profession panel is compact: the profit breakdown and the extra lines fold into one row each (hover to read
+      them, click to keep them open), its extra buttons sit behind a More button, and its background is solid.
+    - Crafting results now appear in a list inside the profession panel, in place of Blizzard's window, so nothing opens
+      over the panel. Blizzard's window comes back if you turn this off in Settings.
+    - The results list shows a session profit, gain or loss: what you crafted would sell for now, plus the commissions
+      and reward items of orders you handed in, minus what the reagents cost. Settings > Crafting results can count
+      commissions only.
+    - The results list stays on screen on the Crafting Orders tab, where it replaces Blizzard's window too.
+    - The profession panel's text is a step larger, and its checkbox and buttons a little smaller.
+    - Finishing reagents no longer count as raising a recipe's difficulty, which made their quality, concentration and
+      "best optional" numbers wrong.
+    - The panel's live quality now counts a currency a reagent slot spends.
+    - Opening the Orders tab no longer logs an error in Diagnostics.
+    - The Crafts page's prediction for an order's craft now counts the patron's reagents, so a craft they lift above the
+      prediction no longer reads as a miss.

@@ -476,7 +476,8 @@ function Orders:ScoreInput(input, ctx)
   local function evaluate(useConcentration)
     if not (recipes and recipes.Evaluate) then return nil end
     return recipes:Evaluate(input.recipeID, ctx.charKey,
-      { targetQuality = target, providedReagents = provided, useConcentration = useConcentration })
+      { targetQuality = target, atLeastTarget = target ~= nil and true or nil, providedReagents = provided,
+        useConcentration = useConcentration })
   end
   local function short_of_target(result)
     return target ~= nil and ((result.flags or {}).unreachableTarget == true or (result.expectedQuality or 0) < target)
@@ -1370,7 +1371,7 @@ function Orders:OnFulfillClicked(orderID, _, _)
   end
   if type(input) ~= "table" or orderID == nil then return end
   local tip = input.tipAmount
-  local rewardsValue, rewards = self:ValueRewards(input.rewards, orderID)
+  local rewardsValue, rewards, rewardsUnpriced = self:ValueRewards(input.rewards, orderID)
   pending[orderID] = { at = now, fulfilled = {
     orderID = orderID,
     orderType = input.orderType,
@@ -1384,6 +1385,7 @@ function Orders:OnFulfillClicked(orderID, _, _)
     commission = type(tip) == "number" and tip - number_or(input.consortiumCut, 0) or nil,
     rewards = rewards,
     rewardsValue = rewardsValue,
+    rewardsUnpriced = rewardsUnpriced or nil,
     isRecraft = input.isRecraft == true or nil,   -- the Ledger records a recraft's commission without a cost
   } }
 end

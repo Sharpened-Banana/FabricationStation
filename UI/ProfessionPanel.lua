@@ -12,7 +12,20 @@ local L = ns.L
 -- Apply's (a click, and only while the crafting setting applyWritesBlizzardSlots is on): the same transaction calls
 -- Blizzard's own quality dialog makes.
 --
--- The panel shows while ProfessionsFrame and its CraftingPage (the Recipes tab) are both shown.
+-- The panel shows while ProfessionsFrame and its CraftingPage (the Recipes tab) are both shown. On the Crafting Orders
+-- tab it stays as the crafting results list alone, once there are results (see "Crafting results" below).
+--
+-- Blizzard's Crafting Results window (CraftingPage.CraftingOutputLog) opens over the top of the panel beside it and is
+-- not ours to move. While it covers the panel, the panel's content starts below it and gives up the reagent-per-quality table (Apply is not
+-- what you reach for mid-craft), so the numbers stay readable. It is read and post-hooked only.
+--
+-- Size and place: the grip drags the size, and dragging the panel moves it (settings.professionPanel = { width, height,
+-- x, y }, x and y from ProfessionsFrame's top right, so it comes along when that moves). A right-click on the grip goes
+-- back to the default: WIDTH wide, DEFAULT_HEIGHT tall, starting below where the results window opens (that window is
+-- hidden until a craft, but has its size), so it never covers the panel. A panel too short for the reagent table gives it
+-- up, as it does under the results window. The lock button beside the grip saves the size
+-- the panel has, hides the grip and stops the dragging, in every session (professionPanel.locked), until it is clicked
+-- again. Moved clear of the results window, the panel keeps its full layout.
 --
 -- Attachment: AttachIfReady() runs from ADDON_LOADED("Blizzard_Professions") and from OnEnable when the addon is
 -- already loaded; `attached` makes it register once. Every hook body runs in ns.FS:SafeCall("ProfessionPanel", ...),
@@ -20,6 +33,21 @@ local L = ns.L
 -- OnDisable hides the panel and unregisters the callbacks; the HookScript hooks cannot be removed, so they are
 -- installed once per session and do nothing while the module is off. Apply is off by default
 -- (Recipes.DEFAULTS.applyWritesBlizzardSlots) until the in-game taint check has passed; the panel says so.
+--
+-- Compact layout: the summary stays on the panel and the rest is one hover or click away. The profit breakdown and the
+-- provider lines fold into one row each (the tooltip lists them, a click keeps them open in every session,
+-- professionPanel.breakdownOpen / detailsOpen), and the provider actions live behind the More button beside Craft Next.
+-- What does not fit above the buttons folds for the moment, the reagent table first.
+--
+-- Crafting results: the CraftResults module replaces Blizzard's results window on this page, and its list fills the room
+-- between the fold rows and the buttons, newest on top, one row per craft (the mouse wheel scrolls, the tooltip spells a
+-- row out), under a session profit line (CraftResults:SessionProfit). Once there are results they outrank the reagent table. With that module off, Blizzard's window is back and
+-- the panel starts below it again, as described above.
+--
+-- On the orders page none of the recipe's numbers or buttons apply, so the panel (view.ordersView) is the list and its
+-- session profit only, with no grip or lock: the side panel's height, WIDTH wide, beside the side panel while that
+-- shows, else at ProfessionsFrame's edge. It does not use or change the saved size and place, and goes back to them on
+-- the Recipes page.
 --
 -- Display rules (same as the tabs): a nil profit is "no price" (never 0g); noPrice with a profit shows the profit and
 -- "some prices missing"; estimated results say "estimate"; a target quality the reagents cannot reach (the result
@@ -39,17 +67,25 @@ local TRANSACTION_UPDATED = "Professions.TransactionUpdated"
 local SOURCE = "ProfessionPanel"
 local REFRESH_KEY, REFRESH_DELAY = "professionPanel.refresh", 0.5
 
-local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 300, 10, 14, 22, 24
+local WIDTH, PAD, LINE, ROW, BUTTON_ROW = 340, 10, 16, 22, 24
+local BODY_FONT, HEADING_FONT = "GameFontHighlight", "GameFontNormal"
+local CONTROLS_SCALE = 0.9         -- the checkbox and buttons at the bottom, a little smaller than the panel's text
+local MIN_WIDTH, MAX_WIDTH, MIN_HEIGHT, MAX_HEIGHT, DEFAULT_HEIGHT = 300, 700, 300, 1200, 480
+local OWN_RESULTS_HEIGHT = 640     -- about the crafting window's height: the list needs the room, nothing opens over it
+local RESULT_ROW, RESULTS_HEADER, RESULTS_GAP_ABOVE, RESULT_ROWS_UNMEASURED = 18, 36, 8, 5   -- the header: title and total
 local PROVIDER_RIGHT_WIDTH = 120   -- the right-hand column of a provider line; longer texts go to the row tooltip
-local ACTION_BUTTON_WIDTH = 90     -- an action's button; its status line takes the rest of the row
+local ACTION_BUTTON_WIDTH = 160    -- an action's button (its label fits); its status line takes the rest of the row
+local PLUS_ICON, MINUS_ICON = "Interface\\Buttons\\UI-PlusButton-Up", "Interface\\Buttons\\UI-MinusButton-Up"
 local MAX_QUALITY_ROWS = 5
+local RESULTS_GAP, RESULTS_HEIGHT = 6, 290   -- below the results window; its height when it cannot be measured (Blizzard's)
 local SECONDS_PER_DAY = 86400
 local EM_DASH, TIMES = "\226\128\148", "\195\151"
 local READ_ONLY = L["Saved data is from a newer version of FabricationStation; the queue is read-only."]
 local TONES = { good = { 0.25, 1, 0.25 }, bad = { 1, 0.25, 0.25 }, warn = { 1, 0.82, 0 }, plain = { 1, 1, 1 },
   dim = { 0.62, 0.62, 0.62 } }
+M.BACKGROUND_COLOR = { 0.05, 0.05, 0.06, 1 }   -- solid: the world and name plates must not show through the text
 local BACKDROP = {
-  bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+  bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
   tile = true, tileSize = 16, edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 },
 }
 
@@ -66,7 +102,7 @@ M.APPLY_REFUSED = {
 
 local view           -- built frames (once per session), nil before the first attach
 local attached       -- the callbacks are registered (reset by OnDisable)
-local hooked         -- the ProfessionsFrame and CraftingPage OnShow/OnHide hooks are installed (once per session)
+local hooked         -- the OnShow/OnHide hooks on ProfessionsFrame and its pages are installed (once per session)
 local attachedForm   -- the schematic form the AllocationsModified callback is registered on
 local recipeID       -- the selected recipe
 local result         -- Recipes:Evaluate for it (the optimiser)
@@ -449,8 +485,8 @@ local function line_at(lines, i)
   if line then return line end
   local parent = lines.frame
   line = {
-    left = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"),
-    right = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"),
+    left = parent:CreateFontString(nil, "OVERLAY", BODY_FONT),
+    right = parent:CreateFontString(nil, "OVERLAY", BODY_FONT),
   }
   line.left:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -(i - 1) * LINE)
   line.left:SetJustifyH("LEFT")
@@ -486,8 +522,8 @@ local function provider_row_at(section, i)
   frame:EnableMouse(true)
   row = {
     frame = frame,
-    left = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"),
-    right = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"),
+    left = frame:CreateFontString(nil, "OVERLAY", BODY_FONT),
+    right = frame:CreateFontString(nil, "OVERLAY", BODY_FONT),
   }
   row.right:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
   row.right:SetWidth(PROVIDER_RIGHT_WIDTH)
@@ -514,6 +550,11 @@ end
 
 local render_actions   -- below
 
+local sizeSettings = ns.Util.SettingsAccessor("professionPanel")
+local function size_settings()
+  return sizeSettings({}, function(stored) return stored end)
+end
+
 local function render_provider_lines()
   local section = view and view.providerLines
   if not section then return end
@@ -531,8 +572,12 @@ local function render_provider_lines()
     section.pool[i].frame:Hide(); section.pool[i].left:Hide(); section.pool[i].right:Hide()
   end
   section.count = #lines
-  section.frame:SetHeight(math.max(1, #lines * LINE))
-  if #lines > 0 then section.frame:Show() else section.frame:Hide() end
+  view.detailsLines = lines
+  view.detailsToggle.right:SetText(tostring(#lines))
+  if #lines > 0 then view.detailsToggle:Show() else view.detailsToggle:Hide() end
+  local open = #lines > 0 and view.detailsShown == true
+  section.frame:SetHeight(open and #lines * LINE or 1)
+  if open then section.frame:Show() else section.frame:Hide() end
 end
 
 -- A click on an action's button: runs the spec it was drawn from when that spec was enabled, then redraws the section.
@@ -554,7 +599,7 @@ local function action_row_at(section, i)
   b:SetSize(ACTION_BUTTON_WIDTH, ROW - 2)
   b:SetPoint("LEFT", frame, "LEFT", 0, 0)
   b:SetMotionScriptsWhileDisabled(true)
-  row = { frame = frame, button = b, status = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall") }
+  row = { frame = frame, button = b, status = frame:CreateFontString(nil, "OVERLAY", BODY_FONT) }
   row.status:SetPoint("LEFT", b, "RIGHT", 6, 0)
   row.status:SetPoint("RIGHT", frame, "RIGHT", 0, 0)
   row.status:SetJustifyH("LEFT")
@@ -592,17 +637,183 @@ function render_actions()
   end
   section.count = #specs
   section.frame:SetHeight(math.max(1, #specs * ROW))
-  if #specs > 0 then section.frame:Show() else section.frame:Hide() end
+  view.morePopup:SetHeight(math.max(1, #specs * ROW) + 12)
+  if #specs > 0 then
+    section.frame:Show(); view.moreButton:Show()
+  else
+    section.frame:Hide(); view.moreButton:Hide(); view.morePopup:Hide()
+  end
+end
+
+local apply_size, show_lock   -- below
+-- Rough heights of the panel's fixed parts, for fold_plan.
+local TOP_BLOCK, TABLE_HEADER, FOLD_ROW, BOTTOM_BLOCK = 118, 38, 22, 133
+
+-- The results window's CraftingPage field, or nil on a client without it.
+local function results_log()
+  local frame = ProfessionsFrame
+  local page = type(frame) == "table" and frame.CraftingPage or nil
+  local log = type(page) == "table" and page.CraftingOutputLog or nil
+  return type(log) == "table" and log or nil
+end
+
+-- A frame's getter as a number, or nil (only getters are called on Blizzard's window).
+local function read_edge(frame, method)
+  if type(frame[method]) ~= "function" then return nil end
+  local ok, value = pcall(frame[method], frame)
+  return ok and type(value) == "number" and value or nil
+end
+
+-- CraftResults is running, so Blizzard's results window does not open on this page.
+local function own_results()
+  local results = module("CraftResults")
+  return results ~= nil and results:IsEnabled()
+end
+
+local function results_count()
+  return own_results() and #module("CraftResults"):GetEntries() or 0
+end
+
+-- The default panel's offset from ProfessionsFrame's top: just below Blizzard's results window, open or not.
+local function below_results()
+  local log = results_log()
+  local height = log and read_edge(log, "GetHeight") or nil
+  if height and height > 0 then
+    local scale = (read_edge(log, "GetEffectiveScale") or 1) / (read_edge(view and view.frame or log, "GetEffectiveScale") or 1)
+    return -(height * scale + RESULTS_GAP)
+  end
+  return -(RESULTS_HEIGHT + RESULTS_GAP)
+end
+
+-- How far below the panel's top the results window ends, in the panel's units; 0 while it is closed.
+local function results_clearance()
+  if view.ordersView then return 0 end   -- that window is on the Recipes page
+  local log = results_log()
+  if not (log and type(log.IsShown) == "function" and log:IsShown()) then return 0 end
+  local top, bottom = read_edge(view.frame, "GetTop"), read_edge(log, "GetBottom")
+  if not (top and bottom) then return RESULTS_HEIGHT + RESULTS_GAP end
+  local scale = (read_edge(log, "GetEffectiveScale") or 1) / (read_edge(view.frame, "GetEffectiveScale") or 1)
+  -- Moved clear of the window (beside it or below it), there is nothing to get out from under.
+  local left, right = read_edge(view.frame, "GetLeft"), read_edge(view.frame, "GetRight")
+  local logLeft, logRight = read_edge(log, "GetLeft"), read_edge(log, "GetRight")
+  if left and right and logLeft and logRight and (logRight * scale <= left or logLeft * scale >= right) then return 0 end
+  if top <= bottom * scale then return 0 end
+  return top - bottom * scale + RESULTS_GAP
+end
+
+-- Starts the content below the results window while it covers the panel; returns how far.
+local function place_content()
+  local clearance = results_clearance()
+  view.title:ClearAllPoints()
+  view.title:SetPoint("TOPLEFT", view.frame, "TOPLEFT", PAD, -(PAD + clearance))
+  view.title:SetPoint("TOPRIGHT", view.frame, "TOPRIGHT", -PAD, -(PAD + clearance))
+  return clearance
+end
+
+-- What to show of the optional parts: what was left open, while it fits above the buttons, then the reagent table (never
+-- under the results window). A height that cannot be read fits everything.
+local function fold_plan(clearance)
+  local saved = size_settings()
+  local details = view.providerLines.count or 0
+  local showBreakdown, showDetails = saved.breakdownOpen == true, saved.detailsOpen == true and details > 0
+  local showTable = clearance == 0
+  local height = read_edge(view.frame, "GetHeight")
+  if not height then return showTable, showBreakdown, showDetails, RESULT_ROWS_UNMEASURED end
+  local room = height - clearance - TOP_BLOCK - FOLD_ROW - (details > 0 and FOLD_ROW or 0) - BOTTOM_BLOCK
+  local function fits(cost)
+    if room < cost then return false end
+    room = room - cost
+    return true
+  end
+  showBreakdown = showBreakdown and fits(#model.breakdownRows * LINE + 4)
+  showDetails = showDetails and fits(details * LINE + 2)
+  -- Room for a useful list goes first; whatever the table leaves is added to it.
+  local listMinimum = RESULTS_GAP_ABOVE + RESULTS_HEADER + 2 * RESULT_ROW
+  local hasList = results_count() > 0 and fits(listMinimum)
+  showTable = showTable and fits(TABLE_HEADER + #model.perQualityRows * (ROW + 2))
+  local rows = hasList and math.floor((room + listMinimum - RESULTS_GAP_ABOVE - RESULTS_HEADER) / RESULT_ROW) or 0
+  return showTable, showBreakdown, showDetails, rows
+end
+
+-- The rows of the list from the scroll position, reusing the pool.
+local function draw_results()
+  local section = view.results
+  local entries = own_results() and module("CraftResults"):GetEntries() or {}
+  section.offset = math.max(0, math.min(section.offset, #entries - section.maxRows))
+  local results = module("CraftResults")
+  for i = 1, math.max(section.maxRows, #section.rows) do
+    local row = section.rows[i]
+    local entry = i <= section.maxRows and entries[i + section.offset] or nil
+    if entry then
+      row = row or section.new_row(i)
+      row.model = results.RowModel(entry)
+      row.icon:SetTexture(row.model.icon)
+      row.text:SetText(row.model.text)
+      row.extra:SetText(row.model.extra)
+      row:Show()
+    elseif row then
+      row.model = nil
+      row:Hide()
+    end
+  end
+end
+
+-- The session profit line: a loss in red, a gain in green, unknown as a word or a dash and never 0.
+local function render_session_profit()
+  local section, total = view.results, module("CraftResults"):SessionProfit()
+  section.missing = total.missing
+  section.totalLabel:SetText(total.missing > 0 and L["Session profit (some prices missing)"] or L["Session profit"])
+  if total.profit then
+    section.totalValue:SetText(ns.UI.FormatMoney(total.profit))
+    set_tone(section.totalValue, total.profit > 0 and "good" or total.profit < 0 and "bad" or "plain")
+  else
+    section.totalValue:SetText(total.missing > 0 and L["no price"] or EM_DASH)
+    set_tone(section.totalValue, "dim")
+  end
+end
+
+-- Shows up to maxRows of the list below `tail`; nothing while there are no results or no room.
+local function render_results(tail, maxRows)
+  local section = view.results
+  local count = results_count()
+  if count == 0 or maxRows < 1 then
+    section.frame:Hide()
+    return
+  end
+  section.maxRows = maxRows
+  section.frame:ClearAllPoints()
+  section.frame:SetPoint("TOPLEFT", tail, "BOTTOMLEFT", 0, -RESULTS_GAP_ABOVE)
+  section.frame:SetPoint("RIGHT", view.frame, "RIGHT", -PAD, 0)
+  section.frame:SetHeight(RESULTS_HEADER + math.min(count, maxRows) * RESULT_ROW)
+  section.header:SetText(L["Crafting results (%d)"]:format(count))
+  render_session_profit()
+  section.frame:Show()
+  draw_results()
+end
+
+-- The list's rows while no recipe's numbers are shown, in what is left below the title (and the buttons, if shown).
+local function rows_without_recipe()
+  local height = read_edge(view.frame, "GetHeight")
+  if not height or height <= 0 then return RESULT_ROWS_UNMEASURED end
+  local bottom = view.ordersView and 0 or BOTTOM_BLOCK
+  return math.floor((height - 40 - bottom - RESULTS_GAP_ABOVE - RESULTS_HEADER) / RESULT_ROW)
 end
 
 local function render()
   if not view then return end
   view.applyEnabled = apply_allowed()
+  local clearance = place_content()
+  if view.ordersView then
+    view.title:SetText("FabricationStation")
+    render_results(view.title, rows_without_recipe())
+    return
+  end
   if not recipeID then
     model = nil
     view.title:SetText("FabricationStation")
     view.empty:SetText(L["Select a recipe."])
     view.empty:Show(); view.body:Hide()
+    render_results(view.empty, rows_without_recipe())
     return
   end
   view.title:SetText(recipe_name(recipeID))
@@ -610,9 +821,14 @@ local function render()
     model = nil
     view.empty:SetText(L["No crafting data for this recipe yet."])
     view.empty:Show(); view.body:Hide()
+    render_results(view.empty, rows_without_recipe())
     return
   end
   model = M.BuildModel(result, live)
+  render_provider_lines()   -- fold_plan needs their count
+  local showTable, showBreakdown, showDetails, resultRows = fold_plan(clearance)
+  local condensed = not showTable
+  view.detailsShown = showDetails
   view.empty:Hide(); view.body:Show()
   view.quality:SetText(model.qualityText)
   view.bar:SetValue(model.barFill)
@@ -621,14 +837,16 @@ local function render()
   view.flags:SetText(model.flagsText)
   set_tone(view.flags, model.flagsTone)
   view.qualityHeader:SetText(model.qualityHeaderText)
+  if condensed then view.qualityHeader:Hide() else view.qualityHeader:Show() end
   if view.applyEnabled then view.applyNote:SetText(""); view.applyNote:Hide()
   else view.applyNote:SetText(M.APPLY_OFF_NOTE); view.applyNote:Show() end
+  if condensed then view.applyNote:Hide() end
 
-  local previous = view.applyNote
+  local previous = condensed and view.flags or view.applyNote
   for i = 1, MAX_QUALITY_ROWS do
     local row, data = view.qualityRows[i], model.perQualityRows[i]
     row.data = data
-    if data then
+    if data and not condensed then
       row.label:SetText(L["Q%d"]:format(math.floor(data.quality)))
       row.cost:SetText(data.costText)
       set_tone(row.cost, data.costTone)
@@ -641,10 +859,30 @@ local function render()
       row:Hide()
     end
   end
-  view.breakdownHeader:ClearAllPoints()
-  view.breakdownHeader:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -6)
+  view.breakdownToggle:ClearAllPoints()
+  view.breakdownToggle:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 0, -6)
+  view.breakdownToggle:SetPoint("RIGHT", view.body, "RIGHT", 0, 0)
+  view.breakdownToggle.icon:SetTexture(showBreakdown and MINUS_ICON or PLUS_ICON)
+  for _, row in ipairs(model.breakdownRows) do
+    if row.label == L["Profit"] then
+      view.breakdownToggle.right:SetText(row.value)
+      set_tone(view.breakdownToggle.right, row.tone)
+    end
+  end
   set_lines(view.lines, model.breakdownRows)
+  if showBreakdown then
+    view.lines.frame:Show()
+  else
+    view.lines.frame:SetHeight(1)
+    view.lines.frame:Hide()
+  end
+  view.detailsToggle.icon:SetTexture(showDetails and MINUS_ICON or PLUS_ICON)
   render_provider_lines()
+  local tail = view.breakdownToggle
+  if view.providerLines.frame:IsShown() then tail = view.providerLines.frame
+  elseif view.detailsToggle:IsShown() then tail = view.detailsToggle
+  elseif view.lines.frame:IsShown() then tail = view.lines.frame end
+  render_results(tail, resultRows)
 end
 
 ---------------------------------------------------------------------------
@@ -665,10 +903,10 @@ local function update_live()
   if not t or not t.CreateCraftingReagentInfoTbl then return end
   if transaction_recipe(schematic_form(), t) ~= recipeID then return end
   local recipes = module("Recipes")
-  local allocation, optionalItemIDs = recipes:FromCraftingReagentInfo(recipeID, t:CreateCraftingReagentInfoTbl())
+  local allocation, optionalItemIDs, currencies = recipes:FromCraftingReagentInfo(recipeID, t:CreateCraftingReagentInfoTbl())
   local concentrating = t.IsApplyingConcentration and t:IsApplyingConcentration() and true or false
   local scanner = module("Scanner")
-  local info = scanner and scanner:GetLiveOperationInfo(recipeID, allocation, concentrating, optionalItemIDs)
+  local info = scanner and scanner:GetLiveOperationInfo(recipeID, allocation, concentrating, optionalItemIDs, currencies)
   local schematic = scanner and scanner:GetSchematic(recipeID)
   live = M.GameHeader(info, schematic and schematic.maxQuality, concentrating)
   if live then return end
@@ -714,22 +952,70 @@ function Panel:RefreshLines()
   render_provider_lines()
 end
 
--- Shows the panel while ProfessionsFrame and its CraftingPage are shown; picks up the recipe the form already shows.
+local function recipes_page_shown()
+  local page = ProfessionsFrame and ProfessionsFrame.CraftingPage
+  return type(page) == "table" and page:IsShown()
+end
+
+-- ProfessionsFrame.OrdersPage, or nil on a client without it.
+local function orders_page()
+  local page = ProfessionsFrame and ProfessionsFrame.OrdersPage
+  return type(page) == "table" and page or nil
+end
+
+-- The panel as the list alone, or back as the whole panel.
+local function set_orders_view(on)
+  if view.ordersView == on then return end
+  view.ordersView = on
+  if on then
+    view.morePopup:Hide()
+    for _, part in ipairs({ view.body, view.empty, view.controls, view.status, view.checkLine, view.resizeGrip,
+      view.lockButton }) do part:Hide() end
+  else
+    view.controls:Show()
+    view.status:Show()
+    view.lockButton:Show()
+    show_lock(view)
+    if (view.checkLine:GetText() or "") ~= "" then view.checkLine:Show() end
+  end
+end
+
+-- Beside the side panel while it holds the place at ProfessionsFrame's edge (only over the order list).
+local function place_on_orders_page(frame)
+  local browse = orders_page().BrowseFrame
+  local sideModule = module("OrdersSidePanel")
+  local besideSide = type(browse) == "table" and browse:IsShown() and sideModule and sideModule:IsEnabled()
+  local anchor = besideSide and _G.FabricationStationOrdersPanel or ProfessionsFrame
+  frame:ClearAllPoints()
+  frame:SetPoint("TOPLEFT", anchor, "TOPRIGHT", 2, 0)
+  frame:SetPoint("BOTTOMLEFT", anchor, "BOTTOMRIGHT", 2, 0)
+  frame:SetWidth(WIDTH)
+end
+
+-- Shows the panel while ProfessionsFrame and its CraftingPage are shown, picking up the recipe the form already shows,
+-- and the list alone while the orders page is shown and there are results.
 local function sync_visibility()
   if not view then return end
-  local frame = ProfessionsFrame
-  local page = frame and frame.CraftingPage
-  if not (frame and frame:IsShown() and type(page) == "table" and page:IsShown()) then
+  if not (ProfessionsFrame and ProfessionsFrame:IsShown()) then
     view.frame:Hide()
-    return
-  end
-  view.frame:Show()
-  local form = schematic_form()
-  local info = form and form.GetRecipeInfo and form:GetRecipeInfo()
-  if type(info) == "table" and type(info.recipeID) == "number" and info.recipeID ~= recipeID then
-    select_recipe(info)
+  elseif recipes_page_shown() then
+    set_orders_view(false)
+    apply_size(view.frame)   -- the results window has its real size by now
+    view.frame:Show()
+    local form = schematic_form()
+    local info = form and form.GetRecipeInfo and form:GetRecipeInfo()
+    if type(info) == "table" and type(info.recipeID) == "number" and info.recipeID ~= recipeID then
+      select_recipe(info)
+    else
+      evaluate()
+    end
+  elseif orders_page() and orders_page():IsShown() and results_count() > 0 then
+    set_orders_view(true)
+    place_on_orders_page(view.frame)
+    view.frame:Show()
+    render()
   else
-    evaluate()
+    view.frame:Hide()
   end
 end
 
@@ -757,10 +1043,19 @@ local on_allocations_changed = guarded(function()
   update_live()
   render()
 end)
-local on_frame_show = guarded(sync_visibility)
-local on_frame_hide = guarded(function() if view then view.frame:Hide() end end)
+-- A page can show before the one it replaces hides, so every change asks again what is shown.
+local on_frame_change = guarded(sync_visibility)
+local on_results_window = guarded(function() if view then render() end end)
+local on_results_changed = guarded(function()
+  if not view then return end
+  view.results.offset = 0
+  if recipes_page_shown() then render() else sync_visibility() end
+end)
+local on_session_profit = guarded(function()
+  if shown() and view.results.frame:IsShown() then render_session_profit() end
+end)
 local on_data_changed = guarded(function()
-  if recipeID and shown() then
+  if recipeID and shown() and not view.ordersView then
     ns.FS:Debounce(REFRESH_KEY, REFRESH_DELAY, guarded(evaluate))
   end
 end)
@@ -834,7 +1129,7 @@ function Panel:SetCheckLine(text, tone)
   text = text or ""
   view.checkLine:SetText(text)
   set_tone(view.checkLine, tone)
-  if text == "" then view.checkLine:Hide() else view.checkLine:Show() end
+  if text == "" or view.ordersView then view.checkLine:Hide() else view.checkLine:Show() end
 end
 
 local function read_only()
@@ -904,7 +1199,7 @@ end
 ---------------------------------------------------------------------------
 
 local function text(parent, font, justify)
-  local fs = parent:CreateFontString(nil, "OVERLAY", font or "GameFontHighlightSmall")
+  local fs = parent:CreateFontString(nil, "OVERLAY", font or BODY_FONT)
   fs:SetJustifyH(justify or "LEFT")
   return fs
 end
@@ -932,7 +1227,7 @@ local function create_quality_row(parent)
   row.apply:SetMotionScriptsWhileDisabled(true)
   row.profit = text(row, nil, "RIGHT")
   row.profit:SetPoint("RIGHT", row.apply, "LEFT", -6, 0)
-  row.profit:SetWidth(90)
+  row.profit:SetWidth(110)
   row.cost = text(row, nil, "RIGHT")
   row.cost:SetPoint("RIGHT", row.profit, "LEFT", -6, 0)
   row.cost:SetPoint("LEFT", row.label, "RIGHT", 4, 0)
@@ -963,6 +1258,37 @@ local function create_quality_row(parent)
   return row
 end
 
+-- One row of the compact layout: [+] label ... value; the tooltip lists what it folds, a click keeps it open.
+local function fold_row(parent, label, settingKey, tooltip_rows)
+  local row = CreateFrame("Button", nil, parent)
+  row:SetHeight(LINE)
+  row.icon = row:CreateTexture(nil, "ARTWORK")
+  row.icon:SetSize(14, 14)
+  row.icon:SetPoint("LEFT", row, "LEFT", 0, 0)
+  row.icon:SetTexture(PLUS_ICON)
+  row.label = row:CreateFontString(nil, "OVERLAY", HEADING_FONT)
+  row.label:SetPoint("LEFT", row.icon, "RIGHT", 4, 0)
+  row.label:SetText(label)
+  row.right = row:CreateFontString(nil, "OVERLAY", BODY_FONT)
+  row.right:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+  row.right:SetJustifyH("RIGHT")
+  row:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
+    local saved = size_settings()
+    saved[settingKey] = saved[settingKey] ~= true and true or nil
+    render()
+  end))
+  row:SetScript("OnEnter", function(self)
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(label)
+    for _, line in ipairs(tooltip_rows()) do GameTooltip:AddDoubleLine(line[1], line[2], 1, 1, 1, 1, 1, 1) end
+    GameTooltip:AddLine(L["Click to keep this open or fold it."], 0.62, 0.62, 0.62, true)
+    GameTooltip:Show()
+  end)
+  row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+  return row
+end
+
 local function build_controls(frame, created)
   created.checkLine = text(frame)
   created.checkLine:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", PAD, PAD)
@@ -977,8 +1303,15 @@ local function build_controls(frame, created)
   created.status:SetHeight(LINE * 2)
   created.status:SetJustifyV("TOP")
 
-  created.craftButton = button(frame, L["Craft Next"], 120, BUTTON_ROW - 2)
-  created.craftButton:SetPoint("BOTTOMLEFT", created.status, "TOPLEFT", 0, 4)
+  -- One scaled parent, so the buttons, their text and the checkbox's label shrink together.
+  local controls = CreateFrame("Frame", nil, frame)
+  controls:SetSize(1, 1)
+  controls:SetScale(CONTROLS_SCALE)
+  controls:SetPoint("BOTTOMLEFT", created.status, "TOPLEFT", 0, 4)
+  created.controls = controls
+
+  created.craftButton = button(controls, L["Craft Next"], 120, BUTTON_ROW - 2)
+  created.craftButton:SetPoint("BOTTOMLEFT", controls, "BOTTOMLEFT", 0, 0)
   -- The only reference to the protected action: one craft per click, nothing else runs it.
   created.craftButton:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
     if read_only() then return end
@@ -987,11 +1320,32 @@ local function build_controls(frame, created)
     show_craft_result(r)
   end))
 
-  created.addButton = button(frame, L["Add to Queue"], 110, BUTTON_ROW - 2)
+  -- The provider actions, behind one button: they need more room than the row of buttons has.
+  created.moreButton = button(controls, L["More"], 70, BUTTON_ROW - 2)
+  created.moreButton:SetPoint("LEFT", created.craftButton, "RIGHT", 6, 0)
+  created.moreButton:Hide()
+  created.morePopup = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+  created.morePopup:SetPoint("BOTTOMLEFT", created.craftButton, "TOPLEFT", -2, 4)
+  created.morePopup:SetPoint("RIGHT", frame, "RIGHT", -PAD + 2, 0)
+  created.morePopup:SetFrameLevel((frame:GetFrameLevel() or 0) + 20)
+  created.morePopup:SetBackdrop(BACKDROP)
+  created.morePopup:SetBackdropColor(unpack(M.BACKGROUND_COLOR))
+  created.morePopup:EnableMouse(true)
+  created.morePopup:Hide()
+  created.moreButton:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
+    if created.morePopup:IsShown() then created.morePopup:Hide() else created.morePopup:Show() end
+  end))
+  -- Buttons other modules add through RegisterLineAction (Guild's "Ask guild"); hidden while none applies.
+  created.actions = { frame = CreateFrame("Frame", nil, created.morePopup), pool = {}, count = 0 }
+  created.actions.frame:SetPoint("TOPLEFT", created.morePopup, "TOPLEFT", 6, -6)
+  created.actions.frame:SetPoint("RIGHT", created.morePopup, "RIGHT", -6, 0)
+  created.actions.frame:Hide()
+
+  created.addButton = button(controls, L["Add to Queue"], 110, BUTTON_ROW - 2)
   created.addButton:SetPoint("BOTTOMLEFT", created.craftButton, "TOPLEFT", 0, 4)
   created.addButton:SetScript("OnClick", ns.FS:Wrap(SOURCE, add_to_queue))
 
-  created.quantityBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+  created.quantityBox = CreateFrame("EditBox", nil, controls, "InputBoxTemplate")
   created.quantityBox:SetSize(34, 20)
   created.quantityBox:SetPoint("LEFT", created.addButton, "RIGHT", 10, 0)
   created.quantityBox:SetAutoFocus(false)
@@ -1001,20 +1355,94 @@ local function build_controls(frame, created)
   created.quantityBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
   created.quantityBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
 
-  created.targetButton = button(frame, M.TargetLabel(target), 100, BUTTON_ROW - 2)
+  created.targetButton = button(controls, M.TargetLabel(target), 100, BUTTON_ROW - 2)
   created.targetButton:SetPoint("LEFT", created.quantityBox, "RIGHT", 6, 0)
   created.targetButton:SetScript("OnClick", ns.FS:Wrap(SOURCE, cycle_target))
 
-  created.concentrationCheck = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
+  created.concentrationCheck = CreateFrame("CheckButton", nil, controls, "UICheckButtonTemplate")
   created.concentrationCheck:SetSize(BUTTON_ROW, BUTTON_ROW)
   created.concentrationCheck:SetPoint("BOTTOMLEFT", created.addButton, "TOPLEFT", -4, 2)
   created.concentrationCheck:SetScript("OnClick", ns.FS:Wrap(SOURCE, function(self)
     useConcentration = self:GetChecked() and true or false
     evaluate()
   end))
-  local checkLabel = text(frame)
+  local checkLabel = text(controls)
   checkLabel:SetPoint("LEFT", created.concentrationCheck, "RIGHT", 2, 0)
   checkLabel:SetText(L["Use concentration"])
+end
+
+local function result_row(section, index)
+  local row = CreateFrame("Button", nil, section.frame)
+  row:SetHeight(RESULT_ROW)
+  row:SetPoint("TOPLEFT", section.frame, "TOPLEFT", 0, -(RESULTS_HEADER + (index - 1) * RESULT_ROW))
+  row:SetPoint("RIGHT", section.frame, "RIGHT", 0, 0)
+  row.icon = row:CreateTexture(nil, "ARTWORK")
+  row.icon:SetSize(16, 16)
+  row.icon:SetPoint("LEFT", row, "LEFT", 0, 0)
+  row.extra = text(row, nil, "RIGHT")
+  row.extra:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+  row.text = text(row)
+  row.text:SetPoint("LEFT", row.icon, "RIGHT", 4, 0)
+  row.text:SetPoint("RIGHT", row.extra, "LEFT", -6, 0)
+  row.text:SetWordWrap(false)
+  row:SetScript("OnEnter", function(self)
+    if not (GameTooltip and self.model) then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    if self.model.hyperlink then GameTooltip:SetHyperlink(self.model.hyperlink)
+    else GameTooltip:SetText(self.model.text) end
+    for _, line in ipairs(self.model.tooltip) do GameTooltip:AddLine(line, 1, 1, 1, true) end
+    GameTooltip:Show()
+  end)
+  row:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+  section.rows[index] = row
+  return row
+end
+
+local function build_results(frame, created)
+  local section = { frame = CreateFrame("Frame", nil, frame), rows = {}, offset = 0, maxRows = 0 }
+  section.new_row = function(index) return result_row(section, index) end
+  section.frame:Hide()
+  section.header = text(section.frame, HEADING_FONT)
+  section.header:SetPoint("TOPLEFT", section.frame, "TOPLEFT", 0, 0)
+  section.clear = CreateFrame("Button", nil, section.frame)
+  section.clear:SetSize(50, 16)
+  section.clear:SetPoint("TOPRIGHT", section.frame, "TOPRIGHT", 0, 0)
+  local clearLabel = text(section.clear, HEADING_FONT, "RIGHT")
+  clearLabel:SetPoint("RIGHT", section.clear, "RIGHT", 0, 0)
+  clearLabel:SetText(L["Clear"])
+  section.clear:SetScript("OnClick", ns.FS:Wrap(SOURCE, function()
+    local results = module("CraftResults")
+    if results then results:Clear() end
+  end))
+  section.total = CreateFrame("Button", nil, section.frame)
+  section.total:SetHeight(LINE)
+  section.total:SetPoint("TOPLEFT", section.frame, "TOPLEFT", 0, -18)
+  section.total:SetPoint("RIGHT", section.frame, "RIGHT", 0, 0)
+  section.totalValue = text(section.total, nil, "RIGHT")
+  section.totalValue:SetPoint("RIGHT", section.total, "RIGHT", 0, 0)
+  section.totalLabel = text(section.total)
+  section.totalLabel:SetPoint("LEFT", section.total, "LEFT", 0, 0)
+  section.total:SetScript("OnEnter", function(self)
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(L["Session profit"])
+    GameTooltip:AddLine(module("CraftResults"):CountsOrderRewards()
+      and L["What the items you crafted would sell for now after the auction cut, plus the commissions and reward items of orders you handed in, minus what the reagents cost. Reward items count at the value the Orders tab gives them, not as gold received. It counts from when you logged in or last cleared the list."]
+      or L["What the items you crafted would sell for now after the auction cut, plus the commissions of orders you handed in, minus what the reagents cost. An order's reward items are not counted. It counts from when you logged in or last cleared the list."], 1, 1, 1, true)
+    local missing = section.missing or 0
+    if missing > 0 then
+      GameTooltip:AddLine((missing == 1 and L["%d craft has no price or only part of its cost."]
+        or L["%d crafts have no price or only part of their cost."]):format(missing), 1, 0.82, 0, true)
+    end
+    GameTooltip:Show()
+  end)
+  section.total:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+  section.frame:EnableMouseWheel(true)
+  section.frame:SetScript("OnMouseWheel", ns.FS:Wrap(SOURCE, function(_, delta)
+    section.offset = section.offset - delta
+    draw_results()
+  end))
+  created.results = section
 end
 
 local function build_body(frame, created)
@@ -1046,7 +1474,7 @@ local function build_body(frame, created)
   created.flags = text(body)
   stack(created.flags, created.concentration, 2)
 
-  created.qualityHeader = text(body, "GameFontNormalSmall")
+  created.qualityHeader = text(body, HEADING_FONT)
   stack(created.qualityHeader, created.flags, 8)
   created.qualityHeader:SetText(L["Cheapest reagents per quality"])
   created.applyNote = text(body)
@@ -1062,30 +1490,158 @@ local function build_body(frame, created)
     previous = row
   end
 
-  created.breakdownHeader = text(body, "GameFontNormalSmall")
-  created.breakdownHeader:SetText(L["Profit per craft"])
+  created.breakdownToggle = fold_row(body, L["Profit per craft"], "breakdownOpen", function()
+    local out = {}
+    for i, row in ipairs(model and model.breakdownRows or {}) do out[i] = { row.label, row.value } end
+    return out
+  end)
   created.lines = { frame = CreateFrame("Frame", nil, body), pool = {} }
-  stack(created.lines.frame, created.breakdownHeader, 4)
+  stack(created.lines.frame, created.breakdownToggle, 4)
   created.lines.frame:SetPoint("RIGHT", body, "RIGHT", 0, 0)
-  -- Rows other modules add through RegisterLineProvider; hidden while no provider has lines.
+  -- Rows other modules add through RegisterLineProvider, folded behind their own row; hidden while no provider has lines.
+  created.detailsToggle = fold_row(body, L["More details"], "detailsOpen", function()
+    return created.detailsLines or {}
+  end)
+  stack(created.detailsToggle, created.lines.frame, 6)
+  created.detailsToggle:Hide()
   created.providerLines = { frame = CreateFrame("Frame", nil, body), pool = {}, count = 0 }
-  stack(created.providerLines.frame, created.lines.frame, 6)
+  stack(created.providerLines.frame, created.detailsToggle, 2)
   created.providerLines.frame:SetPoint("RIGHT", body, "RIGHT", 0, 0)
   created.providerLines.frame:Hide()
-  -- Buttons other modules add through RegisterLineAction (Guild's "Ask guild"); hidden while none applies.
-  created.actions = { frame = CreateFrame("Frame", nil, body), pool = {}, count = 0 }
-  stack(created.actions.frame, created.providerLines.frame, 4)
-  created.actions.frame:SetPoint("RIGHT", body, "RIGHT", 0, 0)
-  created.actions.frame:Hide()
+end
+
+local function in_range(value, low, high)
+  if type(value) ~= "number" then return nil end
+  return math.max(low, math.min(high, value))
+end
+
+-- Attaches the panel to ProfessionsFrame at the saved size (also after a drag: StartSizing re-anchors the frame).
+function apply_size(frame)
+  local saved = size_settings()
+  local height = in_range(saved.height, MIN_HEIGHT, MAX_HEIGHT)
+  local moved = type(saved.x) == "number" and type(saved.y) == "number"
+  local own = own_results()
+  frame:ClearAllPoints()
+  frame:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", moved and saved.x or 2,
+    moved and saved.y or (own and 0 or below_results()))
+  frame:SetWidth(in_range(saved.width, MIN_WIDTH, MAX_WIDTH) or WIDTH)
+  frame:SetHeight(height or (own and OWN_RESULTS_HEIGHT or DEFAULT_HEIGHT))
+end
+
+local function save_current_size(frame, saved)
+  saved.width = math.floor(frame:GetWidth() + 0.5)
+  saved.height = math.floor(frame:GetHeight() + 0.5)
+end
+
+-- Where a drag left the panel, from ProfessionsFrame's top right. Edges that cannot be read leave the saved place.
+local function on_drag_stopped(frame)
+  if view.ordersView then return end
+  frame:StopMovingOrSizing()
+  local saved = size_settings()
+  local left, top = read_edge(frame, "GetLeft"), read_edge(frame, "GetTop")
+  local right, frameTop = read_edge(ProfessionsFrame, "GetRight"), read_edge(ProfessionsFrame, "GetTop")
+  if saved.locked ~= true and left and top and right and frameTop then
+    local scale = (read_edge(ProfessionsFrame, "GetEffectiveScale") or 1) / (read_edge(frame, "GetEffectiveScale") or 1)
+    saved.x = math.floor(left - right * scale + 0.5)
+    saved.y = math.floor(top - frameTop * scale + 0.5)
+    save_current_size(frame, saved)
+  end
+  apply_size(frame)
+  render()   -- it may have moved out from under the results window, or under it
+end
+
+-- The template's own mouse-up handler ends the drag; this hook runs after it.
+local function on_grip_released(frame, mouseButton)
+  local saved = size_settings()
+  if saved.locked == true then
+    apply_size(frame)
+    return
+  end
+  if mouseButton == "RightButton" then
+    saved.width, saved.height, saved.x, saved.y = nil, nil, nil, nil
+  else
+    save_current_size(frame, saved)
+  end
+  apply_size(frame)
+  render()
+end
+
+-- Shows what the saved lock says: the grip only while unlocked, and the lock's icon.
+function show_lock(created)
+  local locked = size_settings().locked == true
+  if locked then created.resizeGrip:Hide() else created.resizeGrip:Show() end
+  created.lockIcon:SetTexture(locked and "Interface\\Buttons\\LockButton-Locked-Up"
+    or "Interface\\Buttons\\LockButton-Unlocked-Up")
+end
+
+local function lock_tooltip(owner)
+  if not GameTooltip then return end
+  local locked = size_settings().locked == true
+  GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+  GameTooltip:SetText(locked and L["Unlock size and position"] or L["Lock size and position"])
+  GameTooltip:AddLine(locked and L["The size and position are locked. Unlock them to change the panel again."]
+    or L["The panel keeps this size and position, in every session, until you unlock it."], 1, 1, 1, true)
+  GameTooltip:Show()
+end
+
+local function toggle_lock(frame, created, owner)
+  local saved = size_settings()
+  if saved.locked == true then
+    saved.locked = nil
+  else
+    save_current_size(frame, saved)
+    saved.locked = true
+    apply_size(frame)
+  end
+  show_lock(created)
+  if GameTooltip and GameTooltip.GetOwner and GameTooltip:GetOwner() == owner then lock_tooltip(owner) end
+end
+
+local function build_lock(frame, created)
+  local lock = CreateFrame("Button", nil, frame)
+  lock:SetSize(16, 16)
+  lock:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -22, 4)
+  created.lockIcon = lock:CreateTexture(nil, "ARTWORK")
+  created.lockIcon:SetAllPoints(lock)
+  lock:SetScript("OnClick", function(self) ns.FS:SafeCall(SOURCE, toggle_lock, frame, created, self) end)
+  lock:SetScript("OnEnter", function(self) ns.FS:SafeCall(SOURCE, lock_tooltip, self) end)
+  lock:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
+  created.lockButton = lock
+  show_lock(created)
+end
+
+local function build_grip(frame, created)
+  -- Dragging the panel moves it. The panel takes the mouse for that; its own buttons still get their clicks.
+  frame:SetMovable(true)
+  frame:SetClampedToScreen(true)
+  frame:EnableMouse(true)
+  frame:RegisterForDrag("LeftButton")
+  frame:SetScript("OnDragStart", function(self)
+    if size_settings().locked ~= true and not created.ordersView then self:StartMoving() end
+  end)
+  frame:SetScript("OnDragStop", function(self) ns.FS:SafeCall(SOURCE, on_drag_stopped, self) end)
+  frame:SetResizable(true)
+  frame:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+  local grip = CreateFrame("Button", nil, frame, "PanelResizeButtonTemplate")
+  grip:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -4, 4)
+  grip:Init(frame, MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+  grip:HookScript("OnMouseUp", function(_, mouseButton)
+    ns.FS:SafeCall(SOURCE, on_grip_released, frame, mouseButton)
+  end)
+  grip:HookScript("OnEnter", function(self)
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    GameTooltip:SetText(L["Drag to resize. Right-click for the default size and position."], 1, 1, 1, 1, true)
+    GameTooltip:Show()
+  end)
+  grip:HookScript("OnLeave", function() GameTooltip:Hide() end)
+  created.resizeGrip = grip
 end
 
 local function build()
   local frame = CreateFrame("Frame", "FabricationStationProfessionPanel", UIParent, "BackdropTemplate")
-  frame:SetWidth(WIDTH)
-  frame:SetPoint("TOPLEFT", ProfessionsFrame, "TOPRIGHT", 2, 0)
-  frame:SetPoint("BOTTOMLEFT", ProfessionsFrame, "BOTTOMRIGHT", 2, 0)
+  apply_size(frame)
   frame:SetBackdrop(BACKDROP)
-  frame:SetBackdropColor(0, 0, 0, 0.85)
+  frame:SetBackdropColor(unpack(M.BACKGROUND_COLOR))
   frame:Hide()
 
   local created = { frame = frame, applyEnabled = false }
@@ -1098,7 +1654,10 @@ local function build()
   created.empty:SetPoint("RIGHT", frame, "RIGHT", -PAD, 0)
 
   build_body(frame, created)
+  build_results(frame, created)
   build_controls(frame, created)
+  build_grip(frame, created)
+  build_lock(frame, created)
   view = created
 end
 
@@ -1113,11 +1672,22 @@ function Panel:AttachIfReady()
   local form = schematic_form()
   if not form then error("ProfessionsFrame.CraftingPage.SchematicForm not found") end
   if not view then build() end
+  local results = module("CraftResults")
+  if results then results:SyncBlizzardWindow(true) end
   if not hooked then
-    ProfessionsFrame:HookScript("OnShow", on_frame_show)
-    ProfessionsFrame:HookScript("OnHide", on_frame_hide)
-    ProfessionsFrame.CraftingPage:HookScript("OnShow", on_frame_show)
-    ProfessionsFrame.CraftingPage:HookScript("OnHide", on_frame_hide)
+    local orders = orders_page()
+    for _, part in ipairs({ ProfessionsFrame, ProfessionsFrame.CraftingPage, orders or false,
+      orders and orders.BrowseFrame or false }) do
+      if part then
+        part:HookScript("OnShow", on_frame_change)
+        part:HookScript("OnHide", on_frame_change)
+      end
+    end
+    local log = results_log()
+    if log and type(log.HookScript) == "function" then
+      log:HookScript("OnShow", on_results_window)
+      log:HookScript("OnHide", on_results_window)
+    end
     hooked = true
   end
   EventRegistry:RegisterCallback(RECIPE_SELECTED, on_recipe_selected, self)
@@ -1165,6 +1735,8 @@ function Panel:OnEnable()
   self:RegisterMessage(ns.Msg.PRICES_CHANGED, on_data_changed)
   self:RegisterMessage(ns.Msg.DATA_CHANGED, on_data_changed)
   self:RegisterMessage(ns.Msg.RECIPES_CHANGED, on_data_changed)
+  self:RegisterMessage(ns.Msg.CRAFT_RESULTS_CHANGED, on_results_changed)
+  self:RegisterMessage(ns.Msg.SESSION_PROFIT_CHANGED, on_session_profit)
   if C_AddOns.IsAddOnLoaded(PROFESSIONS_ADDON) and ProfessionsFrame then
     ns.FS:SafeCall(SOURCE, self.AttachIfReady, self)
   end
@@ -1173,5 +1745,7 @@ end
 function Panel:OnDisable()
   detach(self)
   ns.FS:CancelDebounce(REFRESH_KEY)
+  local results = module("CraftResults")
+  if results then results:SyncBlizzardWindow(false) end
   if view then view.frame:Hide() end
 end

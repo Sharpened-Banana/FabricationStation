@@ -11,7 +11,8 @@ local _, ns = ...
 --     actual = { quality?, quantity?, baseQuantity?,
 --                multicraft? (extra items: the game's number, else the extras seen; nil = unknown),
 --                resourcesReturned = { [itemID] = qty }, concentrationSpent?, ingenuityRefund?, ingenuityProc? },
---     fixture = { reagents, calib, build } | nil }
+--     fixture = { reagents (with an order's patron reagents), calib, build, exactReagents? (the predictions were asked
+--                 about every reagent the craft uses, currencies too) } | nil }
 -- CraftLog:Summary(filter) totals the entries per recipe for the Ledger's Crafts page.
 --
 -- It only watches. A post-hook on C_TradeSkillUI.CraftRecipe (Blizzard's own button and Queue:CraftNext alike; this
@@ -72,8 +73,8 @@ local function log_once(key, text)
 end
 
 local function call(key, fn)
-  local ok, a, b = pcall(fn)
-  if ok then return a, b end
+  local ok, a, b, c = pcall(fn)
+  if ok then return a, b, c end
   log_once(key, key .. " failed: " .. tostring(a))  -- locale: joined (log text)
   return nil
 end
@@ -178,29 +179,46 @@ end
 
 -- Post-hook on C_TradeSkillUI.CraftRecipe: remembers the craft and both predictions until its results arrive. Each
 -- step is protected; a failed one leaves its part nil.
+-- What an order's craft really uses: Blizzard passes CraftRecipe only the crafter's own reagents, so the patron's are
+-- added from the claimed order (each entry's reagentInfo is a CraftingReagentInfo). Without them the predictions come
+-- out lower than the craft. -> infos, true when they were added; a claimed order that is another one adds nothing.
+local function with_patron_reagents(craftingReagents, orderID)
+  local api = type(C_CraftingOrders) == "table" and C_CraftingOrders.GetClaimedOrder
+  local claimed = orderID ~= nil and type(api) == "function" and call("GetClaimedOrder", api) or nil
+  if type(claimed) ~= "table" or claimed.orderID ~= orderID then return craftingReagents, false end
+  local all = type(craftingReagents) == "table" and ns.Util.DeepCopy(craftingReagents) or {}
+  for _, entry in ipairs(type(claimed.reagents) == "table" and claimed.reagents or {}) do
+    local info = type(entry) == "table" and entry.reagentInfo
+    if type(info) == "table" and type(info.reagent) == "table" then all[#all + 1] = ns.Util.DeepCopy(info) end
+  end
+  return all, true
+end
+
 function CraftLog:OnCraftRecipe(recipeID, numCasts, craftingReagents, _, orderID, applyConcentration)
   pending = nil
   if not is_finite(recipeID) then return end
   local concentration = applyConcentration == true
   local recipes = ns.FS:GetModule("Recipes", true)
   local scanner = ns.FS:GetModule("Scanner", true)
+  local infos, patronAdded = with_patron_reagents(craftingReagents, orderID)
   local p = {
     recipeID = recipeID, castsLeft = math.max(1, math.floor(number_or_nil(numCasts) or 1)), orderID = orderID,
     applyConcentration = concentration, at = ns.FS:Now(),
-    reagents = type(craftingReagents) == "table" and ns.Util.DeepCopy(craftingReagents) or nil,
+    reagents = type(infos) == "table" and ns.Util.DeepCopy(infos) or nil,
+    exactReagents = (orderID == nil or patronAdded) or nil,
   }
   p.calib = call("GetCalibration", function()
     return ns.Util.DeepCopy(recipes:GetCalibration(ns.FS:CharKey(), recipeID))
   end)
-  local allocation, optionalItemIDs = call("FromCraftingReagentInfo", function()
-    return recipes:FromCraftingReagentInfo(recipeID, craftingReagents)
+  local allocation, optionalItemIDs, currencies = call("FromCraftingReagentInfo", function()
+    return recipes:FromCraftingReagentInfo(recipeID, infos)
   end)
   if type(allocation) == "table" then
     p.predicted = predicted_of(call("PredictLive", function()
       return recipes:PredictLive(recipeID, allocation, optionalItemIDs, concentration)
     end), concentration)
     p.game = game_of(call("GetLiveOperationInfo", function()
-      return scanner:GetLiveOperationInfo(recipeID, allocation, concentration, optionalItemIDs)
+      return scanner:GetLiveOperationInfo(recipeID, allocation, concentration, optionalItemIDs, currencies)
     end))
   end
   pending = p
@@ -254,7 +272,8 @@ function CraftLog:OnCraftResult(data)
     operationID = operationID, applyConcentration = p.applyConcentration,
     predicted = ns.Util.DeepCopy(p.predicted), game = ns.Util.DeepCopy(p.game),
     actual = actual_of(data, schematic),
-    fixture = { reagents = ns.Util.DeepCopy(p.reagents), calib = ns.Util.DeepCopy(p.calib), build = build_number() },
+    fixture = { reagents = ns.Util.DeepCopy(p.reagents), calib = ns.Util.DeepCopy(p.calib), build = build_number(),
+      exactReagents = p.exactReagents },
   }
   log.nextID = log.nextID + 1
   local entries = ns.Util.PushCapped(log.entries, entry, CraftLog.ENTRY_CAP)

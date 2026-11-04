@@ -1044,10 +1044,8 @@ Reagents panel: a "Reagents to supply" header with every reagent you supply, own
 over the "?". An item the client has not cached reads "item:<id>" and becomes its name within a moment while the tooltip
 stays open (if not, note whether `/dump C_Item.RequestLoadItemDataByID` exists). Clicking an order row where the icons or
 the panel sit still opens the order, and the row beneath still highlights on hover (the addon calls
-SetPropagateMouseClicks and SetPropagateMouseMotion; `/dump CreateFrame("Frame").SetPropagateMouseMotion` tells whether
-the client has that function: if it is nil, note where the click or hover is lost). Hover the panel and note whether a
-Blizzard tooltip appears beside ours (the old cell may have its own): if it does, SetPropagateMouseMotion on the cover
-must go. Put a reagent in your bags (or use
+SetMouseClickEnabled(false) on the cover: motion stops at it, clicks go by; see P7-39). Hover the panel: no Blizzard
+tooltip appears (the old cell has its own, which is why the motion stops at the cover). Put a reagent in your bags (or use
 one up) with the list open: the red/white counts update within a moment.
 
 P5-13. **The icons setting.** Settings > Orders & Ledger > Crafting-orders window: "Show reward and reagent icons on order
@@ -1467,6 +1465,79 @@ concentration, try it with no reagents, with a mix of ranks and with one slot le
 line says "Math check: OK", the concentration cost matches Blizzard's number exactly (flasks and potions on an
 alchemist with the discount nodes included), and recipes with no quality log no difficulty line. Report any new line in
 Diagnostics with its recipe; a discount can only be learned where the game charges concentration with no reagents.
+
+P7-39. **Cover tooltips.** On the crafting-orders board hover the green check and a short-reagent icon in the Reagents
+column, then the Commission column. Expected: FabricationStation's text tooltip each time ("You have every reagent...",
+"The customer provides...", "Reagents to supply", "Commission: ..."), with no box of item icons. Left-click on those
+cells still opens the order and right-click still shows its menu (they rely on `SetMouseClickEnabled(false)`, not
+verified here), and the whole row stays lit while the pointer is on them.
+
+P7-40. **The × on a long name.** Find a not-learned order with a long name and quality pips ("Thalassian Competitor's Mail
+Links"). Expected: the big red × shows right of the name, without covering it, and its tooltip says the recipe is not
+learned; the risk count drops out if there is no room for it. Widen the window: it comes back. Every × on the board is in
+one column, where other orders have their + (a not-learned order never has a +: it cannot be queued).
+
+P7-41. **Patron reagents above the minimum.** Find a patron order that provides all its reagents and asks for a low
+minimum quality (Skinner's Cap on a leatherworker). Expected: no "minimum quality cannot be reached" risk, no concentration
+cell (none is needed), and Blizzard's bar in the order view lands at or above the minimum.
+
+P7-42. **Panel under Crafting Results.** Craft something so Blizzard's Crafting Results window opens over the panel.
+Expected: the recipe name, quality, skill and profit lines move below that window, the "Cheapest reagents per quality" table
+hides, and nothing overlaps the Use concentration / Add to Queue / Craft Next buttons at the bottom (with many provider
+lines, report any overlap). Close the window: the content goes back to the top and the table returns. A Lua error here
+turns off only the panel.
+
+P7-43. **Panel size and position.** Open a profession. Right-click the panel's grip once if you dragged its size before this
+build. Expected: the panel is wider than before and starts right below where Crafting Results opens; craft something and
+that window sits above the panel, covering none of it (report the gap if the window's height was misread). If the crafting
+window sits low on the screen, the panel may be pushed up to stay on screen: move or size it. A panel too short for the
+reagent table hides it. Drag the grip at its bottom-right corner: it follows, within 300-700 wide and 450-1200 tall. Drag the
+panel by an empty part: it moves, stays on the screen, and comes along when you then move the crafting window. Close and
+reopen, then `/reload`: size and place stay. Move it clear of where Crafting Results opens and craft: the window covers
+nothing and the panel keeps its reagent table. Right-click the grip: back to the default. Report whether the grip works
+(`PanelResizeButtonTemplate`, as the main window's) and whether it covers the "Math check" line.
+Click the lock beside the grip: the icon shows locked, the grip goes and the panel no longer drags. `/reload`, log out, or
+switch character: same size and place, still locked. Click it again: the icon shows unlocked, the grip and the drag return,
+and nothing moves. Report whether both lock icons show (`Interface\\Buttons\\LockButton-Locked-Up` and `-Unlocked-Up`).
+
+P7-44. **Compact panel.** Open a profession and select a recipe. Expected: a solid background with nothing showing through;
+"Profit per craft" is one row with [+] and the profit on the right, and hovering it lists Reagents, Sale, Multicraft and the
+rest. Click it: the lines stay open, also after `/reload`; click again to fold. "More details" does the same for Best
+optionals and the sub-craft lines, with their count on the right. Beside Craft Next, More opens "Queue with best
+optionals", "Queue with sub-crafts" and "Ask guild" with their whole labels, above the other buttons; each still works and
+its status shows beside it. Use concentration is never covered. Open everything and make the panel small, or craft with it
+under Crafting Results: what does not fit folds, the reagent table first, and comes back when there is room. Report whether
+the +/- icons show (`Interface\\Buttons\\UI-PlusButton-Up`, `UI-MinusButton-Up`).
+
+P7-45. **Crafting results in the panel.** On the Recipes page, craft something several times, some with Create All.
+Expected: Blizzard's Crafting Results window never opens; "Crafting results (n)" appears in the panel under the fold rows,
+newest on top, with the item's icon, coloured name and quantity. A craft with multicraft shows "+n extra", one with saved
+reagents shows "Saved" with their icons and counts, one with ingenuity shows "Ingenuity", and a first craft shows "Bonus"; the
+row's tooltip shows the item and spells these out. Compare a few rows with the game's chat lines and report any difference
+(the payload's multicraft, concentration and ingenuity fields are unverified, P7-16). With many rows, the mouse wheel scrolls
+and a new craft goes back to the top; Clear empties the list. Make the panel short: the reagent table goes before the list.
+Crafting works as before and nothing errors, also in BugSack. On the orders page Blizzard's window still opens when you craft
+an order. Turn off Settings > Crafting results: the list goes, the next craft opens Blizzard's window, and after closing and
+reopening a panel you never moved starts below it. Turn it on again: Blizzard's window stays closed from the next craft.
+
+P7-46. **Session profit.** Craft a recipe that has prices a few times on the Recipes page. Expected: "Session profit" under the
+Crafting results heading, red for a loss and green for a gain. After one craft of N items with no multicraft or saved reagents,
+it matches N x the item's price x 0.95 minus the reagent cost; a craft with saved reagents or multicraft comes out better. Hover
+it: the tooltip explains what it counts. Clear the list: the line starts again with the next craft. An unpriced item says "no
+price" or "(some prices missing)", never 0. `/reload` starts a new session. An order's craft does not change it until you hand the order in: then the total moves by the
+commission minus that order's reagent cost, right away, without its reward items.
+
+P7-47. **Crafting results on the Crafting Orders tab.** Craft something on the Recipes page, then open the Crafting Orders tab.
+Expected: the panel stays as the results list and session profit only, with no recipe numbers or buttons, beside the side panel
+over the order list and at the window's edge while an order is open. Craft an order: its result joins the list and Blizzard's own
+Crafting Results window does not open. With an empty list the tab shows no panel until
+the first craft; Clear closes it. Back on the Recipes page: the whole panel at your saved size and place. Turn CraftResults off:
+Blizzard's window is back on both tabs.
+
+P7-48. **Orders in the session profit.** Hand in an order with a reward item. Expected: the session profit rises by its commission plus
+the reward's value, minus its reagent cost, and the hover text mentions reward items. In Settings > Crafting results choose "Commission
+only": the total drops by the reward's value at once and the hover text says rewards are not counted. Hand in an order with a reward
+that has no price while rewards count: the label says "(some prices missing)". The choice survives `/reload`.
 
 ## Not done here
 

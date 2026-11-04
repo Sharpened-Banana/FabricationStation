@@ -91,18 +91,19 @@ local CONC_SLOT = CONC_WIDTH + CELL_GAP
 local CORE_WIDTH = SCORE_CORE + CONC_SLOT
 local WARN_SLOT, PROFIT_SLOT = WARN_SIZE + CELL_GAP, CELL_WIDTH + CELL_GAP
 local STRIP_WIDTH = CORE_WIDTH + WARN_SLOT + PROFIT_SLOT
--- A recipe the character has not learned (the notLearned risk) shows a red cross in the score cell's slot, right of
--- [conc], in place of the profit and the score (both hidden). When the core has no room, the "minimal" tier keeps only
--- [risk] [+] and, for such a recipe, the cross beside them: MINIMAL_WIDTH (+ LEARN_SLOT).
+-- A recipe the character has not learned (the notLearned risk) shows a red cross in the [+] slot (such an order cannot be
+-- queued, so it never has a +), in the same column on every row, in place of the profit and the score (both hidden).
+-- When the core has no room, the "minimal" tier keeps only [risk] [+], or [risk] and the cross: MINIMAL_WIDTH. With no
+-- room for that either, such a recipe keeps the cross alone ("cross": LEARN_WIDTH): it is the one thing the row must say.
 -- (One table: the main chunk is at Lua 5.1's 200-locals limit.)
-local LEARN = { WIDTH = 24, SLOT = 24 + CELL_GAP, MINIMAL = ADD_SIZE + CELL_GAP + RISK_WIDTH, FONT_SIZE = 26 }
+local LEARN = { WIDTH = 24, MINIMAL = ADD_SIZE + CELL_GAP + RISK_WIDTH, FONT_SIZE = 26 }
 local PAD, GAP = 6, 4
 local ICON_SIZE, ICON_GAP, MORE_WIDTH = 20, 2, 24   -- row icons: 20 px, 2 px apart; the "+N" slot has a width of its own
 M.ICON_SIZE, M.ICON_GAP, M.MORE_WIDTH = ICON_SIZE, ICON_GAP, MORE_WIDTH   -- read-only (the specs derive their geometry)
 -- The strip's measures, read-only (the specs derive their geometry from them).
 M.LAYOUT = { CORE_WIDTH = CORE_WIDTH, SCORE_CORE = SCORE_CORE, CONC_SLOT = CONC_SLOT, WARN_SLOT = WARN_SLOT,
   PROFIT_SLOT = PROFIT_SLOT, STRIP_WIDTH = STRIP_WIDTH, PAD = PAD, GAP = GAP, CELL_GAP = CELL_GAP, FIXED_COLUMNS = FIXED_COLUMNS,
-  MINIMAL_WIDTH = LEARN.MINIMAL, LEARN_SLOT = LEARN.SLOT }
+  MINIMAL_WIDTH = LEARN.MINIMAL, LEARN_WIDTH = LEARN.WIDTH }
 local TOOLTIP_ICON = 14                               -- the inline icon in a tooltip line (keeps the line height)
 local UNKNOWN_ICON = 134400                           -- the question mark, for an icon the client cannot give
 -- The Reagents cover's padding inside Blizzard's cell.
@@ -906,6 +907,8 @@ end
 local function update_hover(c)
   set_shown(c.coverHover, c.rowHover == true or c.coverHovered == true)
   set_shown(c.tipHover, c.rowHover == true or c.tipHovered == true)
+  -- The pointer on a cover is not on Blizzard's row (its own highlight is off), so the row is lit from here.
+  set_shown(c.rowLit, c.coverHovered == true or c.tipHovered == true)
 end
 
 local function row_hover(c, on)
@@ -923,11 +926,12 @@ local function tip_hover(c, on)
   update_hover(c)
 end
 
--- Our overlay frames let clicks and hover through to Blizzard's row beneath (unverified API names: pcall-guarded).
-local function pass_through(frame)
-  for _, method in ipairs({ "SetPropagateMouseClicks", "SetPropagateMouseMotion" }) do
-    if type(frame[method]) == "function" then pcall(frame[method], frame, true) end
-  end
+-- A cover takes the pointer's motion (it has a tooltip of its own) and lets clicks by to Blizzard's row beneath. The
+-- motion must stop here: Blizzard's Reagents cell draws its own tooltip on OnEnter (the patron's reagents as a frame of
+-- icons, with no text), which replaced ours when the motion was passed through. (pcall-guarded like every game call here.)
+local function clicks_through(frame)
+  if type(frame.SetMouseMotionEnabled) == "function" then pcall(frame.SetMouseMotionEnabled, frame, true) end
+  if type(frame.SetMouseClickEnabled) == "function" then pcall(frame.SetMouseClickEnabled, frame, false) end
 end
 
 -- The concentration cell's tooltip: what the order needs, what you have, what it is worth, and why it is red.
@@ -1032,6 +1036,10 @@ local function new_cells(row)
   c.frame = frame
   c.tintTexture = frame:CreateTexture(nil, "BACKGROUND")
   c.tintTexture:SetAllPoints(frame)
+  c.rowLit = frame:CreateTexture(nil, "BACKGROUND", nil, 1)
+  c.rowLit:SetAllPoints(frame)
+  c.rowLit:SetColorTexture(HOVER_COLOR[1], HOVER_COLOR[2], HOVER_COLOR[3], HOVER_COLOR[4])
+  c.rowLit:Hide()
   c.dimTexture = frame:CreateTexture(nil, "OVERLAY")
   c.dimTexture:SetAllPoints(frame)
   c.dimTexture:SetColorTexture(DIM[1], DIM[2], DIM[3], DIM[4])
@@ -1081,10 +1089,10 @@ local function new_cells(row)
   c.conc:SetScript("OnEnter", function() M.Guard(ROWS, conc_tooltip, c) end)
   c.conc:SetScript("OnLeave", function() M.Guard(ROWS, hide_tooltip) end)
 
-  -- The cross of a recipe the character has not learned, in the score cell's slot (right-aligned beside [risk]).
+  -- The cross of a recipe the character has not learned, right-aligned in the [+] slot (one column on every row).
   c.learn = CreateFrame("Frame", nil, strip)
   c.learn:SetSize(LEARN.WIDTH, STRIP_HEIGHT)
-  c.learn:SetPoint("RIGHT", strip, "RIGHT", -(ADD_SIZE + CELL_GAP + RISK_WIDTH + CELL_GAP), 0)
+  c.learn:SetPoint("RIGHT", strip, "RIGHT", 0, 0)
   c.learn:EnableMouse(true)
   -- A large cross (the user asked for it to be much bigger than the cell text): a big outlined font when the client
   -- takes SetFont, else the largest standard font object.
@@ -1125,7 +1133,7 @@ local function new_cells(row)
   c.tipCover = CreateFrame("Frame", nil, frame)
   c.tipCover:SetClipsChildren(true)
   c.tipCover:EnableMouse(true)
-  pass_through(c.tipCover)
+  clicks_through(c.tipCover)
   c.tipCover:SetScript("OnEnter", function()
     M.Guard(ROWS, function()
       tip_hover(c, true)
@@ -1170,7 +1178,7 @@ local function new_cells(row)
   c.cover = CreateFrame("Frame", nil, frame)
   c.cover:SetClipsChildren(true)
   c.cover:EnableMouse(true)
-  pass_through(c.cover)
+  clicks_through(c.cover)
   c.cover:SetScript("OnEnter", function()
     M.Guard(ROWS, function()
       cover_hover(c, true)
@@ -1226,10 +1234,11 @@ end
 -- makes it give way to Blizzard's item name (hotfix H1-6 rule: our cells never cover the name). With room for
 -- everything: "all"; else without the profit cell (score, risk and the warning icon stay): "noProfit"; else, when the
 -- row has a minimal tier (`minimal`: its width, nil for none), only [risk] [+] (and a not-learned recipe's cross):
--- "minimal"; else no strip at all: "none" (the side panel and the Orders tab still carry the numbers). A row that
+-- "minimal"; else, when the row has a cross-only tier (`crossOnly`: its width, nil for none), only the cross: "cross";
+-- else no strip at all: "none" (the side panel and the Orders tab still carry the numbers). A row that
 -- cannot be measured keeps everything. Also returns the space reserved right of the item-name column. Only getters
 -- are called on Blizzard's row, its item-name cell and that cell's Text.
-local function fit(c, row, warn, minimal)
+local function fit(c, row, warn, minimal, crossOnly)
   local itemCell = type(row.cells) == "table" and child(row.cells, 1) or nil
   local reserve = FIXED_COLUMNS
   local rowRight, cellRight = read_number(row, "GetRight"), read_number(itemCell, "GetRight")
@@ -1248,6 +1257,7 @@ local function fit(c, row, warn, minimal)
   if fits(core + PROFIT_SLOT) then return "all", reserve end
   if fits(core) then return "noProfit", reserve end
   if minimal and fits(minimal) then return "minimal", reserve end
+  if crossOnly and fits(crossOnly) then return "cross", reserve end
   return "none", reserve
 end
 
@@ -1428,8 +1438,8 @@ end
 -- Fits a row's strip to Blizzard's item name as it is now (see fit) and shows the parts that have room.
 function apply_fit(c, row)
   -- The minimal tier exists for a row with something to say: its risk / info cell, or a not-learned recipe's cross.
-  local minimal = (c.riskShown or c.notLearned) and LEARN.MINIMAL + (c.notLearned and LEARN.SLOT or 0) or nil
-  c.fit = fit(c, row, c.blocked, minimal)
+  local minimal = (c.riskShown or c.notLearned) and LEARN.MINIMAL or nil
+  c.fit = fit(c, row, c.blocked, minimal, c.notLearned and LEARN.WIDTH or nil)
   local core = c.fit == "all" or c.fit == "noProfit"
   c.warnShown = c.blocked == true and core
   set_shown(c.warn, c.warnShown)
@@ -1442,9 +1452,11 @@ function apply_fit(c, row)
   -- The score cell repeats the profit when no concentration is charged: blank it (it keeps its slot) while the profit
   -- cell is shown beside it with the same text. Otherwise it keeps its text, the only number left once the profit gives way.
   c.score:SetText(c.fit == "all" and c.scoreText == c.profitText and "" or c.scoreText)
-  -- A not-learned recipe's cross takes the score cell's slot, in every tier that shows a strip.
+  -- A not-learned recipe has no score, and its cross shows in every tier that shows a strip.
   set_shown(c.score, core and not c.notLearned)
   set_shown(c.learn, c.notLearned == true and c.fit ~= "none")
+  set_shown(c.risk, c.riskShown and c.fit ~= "cross")
+  set_shown(c.add, c.addShown and not c.notLearned)
   set_shown(c.strip, c.fit ~= "none")
   render_tip_cover(c, row)
   render_cover(c, row)
@@ -1582,7 +1594,7 @@ local function show_row(row, elementData)
   for _, risk in ipairs(type(view.risks) == "table" and view.risks or {}) do
     if risk == "notLearned" then c.notLearned = true end
   end
-  set_shown(c.add, M.QueueEntry(view) ~= nil and ns.FS:GetModule("Queue", true) ~= nil)
+  c.addShown = M.QueueEntry(view) ~= nil and ns.FS:GetModule("Queue", true) ~= nil
 
   c.blocked = model.highlight == "blocked"
   apply_fit(c, row)

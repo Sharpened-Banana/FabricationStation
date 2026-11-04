@@ -96,6 +96,44 @@ describe("golden fixture comparison", function()
         assert.is_truthy(text(Golden.check(f)):find(field .. ": missing", 1, true), field)
       end
     end)
+    it("does not compare the skill points a concentrated craft adds, but still its quality and cost", function()
+      local f = matching("craft")
+      f.applyConcentration = true
+      local r = Golden.predict(f)
+      f.operationInfo.craftingQuality, f.actualQuality = r.expectedQuality, r.expectedQuality
+      f.operationInfo.concentrationCost = r.concentrationCostForAllocation
+      f.operationInfo.bonusSkill = 625
+      f.operationInfo.lowerSkillThreshold, f.operationInfo.upperSkillTreshold = 725, 725
+      assert.same({}, Golden.check(f))
+      f.operationInfo.concentrationCost = f.operationInfo.concentrationCost + 1
+      assert.is_truthy(text(Golden.check(f)):find("concentrationCost", 1, true))
+      f.operationInfo.concentrationCost = r.concentrationCostForAllocation
+      f.operationInfo.craftingQuality = r.expectedQuality + 1
+      assert.is_truthy(text(Golden.check(f)):find("quality: the game", 1, true))
+    end)
+    it("compares a capture's skill even with concentration: it asks the game without it", function()
+      local f = matching("capture")
+      f.applyConcentration = true
+      f.operationInfo.bonusSkill = 625
+      assert.is_truthy(text(Golden.check(f)):find("skill: the game", 1, true))
+    end)
+    it("counts the finishing reagent the craft used", function()
+      local f = matching("craft")
+      f.schematic.reagentSlots[2] = { slotIndex = 2, dataSlotIndex = 2, kind = "finishing", quantity = 1, reagents = { 7001 } }
+      f.gameData.ReagentQuality[7001] = { rank = 1, categoryID = 60, maxDifficultyAdjustment = 100, reagentEffectPct = 100 }
+      f.gameData.OptionalReagents[7001] = { categoryID = 60, effects = { { type = "skill", amount = 5 } } }
+      f.reagents[2] = { reagent = { itemID = 7001 }, quantity = 1, dataSlotIndex = 2 }
+      assert.equals(f.operationInfo.baseSkill + 5, (Golden.predict(f)).skill)
+      assert.equals(f.operationInfo.baseDifficulty, (Golden.predict(f)).difficulty)
+    end)
+    it("lets an old craft make more than predicted when its prediction lacked reagents, still comparing the rest", function()
+      local f = matching("craft")
+      f.reagentsMissing = true
+      f.actualQuality = f.actualQuality + 1
+      assert.same({}, Golden.check(f))
+      f.operationInfo.craftingQuality = f.operationInfo.craftingQuality + 1
+      assert.is_truthy(text(Golden.check(f)):find("quality: the game", 1, true))
+    end)
     it("fails when the craft made another quality than the game predicted", function()
       local f = matching("craft")
       f.actualQuality = f.actualQuality + 1

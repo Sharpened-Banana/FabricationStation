@@ -318,7 +318,7 @@ describe("ProfessionPanel attach", function()
     W.fire("ADDON_LOADED", "Blizzard_Professions")
     local frame = _G.FabricationStationProfessionPanel
     assert.is_table(frame); assert.equals("BackdropTemplate", frame.template); assert.equals(UIParent, frame:GetParent())
-    assert.equals(300, frame:GetWidth())
+    assert.equals(340, frame:GetWidth())
     assert.same({ "TOPLEFT", ProfessionsFrame, "TOPRIGHT", 2, 0 }, { frame:GetPoint(1) })
     W.fire("ADDON_LOADED", "Blizzard_Professions")
     assert_attached_once(ns, form)
@@ -660,5 +660,942 @@ describe("fake_professions_frame", function()
     assert.is_table(_G.ProfessionsFrame)
     install_wow_stubs()
     assert.same({ nil, nil, nil, nil }, { _G.ProfessionsFrame, _G.Professions, _G.ProfessionsRecipeSchematicFormMixin, _G.ScrollBoxListMixin })
+  end)
+end)
+
+-- Blizzard's Crafting Results window opens over the top of the panel (its strata is DIALOG, anchored 20 px right of the
+-- page), and it is not ours to move. While it shows the panel's content starts below it and gives up the reagent table.
+describe("ProfessionPanel under the Crafting Results window", function()
+  local ns, W, form, P, log, view
+  local function fake_log()
+    local hooks = {}
+    local l = { shown = false }
+    function l:HookScript(event, fn) hooks[event] = fn end
+    function l:IsShown() return self.shown end
+    function l:GetBottom() return self.bottom end
+    function l:open(bottom) self.shown, self.bottom = true, bottom; hooks.OnShow(self) end
+    function l:close() self.shown = false; hooks.OnHide(self) end
+    return l
+  end
+  local function title_offset()
+    local _, _, _, _, y = view.title:GetPoint(1)
+    return y
+  end
+  local function boot(withoutLog)
+    ns, W = make_world({ last = "UI/ProfessionPanel.lua" })
+    form = fake_professions_frame()
+    log = fake_log()
+    if not withoutLog then form.raw(_G.ProfessionsFrame.CraftingPage).CraftingOutputLog = log end
+    for i = #form.assignedFields, 1, -1 do form.assignedFields[i] = nil end   -- that was the spec playing Blizzard
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    form.selectRecipe({ recipeID = 9001 })
+    P = ns.FS:GetModule("ProfessionPanel")
+    view = P:GetView()
+    view.frame.GetTop = function() return 800 end
+  end
+  after_each(function() fake_professions_frame.reset() end)
+
+  it("starts at the top of the panel while the window is closed", function()
+    boot()
+    assert.equals(-10, title_offset())
+    assert.is_true(view.qualityHeader:IsShown())
+  end)
+  it("moves the content below the window while it is open, and back", function()
+    boot()
+    log:open(450)                -- the window ends 350 below the panel's top
+    assert.equals(-(10 + 350 + 6), title_offset())
+    log:close()
+    assert.equals(-10, title_offset())
+  end)
+  it("gives up the reagent table while it is open, and shows it again after", function()
+    boot()
+    view.qualityRows[1]:Show()
+    log:open(450)
+    assert.is_false(view.qualityHeader:IsShown()); assert.is_false(view.applyNote:IsShown())
+    for _, row in ipairs(view.qualityRows) do assert.is_false(row:IsShown()) end
+    local _, relativeTo = view.breakdownToggle:GetPoint(1)
+    assert.equal(view.flags, relativeTo)
+    log:close()
+    assert.is_true(view.qualityHeader:IsShown())
+    assert.is_true(view.qualityRows[1]:IsShown())
+  end)
+  it("leaves room for the window's own height when it cannot be measured", function()
+    boot()
+    log:open(nil)
+    assert.is_true(title_offset() <= -300)
+  end)
+  it("does nothing on a client without the window", function()
+    boot(true)
+    assert.equals(-10, title_offset())
+    assert.is_true(view.qualityHeader:IsShown())
+  end)
+  it("writes nothing on Blizzard's frames", function()
+    boot()
+    log:open(450); log:close()
+    assert.same({}, form.assignedFields)
+  end)
+end)
+
+describe("ProfessionPanel size", function()
+  local ns, W, form, view
+  local function boot(stored)
+    ns, W = make_world({ last = "UI/ProfessionPanel.lua" })
+    form = fake_professions_frame()
+    if stored then ns.FS.db.global.settings.professionPanel = stored end
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    view = ns.FS:GetModule("ProfessionPanel"):GetView()
+  end
+  local function saved() return ns.FS.db.global.settings.professionPanel end
+  local function anchors()
+    local out = {}
+    for i = 1, view.frame:GetNumPoints() do
+      local point, relativeTo, relativePoint = view.frame:GetPoint(i)
+      out[i] = { point, relativeTo == _G.ProfessionsFrame, relativePoint }
+    end
+    return out
+  end
+  local DEFAULT_PLACE = { { "TOPLEFT", true, "TOPRIGHT" } }
+  local TOP_ONLY = { { "TOPLEFT", true, "TOPRIGHT" } }
+  local function release(button)
+    view.resizeGrip:GetScript("OnMouseUp")(view.resizeGrip, button or "LeftButton")
+  end
+  after_each(function() fake_professions_frame.reset() end)
+
+  it("starts wider than it was, below where Blizzard's Crafting Results window opens", function()
+    boot()
+    ns.FS:SetModuleEnabled("CraftResults", false)
+    form.hide(); form.show()
+    assert.equals(340, view.frame:GetWidth())
+    assert.equals(480, view.frame:GetHeight())
+    local _, _, _, x, y = view.frame:GetPoint(1)
+    assert.same({ 2, -296 }, { x, y })        -- the window's height when it cannot be measured, and the gap
+    assert.same(DEFAULT_PLACE, anchors())
+  end)
+  it("measures the Crafting Results window for that", function()
+    ns, W = make_world({ last = "UI/ProfessionPanel.lua" })
+    form = fake_professions_frame()
+    form.raw(_G.ProfessionsFrame.CraftingPage).CraftingOutputLog = {
+      HookScript = function() end, IsShown = function() return false end, GetHeight = function() return 340 end }
+    ns.FS:SetModuleEnabled("CraftResults", false)
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    view = ns.FS:GetModule("ProfessionPanel"):GetView()
+    local _, _, _, _, y = view.frame:GetPoint(1)
+    assert.equals(-346, y)
+  end)
+  it("gives up the reagent table when the panel is too short for it", function()
+    boot({ breakdownOpen = true })
+    form.selectRecipe({ recipeID = 9001 })
+    view.frame:SetSize(340, 450)
+    release()
+    assert.is_false(view.qualityHeader:IsShown())
+    view.frame:SetSize(340, 800)
+    release()
+    assert.is_true(view.qualityHeader:IsShown())
+  end)
+  it("has a grip that keeps the sizes in range", function()
+    boot()
+    assert.is_truthy(view.resizeGrip)
+  end)
+  it("opens at the size you dragged it to, still attached to the crafting window", function()
+    boot({ width = 420, height = 900 })
+    assert.same({ 420, 900 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+    assert.same(TOP_ONLY, anchors())
+  end)
+  it("saves the size on release and attaches again", function()
+    boot()
+    view.frame:ClearAllPoints(); view.frame:SetPoint("TOPLEFT", _G.UIParent, "BOTTOMLEFT", 10, 10)  -- StartSizing does this
+    view.frame:SetSize(500.4, 880.6)
+    release()
+    assert.same({ width = 500, height = 881 }, saved())
+    assert.same({ 500, 881 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+    assert.same(TOP_ONLY, anchors())
+  end)
+  it("goes back to the default on a right-click", function()
+    boot({ width = 420, height = 900 })
+    release("RightButton")
+    assert.is_nil(saved().width); assert.is_nil(saved().height)
+    assert.equals(340, view.frame:GetWidth())
+    assert.same(DEFAULT_PLACE, anchors())
+  end)
+  it("reads a size out of range or of the wrong type as the nearest good one or none", function()
+    boot({ width = 5000, height = 10 })
+    assert.same({ 700, 300 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+    fake_professions_frame.reset()
+    boot({ width = "wide", height = false })
+    assert.equals(340, view.frame:GetWidth())
+    assert.same(DEFAULT_PLACE, anchors())
+  end)
+  it("writes nothing while the saved data is from a newer version", function()
+    boot()
+    ns.FS.dbIsNewer = true
+    local before = ns.Util and ns.Util.DeepCopy and ns.Util.DeepCopy(ns.FS.db.global.settings) or nil
+    view.frame:SetSize(500, 880)
+    release()
+    assert.is_nil(saved() and saved().width)
+    if before then assert.same(before, ns.FS.db.global.settings) end
+    assert.equals(500, view.frame:GetWidth())   -- it still takes this session
+  end)
+  it("writes nothing on Blizzard's frames", function()
+    boot({ width = 420, height = 900 })
+    view.frame:SetSize(500, 880)
+    release()
+    assert.same({}, form.assignedFields)
+  end)
+
+  describe("moving it", function()
+    -- Where the drag leaves the panel and where the crafting window is. It is saved relative to the crafting window, so
+    -- it comes along when that moves.
+    local function drop_at(left, top)
+      local raw = form.raw(_G.ProfessionsFrame)
+      raw.GetRight, raw.GetTop = function() return 800 end, function() return 750 end
+      view.frame.GetLeft, view.frame.GetTop = function() return left end, function() return top end
+      view.frame:SetSize(340, 760)
+      view.frame:GetScript("OnDragStop")(view.frame)
+    end
+    local function place()
+      local point, relativeTo, relativePoint, x, y = view.frame:GetPoint(1)
+      return { point, relativeTo == _G.ProfessionsFrame, relativePoint, x, y }
+    end
+
+    it("can be dragged, and stays on the screen", function()
+      boot()
+      local moved = false
+      view.frame.StartMoving = function() moved = true end
+      view.frame:GetScript("OnDragStart")(view.frame)
+      assert.is_true(moved)
+    end)
+    it("saves where you dropped it, relative to the crafting window, at the size it had", function()
+      boot()
+      drop_at(1000, 700)
+      assert.same({ x = 200, y = -50, width = 340, height = 760 }, saved())
+      assert.same({ "TOPLEFT", true, "TOPRIGHT", 200, -50 }, place())
+      assert.same(TOP_ONLY, anchors())
+    end)
+    it("opens where you left it in the next session", function()
+      boot({ x = 200, y = -50, width = 340, height = 760 })
+      assert.same({ "TOPLEFT", true, "TOPRIGHT", 200, -50 }, place())
+    end)
+    it("keeps its place when you drag the size", function()
+      boot({ x = 200, y = -50, width = 340, height = 760 })
+      view.frame:SetSize(500, 880)
+      release()
+      assert.same({ x = 200, y = -50, width = 500, height = 880 }, saved())
+      assert.same({ "TOPLEFT", true, "TOPRIGHT", 200, -50 }, place())
+    end)
+    it("goes back beside the crafting window on a right-click of the grip", function()
+      boot({ x = 200, y = -50, width = 340, height = 760 })
+      release("RightButton")
+      assert.same({}, saved())
+      assert.same(DEFAULT_PLACE, anchors())
+    end)
+    it("stays where it was when the edges cannot be read", function()
+      boot({ x = 200, y = -50, width = 340, height = 760 })
+      view.frame:GetScript("OnDragStop")(view.frame)
+      assert.same({ "TOPLEFT", true, "TOPRIGHT", 200, -50 }, place())
+    end)
+    it("does not move while locked", function()
+      boot({ x = 200, y = -50, width = 340, height = 760, locked = true })
+      local moved = false
+      view.frame.StartMoving = function() moved = true end
+      view.frame:GetScript("OnDragStart")(view.frame)
+      assert.is_false(moved)
+      drop_at(10, 20)
+      assert.same({ x = 200, y = -50, width = 340, height = 760, locked = true }, saved())
+      assert.same({ "TOPLEFT", true, "TOPRIGHT", 200, -50 }, place())
+    end)
+    it("reads a place of the wrong type as beside the crafting window", function()
+      boot({ x = "far", y = false })
+      assert.same(DEFAULT_PLACE, anchors())
+    end)
+    it("keeps its full layout when the results window does not cover it", function()
+      boot()
+      local hooks = {}
+      local log = { shown = false }
+      function log:HookScript(event, fn) hooks[event] = fn end
+      function log:IsShown() return self.shown end
+      function log:GetBottom() return 450 end
+      function log:GetLeft() return 820 end
+      function log:GetRight() return 1100 end
+      fake_professions_frame.reset()
+      ns, W = make_world({ last = "UI/ProfessionPanel.lua" })
+      form = fake_professions_frame()
+      form.raw(_G.ProfessionsFrame.CraftingPage).CraftingOutputLog = log
+      W.fire("ADDON_LOADED", "Blizzard_Professions")
+      form.selectRecipe({ recipeID = 9001 })
+      view = ns.FS:GetModule("ProfessionPanel"):GetView()
+      view.frame.GetTop = function() return 800 end
+      view.frame.GetLeft, view.frame.GetRight = function() return 1200 end, function() return 1540 end
+      log.shown = true; hooks.OnShow(log)
+      local _, _, _, _, y = view.title:GetPoint(1)
+      assert.equals(-10, y)
+      assert.is_true(view.qualityHeader:IsShown())
+      view.frame.GetLeft, view.frame.GetRight = function() return 1000 end, function() return 1340 end
+      hooks.OnShow(log)
+      _, _, _, _, y = view.title:GetPoint(1)
+      assert.is_true(y < -10)
+    end)
+  end)
+
+  describe("the lock", function()
+    local function click_lock() view.lockButton:GetScript("OnClick")(view.lockButton) end
+
+    it("starts unlocked, with the grip there", function()
+      boot()
+      assert.is_true(view.lockButton:IsShown())
+      assert.is_true(view.resizeGrip:IsShown())
+    end)
+    it("hides the grip and saves the size you locked", function()
+      boot()
+      view.frame:SetSize(500, 880)
+      click_lock()
+      assert.same({ width = 500, height = 880, locked = true }, saved())
+      assert.is_false(view.resizeGrip:IsShown())
+      assert.same(TOP_ONLY, anchors())
+    end)
+    it("locks a panel never dragged at the size it has, no longer following the crafting window", function()
+      boot()
+      view.frame:SetSize(340, 760)
+      click_lock()
+      assert.same({ width = 340, height = 760, locked = true }, saved())
+      assert.same(TOP_ONLY, anchors())
+    end)
+    it("stays locked at that size in the next session", function()
+      boot({ width = 500, height = 880, locked = true })
+      assert.same({ 500, 880 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+      assert.is_false(view.resizeGrip:IsShown())
+      assert.is_true(view.lockButton:IsShown())
+    end)
+    it("ignores a right-click reset and any release while locked", function()
+      boot({ width = 500, height = 880, locked = true })
+      release("RightButton")
+      assert.same({ width = 500, height = 880, locked = true }, saved())
+      view.frame:SetSize(600, 900)
+      release()
+      assert.same({ width = 500, height = 880, locked = true }, saved())
+      assert.same({ 500, 880 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+    end)
+    it("unlocks on a second click, keeping the size, and the grip comes back", function()
+      boot({ width = 500, height = 880, locked = true })
+      click_lock()
+      assert.same({ width = 500, height = 880 }, saved())
+      assert.is_true(view.resizeGrip:IsShown())
+      assert.same({ 500, 880 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+    end)
+    it("says what a click does in its tooltip", function()
+      boot()
+      local lines = {}
+      _G.GameTooltip = { SetOwner = function() end, Show = function() end, Hide = function() end,
+        SetText = function(_, t) lines[#lines + 1] = t end, AddLine = function(_, t) lines[#lines + 1] = t end }
+      view.lockButton:GetScript("OnEnter")(view.lockButton)
+      assert.equal("Lock size and position", lines[1])
+      click_lock()
+      lines = {}
+      view.lockButton:GetScript("OnEnter")(view.lockButton)
+      assert.equal("Unlock size and position", lines[1])
+    end)
+    it("reads anything but true as unlocked", function()
+      boot({ width = 500, height = 880, locked = "yes" })
+      assert.is_true(view.resizeGrip:IsShown())
+    end)
+    it("changes no saved data while it is from a newer version, but holds for the session", function()
+      boot()
+      ns.FS.dbIsNewer = true
+      view.frame:SetSize(500, 880)
+      click_lock()
+      assert.is_nil(saved() and saved().locked)
+      assert.is_false(view.resizeGrip:IsShown())
+    end)
+  end)
+end)
+
+-- The panel keeps all its information but shows the summary: the breakdown and the extra lines fold into one row each
+-- (hover shows them, a click keeps them open, in every session), and the extra buttons live behind one More button.
+describe("ProfessionPanel compact layout", function()
+  local ns, W, form, P, view, lines
+  local function boot(stored)
+    ns, W = make_world({ last = "UI/ProfessionPanel.lua" })
+    form = fake_professions_frame()
+    if stored then ns.FS.db.global.settings.professionPanel = stored end
+    lines = {}
+    _G.GameTooltip = { SetOwner = function() end, Show = function() end, Hide = function() end,
+      SetText = function(_, t) lines[#lines + 1] = t end, AddLine = function(_, t) lines[#lines + 1] = t end,
+      AddDoubleLine = function(_, l, r) lines[#lines + 1] = l .. "=" .. r end }
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    P = ns.FS:GetModule("ProfessionPanel")
+    view = P:GetView()
+  end
+  local function select() form.selectRecipe({ recipeID = 9001 }) end
+  local function saved() return ns.FS.db.global.settings.professionPanel end
+  local function click(b) b:GetScript("OnClick")(b) end
+  local function hover(b) lines = {}; b:GetScript("OnEnter")(b); return lines end
+  after_each(function() fake_professions_frame.reset() end)
+
+  it("has a solid background", function()
+    boot()
+    assert.equals(1, ns.UI.ProfessionPanel.BACKGROUND_COLOR[4])
+  end)
+
+  describe("the profit row", function()
+    it("folds the breakdown by default and shows the profit on one line", function()
+      boot(); select()
+      assert.is_false(view.lines.frame:IsShown())
+      assert.is_true(view.breakdownToggle:IsShown())
+      assert.equal(P:GetModel().breakdownRows[8].value, view.breakdownToggle.right:GetText())
+    end)
+    it("shows every line in its tooltip", function()
+      boot(); select()
+      local tip = hover(view.breakdownToggle)
+      for _, row in ipairs(P:GetModel().breakdownRows) do
+        local found = false
+        for _, line in ipairs(tip) do found = found or line == row.label .. "=" .. row.value end
+        assert.is_true(found, row.label)
+      end
+    end)
+    it("keeps them open on a click, in the next session too, and folds them again", function()
+      boot(); select()
+      click(view.breakdownToggle)
+      assert.is_true(view.lines.frame:IsShown())
+      assert.is_true(saved().breakdownOpen)
+      fake_professions_frame.reset()
+      boot({ breakdownOpen = true }); select()
+      assert.is_true(view.lines.frame:IsShown())
+      click(view.breakdownToggle)
+      assert.is_false(view.lines.frame:IsShown())
+      assert.is_nil(saved().breakdownOpen)
+    end)
+  end)
+
+  describe("the details row", function()
+    local function with_provider()
+      P:RegisterLineProvider("a", function() return { { "Best optionals", "none adds profit" }, { "Sunglass Vial", "craft 42g" } } end)
+    end
+    it("is hidden without provider lines", function()
+      boot(); select()
+      assert.is_false(view.detailsToggle:IsShown())
+    end)
+    it("folds the lines, and shows them in its tooltip", function()
+      boot(); with_provider(); select()
+      assert.is_true(view.detailsToggle:IsShown())
+      assert.is_false(view.providerLines.frame:IsShown())
+      assert.equal("2", view.detailsToggle.right:GetText())
+      local tip = hover(view.detailsToggle)
+      assert.same("Best optionals=none adds profit", tip[2])
+      assert.same("Sunglass Vial=craft 42g", tip[3])
+    end)
+    it("keeps them open on a click, also through a refresh", function()
+      boot(); with_provider(); select()
+      click(view.detailsToggle)
+      assert.is_true(view.providerLines.frame:IsShown())
+      assert.is_true(saved().detailsOpen)
+      P:RefreshLines()
+      assert.is_true(view.providerLines.frame:IsShown())
+    end)
+    it("stays folded through a refresh", function()
+      boot(); with_provider(); select()
+      P:RefreshLines()
+      assert.is_false(view.providerLines.frame:IsShown())
+    end)
+  end)
+
+  describe("the More button", function()
+    local function with_action()
+      P:RegisterLineAction("ask", function() return { text = "Queue with best optionals", enabled = true, onClick = function() end } end)
+    end
+    it("is hidden without actions", function()
+      boot(); select()
+      assert.is_false(view.moreButton:IsShown())
+    end)
+    it("sits beside Craft Next and keeps the actions behind it", function()
+      boot(); with_action(); select()
+      assert.is_true(view.moreButton:IsShown())
+      local _, relativeTo = view.moreButton:GetPoint(1)
+      assert.equal(view.craftButton, relativeTo)
+      assert.is_false(view.morePopup:IsShown())
+    end)
+    it("opens and closes them on a click", function()
+      boot(); with_action(); select()
+      click(view.moreButton)
+      assert.is_true(view.morePopup:IsShown())
+      assert.equal(view.morePopup, view.actions.frame:GetParent())
+      click(view.moreButton)
+      assert.is_false(view.morePopup:IsShown())
+    end)
+    it("closes them when the recipe has no actions left", function()
+      local has = true
+      boot()
+      P:RegisterLineAction("ask", function() return has and { text = "Ask", enabled = true, onClick = function() end } or nil end)
+      select()
+      click(view.moreButton)
+      has = false
+      P:RefreshLines()
+      assert.is_false(view.moreButton:IsShown()); assert.is_false(view.morePopup:IsShown())
+    end)
+    it("gives its buttons room for their labels", function()
+      boot(); with_action(); select()
+      assert.is_true(view.actions.pool[1].button:GetWidth() >= 150)
+    end)
+    it("does not run an action on opening", function()
+      local runs = 0
+      boot()
+      P:RegisterLineAction("ask", function() return { text = "Ask", enabled = true, onClick = function() runs = runs + 1 end } end)
+      select()
+      click(view.moreButton)
+      assert.equals(0, runs)
+    end)
+  end)
+
+  describe("keeping clear of the buttons", function()
+    it("folds what no longer fits, the reagent table first, however it was left open", function()
+      boot({ breakdownOpen = true, detailsOpen = true })
+      P:RegisterLineProvider("a", function() return { { "A", "1" } } end)
+      select()
+      view.frame:SetSize(340, 800)
+      view.resizeGrip:GetScript("OnMouseUp")(view.resizeGrip, "LeftButton")
+      assert.same({ true, true, true }, { view.qualityHeader:IsShown(), view.lines.frame:IsShown(), view.providerLines.frame:IsShown() })
+      view.frame:SetSize(340, 500)
+      view.resizeGrip:GetScript("OnMouseUp")(view.resizeGrip, "LeftButton")
+      assert.same({ false, true, true }, { view.qualityHeader:IsShown(), view.lines.frame:IsShown(), view.providerLines.frame:IsShown() })
+    end)
+    it("folds an open breakdown when the results window leaves no room, and opens it again after", function()
+      boot({ breakdownOpen = true, width = 340, height = 450 })
+      select()
+      assert.is_true(view.lines.frame:IsShown())
+      view.frame.GetTop = function() return 800 end
+      local log = { IsShown = function() return true end, GetBottom = function() return 500 end,
+        HookScript = function() end }
+      form.raw(_G.ProfessionsFrame.CraftingPage).CraftingOutputLog = log
+      select()
+      assert.is_false(view.lines.frame:IsShown())
+      assert.is_true(saved().breakdownOpen)     -- only folded for now
+    end)
+  end)
+end)
+
+-- Our own crafting results replace Blizzard's window on the Recipes page: a list in the panel, so nothing opens over it.
+describe("ProfessionPanel crafting results", function()
+  local ns, W, form, P, view, lines, R
+  local LINK = "|cff0070dd|Hitem:241300::|h[Light's Potential]|h|r"
+  local function fake_log()
+    local log = { registered = { TRADE_SKILL_ITEM_CRAFTED_RESULT = true, TRADE_SKILL_CURRENCY_REWARD_RESULT = true } }
+    function log:UnregisterEvent(event) self.registered[event] = nil end
+    function log:RegisterEvent(event) self.registered[event] = true end
+    function log:HookScript() end
+    function log:IsShown() return false end
+    return log
+  end
+  local log
+  local function boot(stored)
+    ns, W = make_world({ last = "UI/ProfessionPanel.lua" })
+    form = fake_professions_frame()
+    log = fake_log()
+    form.raw(_G.ProfessionsFrame.CraftingPage).CraftingOutputLog = log
+    for i = #form.assignedFields, 1, -1 do form.assignedFields[i] = nil end   -- that was the spec playing Blizzard
+    if stored then ns.FS.db.global.settings.professionPanel = stored end
+    lines = {}
+    _G.GameTooltip = { SetOwner = function() end, Show = function() end, Hide = function() end,
+      SetHyperlink = function(_, link) lines[#lines + 1] = link end,
+      SetText = function(_, t) lines[#lines + 1] = t end, AddLine = function(_, t) lines[#lines + 1] = t end,
+      AddDoubleLine = function(_, l, r) lines[#lines + 1] = l .. "=" .. r end }
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    P = ns.FS:GetModule("ProfessionPanel")
+    R = ns.FS:GetModule("CraftResults")
+    view = P:GetView()
+  end
+  local function select() form.selectRecipe({ recipeID = 9001 }) end
+  local function craft(n, fields)
+    for i = 1, n or 1 do
+      local data = { itemID = 241300, hyperlink = LINK, quantity = i, multicraft = 0, operationID = i }
+      for key, value in pairs(fields or {}) do data[key] = value end
+      W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT", data)
+    end
+    W.advance(R.COLLECT_DELAY + 0.01)
+  end
+  local function resize(height)
+    view.frame:SetSize(340, height)
+    view.resizeGrip:GetScript("OnMouseUp")(view.resizeGrip, "LeftButton")
+  end
+  local function visible_rows()
+    local n = 0
+    for _, row in ipairs(view.results.rows) do if row:IsShown() then n = n + 1 end end
+    return n
+  end
+  after_each(function() fake_professions_frame.reset() end)
+
+  it("stops Blizzard's window on the Recipes page when the panel attaches", function()
+    boot()
+    assert.same({}, log.registered)
+  end)
+  it("writes nothing on Blizzard's frames for that", function()
+    boot()
+    assert.same({}, form.assignedFields)
+  end)
+  it("gives the window back when the panel is turned off", function()
+    boot()
+    ns.FS:SetModuleEnabled("ProfessionPanel", false)
+    assert.is_true(log.registered.TRADE_SKILL_ITEM_CRAFTED_RESULT)
+  end)
+  it("starts beside the top of the crafting window, as nothing opens over it now", function()
+    boot()
+    local _, _, _, x, y = view.frame:GetPoint(1)
+    assert.same({ 2, 0 }, { x, y })
+    assert.equals(640, view.frame:GetHeight())
+  end)
+  it("keeps where you left it", function()
+    boot({ x = 0, y = -17, width = 392, height = 639 })
+    local _, _, _, x, y = view.frame:GetPoint(1)
+    assert.same({ 0, -17 }, { x, y })
+    assert.same({ 392, 639 }, { view.frame:GetWidth(), view.frame:GetHeight() })
+  end)
+  it("shows no list until something is crafted", function()
+    boot(); select()
+    assert.is_false(view.results.frame:IsShown())
+  end)
+  it("shows a craft as a row, with the newest on top", function()
+    boot(); select()
+    craft(2)
+    assert.is_true(view.results.frame:IsShown())
+    assert.equals(2, visible_rows())
+    assert.is_truthy(view.results.rows[1].text:GetText():find("\195\1512", 1, true))
+    assert.is_nil(view.results.rows[2].text:GetText():find("\195\151", 1, true))
+  end)
+  it("counts the crafts in its header", function()
+    boot(); select()
+    craft(3)
+    assert.equals("Crafting results (3)", view.results.header:GetText())
+  end)
+  it("shows the item and what the craft gave in the row's tooltip", function()
+    boot(); select()
+    craft(1, { multicraft = 2 })
+    local row = view.results.rows[1]
+    row:GetScript("OnEnter")(row)
+    assert.same({ LINK, "Multicraft: 2 extra" }, lines)
+  end)
+  it("still shows the list with no recipe selected", function()
+    boot()
+    craft(1)
+    assert.is_true(view.results.frame:IsShown())
+    assert.equals(1, visible_rows())
+  end)
+  it("is cleared by its Clear button", function()
+    boot(); select()
+    craft(2)
+    view.results.clear:GetScript("OnClick")(view.results.clear)
+    assert.is_false(view.results.frame:IsShown())
+    assert.same({}, R:GetEntries())
+  end)
+  describe("session profit line", function()
+    local function total(fields)
+      R.SessionProfit = function()
+        local out = { counted = 1, missing = 0 }
+        for key, value in pairs(fields) do out[key] = value end
+        return out
+      end
+    end
+    it("shows a gain in green under the header", function()
+      boot(); select()
+      total({ profit = 50000 })
+      craft(1)
+      assert.equals("Session profit", view.results.totalLabel:GetText())
+      assert.equals(ns.UI.FormatMoney(50000), view.results.totalValue:GetText())
+      assert.same({ 0.25, 1, 0.25 }, { view.results.totalValue:GetTextColor() })
+    end)
+    it("shows a loss in red", function()
+      boot(); select()
+      total({ profit = -50000 })
+      craft(1)
+      assert.equals(ns.UI.FormatMoney(-50000), view.results.totalValue:GetText())
+      assert.same({ 1, 0.25, 0.25 }, { view.results.totalValue:GetTextColor() })
+    end)
+    it("says when prices are missing", function()
+      boot(); select()
+      total({ profit = 50000, missing = 2 })
+      craft(1)
+      assert.equals("Session profit (some prices missing)", view.results.totalLabel:GetText())
+    end)
+    it("shows no price, never 0, when nothing can be valued", function()
+      boot(); select()
+      total({ counted = 0, missing = 2 })
+      craft(1)
+      assert.equals("no price", view.results.totalValue:GetText())
+    end)
+    it("shows a dash when nothing counts", function()
+      boot(); select()
+      total({ counted = 0 })
+      craft(1)
+      assert.equals("\226\128\148", view.results.totalValue:GetText())
+    end)
+    it("explains itself on hover, with the number of crafts left out", function()
+      boot(); select()
+      total({ profit = 50000, missing = 2 })
+      craft(1)
+      view.results.total:GetScript("OnEnter")(view.results.total)
+      assert.equals("Session profit", lines[1])
+      assert.is_truthy(lines[2]:find("auction cut", 1, true))
+      assert.equals("2 crafts have no price or only part of their cost.", lines[3])
+    end)
+    it("says on hover whether an order's reward items count, as the setting has it", function()
+      boot(); select()
+      total({ profit = 50000, missing = 0 })
+      craft(1)
+      view.results.total:GetScript("OnEnter")(view.results.total)
+      assert.is_truthy(lines[2]:find("reward items", 1, true))
+      assert.is_falsy(lines[2]:find("not counted", 1, true))
+      ns.FS:GetModule("CraftResults").BuildOptions().args.orderProfit.set(nil, "commission")
+      for i = #lines, 1, -1 do lines[i] = nil end
+      view.results.total:GetScript("OnEnter")(view.results.total)
+      assert.is_truthy(lines[2]:find("not counted", 1, true))
+    end)
+  end)
+  it("fits its rows into the room above the buttons, and scrolls to the rest", function()
+    boot(); select()
+    view.frame.GetTop = function() return 800 end
+    resize(400)
+    craft(30)
+    local shownRows = visible_rows()
+    assert.is_true(shownRows >= 2 and shownRows < 30)
+    local first = view.results.rows[1].text:GetText()
+    view.results.frame:GetScript("OnMouseWheel")(view.results.frame, -1)
+    assert.is_not.equal(first, view.results.rows[1].text:GetText())
+    view.results.frame:GetScript("OnMouseWheel")(view.results.frame, 1)
+    view.results.frame:GetScript("OnMouseWheel")(view.results.frame, 1)
+    assert.equals(first, view.results.rows[1].text:GetText())
+  end)
+  it("goes back to the newest when a new craft comes in", function()
+    boot(); select()
+    craft(30)
+    view.results.frame:GetScript("OnMouseWheel")(view.results.frame, -1)
+    assert.equals(1, view.results.offset)
+    craft(1)
+    assert.equals(0, view.results.offset)
+  end)
+  it("gives up the reagent table before the list when room is short", function()
+    boot({ width = 340, height = 370 }); select()
+    craft(5)
+    assert.is_false(view.qualityHeader:IsShown())
+    assert.is_true(view.results.frame:IsShown())
+    assert.is_true(visible_rows() >= 2)
+  end)
+  it("can be made shorter than before, now there is less to fit", function()
+    boot({ width = 340, height = 320 })
+    assert.equals(320, view.frame:GetHeight())
+  end)
+  it("hides the list and goes back to the old place when our results are turned off", function()
+    boot(); select()
+    craft(2)
+    ns.FS:SetModuleEnabled("CraftResults", false)
+    assert.is_false(view.results.frame:IsShown())
+    assert.is_true(log.registered.TRADE_SKILL_ITEM_CRAFTED_RESULT)
+    form.hide(); form.show()
+    local _, _, _, _, y = view.frame:GetPoint(1)
+    assert.equals(-296, y)
+    assert.equals(480, view.frame:GetHeight())
+  end)
+end)
+
+describe("ProfessionPanel text size", function()
+  it("uses no small font, so its text is a step larger than Blizzard's small print", function()
+    local file = assert(io.open("UI/ProfessionPanel.lua", "r"))
+    local source = file:read("*a")
+    file:close()
+    assert.is_nil(source:find("GameFontHighlightSmall", 1, true))
+    assert.is_nil(source:find("GameFontNormalSmall", 1, true))
+  end)
+end)
+
+describe("ProfessionPanel controls", function()
+  after_each(function() fake_professions_frame.reset() end)
+
+  it("are a little smaller than the rest of the panel, all together", function()
+    local ns, W = make_world({ last = "UI/ProfessionPanel.lua" })
+    fake_professions_frame()
+    local createFrame = _G.CreateFrame
+    _G.CreateFrame = function(...)
+      local frame = createFrame(...)
+      frame.SetScale = function(self, scale) self.scale = scale end
+      return frame
+    end
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    _G.CreateFrame = createFrame
+    local view = ns.FS:GetModule("ProfessionPanel"):GetView()
+    assert.equals(0.9, view.controls.scale)
+    for _, key in ipairs({ "craftButton", "moreButton", "addButton", "quantityBox", "targetButton", "concentrationCheck" }) do
+      assert.equals(view.controls, view[key]:GetParent(), key)
+    end
+    assert.equals(view.frame, view.morePopup:GetParent())   -- its labels stay whole at the panel's own size
+  end)
+end)
+
+-- Crafting an order happens on the Crafting Orders tab, where the recipe's numbers and buttons do not apply: the panel
+-- stays as the results list alone.
+describe("ProfessionPanel crafting results on the orders page", function()
+  local ns, W, form, P, view, R
+  local LINK = "|cff0070dd|Hitem:241300::|h[Light's Potential]|h|r"
+  local function boot(stored, opts)
+    opts = opts or {}
+    ns, W = make_world({ last = opts.last or "UI/ProfessionPanel.lua" })
+    form = fake_professions_frame()
+    if opts.noOrdersPage then form.raw(_G.ProfessionsFrame).OrdersPage = nil end
+    if stored then ns.FS.db.global.settings.professionPanel = stored end
+    W.fire("ADDON_LOADED", "Blizzard_Professions")
+    P = ns.FS:GetModule("ProfessionPanel")
+    R = ns.FS:GetModule("CraftResults")
+    view = P:GetView()
+  end
+  local function craft()
+    W.fire("TRADE_SKILL_ITEM_CRAFTED_RESULT",
+      { itemID = 241300, hyperlink = LINK, quantity = 1, multicraft = 0, operationID = 1 })
+    W.advance(R.COLLECT_DELAY + 0.01)
+  end
+  local function to_orders() form.hidePage(); form.showOrdersPage() end
+  local function to_recipes() form.hideOrdersPage(); form.showPage() end
+  local function list_only()
+    return { view.frame:IsShown(), view.results.frame:IsShown(), view.body:IsShown(), view.empty:IsShown(),
+      view.controls:IsShown(), view.status:IsShown(), view.resizeGrip:IsShown(), view.lockButton:IsShown() }
+  end
+  local LIST_ONLY = { true, true, false, false, false, false, false, false }
+  local function anchor(index)
+    local point, relativeTo, relativePoint, x, y = view.frame:GetPoint(index)
+    return { point, relativeTo, relativePoint, x, y }
+  end
+
+  before_each(function() boot() end)
+  after_each(function() _G.FabricationStationOrdersPanel = nil end)
+
+  it("keeps the list showing, with nothing of the recipe's", function()
+    form.selectRecipe({ recipeID = 9001 })
+    craft()
+    to_orders()
+    assert.same(LIST_ONLY, list_only())
+    assert.equals("FabricationStation", view.title:GetText())
+    assert.is_true(view.results.rows[1]:IsShown())
+  end)
+  it("shows it whichever page Blizzard changes first", function()
+    craft()
+    form.showOrdersPage(); form.hidePage()
+    assert.same(LIST_ONLY, list_only())
+    form.showPage(); form.hideOrdersPage()
+    assert.is_true(view.controls:IsShown())
+    assert.is_true(view.frame:IsShown())
+  end)
+  it("shows nothing until there is a result, then opens on the craft, and closes when cleared", function()
+    to_orders()
+    assert.is_false(view.frame:IsShown())
+    craft()
+    assert.same(LIST_ONLY, list_only())
+    R:Clear()
+    assert.is_false(view.frame:IsShown())
+  end)
+  it("gets the whole panel back on the Recipes page, at its saved size and place", function()
+    boot({ width = 492, height = 661, x = 1, y = 3 })
+    craft()
+    to_orders()
+    assert.same({ "TOPLEFT", _G.ProfessionsFrame, "TOPRIGHT", 2, 0 }, anchor(1))
+    to_recipes()
+    assert.same({ true, true, true, true, true }, { view.frame:IsShown(), view.controls:IsShown(),
+      view.status:IsShown(), view.resizeGrip:IsShown(), view.lockButton:IsShown() })
+    assert.same({ "TOPLEFT", _G.ProfessionsFrame, "TOPRIGHT", 1, 3 }, anchor(1))
+    assert.equals(492, view.frame:GetWidth())
+    assert.equals(661, view.frame:GetHeight())
+  end)
+  it("keeps the grip hidden on the way back while the panel is locked", function()
+    boot({ width = 492, height = 661, locked = true })
+    craft()
+    to_orders(); to_recipes()
+    assert.is_false(view.resizeGrip:IsShown())
+    assert.is_true(view.lockButton:IsShown())
+  end)
+  it("sits beside the order list's side panel, and at the edge while an order is open", function()
+    boot(nil, { last = "UI/OrdersPanel.lua" })
+    craft()
+    local side = _G.FabricationStationOrdersPanel
+    assert.is_table(side)
+    form.showBrowse()
+    to_orders()
+    assert.same({ "TOPLEFT", side, "TOPRIGHT", 2, 0 }, anchor(1))
+    form.hideBrowse()
+    assert.same({ "TOPLEFT", _G.ProfessionsFrame, "TOPRIGHT", 2, 0 }, anchor(1))
+  end)
+  it("takes the edge when the side panel's module is off", function()
+    boot(nil, { last = "UI/OrdersPanel.lua" })
+    craft()
+    ns.FS:SetModuleEnabled("OrdersSidePanel", false)
+    form.showBrowse()
+    to_orders()
+    assert.same({ "TOPLEFT", _G.ProfessionsFrame, "TOPRIGHT", 2, 0 }, anchor(1))
+  end)
+  it("does not save a place dragged on the orders page", function()
+    boot({ width = 492, height = 661, x = 1, y = 3 })
+    craft()
+    to_orders()
+    view.frame:GetScript("OnDragStop")(view.frame)
+    local saved = ns.FS.db.global.settings.professionPanel
+    assert.same({ 1, 3, 492, 661 }, { saved.x, saved.y, saved.width, saved.height })
+    assert.same({ "TOPLEFT", _G.ProfessionsFrame, "TOPRIGHT", 2, 0 }, anchor(1))
+  end)
+  it("keeps SelfCheck's line for the Recipes page", function()
+    craft()
+    to_orders()
+    P:SetCheckLine("Checked", "good")
+    assert.is_false(view.checkLine:IsShown())
+    to_recipes()
+    assert.is_true(view.checkLine:IsShown())
+  end)
+  it("does not evaluate the recipe on the orders page", function()
+    form.selectRecipe({ recipeID = 9001 })
+    craft()
+    to_orders()
+    local recipes, calls = ns.FS:GetModule("Recipes"), 0
+    local evaluate = recipes.Evaluate
+    recipes.Evaluate = function(...) calls = calls + 1; return evaluate(...) end
+    ns.FS:SendMessage(ns.Msg.PRICES_CHANGED)
+    W.advance(1)
+    recipes.Evaluate = evaluate
+    assert.equals(0, calls)
+  end)
+  it("shows a commission in the total when the order is handed in, with no new craft", function()
+    craft()
+    to_orders()
+    local before = view.results.totalValue:GetText()
+    ns.FS:GetModule("Ledger"):Add({ type = "commission", amount = 650000, cost = 200000, ref = 55 })
+    assert.is_not.equals(before, view.results.totalValue:GetText())
+    assert.equals(ns.UI.FormatMoney(450000), view.results.totalValue:GetText())
+  end)
+  it("hides on the other tabs and when the window closes", function()
+    craft()
+    to_orders()
+    form.hideOrdersPage()
+    assert.is_false(view.frame:IsShown())
+    form.showOrdersPage()
+    assert.is_true(view.frame:IsShown())
+    form.hide()
+    assert.is_false(view.frame:IsShown())
+  end)
+  it("shows nothing on the orders page with CraftResults or the panel off", function()
+    craft()
+    ns.FS:SetModuleEnabled("CraftResults", false)
+    to_orders()
+    assert.is_false(view.frame:IsShown())
+    ns.FS:SetModuleEnabled("CraftResults", true)
+    craft()
+    assert.is_true(view.frame:IsShown())
+    ns.FS:SetModuleEnabled("ProfessionPanel", false)
+    assert.is_false(view.frame:IsShown())
+    form.hideOrdersPage(); form.showOrdersPage()
+    assert.is_false(view.frame:IsShown())
+  end)
+  it("assigns nothing on Blizzard's frames and logs no error", function()
+    craft()
+    to_orders(); to_recipes()
+    assert.same({}, form.assignedFields)
+    assert.same({}, ns.FS.db.global.diagnostics.errors)
+  end)
+  it("is only the Recipes page's panel on a client with no orders page", function()
+    boot(nil, { noOrdersPage = true })
+    craft()
+    assert.is_true(view.frame:IsShown())
+    form.hidePage()
+    assert.is_false(view.frame:IsShown())
+    for _, entry in ipairs(ns.FS.db.global.diagnostics.errors) do assert.is_not.equals("ProfessionPanel", entry.source) end
+    assert.is_true(P:IsEnabled())
   end)
 end)

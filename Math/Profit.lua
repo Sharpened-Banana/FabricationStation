@@ -214,7 +214,10 @@ end
 -- Expected profit of the best plan for `input` (RecipeInput). See the header for plans; the choice:
 --   targetQuality set: that quality's plan (its concentration plan when useConcentration, else or when there is
 --     none, its plain plan); when no plan of the allowed kinds lands on it, the plan for the highest reachable
---     quality, with flags.unreachableTarget = true.
+--     quality, with flags.unreachableTarget = true. With atLeastTarget (a crafting order's minimum quality: more is
+--     fine, an item of a set quality is not) a plain plan above the target comes before that: the lowest such quality,
+--     which has the cheapest reagents and spends no concentration, with no flag. Reagents the patron provides can leave
+--     nothing else: they fix the skill above the minimum.
 --   otherwise the most profitable concentration plan when useConcentration (the plain one when no quality can
 --     be concentrated), else the most profitable plain plan. Unpriced plans never beat priced ones.
 -- Concentration fields describe the chosen plan when it uses concentration, otherwise the most profitable
@@ -246,6 +249,13 @@ function Profit.EvaluateCraft(input)
   local target = input.targetQuality
   if target then
     chosen = input.useConcentration and conc[target] or plain[target]
+    if not chosen and input.atLeastTarget then
+      local lowest
+      for q in pairs(plain) do
+        if q > target and (lowest == nil or q < lowest) then lowest = q end
+      end
+      chosen = lowest and plain[lowest] or nil
+    end
     if not chosen then
       local top = 0
       for q in pairs(plain) do top = math.max(top, q) end

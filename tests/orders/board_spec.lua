@@ -761,6 +761,24 @@ describe("Orders board", function()
       local f = messages("FS_ORDER_FULFILLED")[1][2]
       assert.same({"npc", nil, 9, 450000}, {f.orderType, f.customer, f.npcCreatureID, f.commission})
     end)
+    it("says when a reward of the order has no value", function()
+      ns.FS:GetModule("Prices").Get = function(_, id) return { value = id == 210000 and 30000 or nil } end
+      O:OnBoardShown(3, { P2.raw_order({orderType=3}) })
+      O:OnRewardsUpdated("CRAFTINGORDERS_UPDATE_REWARDS", { {itemLink="|Hitem:210000::|h[R]|h", count=2}, {itemLink="|Hitem:88888::|h[U]|h", count=1} }, 777)
+      O:OnFulfillClicked(777, "", 7)
+      O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+      local f = messages("FS_ORDER_FULFILLED")[1][2]
+      assert.same({60000, true}, {f.rewardsValue, f.rewardsUnpriced})
+    end)
+    it("does not flag an order whose rewards all have a value", function()
+      ns.FS:GetModule("Prices").Get = function(_, id) return { value = id == 210000 and 30000 or nil } end
+      O:OnBoardShown(3, { P2.raw_order({orderType=3}) })
+      O:OnRewardsUpdated("CRAFTINGORDERS_UPDATE_REWARDS", { {itemLink="|Hitem:210000::|h[R]|h", count=2} }, 777)
+      O:OnFulfillClicked(777, "", 7)
+      O:OnFulfillResponse("CRAFTINGORDERS_FULFILL_ORDER_RESPONSE", 0, 777)
+      local f = messages("FS_ORDER_FULFILLED")[1][2]
+      assert.equals(60000, f.rewardsValue); assert.is_nil(f.rewardsUnpriced)
+    end)
     it("drops a pending fulfilment after an hour without a response", function()
       claimed = P2.raw_order()
       O:OnFulfillClicked(777, "", 7)

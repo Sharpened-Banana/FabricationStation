@@ -8,14 +8,16 @@
 -- environment against a minimal collector (ns = { GameData = { Define = fn(name, build, tbl) } }).
 --
 -- Two kinds of fixture, both written through tools/lib/serialize.lua (sorted keys, so the output is deterministic):
---   * capture_<recipeID>_<id>.lua, one per `/fs capture` (captures.list) whose character has a calibration
---     recipeCalib[charKey][recipeID]: { source = "capture", recipeID, schematic, calib, reagents, operationInfo,
---     applyConcentration, gameData }. A capture without one is skipped ("no calibration").
+--   * capture_<recipeID>_<id>.lua, one per `/fs capture` (captures.list) that kept its calibration (capture.calib):
+--     { source = "capture", recipeID, schematic, calib, reagents, operationInfo, applyConcentration, gameData }. A capture
+--     without one is skipped ("no calibration"): today's recipeCalib may hold specialization points it was made without.
 --   * craft_<recipeID>_<id>.lua, one per craft log entry (craftLog.entries) that kept its `fixture` and has the game's
 --     prediction and the quality it made (game.quality and actual.quality): { source = "craft", recipeID, schematic
 --     (the cached one, schematics[recipeID]), calib = fixture.calib, reagents = fixture.reagents, operationInfo = {
 --     craftingQuality = game.quality, concentrationCost, baseSkill, bonusSkill, baseDifficulty, bonusDifficulty,
---     lowerSkillThreshold, upperSkillTreshold }, actualQuality = actual.quality, applyConcentration, gameData }. An
+--     lowerSkillThreshold, upperSkillTreshold }, actualQuality = actual.quality, applyConcentration,
+--     reagentsMissing? (an order's craft or one spending a currency, logged before the predictions counted those
+--     reagents: no fixture.exactReagents), gameData }. An
 --     entry is skipped, and counted by its first reason in this order: "no fixture" (older than the newest 100),
 --     "no game quality" (no game prediction, or one without a quality), "no actual quality" (the craft's quality is
 --     unknown), "no schematic" (none cached), "no calibration" (its fixture holds none).
@@ -94,7 +96,6 @@ local global = type(db) == "table" and type(db.global) == "table" and db.global 
 local captures = type(global.captures) == "table" and type(global.captures.list) == "table" and global.captures.list or {}
 local crafts = type(global.craftLog) == "table" and type(global.craftLog.entries) == "table" and global.craftLog.entries or {}
 if #captures == 0 and #crafts == 0 then fail("no captures or crafts in " .. path) end
-local recipeCalib = type(global.recipeCalib) == "table" and global.recipeCalib or {}
 local schematics = type(global.schematics) == "table" and global.schematics or {}
 
 -- The committed GameData files, each run in an empty environment against a collector that keeps the defined tables.
@@ -186,6 +187,13 @@ local skippedCaptures, skippedNoSchematic = 0, 0
 local craftSkips = { noFixture = 0, noGame = 0, noActual = 0, noCalibration = 0 }
 local chosen = {}   -- [name] = true: the names this run writes
 
+local function spends_currency(reagents)
+  for _, info in ipairs(reagents) do
+    if type(info) == "table" and type(info.reagent) == "table" and info.reagent.currencyID ~= nil then return true end
+  end
+  return false
+end
+
 local function add(kind, recipeID, id, fixture)
   local okSer, text = pcall(serialize, fixture)
   if not okSer then fail(("%s %d does not serialize: %s"):format(kind, id, tostring(text))) end
@@ -208,8 +216,7 @@ for i, capture in ipairs(captures) do
   if type(capture) ~= "table" or not is_integer(capture.recipeID) or not is_integer(capture.id) then
     fail(("capture %d has no integer recipeID and id"):format(i))
   end
-  local byChar = capture.charKey ~= nil and recipeCalib[capture.charKey] or nil
-  local calib = type(byChar) == "table" and byChar[capture.recipeID] or nil
+  local calib = capture.calib
   if type(calib) ~= "table" then
     skippedCaptures = skippedCaptures + 1
   else
@@ -253,6 +260,7 @@ for i, entry in ipairs(crafts) do
           source = "craft", recipeID = entry.recipeID, schematic = schematic, calib = entry.fixture.calib,
           reagents = reagents, operationInfo = operationInfo, actualQuality = actual.quality,
           applyConcentration = entry.applyConcentration == true,
+          reagentsMissing = ((entry.orderID ~= nil or spends_currency(reagents)) and entry.fixture.exactReagents ~= true) or nil,
           gameData = recipe_game_data(schematic, reagents, entry.fixture.calib),
         })
       end

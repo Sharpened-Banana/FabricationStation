@@ -490,6 +490,53 @@ describe("OrdersPanel row icons", function()
       c.cover:GetScript("OnEnter")(c.cover)
       assert.same({ "The customer provides every reagent" }, tooltip.lines)
     end)
+    -- Blizzard's Reagents cell draws its own tooltip on OnEnter (the patron's reagents as a frame of icons, with no text).
+    -- Passing the pointer's motion through let that replace ours, so the covers take the motion and let only clicks by.
+    describe("the mouse on a cover", function()
+      local calls
+      local function setup_covers()
+        boot()
+        calls = {}
+        local create = _G.CreateFrame
+        _G.CreateFrame = function(...)
+          local frame = create(...)
+          for _, method in ipairs({ "SetMouseClickEnabled", "SetMouseMotionEnabled", "SetPropagateMouseMotion",
+            "SetPropagateMouseClicks" }) do
+            frame[method] = function(self, value)
+              calls[self] = calls[self] or {}
+              calls[self][method] = value
+            end
+          end
+          return frame
+        end
+        local raw = order({ reagents = { reagent(1001, 3) } })
+        evalResult = allocation({ itemID = 1001, quantity = 3 })
+        show_board({ raw })
+        return cells_of(row_for(raw))
+      end
+      it("keeps the motion from Blizzard's cell and lets clicks reach it", function()
+        local c = setup_covers()
+        for _, cover in ipairs({ c.cover, c.tipCover }) do
+          local got = calls[cover] or {}
+          assert.is_false(got.SetMouseClickEnabled)
+          assert.is_true(got.SetMouseMotionEnabled)
+          assert.is_nil(got.SetPropagateMouseMotion)
+          assert.is_nil(got.SetPropagateMouseClicks)
+        end
+      end)
+      it("lights the whole row while the pointer is on a cover, and only then", function()
+        local c = setup_covers()
+        assert.is_false(c.rowLit:IsShown())
+        c.cover:GetScript("OnEnter")(c.cover)
+        assert.is_true(c.rowLit:IsShown())
+        c.cover:GetScript("OnLeave")(c.cover)
+        assert.is_false(c.rowLit:IsShown())
+        c.tipCover:GetScript("OnEnter")(c.tipCover)
+        assert.is_true(c.rowLit:IsShown())
+        c.tipCover:GetScript("OnLeave")(c.tipCover)
+        assert.is_false(c.rowLit:IsShown())
+      end)
+    end)
     it("lists every reagent in the tooltip, owned ones included, short ones in red", function()
       boot()
       cached[1001], cached[1002] = "Ore", "Silk"
@@ -1291,12 +1338,12 @@ describe("OrdersPanel row icons", function()
       { name = "Orders:BuildContext", arm = function(mode)
           ns.FS:GetModule("Orders").BuildContext = stub(mode)
         end },
-      { name = "SetPropagateMouseClicks and SetPropagateMouseMotion", pre = function(mode)
+      { name = "SetMouseClickEnabled and SetMouseMotionEnabled", pre = function(mode)
           local create = _G.CreateFrame
           _G.CreateFrame = function(...)
             local frame = create(...)
-            frame.SetPropagateMouseClicks = stub(mode)
-            frame.SetPropagateMouseMotion = stub(mode)
+            frame.SetMouseClickEnabled = stub(mode)
+            frame.SetMouseMotionEnabled = stub(mode)
             return frame
           end
         end },

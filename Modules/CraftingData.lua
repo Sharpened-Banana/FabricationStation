@@ -107,14 +107,16 @@ function CraftingData.CraftingDataIDFor(gd, schematic)
   return tbl(gd, "ItemCraftingData")[itemID]
 end
 
--- Stats an optional or finishing reagent adds: increasedifficulty from the item's
--- maxDifficultyAdjustment, plus its mapped OptionalReagents effects summed by stat. Effect types
--- without an EFFECT_MAP entry are ignored. Finishing reagents scale their effects by
+-- Stats an optional or finishing reagent adds: increasedifficulty from an optional reagent's
+-- maxDifficultyAdjustment (a finishing reagent's does not raise the game's difficulty: real crafts of Light's Potential
+-- with a +5 skill reagent listed at 100 stayed at 530), plus its mapped OptionalReagents effects summed by stat. Effect
+-- types without an EFFECT_MAP entry are ignored. Finishing reagents scale their effects by
 -- reagentEffectPct / 100 when the item has a positive percentage, else the effects apply as listed.
 function CraftingData.OptionalStats(gd, itemID, kind)
   local stats = {}
   local quality = tbl(gd, "ReagentQuality")[itemID]
-  if quality and type(quality.maxDifficultyAdjustment) == "number" and quality.maxDifficultyAdjustment > 0 then
+  if kind ~= "finishing" and quality and type(quality.maxDifficultyAdjustment) == "number"
+    and quality.maxDifficultyAdjustment > 0 then
     stats.increasedifficulty = quality.maxDifficultyAdjustment
   end
   local scale = 1
@@ -191,10 +193,11 @@ end
 -- (slotIndex, else dataSlotType + dataSlotIndex), never by dataSlotIndex alone.
 function CraftingData.AllocationFromReagentInfo(schematic, infos)
   local slotFor = CraftingData.SlotResolver(schematic)
-  local allocation, optionalItemIDs = {}, {}
+  local allocation, optionalItemIDs, currencies = {}, {}, {}
   for _, info in ipairs(infos or EMPTY) do
     local slot = slotFor(info)
     local itemID = info.reagent and info.reagent.itemID
+    if info.reagent and info.reagent.currencyID then currencies[#currencies + 1] = info end
     if slot and itemID then
       if CraftingData.IsAllocated(slot) then
         allocation[#allocation + 1] = { slotIndex = slot.slotIndex, itemID = itemID, quantity = info.quantity }
@@ -203,7 +206,7 @@ function CraftingData.AllocationFromReagentInfo(schematic, infos)
       end
     end
   end
-  return allocation, optionalItemIDs
+  return allocation, optionalItemIDs, currencies
 end
 
 -- The row of an optional or finishing slot that can take a chosen item: { slotIndex, kind, quantity, itemIDs }, or nil
@@ -342,5 +345,6 @@ function CraftingData.BuildInput(gd, args)
       lessFactors = calib and type(calib.concentrationLess) == "number" and { calib.concentrationLess } or {} },
     useConcentration = args.useConcentration,
     targetQuality = args.targetQuality,
+    atLeastTarget = args.atLeastTarget,
   }
 end

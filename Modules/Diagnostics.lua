@@ -201,6 +201,7 @@ local function read_capture()
   local skillLineID = recipe_line(recipeID, schematic)
   local charKey = ns.FS:CharKey()
   local gameData = ns.GameData
+  local recipes = ns.FS:GetModule("Recipes", true)
 
   return {
     time = ns.FS:Now(),
@@ -220,6 +221,8 @@ local function read_capture()
     operationInfoConcentration = copy(operationInfoConcentration),
     predictedQuality = operationInfo.craftingQuality,
     profession = skillLineID and copy(Scanner:GetProfession(charKey, skillLineID)) or nil,
+    -- As of this capture: a later calibration can hold specialization points the game's numbers here do not.
+    calib = recipes and copy(recipes:GetCalibration(charKey, recipeID)) or nil,
   }
 end
 
